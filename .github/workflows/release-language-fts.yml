@@ -125,7 +125,7 @@ jobs:
 
           php indexer/tools/collect-release-evidence.php \
             --release-target=direct-install \
-            --direct-package-dir="$BUILD_ROOT/core/indexer" \
+            --direct-package-dir="$BUILD_ROOT/core/language-fts" \
             > "$DIST_DIR/language-fts-release-evidence.json"
 
           (
@@ -192,17 +192,18 @@ jobs:
           $extended = $zipNames($assets['extended']);
           $manifest = json_decode((string) file_get_contents($manifestPath), true);
 
-          $assert($hasPrefix($core, 'indexer/resources/analyzer-packs/pl-polimorf-20180722-full-playground/'), 'Core ZIP must include the BSD Polish pack.');
-          $assert(! $hasPrefix($core, 'indexer/resources/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/'), 'Core ZIP must exclude CC BY-SA UniMorph packs.');
-          $assert(! $hasPrefix($core, 'indexer/resources/analyzer-packs/te-unimorph-tel-551f60f5f434/'), 'Core ZIP must exclude unknown-license packs.');
+          $assert(in_array('language-fts/indexer.php', $core, true), 'Core ZIP must be rooted at language-fts/.');
+          $assert(! $hasPrefix($core, 'language-fts/resources/analyzer-packs/'), 'Core ZIP must not include analyzer-pack runtime data.');
+          $assert(! $hasPrefix($core, 'language-fts/tools/'), 'Core ZIP must not include release/build tools.');
+          $assert(! $hasPrefix($core, 'language-fts/playground/'), 'Core ZIP must not include Playground harness files.');
 
-          $assert($hasPrefix($full, 'indexer/resources/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/'), 'GitHub full ZIP must include CC BY-SA UniMorph packs.');
-          $assert(! $hasPrefix($full, 'indexer/resources/analyzer-packs/te-unimorph-tel-551f60f5f434/'), 'GitHub full ZIP must exclude unknown-license packs.');
-          $assert(in_array('indexer/MIXED-LICENSE-NOTICE.txt', $full, true), 'GitHub full ZIP must include mixed-license notice.');
+          $assert($hasPrefix($full, 'language-fts/resources/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/'), 'GitHub full ZIP must include CC BY-SA UniMorph packs.');
+          $assert(! $hasPrefix($full, 'language-fts/resources/analyzer-packs/te-unimorph-tel-551f60f5f434/'), 'GitHub full ZIP must exclude unknown-license packs.');
+          $assert(in_array('language-fts/MIXED-LICENSE-NOTICE.txt', $full, true), 'GitHub full ZIP must include mixed-license notice.');
 
           $assert($hasPrefix($extended, 'language-fts-extended-language-packs/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/'), 'Extended bundle must include CC BY-SA UniMorph packs.');
           $assert(! $hasPrefix($extended, 'language-fts-extended-language-packs/analyzer-packs/te-unimorph-tel-551f60f5f434/'), 'Extended bundle must exclude unknown-license packs.');
-          $assert(! $hasPrefix($extended, 'language-fts-extended-language-packs/analyzer-packs/pl-polimorf-20180722-full-playground/'), 'Extended bundle must exclude the BSD Polish core pack.');
+          $assert($hasPrefix($extended, 'language-fts-extended-language-packs/analyzer-packs/pl-polimorf-20180722-full-playground/'), 'Extended bundle must include the BSD Polish pack.');
 
           foreach (['manifest.json', 'NOTICE.txt', 'LICENSES.md'] as $file) {
               $assert(in_array('language-fts-extended-language-packs/' . $file, $extended, true), "Extended bundle must include {$file}.");
@@ -227,7 +228,7 @@ jobs:
 
           ## Assets
 
-          - language-fts-core.zip: installable plugin ZIP with GPL-compatible package contents only.
+          - language-fts-core.zip: installable plugin ZIP with runtime PHP, production dependencies, docs, and no bundled analyzer-pack data.
           - language-fts-full.zip: installable GitHub/full plugin ZIP with separately licensed CC BY-SA UniMorph analyzer packs and notices.
           - language-fts-extended-language-packs.zip: optional separately licensed CC BY-SA UniMorph analyzer-pack bundle. Review notices and provenance before use.
           - language-fts-extended-language-packs.manifest.json: signed manifest used by the plugin to verify the optional analyzer-pack bundle.
@@ -237,7 +238,7 @@ jobs:
 
           ## Download Guidance
 
-          Use language-fts-core.zip for the smallest GPL-compatible plugin package. Use language-fts-full.zip only when the separately licensed CC BY-SA packs are acceptable for your distribution. Download language-fts-extended-language-packs.zip only if you want optional extra packs outside the core plugin package.
+          Use language-fts-core.zip for the smallest installable plugin package. Use language-fts-full.zip only when the separately licensed CC BY-SA packs are acceptable for your distribution. Download language-fts-extended-language-packs.zip only if you want optional analyzer packs outside the core plugin package.
 
           No WordPress.org submission, SVN commit, or WordPress.org approval is performed by this workflow.
           NOTES

@@ -376,9 +376,8 @@ if ( ! class_exists( 'WP_FTS_ReleaseChannelPolicy' ) ) {
 				return array(
 					'license_class'     => 'gpl-compatible',
 					'included_profiles' => array(
-						self::PROFILE_CORE,
-						self::PROFILE_WPORG_COMPATIBLE,
 						self::PROFILE_GITHUB_FULL,
+						self::PROFILE_EXTENDED_LANGUAGE_PACKS,
 					),
 					'blocked_reason'    => '',
 				);
@@ -414,8 +413,9 @@ if ( ! class_exists( 'WP_FTS_ReleaseChannelPolicy' ) ) {
 				'',
 				'Profile: ' . $profile,
 				'',
-				'The core package excludes optional CC BY-SA UniMorph analyzer packs and unknown-license packs.',
+				'The core package excludes analyzer-pack runtime data so the installable plugin ZIP remains a small, reviewable package.',
 				'The GitHub full package may include separately licensed CC BY-SA UniMorph analyzer packs with notices and provenance, but unknown-license packs remain excluded.',
+				'Optional analyzer packs are distributed through the signed language-pack bundle and verified before extraction.',
 				'This package is not a WordPress.org submission, approval, endorsement, or hosted asset.',
 				'',
 				'Included analyzer packs:',

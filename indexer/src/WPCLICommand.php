@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+if ( ! defined( 'ABSPATH' ) ) {
+    if ( PHP_SAPI !== 'cli' ) {
+        exit;
+    }
+    define( 'ABSPATH', dirname( __DIR__ ) . '/' );
+}
+
 /**
  * WP-CLI command surface for managing the custom FTS index.
  *

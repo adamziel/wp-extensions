@@ -14,6 +14,13 @@
 
 declare(strict_types=1);
 
+if ( ! defined( 'ABSPATH' ) ) {
+    if ( PHP_SAPI !== 'cli' ) {
+        exit;
+    }
+    define( 'ABSPATH', __DIR__ . '/' );
+}
+
 /**
  * WordPress plugin entrypoint.
  *

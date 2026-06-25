@@ -9,11 +9,11 @@ require_once __DIR__ . '/release-channel-policy.php';
  * The build stages the plugin through .distignore, installs production Composer
  * dependencies, prunes development artifacts from the staged tree, validates
  * the package boundary and analyzer-pack release profile, then writes a ZIP
- * rooted at indexer/.
+ * rooted at language-fts/.
  */
 final class WP_FTS_ReleasePackageBuilder
 {
-    private const PLUGIN_DIR_NAME = 'indexer';
+    private const PLUGIN_DIR_NAME = 'language-fts';
     private const DEFAULT_ZIP_NAME = 'wp-fts-indexer.zip';
     private const DETERMINISTIC_ZIP_MTIME = 946684800; // 2000-01-01T00:00:00Z.
     private const BUILD_LOCK_FILE = '.wp-fts-release-build.lock';
@@ -24,10 +24,11 @@ final class WP_FTS_ReleasePackageBuilder
         '.git',
         '.gitignore',
         'goal.md',
-        'playground/indexer-preview.zip',
+        'playground',
         'resources/sources',
         'review-artifacts',
         'tests',
+        'tools',
         'auth.json',
         '.composer',
         'vendor/bin',

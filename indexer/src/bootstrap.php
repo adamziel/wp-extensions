@@ -1,6 +1,23 @@
 <?php
 declare(strict_types=1);
 
+if ( ! defined( 'ABSPATH' ) ) {
+    if ( PHP_SAPI !== 'cli' ) {
+        exit;
+    }
+    define( 'ABSPATH', dirname( __DIR__ ) . '/' );
+}
+
+if (!empty($GLOBALS['wp_fts_plugin_bootstrapped'])) {
+    return;
+}
+
+if (!empty($GLOBALS['wp_fts_plugin_bootstrapping'])) {
+    return;
+}
+
+$GLOBALS['wp_fts_plugin_bootstrapping'] = true;
+
 /**
  * Prefer the adjacent component source in monorepo checkouts so local edits and
  * Playground source previews do not depend on a mirrored vendor copy.
@@ -16,7 +33,7 @@ if (is_file($wp_fts_component_bootstrap) && !class_exists('WP_FTS_Analyzer', fal
  * against duplicate class loading.
  */
 $wp_fts_vendor_autoload = dirname(__DIR__) . '/vendor/autoload.php';
-if (is_file($wp_fts_vendor_autoload)) {
+if (!class_exists('WP_FTS_Analyzer', false) && is_file($wp_fts_vendor_autoload)) {
     require_once $wp_fts_vendor_autoload;
 }
 
@@ -38,6 +55,9 @@ $wp_fts_files = [
 foreach ($wp_fts_files as $wp_fts_file) {
     require_once $wp_fts_file;
 }
+
+$GLOBALS['wp_fts_plugin_bootstrapped'] = true;
+$GLOBALS['wp_fts_plugin_bootstrapping'] = false;
 
 /**
  * Avoid leaking bootstrap-only variables into the global namespace after the

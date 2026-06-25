@@ -2,14 +2,14 @@
   "$schema": "https://playground.wordpress.net/blueprint-schema.json",
   "meta": {
     "title": "Language FTS Preview",
-    "description": "Installs and activates Language FTS from the indexer/ directory and opens the Settings > Full-Text Search sandbox.",
+    "description": "Installs and activates Language FTS from the indexer/ directory and opens the Settings > Full-Text Search dashboard.",
     "author": "adamziel"
   },
   "preferredVersions": {
     "php": "8.3",
     "wp": "latest"
   },
-  "landingPage": "/wp-admin/options-general.php?page=wp-fts-settings&tab=sandbox",
+  "landingPage": "/wp-admin/options-general.php?page=wp-fts-settings",
   "login": true,
   "siteOptions": {
     "blogname": "Language FTS Preview"

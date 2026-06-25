@@ -14,6 +14,7 @@ final class WP_FTS_ReleaseReadinessChecker
     private const TARGET_DIRECT_INSTALL = 'direct-install';
     private const TARGET_PUBLIC_SUBMISSION = 'public-submission';
     private const READINESS_BUILD_DIR_PREFIX = 'wp-fts-indexer-release-readiness-';
+    private const PACKAGE_ROOT = 'language-fts';
     private const PUBLIC_SUBMISSION_EVIDENCE_PATH = 'docs/public-submission-readiness.json';
 
     private const PUBLIC_README_REQUIRED_FIELDS = [
@@ -70,10 +71,10 @@ final class WP_FTS_ReleaseReadinessChecker
         'indexer.php',
         'composer.json',
         'composer.lock',
+        'LICENSE',
         'README.md',
         'src/bootstrap.php',
         'src/Plugin.php',
-        'tools/build-release-zip.php',
         'vendor/autoload.php',
         'vendor/wp-php-toolkit/full-text-search/src/bootstrap.php',
     ];
@@ -84,10 +85,11 @@ final class WP_FTS_ReleaseReadinessChecker
         '.git',
         '.gitignore',
         'goal.md',
-        'playground/indexer-preview.zip',
+        'playground',
         'resources/sources',
         'review-artifacts',
         'tests',
+        'tools',
         'vendor/bin',
     ];
 
@@ -305,7 +307,7 @@ final class WP_FTS_ReleaseReadinessChecker
                 'removed_paths_count' => count($build['removed_paths']),
             ]);
 
-            $stagePlugin = $build['build_dir'] . '/indexer';
+            $stagePlugin = $build['build_dir'] . '/' . self::PACKAGE_ROOT;
             $this->check_direct_package_directory($stagePlugin, $sourceMetadata, $checks, $blockers);
             $this->check_release_zip($build['zip_path'], $checks, $blockers);
         };
@@ -697,20 +699,20 @@ final class WP_FTS_ReleaseReadinessChecker
         array &$blockers
     ): void {
         $packageDir = self::existing_directory($packageDir, 'direct-install package');
-        $rootOk = basename($packageDir) === 'indexer';
+        $rootOk = basename($packageDir) === self::PACKAGE_ROOT;
         $this->record(
             $checks,
             $blockers,
             'direct_package_root',
             $rootOk ? 'pass' : 'fail',
-            $rootOk ? 'Package root directory is indexer/.' : 'Package root directory must be indexer/.',
+            $rootOk ? 'Package root directory is ' . self::PACKAGE_ROOT . '/.' : 'Package root directory must be ' . self::PACKAGE_ROOT . '/.',
             ['root' => basename($packageDir)]
         );
 
         $missing = [];
         foreach (self::REQUIRED_PACKAGE_PATHS as $relativePath) {
             if (!file_exists($packageDir . '/' . $relativePath)) {
-                $missing[] = 'indexer/' . $relativePath;
+                $missing[] = self::PACKAGE_ROOT . '/' . $relativePath;
             }
         }
         sort($missing, SORT_STRING);
@@ -830,15 +832,16 @@ final class WP_FTS_ReleaseReadinessChecker
 
         $wrongRoot = [];
         foreach ($names as $name) {
-            if (!str_starts_with($name, 'indexer/')) {
+            if (!str_starts_with($name, self::PACKAGE_ROOT . '/')) {
                 $wrongRoot[] = $name;
             }
         }
 
         $requiredMissing = [];
         foreach (self::REQUIRED_PACKAGE_PATHS as $relativePath) {
-            if (!in_array('indexer/' . $relativePath, $names, true)) {
-                $requiredMissing[] = 'indexer/' . $relativePath;
+            $packagePath = self::PACKAGE_ROOT . '/' . $relativePath;
+            if (!in_array($packagePath, $names, true)) {
+                $requiredMissing[] = $packagePath;
             }
         }
 
@@ -849,7 +852,7 @@ final class WP_FTS_ReleaseReadinessChecker
             'direct_zip_boundary',
             $zipOk ? 'pass' : 'fail',
             $zipOk
-                ? 'Release ZIP is rooted at indexer/ and includes required runtime entrypoints.'
+                ? 'Release ZIP is rooted at ' . self::PACKAGE_ROOT . '/ and includes required runtime entrypoints.'
                 : 'Release ZIP root, filename, or runtime entrypoint contract is invalid.',
             [
                 'file_count' => count($names),
@@ -880,7 +883,7 @@ final class WP_FTS_ReleaseReadinessChecker
             if (!$this->is_prohibited_package_path($relativePath, $item->isDir())) {
                 continue;
             }
-            $paths[] = 'indexer/' . $relativePath;
+            $paths[] = self::PACKAGE_ROOT . '/' . $relativePath;
         }
 
         $paths = array_values(array_unique($paths));

@@ -386,7 +386,7 @@ function wp_fts_release_readiness_contract_source_fixture(string $tmp, array $op
                 'Contributors: fixture-maintainer',
                 'Tags: search, full text search, indexing',
                 'Requires at least: 6.5',
-                'Tested up to: 6.9',
+                'Tested up to: 7.0',
                 'Requires PHP: 8.1',
                 "Stable tag: {$version}",
                 'License: GPL-2.0-or-later',
@@ -450,7 +450,7 @@ function wp_fts_release_readiness_contract_source_fixture(string $tmp, array $op
 
 function wp_fts_release_readiness_contract_package_fixture(string $tmp, string $version = '1.2.3'): string
 {
-    $package = $tmp . '/indexer';
+    $package = $tmp . '/language-fts';
     wp_fts_release_readiness_contract_write_file($package . '/indexer.php', "<?php\n/**\n * Plugin Name: Pure PHP FTS Indexer\n * Version: {$version}\n * Requires PHP: 8.1\n */\n");
     wp_fts_release_readiness_contract_write_json($package . '/composer.json', [
         'name' => 'local/wp-pure-php-fts',
@@ -469,9 +469,9 @@ function wp_fts_release_readiness_contract_package_fixture(string $tmp, string $
         'packages-dev' => [],
     ]);
     wp_fts_release_readiness_contract_write_file($package . '/README.md', "# Pure PHP FTS Indexer\n");
+    wp_fts_release_readiness_contract_write_file($package . '/LICENSE', "GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\nFixture redistribution terms for gate coverage.\n");
     wp_fts_release_readiness_contract_write_file($package . '/src/bootstrap.php', "<?php\n");
     wp_fts_release_readiness_contract_write_file($package . '/src/Plugin.php', "<?php\n");
-    wp_fts_release_readiness_contract_write_file($package . '/tools/build-release-zip.php', "<?php\n");
     wp_fts_release_readiness_contract_write_file($package . '/vendor/autoload.php', "<?php\n");
     wp_fts_release_readiness_contract_write_file($package . '/vendor/wp-php-toolkit/full-text-search/src/bootstrap.php', "<?php\n");
 
@@ -545,9 +545,18 @@ function wp_fts_release_readiness_contract_current_public_blocked(): void
     $ids = wp_fts_release_readiness_contract_blocker_ids($report);
 
     wp_fts_release_readiness_contract_same('blocked', $report['status'] ?? null, 'current package should not pass public-submission readiness');
-    foreach (['docs_public_submission_blocker', 'package_license_file', 'package_public_assets', 'public_submission_authority_evidence'] as $id) {
+    foreach (['public_submission_authority_evidence'] as $id) {
         wp_fts_release_readiness_contract_true(in_array($id, $ids, true), "current package should report public-submission blocker {$id}");
     }
+    foreach (['docs_public_submission_blocker'] as $id) {
+        wp_fts_release_readiness_contract_true(!in_array($id, $ids, true), "current package should not report resolved public-submission blocker {$id}");
+    }
+    $canVerifyPublicPngOriginality = function_exists('gzuncompress') || function_exists('imagecreatefrompng');
+    wp_fts_release_readiness_contract_same(
+        !$canVerifyPublicPngOriginality,
+        in_array('package_public_assets', $ids, true),
+        'current package public asset blocker should only remain when PHP cannot verify PNG originality'
+    );
 }
 
 function wp_fts_release_readiness_contract_public_readme_and_license_blockers(): void
@@ -950,7 +959,7 @@ function wp_fts_release_readiness_contract_prohibited_package_paths(): void
         wp_fts_release_readiness_contract_same('blocked', $report['status'] ?? null, 'prohibited staged package paths should block direct-install readiness');
         wp_fts_release_readiness_contract_true(in_array('direct_package_prohibited_paths', $ids, true), 'prohibited paths should report the package boundary blocker');
         $json = WP_FTS_ReleaseReadinessChecker::render_json($report);
-        foreach (['indexer/tests', 'indexer/vendor/bin', 'indexer/vendor/example/library/coverage', 'indexer/playground/indexer-preview.zip'] as $path) {
+        foreach (['language-fts/tests', 'language-fts/vendor/bin', 'language-fts/vendor/example/library/coverage', 'language-fts/playground'] as $path) {
             wp_fts_release_readiness_contract_contains($path, $json, "prohibited path report should include {$path}");
         }
     } finally {

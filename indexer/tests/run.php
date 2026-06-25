@@ -6331,7 +6331,7 @@ test_case('Debug Bar diagnostics panel registration is conditional and safe', fu
     assert_contains('Full-Text Search diagnostics', is_string($html) ? $html : '', 'Debug Bar diagnostics panel should render the shared diagnostics surface');
 });
 
-test_case('playground blueprint preserves sandbox landing tab', function (): void {
+test_case('playground blueprint lands on the settings dashboard', function (): void {
     $blueprintPath = __DIR__ . '/../playground/blueprint.json';
     $json = file_get_contents($blueprintPath);
     if (!is_string($json)) {
@@ -6342,13 +6342,13 @@ test_case('playground blueprint preserves sandbox landing tab', function (): voi
     assert_true(is_array($blueprint), 'playground blueprint should decode as JSON');
 
     $landingPage = is_scalar($blueprint['landingPage'] ?? null) ? (string) $blueprint['landingPage'] : '';
-    assert_same('/wp-admin/options-general.php?page=wp-fts-settings&tab=sandbox', $landingPage, 'playground landing page should use a normal admin query string');
+    assert_same('/wp-admin/options-general.php?page=wp-fts-settings', $landingPage, 'playground landing page should use a normal admin query string');
     assert_true(!str_contains($landingPage, '%26'), 'playground landing page should not encode the tab separator into the page slug');
 
     $route = wp_fts_test_parse_admin_route($landingPage);
     assert_same('/wp-admin/options-general.php', $route['path'], 'playground landing page should target General Settings');
     assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, (string) ($route['params']['page'] ?? ''), 'playground landing page should target the FTS settings page');
-    assert_same('sandbox', (string) ($route['params']['tab'] ?? ''), 'playground landing page should target the Sandbox tab');
+    assert_true(!isset($route['params']['tab']), 'playground landing page should target the default Dashboard tab');
 
     $brokenRoute = wp_fts_test_parse_admin_route('/wp-admin/options-general.php?page=wp-fts-settings%26tab=sandbox');
     assert_same('wp-fts-settings&tab=sandbox', (string) ($brokenRoute['params']['page'] ?? ''), 'real query parsing treats encoded ampersand as part of the page value');

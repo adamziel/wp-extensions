@@ -12,9 +12,12 @@ auth.json
 .composer
 .composer/**
 tests
+tools
+tools/**
+playground
+playground/**
 goal.md
 resources/sources
-playground/indexer-preview.zip
 vendor/bin
 vendor/bin/**
 vendor/*/*/test

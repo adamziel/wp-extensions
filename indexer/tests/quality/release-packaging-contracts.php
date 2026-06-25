@@ -122,6 +122,10 @@ function wp_fts_release_packaging_contract_run(): void
         'auth.json',
         '.composer',
         '.composer/**',
+        'tools',
+        'tools/**',
+        'playground',
+        'playground/**',
     ] as $pattern) {
         wp_fts_release_packaging_contract_contains(
             $pattern,
@@ -134,18 +138,20 @@ function wp_fts_release_packaging_contract_run(): void
         'dependency-internal test and coverage fixtures under `vendor/`',
         'php indexer/tools/build-release-zip.php',
         'prunes staged dotfiles anywhere in the package before ZIP creation',
-        'indexer/vendor/wamania/php-stemmer/.gitignore',
+        'language-fts/vendor/wamania/php-stemmer/.gitignore',
         'vendor/wp-php-toolkit/full-text-search/tests/',
         'vendor/bin',
         '`test`, `tests`, `Tests`, and `coverage`',
         'prohibited dotfiles',
-        'direct-install ZIP boundary only',
+        'installable release ZIP',
         'WordPress.org or SVN submission',
         'dependency-internal vendor tests such as',
-        'indexer/vendor/wp-php-toolkit/full-text-search/tests/*',
+        'language-fts/vendor/wp-php-toolkit/full-text-search/tests/*',
         'Composer auth files such as',
         'indexer/auth.json',
         'indexer/.composer/auth.json',
+        '`language-fts/` package root',
+        'Development tools and Playground harnesses',
         'language-fts-core.zip',
         'language-fts-full.zip',
         'language-fts-extended-language-packs.zip',
@@ -170,7 +176,7 @@ function wp_fts_release_packaging_contract_run(): void
         );
     }
 
-    $vendorTestsPosition = strpos($docs, 'indexer/vendor/wp-php-toolkit/full-text-search/tests/*');
+    $vendorTestsPosition = strpos($docs, 'language-fts/vendor/wp-php-toolkit/full-text-search/tests/*');
     $builderPosition = strpos($docs, 'php indexer/tools/build-release-zip.php');
     wp_fts_release_packaging_contract_true(
         is_int($builderPosition) && is_int($vendorTestsPosition) && $builderPosition < $vendorTestsPosition,
@@ -196,6 +202,7 @@ function wp_fts_release_packaging_contract_prune_run(): void
         wp_fts_release_packaging_contract_write_fixture($stage . '/review-artifacts/evidence.json');
         wp_fts_release_packaging_contract_write_fixture($stage . '/resources/sources/raw-source.txt');
         wp_fts_release_packaging_contract_write_fixture($stage . '/playground/indexer-preview.zip');
+        wp_fts_release_packaging_contract_write_fixture($stage . '/tools/build-release-zip.php');
         wp_fts_release_packaging_contract_write_fixture($stage . '/auth.json', '{"github-oauth":{"example.test":"dummy"}}');
         wp_fts_release_packaging_contract_write_fixture($stage . '/.composer/auth.json', '{"http-basic":{"example.test":{"username":"dummy","password":"dummy"}}}');
         wp_fts_release_packaging_contract_write_fixture($stage . '/.gitignore');
@@ -203,23 +210,23 @@ function wp_fts_release_packaging_contract_prune_run(): void
 
         $before = WP_FTS_ReleasePackageBuilder::find_prohibited_package_paths($stage);
         wp_fts_release_packaging_contract_true(
-            in_array('indexer/auth.json', $before, true),
+            in_array('language-fts/auth.json', $before, true),
             'release verifier should detect root Composer auth files before pruning'
         );
         wp_fts_release_packaging_contract_true(
-            in_array('indexer/.composer', $before, true),
+            in_array('language-fts/.composer', $before, true),
             'release verifier should detect Composer auth home directories before pruning'
         );
         wp_fts_release_packaging_contract_true(
-            in_array('indexer/vendor/wamania/php-stemmer/.gitignore', $before, true),
+            in_array('language-fts/vendor/wamania/php-stemmer/.gitignore', $before, true),
             'release verifier should detect nested Composer dependency .gitignore before pruning'
         );
         wp_fts_release_packaging_contract_true(
-            in_array('indexer/vendor/wamania/php-stemmer/.distignore', $before, true),
+            in_array('language-fts/vendor/wamania/php-stemmer/.distignore', $before, true),
             'release verifier should detect nested Composer dependency .distignore before pruning'
         );
         wp_fts_release_packaging_contract_true(
-            in_array('indexer/vendor/wp-php-toolkit/full-text-search/tests', $before, true),
+            in_array('language-fts/vendor/wp-php-toolkit/full-text-search/tests', $before, true),
             'release verifier should detect dependency-internal tests before pruning'
         );
 
@@ -227,19 +234,19 @@ function wp_fts_release_packaging_contract_prune_run(): void
         $after = WP_FTS_ReleasePackageBuilder::find_prohibited_package_paths($stage);
         wp_fts_release_packaging_contract_same([], $after, 'release prune should remove all prohibited staged package paths');
         wp_fts_release_packaging_contract_true(
-            in_array('indexer/vendor/wamania/php-stemmer/.gitignore', $removed, true),
+            in_array('language-fts/vendor/wamania/php-stemmer/.gitignore', $removed, true),
             'release prune should report removed nested dependency .gitignore'
         );
         wp_fts_release_packaging_contract_true(
-            in_array('indexer/vendor/wamania/php-stemmer/.distignore', $removed, true),
+            in_array('language-fts/vendor/wamania/php-stemmer/.distignore', $removed, true),
             'release prune should report removed nested dependency .distignore'
         );
         wp_fts_release_packaging_contract_true(
-            in_array('indexer/auth.json', $removed, true),
+            in_array('language-fts/auth.json', $removed, true),
             'release prune should report removed root Composer auth files'
         );
         wp_fts_release_packaging_contract_true(
-            in_array('indexer/.composer', $removed, true),
+            in_array('language-fts/.composer', $removed, true),
             'release prune should report removed Composer auth home directories'
         );
         wp_fts_release_packaging_contract_true(
@@ -253,6 +260,14 @@ function wp_fts_release_packaging_contract_prune_run(): void
         wp_fts_release_packaging_contract_true(
             !file_exists($stage . '/review-artifacts/evidence.json'),
             'release prune should remove review artifacts'
+        );
+        wp_fts_release_packaging_contract_true(
+            !file_exists($stage . '/tools/build-release-zip.php'),
+            'release prune should remove build tools'
+        );
+        wp_fts_release_packaging_contract_true(
+            !file_exists($stage . '/playground/indexer-preview.zip'),
+            'release prune should remove Playground files'
         );
     } finally {
         wp_fts_release_packaging_contract_remove_tree($tmp);
@@ -287,20 +302,20 @@ function wp_fts_release_packaging_contract_release_channel_policy_run(): void
     $polish = wp_fts_release_packaging_contract_row_by_prefix($rows, 'pl-polimorf-');
     wp_fts_release_packaging_contract_same('BSD-2-Clause', $polish['license_spdx'], 'Polish PoliMorf runtime pack should remain BSD-2-Clause');
     wp_fts_release_packaging_contract_true(
-        WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_CORE, $polish),
-        'core release profile should allow the BSD-2-Clause Polish pack'
+        !WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_CORE, $polish),
+        'core release profile should exclude bundled analyzer-pack runtime data'
     );
     wp_fts_release_packaging_contract_true(
-        WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_WPORG_COMPATIBLE, $polish),
-        'WP.org-compatible release profile should allow the BSD-2-Clause Polish pack'
+        !WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_WPORG_COMPATIBLE, $polish),
+        'WP.org-compatible release profile should exclude bundled analyzer-pack runtime data'
     );
     wp_fts_release_packaging_contract_true(
         WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_GITHUB_FULL, $polish),
         'GitHub full release profile should allow the BSD-2-Clause Polish pack'
     );
     wp_fts_release_packaging_contract_true(
-        !WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_EXTENDED_LANGUAGE_PACKS, $polish),
-        'extended language-pack bundle should contain only separately licensed CC BY-SA packs, not the core Polish pack'
+        WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_EXTENDED_LANGUAGE_PACKS, $polish),
+        'extended language-pack bundle should include the BSD-2-Clause Polish pack'
     );
 
     $unknown = wp_fts_release_packaging_contract_row_by_prefix($rows, 'te-unimorph-');

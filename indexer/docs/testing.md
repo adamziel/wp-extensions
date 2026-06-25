@@ -88,9 +88,10 @@ default direct-install build directory is protected by an advisory lock, so
 overlapping readiness runs serialize around staging and validation instead of
 racing on the same temporary package tree.
 `public-submission` is a separate authority gate and is expected to fail on
-current main until WordPress.org-style `readme.txt`, GPL-compatible package
-license evidence, valid directory assets, public redistribution policy, and
-public-submission authority evidence are supplied and reviewed.
+current main until public-submission authority evidence is supplied and
+reviewed. The gate still checks WordPress.org-style `readme.txt`,
+GPL-compatible package license evidence, valid directory assets, and public
+redistribution policy so package regressions remain blockers.
 
 The public asset contracts cover the required WordPress.org-style PNGs:
 `assets/banner-772x250.png` must be exactly 772 by 250 pixels and
@@ -167,8 +168,9 @@ WordPress.org/SVN or broader public-marketplace submission readiness:
 php tools/collect-release-evidence.php --release-target=public-submission
 ```
 
-That target is expected to stay `blocked` until the project resolves product
-policy, public assets, license, readme, and authority-evidence requirements.
+That target is expected to stay `blocked` until the project supplies completed
+authority evidence. Public assets, license, readme, and policy checks still run
+and should remain passing.
 Do not use the direct-install or real WordPress/MySQL opt-ins against production
 or shared staging data. A `pass` for `--release-target=direct-install` is only
 evidence for the supported direct-install ZIP path; it does not approve public

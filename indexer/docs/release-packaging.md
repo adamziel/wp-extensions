@@ -1,32 +1,26 @@
 # Release Packaging
 
-Release archives should package the `indexer` directory as the WordPress plugin
-root. The reusable FTS engine ships through Composer under `vendor/`; source
+Release archives should package the source `indexer` directory as the public
+`language-fts` WordPress plugin root. The reusable FTS engine ships through Composer under `vendor/`; source
 checkouts can also load it from the adjacent `components/full-text-search`
 directory. The archive should expand to:
 
 ```text
-indexer/
+language-fts/
   indexer.php
   composer.json
   composer.lock
+  LICENSE
   README.md
   docs/
-  playground/
-    blueprint.json
-    sqlite-smoke-blueprint.json
-    sqlite-smoke.php
-  resources/
-    analyzer-packs/
   src/
-  tools/
   vendor/
     wp-php-toolkit/full-text-search/
 ```
 
 Do not package the whole monorepo as a WordPress plugin. WordPress discovers
 plugin headers only at the plugin root and one directory level below
-`wp-content/plugins`; a nested monorepo checkout can leave `indexer/indexer.php`
+`wp-content/plugins`; a nested monorepo checkout can leave the plugin entrypoint
 undiscovered.
 
 ## Release Channels
@@ -34,16 +28,16 @@ undiscovered.
 Release artifacts are split by license channel:
 
 - `language-fts-core.zip`: an installable plugin ZIP that carries
-  GPL-compatible code and analyzer-pack data only. This profile excludes CC
-  BY-SA UniMorph packs, unknown-license packs, raw upstream source submodules,
-  fixtures, local build artifacts, and credentials. The BSD-2-Clause Polish
-  PoliMorf runtime pack is allowed in this channel.
+  runtime PHP, docs, package-level license evidence, and production Composer
+  dependencies. This profile excludes analyzer-pack runtime data, development
+  tools, Playground harnesses, raw upstream source submodules, fixtures, local
+  build artifacts, and credentials.
 - `language-fts-full.zip`: an installable GitHub/full plugin ZIP. This profile
   may include CC BY-SA UniMorph packs with their notices, provenance, source
   locks, manifests, and runtime shards. Unknown-license packs still remain
   blocked.
 - `language-fts-extended-language-packs.zip`: a separate optional language-pack
-  bundle for CC BY-SA UniMorph packs. It is not an installable plugin ZIP and
+  bundle for approved analyzer packs. It is not an installable plugin ZIP and
   is not bundled with the core package. It includes a
   top-level `manifest.json`, `NOTICE.txt`, `LICENSES.md`, each pack manifest,
   each pack notice, `PROVENANCE.md`, `SOURCE.lock.json`, and runtime shards.
@@ -65,14 +59,15 @@ builders before ZIP creation.
 
 | Analyzer pack class | Core ZIP | GitHub full ZIP | Extended pack bundle |
 | --- | --- | --- | --- |
-| Plugin PHP, docs, tools, production Composer dependencies | Included | Included | Not included |
-| BSD-2-Clause Polish PoliMorf runtime pack | Included | Included | Excluded |
+| Plugin PHP, docs, package license, production Composer dependencies | Included | Included | Not included |
+| Development tools and Playground harnesses | Excluded | Excluded | Not included |
+| BSD-2-Clause Polish PoliMorf runtime pack | Excluded | Included | Included with notices and provenance |
 | CC BY-SA UniMorph runtime packs | Excluded | Included with notices and provenance | Included with notices and provenance |
 | `upstream-license-not-declared` packs | Excluded | Excluded | Excluded |
 | Fixture-only packs | Excluded | Excluded | Excluded |
 | Raw upstream sources under `resources/sources/` | Excluded | Excluded | Excluded |
 
-The core package is a direct-install ZIP boundary only. It is not a WordPress.org submission,
+The core package is an installable release ZIP, not a WordPress.org submission,
 approval, endorsement, hosted asset, SVN commit, tag, GitHub release, or upload.
 
 ## GitHub Release Workflow
@@ -121,9 +116,9 @@ The workflow publishes these release assets:
 - `language-fts-release-evidence.json`;
 - `SHA256SUMS.txt`.
 
-Use `language-fts-core.zip` for the smallest GPL-compatible direct-install
-plugin package. Use `language-fts-full.zip` only when the separately licensed
-CC BY-SA UniMorph packs are acceptable. Use
+Use `language-fts-core.zip` for the smallest direct-install plugin package,
+without bundled analyzer-pack data. Use `language-fts-full.zip` only when the
+separately licensed CC BY-SA UniMorph packs are acceptable. Use
 `language-fts-extended-language-packs.zip` only when you want optional extra
 packs outside the core plugin package, and review the bundle notices before
 use. In-plugin downloads read the signed
@@ -158,11 +153,7 @@ Ship:
 - `composer.lock`;
 - `README.md`;
 - `docs/*.md`;
-- `playground/*.json` and `playground/sqlite-smoke.php`;
-- profile-allowed `resources/analyzer-packs/` runtime manifests, notices,
-  provenance, source locks, and runtime shards that the plugin can validate
-  locally;
-- `tools/` importer, validator, audit, and external-pack helper scripts;
+- `LICENSE`;
 - runtime Composer dependencies under `vendor/`, including
   `wp-php-toolkit/full-text-search`, for release archives.
 
@@ -174,12 +165,15 @@ Do not ship:
 - `.cao/` task and review artifacts;
 - `review-artifacts/`;
 - `tests/`;
+- `tools/`;
+- `playground/`;
 - `goal.md`;
-- Composer auth files such as `indexer/auth.json` and
-  `indexer/.composer/auth.json`;
+- Composer auth files such as `language-fts/auth.json` and
+  `language-fts/.composer/auth.json`;
 - `resources/sources/` raw upstream source submodules such as Jieba and
   UniMorph checkouts;
-- generated preview/archive files such as `playground/indexer-preview.zip`;
+- profile-optional `resources/analyzer-packs/` runtime manifests, notices,
+  provenance, source locks, and runtime shards;
 - `vendor/bin`;
 - dependency-internal test and coverage fixtures under `vendor/`, including
   `vendor/wp-php-toolkit/full-text-search/tests/`;
@@ -187,10 +181,10 @@ Do not ship:
 
 The `.distignore` file in this directory encodes that packaging boundary.
 
-This package is a direct-install ZIP boundary only. It does not make the plugin
-ready for WordPress.org or SVN submission, which still needs complete
-WordPress.org-style readme metadata, GPL-compatible license files and metadata,
-valid directory asset images, and recorded public-submission authority evidence.
+The package includes WordPress.org-style readme metadata, GPL-compatible package
+license evidence, and directory asset images. WordPress.org or SVN submission
+still requires a recorded public-submission authority review in addition to
+these package checks.
 
 ## Release Readiness Gate
 
@@ -205,7 +199,7 @@ php indexer/tools/check-release-readiness.php --target=direct-install
 ```
 
 This target checks the plugin header version, Composer metadata, direct ZIP
-builder, `indexer/` package root, required runtime files, production Composer
+builder, `language-fts/` package root, required runtime files, production Composer
 dependencies, prohibited release artifacts, and ZIP boundary. The default
 readiness path uses a stable temporary build directory and normalized ZIP entry
 metadata so two unchanged runs produce identical JSON, including the operator
@@ -222,13 +216,12 @@ Public-submission readiness is intentionally separate:
 php indexer/tools/check-release-readiness.php --target=public-submission
 ```
 
-Current main is expected to fail this target. The package does not yet carry a
-complete package-level `readme.txt`, package-level GPL-compatible license file,
-public redistribution license policy, valid WordPress.org-style banner/icon
-assets, or `docs/public-submission-readiness.json` authority evidence. The
-checker must continue to report those blockers until the project intentionally
-supplies and verifies the WordPress.org-style metadata/assets/license evidence
-needed for public submission.
+This target remains blocked until
+`docs/public-submission-readiness.json` records a completed authority review.
+The checker still validates package-level `readme.txt`, the package-level
+GPL-compatible license file, public redistribution license policy, and
+WordPress.org-style banner/icon assets so regressions in those package artifacts
+block submission readiness again.
 
 The public-submission asset check requires the exact PNG files
 `assets/banner-772x250.png` and `assets/icon-128x128.png`. The banner must be
@@ -241,6 +234,25 @@ marker. To pass, it must record an approved WordPress.org/public-submission
 target, non-placeholder approver, review date, and explicit approved checks for
 readme, license, assets, and public-submission authority.
 
+Use this shape only after an authorized reviewer has completed that review:
+
+```json
+{
+  "status": "approved",
+  "target": "wordpress.org-plugin-directory",
+  "approver": "Reviewer name",
+  "reviewed_at": "YYYY-MM-DD",
+  "checks": {
+    "readme": true,
+    "license": true,
+    "assets": true,
+    "public_submission_authority": true
+  }
+}
+```
+
+Do not commit `docs/public-submission-readiness.json` with placeholder values.
+
 ## Release Evidence Bundle
 
 The release evidence collector gives release reviewers one sanitized JSON bundle
@@ -248,8 +260,6 @@ for the current checkout:
 
 ```sh
 php indexer/tools/collect-release-evidence.php
-```
-
 The collector has an explicit release target:
 
 ```sh
@@ -257,15 +267,15 @@ php indexer/tools/collect-release-evidence.php --release-target=direct-install
 php indexer/tools/collect-release-evidence.php --release-target=public-submission
 ```
 
-The default target is `direct-install`, matching the current product policy
-that this package is a direct-install ZIP boundary only. The default bundle is
-safe to run before release assets exist: it does not build or write a
-direct-install ZIP by default. Because direct-install readiness is the required
-lane for the default target, the default bundle is `blocked` until the operator
-either explicitly allows direct-install readiness to stage/build artifacts or
-supplies an already staged package directory. Public-submission readiness is
-still included as non-target evidence, and it must continue to say that public
-submission is not approved and remains blocked if that target is selected.
+The default target is `direct-install`, matching the supported installable ZIP
+release workflow. The default bundle is safe to run before release assets exist:
+it does not build or write a direct-install ZIP by default. Because
+direct-install readiness is the required lane for the default target, the
+default bundle is `blocked` until the operator either explicitly allows
+direct-install readiness to stage/build artifacts or supplies an already staged
+package directory. Public-submission readiness is still included as non-target
+evidence, and it must continue to say that public submission is not approved and
+remains blocked if that target is selected.
 
 Use a direct-install target bundle with explicit readiness evidence when a
 review needs a truthful pass/fail bundle for the supported release path:
@@ -276,7 +286,7 @@ php indexer/tools/collect-release-evidence.php \
   --run-direct-install-readiness
 php indexer/tools/collect-release-evidence.php \
   --release-target=direct-install \
-  --direct-package-dir=/path/to/staged/indexer
+  --direct-package-dir=/path/to/staged/language-fts
 php indexer/tools/collect-release-evidence.php \
   --release-target=direct-install \
   --run-docker-disposable-smokes
@@ -300,9 +310,8 @@ marketplace submission review:
 php indexer/tools/collect-release-evidence.php --release-target=public-submission
 ```
 
-That target remains `blocked` on current main until the real
-public-submission artifacts, license/readme metadata, public redistribution
-policy, and authority evidence are supplied. The bundle also records
+That target remains `blocked` on current main until authority evidence is
+supplied. The bundle also records
 skip/pass/fail evidence for the host-configured disposable WordPress release
 smoke, host-configured provider compatibility smoke, explicitly opted-in Docker
 disposable release/provider smoke, explicitly opted-in Docker disposable
@@ -367,7 +376,7 @@ The plugin bootstrap prefers the adjacent `../components/full-text-search`
 source when it exists in a monorepo checkout, then loads `vendor/autoload.php`
 when Composer vendor files are present. A standalone plugin ZIP must include
 vendor files because the adjacent monorepo component will not exist inside
-`wp-content/plugins/indexer`.
+`wp-content/plugins/language-fts`.
 
 ## Build Release Artifacts
 
@@ -397,16 +406,16 @@ php indexer/tools/build-language-pack-release-manifest.php \
   --signature-output="$BUILD_PACKS/language-fts-extended-language-packs.manifest.json.sig"
 ```
 
-The builder stages `indexer/` through `.distignore`, copies the local
-`components/full-text-search` package for Composer's path repository, runs
-`composer install --no-dev --optimize-autoloader` with a scrubbed Composer
-environment, removes vendor development directories such as `vendor/bin`,
+The builder stages source `indexer/` as package root `language-fts/` through
+`.distignore`, copies the local `components/full-text-search` package for
+Composer's path repository, runs `composer install --no-dev --optimize-autoloader`
+with a scrubbed Composer environment, removes vendor development directories such as `vendor/bin`,
 `test`, `tests`, `Tests`, and `coverage`. The builder prunes staged dotfiles anywhere in the package before ZIP creation,
 applies the selected analyzer-pack release profile,
-and refuses staged Composer auth files such as `indexer/auth.json` or
-`indexer/.composer/auth.json` before dependency installation so Composer cannot
+and refuses staged Composer auth files such as `language-fts/auth.json` or
+`language-fts/.composer/auth.json` before dependency installation so Composer cannot
 read source-tree credentials. This removes nested Composer dependency files such as
-`indexer/vendor/wamania/php-stemmer/.gitignore` before they can enter the
+`language-fts/vendor/wamania/php-stemmer/.gitignore` before they can enter the
 archive. If multiple builds use the same `--build-dir`, they are serialized with
 the same advisory lock used by the readiness gate.
 
@@ -416,16 +425,16 @@ Inspect the archive contents:
 php -r '$z=new ZipArchive(); $z->open($argv[1]); for ($i=0; $i<$z->numFiles; $i++) { echo $z->getNameIndex($i), PHP_EOL; }' "$BUILD/language-fts-core.zip" | sed -n '1,120p'
 ```
 
-The core listing should include `indexer/resources/analyzer-packs/`,
-`indexer/tools/`, production `indexer/vendor/` dependencies, and
-`indexer/RELEASE-CHANNEL.txt`. It should not include CC BY-SA UniMorph pack
-directories, unknown-license pack directories, `.cao`, root `indexer/tests/`,
+The core listing should include production `language-fts/vendor/` dependencies
+and `language-fts/RELEASE-CHANNEL.txt`. It should not include analyzer-pack
+runtime directories, development `language-fts/tools/`, Playground harnesses,
+unknown-license pack directories, `.cao`, root `language-fts/tests/`,
 dependency-internal vendor tests such as
-`indexer/vendor/wp-php-toolkit/full-text-search/tests/*`, `indexer/vendor/bin/`,
-dependency dotfiles such as `indexer/vendor/wamania/php-stemmer/.gitignore`,
-Composer auth files such as `indexer/auth.json` or
-`indexer/.composer/auth.json`, `review-artifacts`, `resources/sources`, or the
-nested `playground/indexer-preview.zip` preview archive. The builder fails before ZIP
+`language-fts/vendor/wp-php-toolkit/full-text-search/tests/*`,
+`language-fts/vendor/bin/`, dependency dotfiles such as
+`language-fts/vendor/wamania/php-stemmer/.gitignore`, Composer auth files such
+as `language-fts/auth.json` or `language-fts/.composer/auth.json`,
+`review-artifacts`, `resources/sources`, `tools/`, or `playground/`. The builder fails before ZIP
 creation if the staged package still contains Composer auth files, prohibited dotfiles, root tests,
 review artifacts, raw source checkouts, vendor binaries, or vendor test/coverage
 fixtures.
@@ -445,16 +454,16 @@ The schema probe should succeed even before any content is indexed.
 2. Run the normal PHP harness and any required hardening acceptance commands.
 3. Run `php indexer/tools/check-release-readiness.php --target=direct-install`.
 4. Run `php indexer/tools/collect-release-evidence.php --release-target=direct-install --run-direct-install-readiness`
-   or use `--direct-package-dir=/path/to/staged/indexer` when validating an
+   or use `--direct-package-dir=/path/to/staged/language-fts` when validating an
    existing staged package.
 5. Run `php indexer/tools/check-release-readiness.php --target=public-submission`
    and treat the current blockers as expected unless the release explicitly
    includes a completed public-submission authority pass.
 6. Build the core ZIP, GitHub full ZIP, and extended language pack bundle in
    temporary directories.
-7. Inspect the ZIPs for the release-channel license matrix: CC BY-SA UniMorph
-   packs absent from core, present in full/extended, and unknown-license packs
-   absent everywhere.
+7. Inspect the ZIPs for the release-channel license matrix: analyzer packs
+   absent from core, approved packs present in full/extended, and
+   unknown-license packs absent everywhere.
 8. Inspect the ZIPs for unexpected `.cao`, dotfiles, root `tests/`,
    dependency-internal vendor tests or coverage fixtures, or local cache files.
 9. Install the core or full plugin ZIP in a disposable WordPress site.

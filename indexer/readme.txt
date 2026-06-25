@@ -2,7 +2,7 @@
 Contributors: adamziel
 Tags: search, full-text-search, multilingual, wp-cli
 Requires at least: 6.5
-Tested up to: 6.9
+Tested up to: 7.0
 Requires PHP: 8.1
 Stable tag: 0.1.10
 License: GPL-2.0-or-later
@@ -26,7 +26,7 @@ Support and feedback are best effort. Safety issues, install or activation failu
 
 == Installation ==
 
-1. Install the approved Language FTS plugin package through the WordPress admin plugin screen, or copy the `indexer` plugin folder to `wp-content/plugins/indexer`.
+1. Install the approved Language FTS plugin package through the WordPress admin plugin screen, or copy the `language-fts` plugin folder to `wp-content/plugins/language-fts`.
 2. Activate **Language FTS** from the Plugins screen.
 3. Open **Settings > Full-Text Search** and review Health, Settings, Sandbox, Indexed content, and Analyzer packs.
 4. Run an initial reindex from WP-CLI, for example: `wp fts reindex --post_type=post --batch_size=200`.
@@ -42,6 +42,14 @@ It can replace eligible front-end and wp-admin post search queries when the rela
 = Does it support multilingual sites? =
 
 It supports language-aware indexing and search where the configured analyzers and packs can handle the language. The admin status screens and `wp fts status --format=json` show the active language-pack and fallback state for the site.
+
+= Does it connect to external services? =
+
+By default, indexing and search run locally. An administrator can choose to fetch optional analyzer language packs from GitHub Releases. That request downloads a signed manifest and ZIP bundle from `github.com`, verifies the Ed25519 signature, SHA-256 hash, declared size, and ZIP contents, then extracts approved data files into the site uploads directory. These optional packs are not hosted, reviewed, or endorsed by WordPress.org.
+
+= What happens on uninstall? =
+
+Uninstall removes the plugin options and scheduled events. The derived full-text index tables are retained so an accidental uninstall does not immediately delete search data. Remove the `fts_*` tables manually if you want to discard the derived index completely.
 
 = Does it certify compatibility with other search plugins or hosted search services? =
 
