@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Language FTS
  * Description: Local full-text search for WordPress with multilingual analysis, WP-CLI tools, and operator diagnostics.
- * Version: 0.1.9
+ * Version: 0.1.10
  * Requires at least: 6.5
  * Requires PHP: 8.1
  * Author: adamziel

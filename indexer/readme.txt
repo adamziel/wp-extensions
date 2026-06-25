@@ -4,7 +4,7 @@ Tags: search, full-text-search, multilingual, wp-cli
 Requires at least: 6.5
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 0.1.9
+Stable tag: 0.1.10
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,10 @@ Start with staging or a disposable copy. Confirm backups, rollback, cron behavio
 Include WordPress, PHP, and database versions; active theme and relevant plugins; exact steps to reproduce; relevant status or diagnostic output; and whether the issue reproduces on staging.
 
 == Changelog ==
+
+= 0.1.10 =
+
+Adds the settings Dashboard as the default admin tab and verifies optional GitHub language-pack downloads with a signed manifest, SHA-256 hash, size checks, and bounded extraction.
 
 = 0.1.9 =
 
