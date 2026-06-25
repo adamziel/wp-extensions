@@ -99,7 +99,7 @@ final class WP_FTS_Plugin
     private const EXTENDED_LANGUAGE_PACKS_MANIFEST_URL = 'https://github.com/adamziel/wp-extensions/releases/latest/download/language-fts-extended-language-packs.manifest.json';
     private const EXTENDED_LANGUAGE_PACKS_SIGNATURE_URL = 'https://github.com/adamziel/wp-extensions/releases/latest/download/language-fts-extended-language-packs.manifest.json.sig';
     private const EXTENDED_LANGUAGE_PACKS_TRUSTED_ASSET_URL_PATTERN = '#^https://github\.com/adamziel/wp-extensions/releases/download/language-fts-v[A-Za-z0-9._-]+/language-fts-extended-language-packs\.zip$#';
-    private const EXTENDED_LANGUAGE_PACKS_MANIFEST_PUBLIC_KEY_BASE64 = 'OoCfdrPYLuQK6kz+IIRT6SfMfu0v+nN1zmybvQzf0UU=';
+    private const EXTENDED_LANGUAGE_PACKS_MANIFEST_PUBLIC_KEY_BASE64 = 'TtWC9cOW8Al/7q6IGXZC3+KweYruDS+FyYWjo3uFBSs=';
     private const EXTENDED_LANGUAGE_PACKS_ZIP_PREFIX = 'language-fts-extended-language-packs/analyzer-packs/';
     private const EXTENDED_LANGUAGE_PACKS_MAX_MANIFEST_BYTES = 65536;
     private const EXTENDED_LANGUAGE_PACKS_MAX_SIGNATURE_BYTES = 512;
