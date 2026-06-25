@@ -5402,12 +5402,36 @@ test_case('default dashboard summarizes index progress search behavior and langu
         assert_contains('Choose optional bundled packs', $html, 'dashboard should offer selective bundled pack controls when gzip support is available');
         assert_contains('value="en"', $html, 'dashboard bundled pack choices should include English');
         assert_contains('value="pl"', $html, 'dashboard bundled pack choices should include Polish');
+        assert_true(preg_match('/value="en"[^>]*checked="checked"/', $html) === 1, 'dashboard should preselect the first-run recommended English pack for an English site');
+        assert_true(preg_match('/value="pl"[^>]*checked="checked"/', $html) !== 1, 'dashboard should not preselect unrelated bundled packs on an English site');
+        assert_contains('Recommended packs are preselected for this site language. They are not active until you save them.', $html, 'dashboard should distinguish recommended pack selections from active runtime packs');
+        assert_contains('<span class="description">Recommended</span>', $html, 'dashboard should label first-run recommended packs separately from enabled packs');
         assert_contains('Save selected packs', $html, 'dashboard should save explicit pack selections instead of enabling every bundled pack');
         assert_true(!str_contains($html, 'Enable bundled language packs'), 'dashboard should not offer an all-or-nothing bundled-pack action');
     } else {
         assert_contains('PHP gzip support is required before bundled language packs can be enabled.', $html, 'dashboard should explain missing gzip support instead of offering a broken action');
     }
     assert_true(!str_contains($html, '<h2>Search health</h2>'), 'default dashboard should not render the full Health diagnostics panel');
+});
+
+test_case('dashboard respects explicitly saved empty optional language-pack selection', function (): void {
+    if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_true(true, 'gzip is unavailable, so dashboard optional pack preselection coverage is skipped.');
+        return;
+    }
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'lemmatizer_packs_by_lang' => [],
+    ];
+
+    $html = wp_fts_test_capture_admin_settings_tab(null);
+
+    assert_contains('Choose optional bundled packs', $html, 'dashboard should still render bundled pack controls after an explicit empty save');
+    assert_true(preg_match('/value="en"[^>]*checked="checked"/', $html) !== 1, 'dashboard should not re-preselect English after the operator explicitly saved no optional packs');
+    assert_true(!str_contains($html, 'Recommended packs are preselected for this site language'), 'dashboard should not show first-run recommendation copy after an explicit empty analyzer option exists');
+    assert_contains('<span class="description">Available</span>', $html, 'dashboard should show unselected bundled packs as available after an explicit empty save');
 });
 
 test_case('health tab displays search state counts and last indexed content without demo controls', function (): void {
@@ -6501,6 +6525,9 @@ test_case('admin analyzer packs tab renders bundled runtime pack controls when g
         assert_contains('name="wp_fts_bundled_runtime_lemma_packs[]"', $html, 'eligible bundled runtime packs should render checkbox controls');
         assert_contains('English (en)', $html, 'eligible bundled runtime controls should include English');
         assert_contains('Polish (pl)', $html, 'eligible bundled runtime controls should include Polish');
+        assert_true(preg_match('/value="en"[^>]*checked="checked"/', $html) === 1, 'eligible bundled runtime controls should preselect the first-run recommended English pack');
+        assert_true(preg_match('/value="pl"[^>]*checked="checked"/', $html) !== 1, 'eligible bundled runtime controls should leave unrelated Polish optional until selected');
+        assert_contains('Recommended</label>', $html, 'eligible bundled runtime controls should label first-run recommendations without calling them enabled');
         assert_contains('en-unimorph-eng-66e0e9e8e2dc', $html, 'eligible bundled runtime controls should expose the bundled English pack id');
         assert_contains('pl-polimorf-20180722-full-playground', $html, 'eligible bundled runtime controls should expose the bundled Polish pack id');
         assert_contains('Save selected packs', $html, 'eligible bundled runtime controls should render a bounded save button');

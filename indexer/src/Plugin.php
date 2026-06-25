@@ -6023,22 +6023,32 @@ final class WP_FTS_Plugin
             return;
         }
         $rows = self::dashboard_bundled_pack_choice_rows(self::bundled_runtime_lemma_pack_control_rows($manifests));
+        $hasRecommendedSelection = false;
+        foreach ($rows as $row) {
+            if (!empty($row['selected']) && empty($row['enabled'])) {
+                $hasRecommendedSelection = true;
+                break;
+            }
+        }
 
         echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_DASHBOARD_TAB)) . '">';
         self::render_analyzer_nonce_field();
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ANALYZER_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_ANALYZER_SAVE_BUNDLED_ACTION) . '">';
         echo '<fieldset class="wp-fts-dashboard-pack-choices">';
         echo '<legend>Choose optional bundled packs</legend>';
+        if ($hasRecommendedSelection) {
+            echo '<p class="wp-fts-dashboard-note">Recommended packs are preselected for this site language. They are not active until you save them.</p>';
+        }
         echo '<div class="wp-fts-dashboard-pack-grid">';
         foreach ($rows as $row) {
             echo '<label class="wp-fts-dashboard-pack-choice">';
             if ($row['editable']) {
-                echo '<input type="checkbox" name="' . self::esc_attr(self::ADMIN_ANALYZER_LANGUAGE_FIELD) . '[]" value="' . self::esc_attr($row['language']) . '"' . ($row['enabled'] ? ' checked="checked"' : '') . '>';
+                echo '<input type="checkbox" name="' . self::esc_attr(self::ADMIN_ANALYZER_LANGUAGE_FIELD) . '[]" value="' . self::esc_attr($row['language']) . '"' . ($row['selected'] ? ' checked="checked"' : '') . '>';
             } else {
-                echo '<input type="checkbox" disabled="disabled"' . ($row['enabled'] ? ' checked="checked"' : '') . '>';
+                echo '<input type="checkbox" disabled="disabled"' . ($row['selected'] ? ' checked="checked"' : '') . '>';
             }
             echo '<span>' . self::esc_html(self::sandbox_language_display($row['language']));
-            echo '<span class="description">' . self::esc_html($row['enabled'] ? 'Enabled' : ($row['editable'] ? 'Available' : 'External')) . '</span>';
+            echo '<span class="description">' . self::esc_html(self::bundled_runtime_lemma_pack_choice_state_label($row)) . '</span>';
             echo '</span>';
             echo '</label>';
         }
@@ -6050,8 +6060,8 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array<int,array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}> $rows
-     * @return array<int,array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}>
+     * @param array<int,array{language:string,pack_id:string,enabled:bool,selected:bool,recommended:bool,editable:bool,status:string}> $rows
+     * @return array<int,array{language:string,pack_id:string,enabled:bool,selected:bool,recommended:bool,editable:bool,status:string}>
      */
     private static function dashboard_bundled_pack_choice_rows(array $rows): array
     {
@@ -6061,17 +6071,20 @@ final class WP_FTS_Plugin
         usort($rows, static function (array $a, array $b) use ($site_language, $site_base): int {
             $rank = static function (array $row) use ($site_language, $site_base): int {
                 $language = WP_FTS_TermNamespace::canonicalize_lang((string) ($row['language'] ?? ''), WP_FTS_TermNamespace::DEFAULT_LANG);
-                if (!empty($row['enabled'])) {
+                if (!empty($row['selected'])) {
                     return 0;
                 }
-                if ($language === $site_language || ($site_base !== '' && $language === $site_base)) {
+                if (!empty($row['enabled'])) {
                     return 1;
                 }
-                if ($language === 'en') {
+                if ($language === $site_language || ($site_base !== '' && $language === $site_base)) {
                     return 2;
                 }
-                if ($language === 'pl') {
+                if ($language === 'en') {
                     return 3;
+                }
+                if ($language === 'pl') {
+                    return 4;
                 }
 
                 return 10;
@@ -6086,6 +6099,21 @@ final class WP_FTS_Plugin
         });
 
         return $rows;
+    }
+
+    /**
+     * @param array{enabled:bool,selected:bool,recommended:bool,editable:bool} $row
+     */
+    private static function bundled_runtime_lemma_pack_choice_state_label(array $row): string
+    {
+        if (!empty($row['enabled'])) {
+            return 'Enabled';
+        }
+        if (!empty($row['selected']) && !empty($row['recommended'])) {
+            return 'Recommended';
+        }
+
+        return !empty($row['editable']) ? 'Available' : 'External';
     }
 
     private static function render_dashboard_fetch_extended_packs_form(): void
@@ -10420,8 +10448,8 @@ final class WP_FTS_Plugin
             echo '<td>';
             if ($row['editable']) {
                 echo '<label>';
-                echo '<input type="checkbox" name="' . self::esc_attr(self::ADMIN_ANALYZER_LANGUAGE_FIELD) . '[]" value="' . self::esc_attr($row['language']) . '"' . ($row['enabled'] ? ' checked="checked"' : '') . '> ';
-                echo self::esc_html($row['enabled'] ? 'Enabled' : 'Enable');
+                echo '<input type="checkbox" name="' . self::esc_attr(self::ADMIN_ANALYZER_LANGUAGE_FIELD) . '[]" value="' . self::esc_attr($row['language']) . '"' . ($row['selected'] ? ' checked="checked"' : '') . '> ';
+                echo self::esc_html(self::bundled_runtime_lemma_pack_choice_state_label($row));
                 echo '</label>';
             } else {
                 echo self::esc_html('External');
@@ -10439,11 +10467,13 @@ final class WP_FTS_Plugin
 
     /**
      * @param array<string,string> $manifests
-     * @return array<int,array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}>
+     * @return array<int,array{language:string,pack_id:string,enabled:bool,selected:bool,recommended:bool,editable:bool,status:string}>
      */
     private static function bundled_runtime_lemma_pack_control_rows(array $manifests): array
     {
-        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
+        $missingOption = new stdClass();
+        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, $missingOption);
+        $hasStoredOptions = $stored !== $missingOption;
         $storedOptions = is_array($stored) ? $stored : [];
         $beforeFilter = self::raw_analyzer_options_before_filter(
             self::bundled_runtime_lemma_packs_by_lang(),
@@ -10451,6 +10481,7 @@ final class WP_FTS_Plugin
         );
         $beforePacks = self::runtime_lemma_pack_options_by_language($beforeFilter);
         $filterControlled = self::filter_controlled_runtime_lemma_pack_languages();
+        $recommendedLanguages = self::recommended_bundled_runtime_lemma_pack_languages($manifests);
         $rows = [];
 
         foreach ($manifests as $language => $manifestPath) {
@@ -10458,6 +10489,8 @@ final class WP_FTS_Plugin
             $customStored = self::stored_runtime_lemma_pack_has_custom_value($storedOptions, $language, $manifestPath);
             $enabled = isset($beforePacks[$language]) && self::lemma_pack_option_points_to_manifest($beforePacks[$language], $manifestPath);
             $editable = !$customStored && !isset($filterControlled[$language]);
+            $recommended = !$hasStoredOptions && $editable && !$enabled && isset($recommendedLanguages[$language]);
+            $selected = $enabled || $recommended;
             if (isset($filterControlled[$language])) {
                 $status = 'Configured outside this UI by the analyzer options filter.';
             } elseif ($customStored) {
@@ -10472,6 +10505,8 @@ final class WP_FTS_Plugin
                 'language' => $language,
                 'pack_id' => $packId,
                 'enabled' => $enabled,
+                'selected' => $selected,
+                'recommended' => $recommended,
                 'editable' => $editable,
                 'status' => $status,
             ];
@@ -10480,6 +10515,35 @@ final class WP_FTS_Plugin
         usort($rows, static fn(array $a, array $b): int => strcmp((string) $a['language'], (string) $b['language']));
 
         return $rows;
+    }
+
+    /**
+     * @param array<string,string> $manifests
+     * @return array<string,true>
+     */
+    private static function recommended_bundled_runtime_lemma_pack_languages(array $manifests): array
+    {
+        $recommended = [];
+        $add = static function (mixed $language) use (&$recommended, $manifests): void {
+            if (!is_scalar($language)) {
+                return;
+            }
+            $language = WP_FTS_TermNamespace::canonicalize_lang((string) $language, WP_FTS_TermNamespace::DEFAULT_LANG);
+            if ($language === '' || !isset($manifests[$language])) {
+                return;
+            }
+            $recommended[$language] = true;
+        };
+
+        foreach (self::site_fallback_languages() as $language) {
+            $add($language);
+            $base = self::base_language($language);
+            if ($base !== '') {
+                $add($base);
+            }
+        }
+
+        return $recommended;
     }
 
     /**
