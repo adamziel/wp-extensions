@@ -94,7 +94,19 @@ final class WP_FTS_Plugin
     private const ADMIN_ANALYZER_FETCH_EXTENDED_ACTION = 'fetch_extended_language_packs';
     private const ADMIN_ANALYZER_LANGUAGE_FIELD = 'wp_fts_bundled_runtime_lemma_packs';
     private const EXTENDED_LANGUAGE_PACKS_RELEASE_URL = 'https://github.com/adamziel/wp-extensions/releases';
-    private const EXTENDED_LANGUAGE_PACKS_DOWNLOAD_URL = 'https://github.com/adamziel/wp-extensions/releases/latest/download/language-fts-extended-language-packs.zip';
+    private const EXTENDED_LANGUAGE_PACKS_RELEASE_MANIFEST_SCHEMA = 'language-fts-language-pack-release-manifest-v1';
+    private const EXTENDED_LANGUAGE_PACKS_ASSET_NAME = 'language-fts-extended-language-packs.zip';
+    private const EXTENDED_LANGUAGE_PACKS_MANIFEST_URL = 'https://github.com/adamziel/wp-extensions/releases/latest/download/language-fts-extended-language-packs.manifest.json';
+    private const EXTENDED_LANGUAGE_PACKS_SIGNATURE_URL = 'https://github.com/adamziel/wp-extensions/releases/latest/download/language-fts-extended-language-packs.manifest.json.sig';
+    private const EXTENDED_LANGUAGE_PACKS_TRUSTED_ASSET_URL_PATTERN = '#^https://github\.com/adamziel/wp-extensions/releases/download/language-fts-v[A-Za-z0-9._-]+/language-fts-extended-language-packs\.zip$#';
+    private const EXTENDED_LANGUAGE_PACKS_MANIFEST_PUBLIC_KEY_BASE64 = 'OoCfdrPYLuQK6kz+IIRT6SfMfu0v+nN1zmybvQzf0UU=';
+    private const EXTENDED_LANGUAGE_PACKS_ZIP_PREFIX = 'language-fts-extended-language-packs/analyzer-packs/';
+    private const EXTENDED_LANGUAGE_PACKS_MAX_MANIFEST_BYTES = 65536;
+    private const EXTENDED_LANGUAGE_PACKS_MAX_SIGNATURE_BYTES = 512;
+    private const EXTENDED_LANGUAGE_PACKS_MAX_ZIP_BYTES = 67108864;
+    private const EXTENDED_LANGUAGE_PACKS_MAX_EXTRACTED_BYTES = 134217728;
+    private const EXTENDED_LANGUAGE_PACKS_MAX_EXTRACTED_ENTRIES = 2048;
+    private const EXTENDED_LANGUAGE_PACKS_MAX_EXTRACTED_FILES = 1024;
     private const EXTENDED_LANGUAGE_PACKS_INSTALL_SUBDIR = 'language-fts/analyzer-packs';
     private const ADMIN_QUERY_FIELD = 'wp_fts_sandbox_query';
     private const ADMIN_LANG_FIELD = 'wp_fts_sandbox_lang';
@@ -4981,21 +4993,23 @@ final class WP_FTS_Plugin
         if (!function_exists('download_url')) {
             throw new RuntimeException('WordPress download helpers are unavailable.');
         }
+        self::ensure_extended_language_pack_manifest_verifier_available();
         if (!class_exists('ZipArchive')) {
             throw new RuntimeException('The PHP ZipArchive extension is required to install the language-pack ZIP.');
         }
 
-        $download = download_url(self::EXTENDED_LANGUAGE_PACKS_DOWNLOAD_URL, 300);
-        $wpError = self::wp_error_message($download);
-        if ($wpError !== null) {
-            throw new RuntimeException($wpError);
-        }
-        if (!is_string($download) || $download === '' || !is_file($download)) {
-            throw new RuntimeException('The language-pack download did not produce a local ZIP file.');
-        }
+        $releaseManifest = self::download_verified_extended_language_pack_release_manifest();
+        $download = self::download_extended_language_pack_asset(
+            (string) $releaseManifest['asset_url'],
+            300,
+            'language-pack ZIP',
+            self::EXTENDED_LANGUAGE_PACKS_MAX_ZIP_BYTES
+        );
 
-        $extractRoot = self::create_temporary_directory('wp-fts-language-packs-');
+        $extractRoot = null;
         try {
+            self::assert_extended_language_pack_zip_matches_manifest($download, $releaseManifest);
+            $extractRoot = self::create_temporary_directory('wp-fts-language-packs-');
             self::extract_extended_language_pack_zip($download, $extractRoot);
             $sourceRoot = $extractRoot . DIRECTORY_SEPARATOR . 'language-fts-extended-language-packs' . DIRECTORY_SEPARATOR . 'analyzer-packs';
             if (!is_dir($sourceRoot)) {
@@ -5008,10 +5022,193 @@ final class WP_FTS_Plugin
             if (is_file($download)) {
                 @unlink($download);
             }
-            self::remove_local_tree($extractRoot);
+            if (is_string($extractRoot)) {
+                self::remove_local_tree($extractRoot);
+            }
         }
 
         return $manifests;
+    }
+
+    private static function ensure_extended_language_pack_manifest_verifier_available(): void
+    {
+        if (!function_exists('sodium_crypto_sign_verify_detached')) {
+            throw new RuntimeException('The PHP sodium extension is required to verify the signed language-pack release manifest.');
+        }
+    }
+
+    /**
+     * @return array{asset_url:string,sha256:string,bytes:int,version:string}
+     */
+    private static function download_verified_extended_language_pack_release_manifest(): array
+    {
+        $manifestPath = null;
+        $signaturePath = null;
+
+        try {
+            $manifestPath = self::download_extended_language_pack_asset(
+                self::EXTENDED_LANGUAGE_PACKS_MANIFEST_URL,
+                60,
+                'language-pack release manifest',
+                self::EXTENDED_LANGUAGE_PACKS_MAX_MANIFEST_BYTES
+            );
+            $signaturePath = self::download_extended_language_pack_asset(
+                self::EXTENDED_LANGUAGE_PACKS_SIGNATURE_URL,
+                60,
+                'language-pack release manifest signature',
+                self::EXTENDED_LANGUAGE_PACKS_MAX_SIGNATURE_BYTES
+            );
+
+            $manifestJson = file_get_contents($manifestPath);
+            if (!is_string($manifestJson) || $manifestJson === '') {
+                throw new RuntimeException('The language-pack release manifest is empty.');
+            }
+
+            $signature = file_get_contents($signaturePath);
+            if (!is_string($signature) || trim($signature) === '') {
+                throw new RuntimeException('The language-pack release manifest signature is empty.');
+            }
+
+            self::verify_extended_language_pack_release_manifest_signature($manifestJson, trim($signature));
+            $decoded = json_decode($manifestJson, true);
+            if (!is_array($decoded)) {
+                throw new RuntimeException('The language-pack release manifest is not valid JSON.');
+            }
+
+            return self::normalize_extended_language_pack_release_manifest($decoded);
+        } finally {
+            if (is_string($manifestPath) && is_file($manifestPath)) {
+                @unlink($manifestPath);
+            }
+            if (is_string($signaturePath) && is_file($signaturePath)) {
+                @unlink($signaturePath);
+            }
+        }
+    }
+
+    private static function verify_extended_language_pack_release_manifest_signature(string $manifestJson, string $signatureBase64): void
+    {
+        self::ensure_extended_language_pack_manifest_verifier_available();
+
+        $publicKey = base64_decode(self::EXTENDED_LANGUAGE_PACKS_MANIFEST_PUBLIC_KEY_BASE64, true);
+        $signature = base64_decode($signatureBase64, true);
+        $publicKeyBytes = defined('SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES') ? SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES : 32;
+        $signatureBytes = defined('SODIUM_CRYPTO_SIGN_BYTES') ? SODIUM_CRYPTO_SIGN_BYTES : 64;
+
+        if (!is_string($publicKey) || strlen($publicKey) !== $publicKeyBytes) {
+            throw new RuntimeException('The embedded language-pack release public key is invalid.');
+        }
+        if (!is_string($signature) || strlen($signature) !== $signatureBytes) {
+            throw new RuntimeException('The language-pack release manifest signature is invalid.');
+        }
+        if (!sodium_crypto_sign_verify_detached($signature, $manifestJson, $publicKey)) {
+            throw new RuntimeException('The language-pack release manifest signature could not be verified.');
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $manifest
+     * @return array{asset_url:string,sha256:string,bytes:int,version:string}
+     */
+    private static function normalize_extended_language_pack_release_manifest(array $manifest): array
+    {
+        $schema = is_string($manifest['schema'] ?? null) ? trim((string) $manifest['schema']) : '';
+        if ($schema !== self::EXTENDED_LANGUAGE_PACKS_RELEASE_MANIFEST_SCHEMA) {
+            throw new RuntimeException('The language-pack release manifest schema is unsupported.');
+        }
+
+        $asset = is_array($manifest['asset'] ?? null) ? $manifest['asset'] : [];
+        $name = is_string($asset['name'] ?? null) ? trim((string) $asset['name']) : '';
+        $assetUrl = is_string($asset['url'] ?? null) ? trim((string) $asset['url']) : '';
+        $sha256 = is_string($asset['sha256'] ?? null) ? strtolower(trim((string) $asset['sha256'])) : '';
+        $bytes = self::positive_manifest_integer($asset['bytes'] ?? null, 'language-pack ZIP size');
+        $version = is_scalar($manifest['version'] ?? null) ? trim((string) $manifest['version']) : '';
+
+        if ($name !== self::EXTENDED_LANGUAGE_PACKS_ASSET_NAME) {
+            throw new RuntimeException('The language-pack release manifest references an unexpected asset.');
+        }
+        if ($assetUrl === '' || preg_match(self::EXTENDED_LANGUAGE_PACKS_TRUSTED_ASSET_URL_PATTERN, $assetUrl) !== 1) {
+            throw new RuntimeException('The language-pack release manifest references an untrusted asset URL.');
+        }
+        if (preg_match('/\A[a-f0-9]{64}\z/', $sha256) !== 1) {
+            throw new RuntimeException('The language-pack release manifest contains an invalid SHA-256 hash.');
+        }
+        if ($bytes > self::EXTENDED_LANGUAGE_PACKS_MAX_ZIP_BYTES) {
+            throw new RuntimeException('The language-pack release manifest exceeds the maximum supported ZIP size.');
+        }
+        if ($version === '' || preg_match('/\Alanguage-fts-v[A-Za-z0-9._-]+\z/', $version) !== 1) {
+            throw new RuntimeException('The language-pack release manifest contains an invalid release version.');
+        }
+        if (!str_contains($assetUrl, '/releases/download/' . $version . '/')) {
+            throw new RuntimeException('The language-pack release manifest asset URL does not match its release version.');
+        }
+
+        return [
+            'asset_url' => $assetUrl,
+            'sha256' => $sha256,
+            'bytes' => $bytes,
+            'version' => $version,
+        ];
+    }
+
+    private static function positive_manifest_integer(mixed $value, string $label): int
+    {
+        if (is_int($value)) {
+            $number = $value;
+        } elseif (is_string($value) && preg_match('/\A[1-9][0-9]*\z/', $value) === 1) {
+            $number = (int) $value;
+        } else {
+            throw new RuntimeException("The {$label} is missing or invalid.");
+        }
+
+        if ($number < 1) {
+            throw new RuntimeException("The {$label} must be positive.");
+        }
+
+        return $number;
+    }
+
+    private static function download_extended_language_pack_asset(string $url, int $timeout, string $label, int $maxBytes): string
+    {
+        $download = download_url($url, $timeout);
+        $wpError = self::wp_error_message($download);
+        if ($wpError !== null) {
+            throw new RuntimeException($wpError);
+        }
+        if (!is_string($download) || $download === '' || !is_file($download)) {
+            throw new RuntimeException("The {$label} download did not produce a local file.");
+        }
+
+        $bytes = filesize($download);
+        if (!is_int($bytes) || $bytes < 1) {
+            @unlink($download);
+            throw new RuntimeException("The {$label} download is empty.");
+        }
+        if ($bytes > $maxBytes) {
+            @unlink($download);
+            throw new RuntimeException("The {$label} download is larger than expected.");
+        }
+
+        return $download;
+    }
+
+    /**
+     * @param array{asset_url:string,sha256:string,bytes:int,version:string} $manifest
+     */
+    private static function assert_extended_language_pack_zip_matches_manifest(string $zipPath, array $manifest): void
+    {
+        $bytes = filesize($zipPath);
+        if (!is_int($bytes)) {
+            throw new RuntimeException('Could not determine the language-pack ZIP size.');
+        }
+        if ($bytes !== $manifest['bytes']) {
+            throw new RuntimeException('The language-pack ZIP size does not match the signed manifest.');
+        }
+
+        $sha256 = hash_file('sha256', $zipPath);
+        if (!is_string($sha256) || !hash_equals($manifest['sha256'], strtolower($sha256))) {
+            throw new RuntimeException('The language-pack ZIP hash does not match the signed manifest.');
+        }
     }
 
     private static function load_wordpress_file_helpers(): void
@@ -5097,20 +5294,38 @@ final class WP_FTS_Plugin
         }
 
         try {
+            $matchedEntries = 0;
+            $matchedFiles = 0;
+            $extractedBytes = 0;
             for ($i = 0; $i < $zip->numFiles; $i++) {
                 $entry = (string) $zip->getNameIndex($i);
                 $entry = str_replace('\\', '/', $entry);
                 if (!self::safe_zip_entry_name($entry)) {
                     throw new RuntimeException('The language-pack ZIP contains an unsafe path.');
                 }
-                if (!str_starts_with($entry, 'language-fts-extended-language-packs/analyzer-packs/')) {
+                if (!str_starts_with($entry, self::EXTENDED_LANGUAGE_PACKS_ZIP_PREFIX)) {
                     continue;
+                }
+
+                $matchedEntries++;
+                if ($matchedEntries > self::EXTENDED_LANGUAGE_PACKS_MAX_EXTRACTED_ENTRIES) {
+                    throw new RuntimeException('The language-pack ZIP contains too many entries.');
                 }
 
                 $target = $extractRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $entry);
                 if (str_ends_with($entry, '/')) {
                     self::ensure_local_directory($target);
                     continue;
+                }
+
+                $matchedFiles++;
+                if ($matchedFiles > self::EXTENDED_LANGUAGE_PACKS_MAX_EXTRACTED_FILES) {
+                    throw new RuntimeException('The language-pack ZIP contains too many files.');
+                }
+
+                $declaredSize = self::zip_entry_declared_size($zip, $i);
+                if ($declaredSize !== null && $extractedBytes + $declaredSize > self::EXTENDED_LANGUAGE_PACKS_MAX_EXTRACTED_BYTES) {
+                    throw new RuntimeException('The language-pack ZIP expands beyond the supported size limit.');
                 }
 
                 self::ensure_local_directory(dirname($target));
@@ -5124,8 +5339,9 @@ final class WP_FTS_Plugin
                     throw new RuntimeException('Could not create a language-pack ZIP entry.');
                 }
                 try {
-                    if (stream_copy_to_stream($stream, $targetStream) === false) {
-                        throw new RuntimeException('Could not extract a language-pack ZIP entry.');
+                    $copied = self::copy_extended_language_pack_zip_entry($stream, $targetStream, $extractedBytes);
+                    if ($declaredSize !== null && $copied !== $declaredSize) {
+                        throw new RuntimeException('A language-pack ZIP entry size did not match its metadata.');
                     }
                 } finally {
                     fclose($targetStream);
@@ -5137,9 +5353,66 @@ final class WP_FTS_Plugin
         }
     }
 
+    private static function zip_entry_declared_size(ZipArchive $zip, int $index): ?int
+    {
+        $stat = $zip->statIndex($index);
+        if (!is_array($stat) || !array_key_exists('size', $stat)) {
+            return null;
+        }
+
+        $size = $stat['size'];
+        if (is_int($size)) {
+            return $size >= 0 ? $size : null;
+        }
+        if (is_string($size) && preg_match('/\A(0|[1-9][0-9]*)\z/', $size) === 1) {
+            return (int) $size;
+        }
+
+        return null;
+    }
+
+    /**
+     * @param resource $source
+     * @param resource $target
+     */
+    private static function copy_extended_language_pack_zip_entry(mixed $source, mixed $target, int &$extractedBytes): int
+    {
+        $copied = 0;
+        while (!feof($source)) {
+            $chunk = fread($source, 1048576);
+            if ($chunk === false) {
+                throw new RuntimeException('Could not read a language-pack ZIP entry.');
+            }
+            if ($chunk === '') {
+                if (feof($source)) {
+                    break;
+                }
+                throw new RuntimeException('Could not make progress while reading a language-pack ZIP entry.');
+            }
+
+            $chunkLength = strlen($chunk);
+            $extractedBytes += $chunkLength;
+            $copied += $chunkLength;
+            if ($extractedBytes > self::EXTENDED_LANGUAGE_PACKS_MAX_EXTRACTED_BYTES) {
+                throw new RuntimeException('The language-pack ZIP expands beyond the supported size limit.');
+            }
+
+            $offset = 0;
+            while ($offset < $chunkLength) {
+                $written = fwrite($target, substr($chunk, $offset));
+                if (!is_int($written) || $written < 1) {
+                    throw new RuntimeException('Could not write a language-pack ZIP entry.');
+                }
+                $offset += $written;
+            }
+        }
+
+        return $copied;
+    }
+
     private static function safe_zip_entry_name(string $entry): bool
     {
-        if ($entry === '' || str_contains($entry, "\0") || str_starts_with($entry, '/')) {
+        if ($entry === '' || str_contains($entry, "\0") || str_starts_with($entry, '/') || preg_match('/\A[A-Za-z]:/', $entry) === 1) {
             return false;
         }
 
@@ -5728,7 +6001,7 @@ final class WP_FTS_Plugin
         self::render_analyzer_nonce_field();
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ANALYZER_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_ANALYZER_FETCH_EXTENDED_ACTION) . '">';
         echo '<p><button type="submit" class="button button-primary">Download language packs from GitHub</button></p>';
-        echo '<p class="wp-fts-dashboard-note">Downloads the fixed extended language-pack release asset, installs packs under uploads, and enables matching languages where no custom pack is configured.</p>';
+        echo '<p class="wp-fts-dashboard-note">Downloads the signed GitHub Releases manifest, verifies the language-pack ZIP hash and size, installs packs under uploads, and enables matching languages where no custom pack is configured.</p>';
         echo '</form>';
     }
 
@@ -6958,7 +7231,7 @@ final class WP_FTS_Plugin
     {
         echo '<div class="notice notice-info inline">';
         echo '<p><strong>Extended language packs</strong></p>';
-        echo '<p>Optional extended language packs are separately licensed and not bundled with the core package. Review their notices before use. The Dashboard can download the GitHub Releases bundle on request, install packs under uploads, and enable matching languages where no custom pack is configured. WordPress.org does not host or endorse them.</p>';
+        echo '<p>Optional extended language packs are separately licensed and not bundled with the core package. Review their notices before use. The Dashboard can verify a signed GitHub Releases manifest, install packs under uploads, and enable matching languages where no custom pack is configured. WordPress.org does not host or endorse them.</p>';
         echo '<p><a class="button" href="' . esc_url(self::EXTENDED_LANGUAGE_PACKS_RELEASE_URL) . '" target="_blank" rel="noopener noreferrer">Download extended language packs</a></p>';
         echo '</div>';
     }

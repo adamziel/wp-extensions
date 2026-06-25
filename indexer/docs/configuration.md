@@ -399,9 +399,10 @@ manifest paths in `wp_fts_analyzer_options`. Bundled packs affect real site
 searches after content is reindexed. Custom pack paths remain option/filter
 configuration; the admin UI does not accept arbitrary filesystem paths or
 create sample content. If the install does not include bundled extended packs,
-the Dashboard can download the fixed extended language-pack bundle from GitHub
-Releases on request, extract analyzer packs under uploads, and store the
-installed manifest paths.
+the Dashboard can download the signed extended language-pack release manifest
+from GitHub Releases on request, verify the manifest signature, verify the
+bundle byte size and SHA-256 hash, extract analyzer packs under uploads, and
+store the installed manifest paths.
 
 `wp fts status` reports the same runtime analyzer-pack posture through a
 read-only `language_pack_status` block. Use `wp fts status --format=json` for

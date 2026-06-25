@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../../tools/build-release-zip.php';
 require_once __DIR__ . '/../../tools/build-language-pack-bundle.php';
+require_once __DIR__ . '/../../tools/build-language-pack-release-manifest.php';
 
 function wp_fts_release_packaging_contract_contains(string $needle, string $haystack, string $message): void
 {
@@ -148,11 +149,17 @@ function wp_fts_release_packaging_contract_run(): void
         'language-fts-core.zip',
         'language-fts-full.zip',
         'language-fts-extended-language-packs.zip',
+        'language-fts-extended-language-packs.manifest.json',
+        'language-fts-extended-language-packs.manifest.json.sig',
         'language-fts-release-evidence.json',
         'CC BY-SA UniMorph runtime packs',
         'upstream-license-not-declared',
         'BSD-2-Clause Polish PoliMorf runtime pack',
         'php indexer/tools/build-language-pack-bundle.php',
+        'php indexer/tools/build-language-pack-release-manifest.php',
+        'LANGUAGE_FTS_LANGUAGE_PACK_MANIFEST_SIGNING_KEY',
+        'Ed25519',
+        'SHA-256 hash before extraction',
         '--profile=github-full',
         'not a WordPress.org submission',
     ] as $needle) {
@@ -364,6 +371,81 @@ function wp_fts_release_packaging_contract_composer_env_run(): void
     }
 }
 
+function wp_fts_release_packaging_contract_manifest_signature_run(bool $allowPending = false): void
+{
+    if (
+        !function_exists('sodium_crypto_sign_keypair')
+        || !function_exists('sodium_crypto_sign_secretkey')
+        || !function_exists('sodium_crypto_sign_publickey')
+        || !function_exists('sodium_crypto_sign_verify_detached')
+    ) {
+        if ($allowPending && function_exists('mark_pending')) {
+            mark_pending('The PHP sodium extension is required to test signed release manifests.');
+        }
+        throw new RuntimeException('The PHP sodium extension is required to test signed release manifests.');
+    }
+
+    $tmp = wp_fts_release_packaging_contract_temp_dir();
+    $envName = 'WP_FTS_TEST_LANGUAGE_PACK_MANIFEST_SIGNING_KEY';
+    try {
+        $zipPath = $tmp . '/' . WP_FTS_LanguagePackReleaseManifestBuilder::ASSET_NAME;
+        wp_fts_release_packaging_contract_write_fixture($zipPath, "zip fixture\n");
+
+        $keypair = sodium_crypto_sign_keypair();
+        $secretKey = sodium_crypto_sign_secretkey($keypair);
+        $publicKey = sodium_crypto_sign_publickey($keypair);
+        putenv($envName . '=' . base64_encode($secretKey));
+
+        $result = (new WP_FTS_LanguagePackReleaseManifestBuilder())->build([
+            'zip' => $zipPath,
+            'asset_url' => 'https://github.com/adamziel/wp-extensions/releases/download/language-fts-v0.1.10/' . WP_FTS_LanguagePackReleaseManifestBuilder::ASSET_NAME,
+            'version' => 'language-fts-v0.1.10',
+            'output' => $tmp . '/' . WP_FTS_LanguagePackReleaseManifestBuilder::MANIFEST_NAME,
+            'signature_output' => $tmp . '/' . WP_FTS_LanguagePackReleaseManifestBuilder::SIGNATURE_NAME,
+            'signing_key_env' => $envName,
+        ]);
+
+        $manifestJson = (string) file_get_contents((string) $result['manifest_path']);
+        $signature = base64_decode(trim((string) file_get_contents((string) $result['signature_path'])), true);
+        $manifest = json_decode($manifestJson, true);
+
+        wp_fts_release_packaging_contract_true(is_array($manifest), 'release manifest builder should write JSON');
+        wp_fts_release_packaging_contract_same(WP_FTS_LanguagePackReleaseManifestBuilder::SCHEMA, $manifest['schema'] ?? null, 'release manifest builder should write the expected schema');
+        wp_fts_release_packaging_contract_same(WP_FTS_LanguagePackReleaseManifestBuilder::ASSET_NAME, $manifest['asset']['name'] ?? null, 'release manifest builder should record the expected ZIP asset');
+        wp_fts_release_packaging_contract_same(hash_file('sha256', $zipPath), $manifest['asset']['sha256'] ?? null, 'release manifest builder should record the ZIP SHA-256 hash');
+        wp_fts_release_packaging_contract_same(filesize($zipPath), $manifest['asset']['bytes'] ?? null, 'release manifest builder should record the ZIP byte size');
+        wp_fts_release_packaging_contract_true(is_string($signature) && sodium_crypto_sign_verify_detached($signature, $manifestJson, $publicKey), 'release manifest builder should write a verifiable Ed25519 signature');
+
+        foreach ([
+            'bad release version' => [
+                'version' => 'latest',
+                'asset_url' => 'https://github.com/adamziel/wp-extensions/releases/download/latest/' . WP_FTS_LanguagePackReleaseManifestBuilder::ASSET_NAME,
+            ],
+            'mismatched release URL' => [
+                'version' => 'language-fts-v0.1.10',
+                'asset_url' => 'https://github.com/adamziel/wp-extensions/releases/download/language-fts-v0.1.11/' . WP_FTS_LanguagePackReleaseManifestBuilder::ASSET_NAME,
+            ],
+        ] as $case => $override) {
+            try {
+                (new WP_FTS_LanguagePackReleaseManifestBuilder())->build([
+                    'zip' => $zipPath,
+                    'asset_url' => $override['asset_url'],
+                    'version' => $override['version'],
+                    'output' => $tmp . "/{$case}.json",
+                    'signature_output' => $tmp . "/{$case}.json.sig",
+                    'signing_key_env' => $envName,
+                ]);
+                wp_fts_release_packaging_contract_true(false, "release manifest builder should reject {$case}");
+            } catch (InvalidArgumentException $e) {
+                wp_fts_release_packaging_contract_true($e->getMessage() !== '', "release manifest builder should reject {$case} with a bounded message");
+            }
+        }
+    } finally {
+        putenv($envName);
+        wp_fts_release_packaging_contract_remove_tree($tmp);
+    }
+}
+
 if (function_exists('test_case')) {
     test_case('quality release packaging excludes dependency-internal vendor tests', function (): void {
         wp_fts_release_packaging_contract_run();
@@ -377,10 +459,14 @@ if (function_exists('test_case')) {
     test_case('quality release packaging enforces mixed-license channel policy', function (): void {
         wp_fts_release_packaging_contract_release_channel_policy_run();
     });
+    test_case('quality release packaging signs extended language-pack manifest', function (): void {
+        wp_fts_release_packaging_contract_manifest_signature_run(true);
+    });
 } elseif (PHP_SAPI === 'cli' && realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === __FILE__) {
     wp_fts_release_packaging_contract_run();
     wp_fts_release_packaging_contract_prune_run();
     wp_fts_release_packaging_contract_composer_env_run();
     wp_fts_release_packaging_contract_release_channel_policy_run();
+    wp_fts_release_packaging_contract_manifest_signature_run();
     fwrite(STDOUT, "OK: release packaging contract prunes dependency dotfiles, auth files, vendor tests, and mixed-license channel violations.\n");
 }

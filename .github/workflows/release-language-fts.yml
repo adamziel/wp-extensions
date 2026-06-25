@@ -15,7 +15,7 @@ on:
       draft:
         description: Create or update the release as a draft.
         required: false
-        default: true
+        default: false
         type: boolean
       prerelease:
         description: Mark the release as a prerelease.
@@ -50,6 +50,10 @@ jobs:
               exit 1
               ;;
           esac
+          if [[ ! "$RELEASE_TAG" =~ ^language-fts-v[A-Za-z0-9._-]+$ ]]; then
+            echo "Release tag may contain only letters, numbers, dots, underscores, and hyphens after language-fts-v: $RELEASE_TAG" >&2
+            exit 1
+          fi
 
       - name: Check out repository
         uses: actions/checkout@v4
@@ -61,7 +65,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: zip
+          extensions: zip, sodium
           coverage: none
 
       - name: Locate Composer cache
@@ -81,14 +85,18 @@ jobs:
           php -l indexer/tools/release-channel-policy.php
           php -l indexer/tools/build-release-zip.php
           php -l indexer/tools/build-language-pack-bundle.php
+          php -l indexer/tools/build-language-pack-release-manifest.php
           php -l indexer/tools/collect-release-evidence.php
           php indexer/tests/quality/release-packaging-contracts.php
 
       - name: Build release assets
+        env:
+          LANGUAGE_FTS_LANGUAGE_PACK_MANIFEST_SIGNING_KEY: ${{ secrets.LANGUAGE_FTS_LANGUAGE_PACK_MANIFEST_SIGNING_KEY }}
         run: |
           set -euo pipefail
 
           BUILD_ROOT="${RUNNER_TEMP:?}/language-fts-build"
+          ASSET_BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
 
           rm -rf "$DIST_DIR" "$BUILD_ROOT"
           mkdir -p "$DIST_DIR" "$BUILD_ROOT"
@@ -108,6 +116,13 @@ jobs:
             --build-dir="$BUILD_ROOT/extended-language-packs" \
             --output="$DIST_DIR/language-fts-extended-language-packs.zip"
 
+          php indexer/tools/build-language-pack-release-manifest.php \
+            --zip="$DIST_DIR/language-fts-extended-language-packs.zip" \
+            --asset-url="${ASSET_BASE_URL}/language-fts-extended-language-packs.zip" \
+            --version="$RELEASE_TAG" \
+            --output="$DIST_DIR/language-fts-extended-language-packs.manifest.json" \
+            --signature-output="$DIST_DIR/language-fts-extended-language-packs.manifest.json.sig"
+
           php indexer/tools/collect-release-evidence.php \
             --release-target=direct-install \
             --direct-package-dir="$BUILD_ROOT/core/indexer" \
@@ -119,6 +134,8 @@ jobs:
               language-fts-core.zip \
               language-fts-full.zip \
               language-fts-extended-language-packs.zip \
+              language-fts-extended-language-packs.manifest.json \
+              language-fts-extended-language-packs.manifest.json.sig \
               language-fts-release-evidence.json \
               > SHA256SUMS.txt
           )
@@ -135,6 +152,8 @@ jobs:
               'full' => $dist . '/language-fts-full.zip',
               'extended' => $dist . '/language-fts-extended-language-packs.zip',
           ];
+          $manifestPath = $dist . '/language-fts-extended-language-packs.manifest.json';
+          $signaturePath = $dist . '/language-fts-extended-language-packs.manifest.json.sig';
 
           $zipNames = static function (string $path): array {
               $zip = new ZipArchive();
@@ -171,6 +190,7 @@ jobs:
           $core = $zipNames($assets['core']);
           $full = $zipNames($assets['full']);
           $extended = $zipNames($assets['extended']);
+          $manifest = json_decode((string) file_get_contents($manifestPath), true);
 
           $assert($hasPrefix($core, 'indexer/resources/analyzer-packs/pl-polimorf-20180722-full-playground/'), 'Core ZIP must include the BSD Polish pack.');
           $assert(! $hasPrefix($core, 'indexer/resources/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/'), 'Core ZIP must exclude CC BY-SA UniMorph packs.');
@@ -191,6 +211,11 @@ jobs:
           foreach (['manifest.json', 'NOTICE.txt', 'PROVENANCE.md', 'SOURCE.lock.json'] as $file) {
               $assert(in_array('language-fts-extended-language-packs/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/' . $file, $extended, true), "Extended UniMorph packs must include {$file}.");
           }
+
+          $assert(is_array($manifest), 'Extended language-pack release manifest must be JSON.');
+          $assert(($manifest['schema'] ?? null) === 'language-fts-language-pack-release-manifest-v1', 'Extended language-pack release manifest must use the v1 schema.');
+          $assert(($manifest['asset']['name'] ?? null) === 'language-fts-extended-language-packs.zip', 'Extended language-pack release manifest must name the ZIP asset.');
+          $assert(is_file($signaturePath) && trim((string) file_get_contents($signaturePath)) !== '', 'Extended language-pack release manifest signature must be present.');
           PHP
 
       - name: Write release notes
@@ -205,6 +230,8 @@ jobs:
           - language-fts-core.zip: installable plugin ZIP with GPL-compatible package contents only.
           - language-fts-full.zip: installable GitHub/full plugin ZIP with separately licensed CC BY-SA UniMorph analyzer packs and notices.
           - language-fts-extended-language-packs.zip: optional separately licensed CC BY-SA UniMorph analyzer-pack bundle. Review notices and provenance before use.
+          - language-fts-extended-language-packs.manifest.json: signed manifest used by the plugin to verify the optional analyzer-pack bundle.
+          - language-fts-extended-language-packs.manifest.json.sig: detached Ed25519 signature for the language-pack manifest.
           - language-fts-release-evidence.json: release evidence for the packaged checkout.
           - SHA256SUMS.txt: SHA-256 checksums for release assets.
 
@@ -225,6 +252,8 @@ jobs:
             "$DIST_DIR/language-fts-core.zip"
             "$DIST_DIR/language-fts-full.zip"
             "$DIST_DIR/language-fts-extended-language-packs.zip"
+            "$DIST_DIR/language-fts-extended-language-packs.manifest.json"
+            "$DIST_DIR/language-fts-extended-language-packs.manifest.json.sig"
             "$DIST_DIR/language-fts-release-evidence.json"
             "$DIST_DIR/SHA256SUMS.txt"
           )

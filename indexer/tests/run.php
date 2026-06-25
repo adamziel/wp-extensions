@@ -5074,7 +5074,7 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_contains('Download extended language packs', $analyzerHtml, 'analyzer packs tab should link to separately distributed extended packs');
     assert_contains('https://github.com/adamziel/wp-extensions/releases', $analyzerHtml, 'analyzer packs tab should use the stable GitHub Releases URL for extended packs');
     assert_contains('Optional extended language packs are separately licensed and not bundled with the core package', $analyzerHtml, 'analyzer packs tab should keep extended pack license and bundle boundaries explicit');
-    assert_contains('The Dashboard can download the GitHub Releases bundle on request', $analyzerHtml, 'analyzer packs tab should point operators to the explicit dashboard download action');
+    assert_contains('The Dashboard can verify a signed GitHub Releases manifest', $analyzerHtml, 'analyzer packs tab should point operators to the explicit verified dashboard download action');
     assert_contains('install packs under uploads', $analyzerHtml, 'analyzer packs tab should explain where downloaded packs are installed');
     assert_contains('WordPress.org does not host or endorse them', $analyzerHtml, 'analyzer packs tab should not imply WordPress.org hosting or endorsement for extended packs');
     assert_contains('Polish (pl)', $analyzerHtml, 'analyzer pack status should include the bundled Polish pack');
@@ -6773,6 +6773,81 @@ test_case('admin analyzer pack action parser accepts explicit GitHub fetch actio
         assert_same('', $method->invoke(null), 'unknown analyzer actions should still fail closed');
     } finally {
         $_POST = $oldPost;
+    }
+});
+
+test_case('admin GitHub language-pack release manifest accepts only trusted signed asset metadata', function (): void {
+    $normalize = new ReflectionMethod(WP_FTS_Plugin::class, 'normalize_extended_language_pack_release_manifest');
+    $normalize->setAccessible(true);
+
+    $valid = [
+        'schema' => 'language-fts-language-pack-release-manifest-v1',
+        'version' => 'language-fts-v0.1.10',
+        'asset' => [
+            'name' => 'language-fts-extended-language-packs.zip',
+            'url' => 'https://github.com/adamziel/wp-extensions/releases/download/language-fts-v0.1.10/language-fts-extended-language-packs.zip',
+            'sha256' => str_repeat('a', 64),
+            'bytes' => 1234,
+        ],
+    ];
+
+    $normalized = $normalize->invoke(null, $valid);
+    assert_same($valid['asset']['url'], $normalized['asset_url'], 'signed language-pack manifest should preserve the trusted release asset URL');
+    assert_same($valid['asset']['sha256'], $normalized['sha256'], 'signed language-pack manifest should preserve the ZIP hash');
+    assert_same(1234, $normalized['bytes'], 'signed language-pack manifest should preserve the ZIP byte size');
+
+    foreach ([
+        'mutable latest URL' => ['asset' => ['url' => 'https://github.com/adamziel/wp-extensions/releases/latest/download/language-fts-extended-language-packs.zip']],
+        'wrong repository URL' => ['asset' => ['url' => 'https://github.com/example/wp-extensions/releases/download/language-fts-v0.1.10/language-fts-extended-language-packs.zip']],
+        'bad hash' => ['asset' => ['sha256' => 'not-a-sha256']],
+        'oversized ZIP' => ['asset' => ['bytes' => 67108865]],
+        'unexpected asset' => ['asset' => ['name' => 'language-fts-full.zip']],
+        'bad version' => ['version' => 'latest'],
+        'version and URL mismatch' => ['version' => 'language-fts-v0.1.11'],
+    ] as $case => $override) {
+        $candidate = array_replace_recursive($valid, $override);
+        try {
+            $normalize->invoke(null, $candidate);
+            assert_true(false, "signed language-pack manifest should reject {$case}");
+        } catch (RuntimeException $e) {
+            assert_true($e->getMessage() !== '', "signed language-pack manifest should reject {$case} with a bounded message");
+        }
+    }
+});
+
+test_case('admin GitHub language-pack ZIP must match signed manifest hash and size', function (): void {
+    $assertZip = new ReflectionMethod(WP_FTS_Plugin::class, 'assert_extended_language_pack_zip_matches_manifest');
+    $assertZip->setAccessible(true);
+
+    $zipPath = tempnam(sys_get_temp_dir(), 'wp-fts-pack-zip-');
+    if (!is_string($zipPath) || file_put_contents($zipPath, 'language-pack zip fixture') === false) {
+        mark_pending('Could not create temporary ZIP hash fixture.');
+    }
+
+    try {
+        $manifest = [
+            'asset_url' => 'https://github.com/adamziel/wp-extensions/releases/download/language-fts-v0.1.10/language-fts-extended-language-packs.zip',
+            'sha256' => (string) hash_file('sha256', $zipPath),
+            'bytes' => (int) filesize($zipPath),
+            'version' => 'language-fts-v0.1.10',
+        ];
+
+        $assertZip->invoke(null, $zipPath, $manifest);
+        assert_true(true, 'language-pack ZIP should pass when hash and size match the signed manifest');
+
+        foreach ([
+            'wrong size' => ['bytes' => $manifest['bytes'] + 1],
+            'wrong hash' => ['sha256' => str_repeat('b', 64)],
+        ] as $case => $override) {
+            try {
+                $assertZip->invoke(null, $zipPath, array_replace($manifest, $override));
+                assert_true(false, "language-pack ZIP should reject {$case}");
+            } catch (RuntimeException $e) {
+                assert_true($e->getMessage() !== '', "language-pack ZIP should reject {$case} with a bounded message");
+            }
+        }
+    } finally {
+        @unlink($zipPath);
     }
 });
 

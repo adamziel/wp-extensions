@@ -47,6 +47,13 @@ Release artifacts are split by license channel:
   is not bundled with the core package. It includes a
   top-level `manifest.json`, `NOTICE.txt`, `LICENSES.md`, each pack manifest,
   each pack notice, `PROVENANCE.md`, `SOURCE.lock.json`, and runtime shards.
+- `language-fts-extended-language-packs.manifest.json`: a signed release
+  manifest that records the optional language-pack bundle name, immutable
+  GitHub release asset URL, byte size, and SHA-256 hash.
+- `language-fts-extended-language-packs.manifest.json.sig`: the detached
+  Ed25519 signature for the release manifest. The plugin verifies this
+  signature with its embedded public key before downloading or installing the
+  optional bundle.
 - `language-fts-release-evidence.json`: machine-readable release evidence for
   the reviewed checkout and selected release target.
 
@@ -73,15 +80,19 @@ approval, endorsement, hosted asset, SVN commit, tag, GitHub release, or upload.
 Language FTS release assets are built by the manual/tag workflow in
 `.github/workflows/release-language-fts.yml`. The workflow validates the
 release packaging contracts, builds every release-channel asset, inspects the
-ZIP contents for license-policy violations, writes release notes, writes
-`SHA256SUMS.txt`, and then creates or updates a GitHub release with the
-generated files.
+ZIP contents for license-policy violations, signs the optional language-pack
+release manifest, writes release notes, writes `SHA256SUMS.txt`, and then
+creates or updates a GitHub release with the generated files.
 
 Recommended release tags use the `language-fts-v*` prefix:
 
 - `language-fts-v0.1.10` for a normal release;
 - `language-fts-v0.1.10-rc1` for a prerelease;
 - `language-fts-v0.1.9-test` for a disposable release test.
+
+Characters after `language-fts-v` must be letters, numbers, dots,
+underscores, or hyphens so the plugin can verify the signed language-pack
+manifest against a trusted immutable release asset URL.
 
 To run the workflow from GitHub:
 
@@ -91,8 +102,8 @@ To run the workflow from GitHub:
 4. Enter the release `tag`.
 5. Leave `target_ref` blank to release the selected workflow branch/ref, or set
    it to a branch name, tag, or commit SHA.
-6. Leave `draft` enabled for review builds. Disable it only when intentionally
-   publishing a public release.
+6. Leave `draft` disabled for a public release. Enable it only when
+   intentionally preparing a private review build.
 7. Enable `prerelease` only for release candidates or test releases.
 
 The workflow also runs on pushed tags that match `language-fts-v*`. Tag-push
@@ -105,6 +116,8 @@ The workflow publishes these release assets:
 - `language-fts-core.zip`;
 - `language-fts-full.zip`;
 - `language-fts-extended-language-packs.zip`;
+- `language-fts-extended-language-packs.manifest.json`;
+- `language-fts-extended-language-packs.manifest.json.sig`;
 - `language-fts-release-evidence.json`;
 - `SHA256SUMS.txt`.
 
@@ -113,7 +126,17 @@ plugin package. Use `language-fts-full.zip` only when the separately licensed
 CC BY-SA UniMorph packs are acceptable. Use
 `language-fts-extended-language-packs.zip` only when you want optional extra
 packs outside the core plugin package, and review the bundle notices before
-use.
+use. In-plugin downloads read the signed
+`language-fts-extended-language-packs.manifest.json`, verify
+`language-fts-extended-language-packs.manifest.json.sig`, then verify the ZIP
+byte size and SHA-256 hash before extraction.
+
+The release workflow requires the repository secret
+`LANGUAGE_FTS_LANGUAGE_PACK_MANIFEST_SIGNING_KEY`. The value is a base64-encoded
+Ed25519 secret key. Rotate it by generating a new keypair, updating the GitHub
+secret with the private key, and updating
+`EXTENDED_LANGUAGE_PACKS_MANIFEST_PUBLIC_KEY_BASE64` in `indexer/src/Plugin.php`
+with the matching public key before publishing the next release.
 
 An empty manual draft named `language-fts-v0.1.9` may exist at
 `https://github.com/adamziel/wp-extensions/releases/tag/untagged-ddb06656129684895c65`.
@@ -366,6 +389,12 @@ php indexer/tools/build-language-pack-bundle.php \
   --profile=extended-language-packs \
   --build-dir="$BUILD_PACKS" \
   --output="$BUILD_PACKS/language-fts-extended-language-packs.zip"
+php indexer/tools/build-language-pack-release-manifest.php \
+  --zip="$BUILD_PACKS/language-fts-extended-language-packs.zip" \
+  --asset-url="https://github.com/adamziel/wp-extensions/releases/download/language-fts-v0.1.10/language-fts-extended-language-packs.zip" \
+  --version="language-fts-v0.1.10" \
+  --output="$BUILD_PACKS/language-fts-extended-language-packs.manifest.json" \
+  --signature-output="$BUILD_PACKS/language-fts-extended-language-packs.manifest.json.sig"
 ```
 
 The builder stages `indexer/` through `.distignore`, copies the local
