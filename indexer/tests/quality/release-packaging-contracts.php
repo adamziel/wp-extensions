@@ -438,7 +438,7 @@ function wp_fts_release_packaging_contract_manifest_signature_run(bool $allowPen
             ],
             'mismatched release URL' => [
                 'version' => 'language-fts-v0.1.10',
-                'asset_url' => 'https://github.com/adamziel/wp-extensions/releases/download/language-fts-v0.1.11/' . WP_FTS_LanguagePackReleaseManifestBuilder::ASSET_NAME,
+                'asset_url' => 'https://github.com/adamziel/wp-extensions/releases/download/language-fts-v0.1.12/' . WP_FTS_LanguagePackReleaseManifestBuilder::ASSET_NAME,
             ],
         ] as $case => $override) {
             try {

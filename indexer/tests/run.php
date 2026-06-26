@@ -6963,7 +6963,7 @@ test_case('admin GitHub language-pack release manifest accepts only trusted sign
         'oversized ZIP' => ['asset' => ['bytes' => 67108865]],
         'unexpected asset' => ['asset' => ['name' => 'language-fts-full.zip']],
         'bad version' => ['version' => 'latest'],
-        'version and URL mismatch' => ['version' => 'language-fts-v0.1.11'],
+        'version and URL mismatch' => ['version' => 'language-fts-v0.1.12'],
     ] as $case => $override) {
         $candidate = array_replace_recursive($valid, $override);
         try {
