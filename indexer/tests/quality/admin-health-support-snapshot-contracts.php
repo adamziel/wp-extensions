@@ -236,7 +236,7 @@ test_case('admin health support snapshot schema is bounded redacted and read-onl
         assert_same('wp-fts-support-snapshot-v1', $payload['schema'] ?? null, 'admin health support snapshot should expose a stable schema id');
         assert_true(is_array($payload['context'] ?? null), 'admin health support snapshot should include plugin and runtime context');
         assert_same('Language FTS', $payload['context']['plugin']['name'] ?? null, 'admin health support snapshot should include plugin name without shelling out');
-        assert_same('0.1.10', $payload['context']['plugin']['version'] ?? null, 'admin health support snapshot should include plugin version without shelling out');
+        assert_same('0.1.11', $payload['context']['plugin']['version'] ?? null, 'admin health support snapshot should include plugin version without shelling out');
         assert_same('6.9-test', $payload['context']['runtime']['wordpress_version'] ?? null, 'admin health support snapshot should include WordPress version when available');
         assert_true(is_array($payload['operator_status'] ?? null), 'admin health support snapshot should include operator status');
         assert_true(is_array($payload['provider_compatibility'] ?? null), 'admin health support snapshot should include provider compatibility');

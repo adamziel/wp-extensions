@@ -4,7 +4,7 @@ Tags: search, full-text-search, multilingual, wp-cli
 Requires at least: 6.5
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.1.10
+Stable tag: 0.1.11
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -64,6 +64,10 @@ Start with staging or a disposable copy. Confirm backups, rollback, cron behavio
 Include WordPress, PHP, and database versions; active theme and relevant plugins; exact steps to reproduce; relevant status or diagnostic output; and whether the issue reproduces on staging.
 
 == Changelog ==
+
+= 0.1.11 =
+
+Refines the Dashboard language-pack view so automatic mode lists chosen packs without showing manual pack checkboxes, lets automatic mode use post language metadata and multilingual plugin language signals, and updates the Playground preview with multilingual demo content.
 
 = 0.1.10 =
 

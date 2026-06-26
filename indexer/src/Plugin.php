@@ -72,7 +72,7 @@ final class WP_FTS_Plugin
     private const SUPPORT_SNAPSHOT_MAX_LIST_ITEMS = 12;
     private const SUPPORT_SNAPSHOT_MAX_ASSOC_ITEMS = 80;
     private const SUPPORT_SNAPSHOT_PLUGIN_NAME = 'Language FTS';
-    private const SUPPORT_SNAPSHOT_PLUGIN_VERSION = '0.1.10';
+    private const SUPPORT_SNAPSHOT_PLUGIN_VERSION = '0.1.11';
     private const INDEX_PROFILE_SCHEMA = 'wp-fts-index-profile-v1';
     private const INDEX_PROFILE_INDEXER_SIGNATURE = 'wp-fts-indexer-v2';
     private const RANKING_TUNING_SCHEMA = 'wp-fts-ranking-tuning-v1';
