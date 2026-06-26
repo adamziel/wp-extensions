@@ -22,12 +22,12 @@ The plugin is now a thin WordPress adapter around the reusable
 engine; this plugin owns WordPress hooks, post extraction, MySQL storage, admin
 UI, WP-CLI, REST/search integration, and Playground packaging.
 
-The Playground preview installs this `indexer/` plugin directly from the GitHub
-repository with a `git:directory` Blueprint resource and opens the admin-only
-Settings > Full-Text Search Sandbox tab. The sandbox searches content already
-present in the full-text index and never creates demo posts or hidden sample
-content. It shows indexed posts with pagination, lets you run language-aware
-searches, and indexes new or updated published posts when they are saved.
+The Playground preview installs the bundled preview ZIP, seeds a small set of
+multilingual demo posts, indexes them, and opens the admin-only Settings >
+Full-Text Search Dashboard tab. The sandbox searches content already present in
+the full-text index and never creates hidden sample content. It shows indexed
+posts with pagination, lets you run language-aware searches, and indexes new or
+updated published posts when they are saved.
 Playground is useful for trying the workflow quickly; production suitability
 still depends on the site, host, database, cron, cache, content, traffic, and
 plugin/theme mix.

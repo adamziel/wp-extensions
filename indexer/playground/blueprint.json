@@ -2,7 +2,7 @@
   "$schema": "https://playground.wordpress.net/blueprint-schema.json",
   "meta": {
     "title": "Language FTS Preview",
-    "description": "Installs and activates Language FTS from the indexer/ directory and opens the Settings > Full-Text Search dashboard.",
+    "description": "Installs and activates Language FTS, seeds multilingual demo posts, indexes them, and opens the Settings > Full-Text Search dashboard.",
     "author": "adamziel"
   },
   "preferredVersions": {
@@ -18,16 +18,17 @@
     {
       "step": "installPlugin",
       "pluginData": {
-        "resource": "git:directory",
-        "url": "https://github.com/adamziel/wp-extensions",
-        "path": "indexer",
-        "ref": "main",
-        "refType": "branch"
+        "resource": "url",
+        "url": "https://raw.githubusercontent.com/adamziel/wp-extensions/main/indexer/playground/indexer-preview.zip"
       },
       "options": {
         "activate": true,
         "targetFolderName": "indexer"
       }
+    },
+    {
+      "step": "runPHP",
+      "code": "<?php require '/wordpress/wp-content/plugins/indexer/playground/dashboard-demo-content.php';"
     }
   ]
 }
