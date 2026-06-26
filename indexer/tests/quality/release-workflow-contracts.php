@@ -123,7 +123,7 @@ function wp_fts_release_workflow_contract_run(): void
         'SHA256SUMS.txt',
         'te-unimorph-tel-551f60f5f434',
         'en-unimorph-eng-66e0e9e8e2dc',
-        'pl-polimorf-20180722-full-playground',
+        'language-fts-extended-language-packs/analyzer-packs/pl-polimorf-20180722-full/',
         'MIXED-LICENSE-NOTICE.txt',
         'No WordPress.org submission',
         'gh release view',

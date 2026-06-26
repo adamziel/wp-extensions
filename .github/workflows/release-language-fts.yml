@@ -203,7 +203,7 @@ jobs:
 
           $assert($hasPrefix($extended, 'language-fts-extended-language-packs/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/'), 'Extended bundle must include CC BY-SA UniMorph packs.');
           $assert(! $hasPrefix($extended, 'language-fts-extended-language-packs/analyzer-packs/te-unimorph-tel-551f60f5f434/'), 'Extended bundle must exclude unknown-license packs.');
-          $assert($hasPrefix($extended, 'language-fts-extended-language-packs/analyzer-packs/pl-polimorf-20180722-full-playground/'), 'Extended bundle must include the BSD Polish pack.');
+          $assert($hasPrefix($extended, 'language-fts-extended-language-packs/analyzer-packs/pl-polimorf-20180722-full/'), 'Extended bundle must include the BSD Polish pack.');
 
           foreach (['manifest.json', 'NOTICE.txt', 'LICENSES.md'] as $file) {
               $assert(in_array('language-fts-extended-language-packs/' . $file, $extended, true), "Extended bundle must include {$file}.");
