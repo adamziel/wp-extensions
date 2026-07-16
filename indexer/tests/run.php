@@ -12690,6 +12690,12 @@ test_case('admin Posts list search replacement avoids REST cron secondary sandbo
         'custom status sorted column' => ['post_status' => 'draft', 'perm' => 'readable', 'orderby' => 'title'],
         'custom status order direction' => ['post_status' => 'pending', 'perm' => 'readable', 'orderby' => 'modified', 'order' => 'DESC'],
         'permission scope' => ['perm' => 'editable'],
+        'id result shape' => ['fields' => 'ids'],
+        'parent result shape' => ['fields' => 'id=>parent'],
+        'unbounded result set' => ['posts_per_page' => -1],
+        'no paging' => ['nopaging' => true],
+        'suppressed totals' => ['no_found_rows' => true],
+        'ascending relevance' => ['order' => 'ASC'],
         'suppressed filters' => ['suppress_filters' => true],
     ];
 
@@ -12744,6 +12750,14 @@ test_case('front-end search replacement declines constrained WP_Query searches',
             'exact post id' => ['p' => 751],
             'exact page id' => ['page_id' => 751],
             'exact post name' => ['name' => 'constrained-front-end-result'],
+            'id result shape' => ['fields' => 'ids'],
+            'parent result shape' => ['fields' => 'id=>parent'],
+            'custom ordering' => ['orderby' => 'title'],
+            'ascending relevance' => ['order' => 'ASC'],
+            'unbounded result set' => ['posts_per_page' => -1],
+            'no paging' => ['nopaging' => true],
+            'suppressed totals' => ['no_found_rows' => true],
+            'partially indexed post types' => ['post_type' => ['post', 'secret']],
         ];
 
         foreach ($constrainedVars as $label => $vars) {
@@ -12756,6 +12770,18 @@ test_case('front-end search replacement declines constrained WP_Query searches',
             assert_same(null, $query->get('wp_fts_search_candidate', null), "constrained {$label} search should not be marked for FTS replacement");
             assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), "constrained {$label} search should continue through normal WordPress search");
         }
+
+        $defaultShape = new WP_FTS_Test_Query([
+            's' => 'constraintneedle',
+            'posts_per_page' => 10,
+            'fields' => '',
+            'orderby' => 'relevance',
+            'order' => 'DESC',
+            'nopaging' => false,
+            'no_found_rows' => false,
+        ]);
+        WP_FTS_Plugin::prepare_frontend_search_query($defaultShape);
+        assert_same(true, $defaultShape->get('wp_fts_search_candidate'), 'normal object relevance queries should remain eligible for FTS replacement');
     } finally {
         $wpdb = $oldWpdb;
     }

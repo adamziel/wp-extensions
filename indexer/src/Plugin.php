@@ -11638,6 +11638,18 @@ JS;
             }
         }
 
+        if (self::search_query_has_unsupported_page_size($query)) {
+            return true;
+        }
+
+        if (self::frontend_search_has_unsupported_ordering($query)) {
+            return true;
+        }
+
+        if (self::frontend_search_has_unsupported_post_types($query)) {
+            return true;
+        }
+
         $post_status = self::query_var($query, 'post_status', null);
         if (self::constraint_value_present($post_status)) {
             $statuses = self::normalize_string_list($post_status);
@@ -11663,6 +11675,10 @@ JS;
             if (self::query_var_has_constraint($query, $key)) {
                 return true;
             }
+        }
+
+        if (self::search_query_has_unsupported_page_size($query)) {
+            return true;
         }
 
         if (self::admin_post_search_has_unsupported_permission_scope($query)) {
@@ -11700,7 +11716,7 @@ JS;
     {
         $orderby = self::query_var($query, 'orderby', null);
         if (!self::constraint_value_present($orderby)) {
-            return false;
+            return self::admin_post_search_has_unsupported_order($query, ['DESC']);
         }
 
         if (!is_scalar($orderby) || trim((string) $orderby) !== 'modified') {
@@ -11768,6 +11784,7 @@ JS;
             'date_query',
             'day',
             'exact',
+            'fields',
             'hour',
             'm',
             'meta_compare',
@@ -11778,6 +11795,8 @@ JS;
             'minute',
             'monthnum',
             'name',
+            'no_found_rows',
+            'nopaging',
             'p',
             'page_id',
             'pagename',
@@ -11805,6 +11824,52 @@ JS;
             'w',
             'year',
         ];
+    }
+
+    private static function search_query_has_unsupported_page_size(mixed $query): bool
+    {
+        $postsPerPage = self::query_var($query, 'posts_per_page', null);
+
+        return is_numeric($postsPerPage) && (int) $postsPerPage <= 0;
+    }
+
+    /**
+     * Preserve FTS score ordering only when the query asks for normal relevance.
+     */
+    private static function frontend_search_has_unsupported_ordering(mixed $query): bool
+    {
+        $orderby = self::query_var($query, 'orderby', null);
+        if (self::constraint_value_present($orderby)) {
+            if (!is_scalar($orderby) || strtolower(trim((string) $orderby)) !== 'relevance') {
+                return true;
+            }
+        }
+
+        $order = self::query_var($query, 'order', null);
+        if (!self::constraint_value_present($order)) {
+            return false;
+        }
+
+        return !is_scalar($order) || strtoupper(trim((string) $order)) !== 'DESC';
+    }
+
+    /**
+     * Replace only queries whose complete core post-type scope is indexed.
+     */
+    private static function frontend_search_has_unsupported_post_types(mixed $query): bool
+    {
+        $requested = self::query_var($query, 'post_type', null);
+        if ($requested === null || $requested === '' || $requested === 'any') {
+            $expected = self::public_searchable_post_types();
+        } else {
+            $expected = self::normalize_string_list($requested);
+        }
+
+        $supported = self::frontend_query_post_types($query);
+        sort($expected, SORT_STRING);
+        sort($supported, SORT_STRING);
+
+        return $expected !== $supported;
     }
 
     private static function query_var_has_constraint(mixed $query, string $key): bool
