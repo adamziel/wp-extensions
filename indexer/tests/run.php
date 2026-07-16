@@ -2123,14 +2123,29 @@ final class WP_FTS_Test_WPDB
         }
 
         if (str_starts_with($sql, 'INSERT INTO wp_fts_terms')) {
-            $term = (string) $args[0];
-            $value = max(0, (int) $args[1]);
-            if (str_contains($sql, 'doc_freq = doc_freq + VALUES(doc_freq)')) {
-                $value += (int) ($this->terms[$term]['doc_freq'] ?? 0);
+            $affected = 0;
+            for ($offset = 0; $offset + 1 < count($args); $offset += 2) {
+                $term = (string) $args[$offset];
+                $value = max(0, (int) $args[$offset + 1]);
+                if (str_contains($sql, 'doc_freq = doc_freq + VALUES(doc_freq)')) {
+                    $value += (int) ($this->terms[$term]['doc_freq'] ?? 0);
+                }
+                $this->terms[$term] = ['doc_freq' => $value];
+                $affected++;
             }
-            $this->terms[$term] = ['doc_freq' => $value];
             ksort($this->terms, SORT_STRING);
-            return 1;
+            return $affected;
+        }
+
+        if (str_starts_with($sql, "UPDATE wp_fts_terms\nSET doc_freq = GREATEST(0, CAST(doc_freq AS SIGNED) - CASE term")) {
+            $termCount = intdiv(count($args), 3);
+            for ($offset = 0; $offset < $termCount * 2; $offset += 2) {
+                $term = (string) $args[$offset];
+                if (isset($this->terms[$term])) {
+                    $this->terms[$term]['doc_freq'] = max(0, $this->terms[$term]['doc_freq'] - abs((int) $args[$offset + 1]));
+                }
+            }
+            return $termCount;
         }
 
         if (str_starts_with($sql, 'UPDATE wp_fts_terms')) {
@@ -2160,13 +2175,29 @@ final class WP_FTS_Test_WPDB
             return 1;
         }
 
+        if (str_starts_with($sql, "DELETE FROM wp_fts_terms\nWHERE term IN")) {
+            $affected = 0;
+            foreach ($args as $term) {
+                $term = (string) $term;
+                if (($this->terms[$term]['doc_freq'] ?? null) === 0) {
+                    unset($this->terms[$term]);
+                    $affected++;
+                }
+            }
+            return $affected;
+        }
+
         if (str_starts_with($sql, 'INSERT INTO wp_fts_postings')) {
-            $term = (string) $args[0];
-            $docId = (int) $args[1];
-            $this->postings[$term][$docId] = max(1, (int) $args[2]);
-            ksort($this->postings[$term], SORT_NUMERIC);
+            $affected = 0;
+            for ($offset = 0; $offset + 2 < count($args); $offset += 3) {
+                $term = (string) $args[$offset];
+                $docId = (int) $args[$offset + 1];
+                $this->postings[$term][$docId] = max(1, (int) $args[$offset + 2]);
+                ksort($this->postings[$term], SORT_NUMERIC);
+                $affected++;
+            }
             ksort($this->postings, SORT_STRING);
-            return 1;
+            return $affected;
         }
 
         if ($sql === 'DELETE FROM wp_fts_postings') {

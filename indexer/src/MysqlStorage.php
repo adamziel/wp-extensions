@@ -12,6 +12,14 @@ declare(strict_types=1);
  */
 final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Document_Terms_Storage, WP_FTS_Prefix_Term_Storage, WP_FTS_Resettable_Storage
 {
+    /**
+     * The largest statement repeats each maximum-length term key once for a
+     * CASE expression and once for its IN predicate: at most 51 KiB of raw keys
+     * and 300 placeholders. This stays well below normal MySQL packet limits
+     * without returning to one round trip per term.
+     */
+    private const WRITE_CHUNK_ROWS = 100;
+
     private object $wpdb;
     private string $termsTable;
     private string $postingsTable;
@@ -261,7 +269,7 @@ LIMIT %d",
     }
 
     /**
-     * Replace one document's postings with row deletes and row upserts.
+     * Replace one document's postings with one delete and chunked row upserts.
      *
      * Document-frequency changes are applied as atomic deltas, so two writers
      * adding different documents for the same term increment the shared term row
@@ -280,9 +288,7 @@ LIMIT %d",
             $doc_id
         ), 'delete FTS document postings');
 
-        foreach ($termFrequencies as $term => $tf) {
-            $this->insert_posting($term, $doc_id, $tf);
-        }
+        $this->insert_document_postings($doc_id, $termFrequencies);
 
         $deltas = [];
         foreach ($oldTerms as $term => $_) {
@@ -323,9 +329,7 @@ LIMIT %d",
             $term
         ), 'replace FTS term postings');
 
-        foreach ($decoded as $docId => $tf) {
-            $this->insert_posting($term, (int) $docId, (int) $tf);
-        }
+        $this->insert_term_postings($term, $decoded);
         $this->set_doc_freq($term, count($decoded));
     }
 
@@ -1131,20 +1135,94 @@ GROUP BY term",
     }
 
     /**
-     * Insert or update one row posting.
+     * Insert one document's term frequencies without copying the entire input.
+     *
+     * @param array<string,int> $termFrequencies
+     */
+    private function insert_document_postings(int $docId, array $termFrequencies): void
+    {
+        $chunk = [];
+        foreach ($termFrequencies as $term => $tf) {
+            $chunk[] = [(string) $term, $docId, (int) $tf];
+            if (count($chunk) === self::WRITE_CHUNK_ROWS) {
+                $this->insert_posting_chunk($chunk);
+                $chunk = [];
+            }
+        }
+        $this->insert_posting_chunk($chunk);
+    }
+
+    /**
+     * Insert one compatibility term blob's decoded posting rows without copying
+     * the entire decoded map.
+     *
+     * @param array<int,int> $postings
+     */
+    private function insert_term_postings(string $term, array $postings): void
+    {
+        $chunk = [];
+        foreach ($postings as $docId => $tf) {
+            $chunk[] = [$term, (int) $docId, (int) $tf];
+            if (count($chunk) === self::WRITE_CHUNK_ROWS) {
+                $this->insert_posting_chunk($chunk);
+                $chunk = [];
+            }
+        }
+        $this->insert_posting_chunk($chunk);
+    }
+
+    /**
+     * Insert or update one packet-bounded posting chunk.
+     *
+     * The SQLite compatibility contract covers the existing one-row MySQL
+     * upsert, so that runtime retains it instead of requiring new translation
+     * support for the multi-row form.
+     *
+     * @param array<int,array{0:string,1:int,2:int}> $rows
+     */
+    private function insert_posting_chunk(array $rows): void
+    {
+        if ($rows === []) {
+            return;
+        }
+
+        if ($this->is_sqlite_runtime()) {
+            foreach ($rows as [$term, $docId, $tf]) {
+                $this->insert_posting($term, $docId, $tf);
+            }
+            return;
+        }
+
+        $values = [];
+        $args = [];
+        foreach ($rows as [$term, $docId, $tf]) {
+            $this->assert_term_key_fits($term);
+            $values[] = '(%s, %d, %d)';
+            array_push($args, $term, $docId, max(1, $tf));
+        }
+
+        $this->query($this->wpdb->prepare(
+            "INSERT INTO {$this->postingsTable} (term, doc_id, tf)
+VALUES " . implode(",\n", $values) . "
+ON DUPLICATE KEY UPDATE tf = VALUES(tf)",
+            ...$args
+        ), 'write FTS row postings');
+    }
+
+    /**
+     * Insert the one-row upsert understood by WordPress' SQLite integration.
      */
     private function insert_posting(string $term, int $docId, int $tf): void
     {
         $this->assert_term_key_fits($term);
-        $sql = $this->wpdb->prepare(
+        $this->query($this->wpdb->prepare(
             "INSERT INTO {$this->postingsTable} (term, doc_id, tf)
 VALUES (%s, %d, %d)
 ON DUPLICATE KEY UPDATE tf = VALUES(tf)",
             $term,
             $docId,
             max(1, $tf)
-        );
-        $this->query($sql, 'write FTS row posting');
+        ), 'write FTS row posting');
     }
 
     /**
@@ -1179,6 +1257,7 @@ ON DUPLICATE KEY UPDATE doc_freq = VALUES(doc_freq)",
     private function adjust_doc_freqs(array $deltas): void
     {
         ksort($deltas, SORT_STRING);
+        $normalized = [];
         foreach ($deltas as $term => $delta) {
             $term = (string) $term;
             $delta = (int) $delta;
@@ -1187,6 +1266,39 @@ ON DUPLICATE KEY UPDATE doc_freq = VALUES(doc_freq)",
             }
 
             $this->assert_term_key_fits($term);
+            $normalized[$term] = $delta;
+        }
+        if ($normalized === []) {
+            return;
+        }
+
+        if ($this->is_sqlite_runtime()) {
+            $this->adjust_doc_freqs_individually($normalized);
+            return;
+        }
+
+        $increments = [];
+        $decrements = [];
+        foreach ($normalized as $term => $delta) {
+            if ($delta > 0) {
+                $increments[$term] = $delta;
+            } else {
+                $decrements[$term] = abs($delta);
+            }
+        }
+
+        $this->increment_doc_freqs($increments);
+        $this->decrement_doc_freqs($decrements);
+    }
+
+    /**
+     * Preserve the one-term statements translated by WordPress' SQLite layer.
+     *
+     * @param array<string,int> $deltas
+     */
+    private function adjust_doc_freqs_individually(array $deltas): void
+    {
+        foreach ($deltas as $term => $delta) {
             if ($delta > 0) {
                 $this->query($this->wpdb->prepare(
                     "INSERT INTO {$this->termsTable} (term, doc_freq)
@@ -1210,6 +1322,67 @@ WHERE term = %s",
                 "DELETE FROM {$this->termsTable} WHERE term = %s AND doc_freq = 0",
                 $term
             ), 'delete empty FTS document frequency');
+        }
+    }
+
+    /**
+     * Apply positive document-frequency deltas with one upsert per chunk.
+     *
+     * @param array<string,int> $increments
+     */
+    private function increment_doc_freqs(array $increments): void
+    {
+        foreach (array_chunk($increments, self::WRITE_CHUNK_ROWS, true) as $chunk) {
+            $values = [];
+            $args = [];
+            foreach ($chunk as $term => $increment) {
+                $values[] = '(%s, %d)';
+                array_push($args, $term, $increment);
+            }
+
+            $this->query($this->wpdb->prepare(
+                "INSERT INTO {$this->termsTable} (term, doc_freq)
+VALUES " . implode(",\n", $values) . "
+ON DUPLICATE KEY UPDATE doc_freq = doc_freq + VALUES(doc_freq)",
+                ...$args
+            ), 'increment FTS document frequencies');
+        }
+    }
+
+    /**
+     * Apply negative document-frequency deltas with one update and cleanup per
+     * chunk. Repeating term arguments keeps both CASE and IN comparisons fully
+     * prepared while staying under the chunk's 300-placeholder bound.
+     *
+     * @param array<string,int> $decrements
+     */
+    private function decrement_doc_freqs(array $decrements): void
+    {
+        foreach (array_chunk($decrements, self::WRITE_CHUNK_ROWS, true) as $chunk) {
+            $cases = [];
+            $args = [];
+            foreach ($chunk as $term => $decrement) {
+                $cases[] = 'WHEN %s THEN %d';
+                array_push($args, $term, $decrement);
+            }
+
+            $terms = array_keys($chunk);
+            $placeholders = implode(',', array_fill(0, count($terms), '%s'));
+            array_push($args, ...$terms);
+            $this->query($this->wpdb->prepare(
+                "UPDATE {$this->termsTable}
+SET doc_freq = GREATEST(0, CAST(doc_freq AS SIGNED) - CASE term
+    " . implode("\n    ", $cases) . "
+    ELSE 0
+END)
+WHERE term IN ({$placeholders})",
+                ...$args
+            ), 'decrement FTS document frequencies');
+            $this->query($this->wpdb->prepare(
+                "DELETE FROM {$this->termsTable}
+WHERE term IN ({$placeholders}) AND doc_freq = 0",
+                ...$terms
+            ), 'delete empty FTS document frequencies');
         }
     }
 

@@ -251,7 +251,135 @@ namespace {
         assert_same([1001 => 4], WP_FTS_PostingsCodec::decode($storage->get_terms([$unique])[$unique]['postings']), 'new term should receive the moved document posting');
 
         $negativeUpdate = wp_fts_quality_last_prepared_like($wpdb, 'UPDATE wp_fts_terms');
-        assert_same([1, $shared], $negativeUpdate['args'], 'old shared term df should be decremented atomically');
+        assert_contains('CASE term', $negativeUpdate['sql'], 'old shared term df should use the set-wise decrement statement');
+        assert_same([$shared, 1, $shared], $negativeUpdate['args'], 'old shared term df should be decremented atomically');
+    });
+
+    test_case('batched mysql indexing writes stay inside representative query and packet budgets', function (): void {
+        $wpdb = new WP_FTS_Test_WPDB();
+        $storage = new WP_FTS_Storage_Mysql($wpdb);
+        $english = [];
+        $polish = [];
+        for ($index = 0; $index < 1000; $index++) {
+            $token = str_pad((string) $index, 240, 'x');
+            $english[WP_FTS_TermNamespace::namespace_term('en', $token)] = ($index % 5) + 1;
+            $polish[WP_FTS_TermNamespace::namespace_term('pl', $token)] = ($index % 7) + 1;
+        }
+
+        $storage->replace_doc_postings(9001, $english);
+        $postingWrites = wp_fts_quality_prepared_like($wpdb, 'INSERT INTO wp_fts_postings');
+        $termWrites = array_values(array_filter(
+            wp_fts_quality_prepared_like($wpdb, 'INSERT INTO wp_fts_terms'),
+            static fn(array $entry): bool => str_contains($entry['sql'], 'doc_freq = doc_freq + VALUES(doc_freq)')
+        ));
+        assert_same(10, count($postingWrites), 'one thousand posting rows should use ten bounded upserts');
+        assert_same(10, count($termWrites), 'one thousand document-frequency increments should use ten bounded upserts');
+        assert_true(count($wpdb->prepared) <= 22, 'representative first indexing should stay within 22 prepared statements');
+
+        foreach ($wpdb->prepared as $entry) {
+            assert_true(count($entry['args']) <= 300, 'one batched indexing statement should bind at most 300 values');
+            $stringBytes = array_sum(array_map(
+                static fn(mixed $value): int => is_string($value) ? strlen($value) : 0,
+                $entry['args']
+            ));
+            assert_true($stringBytes <= 51000, 'one batched indexing statement should carry at most 51 KiB of raw term keys');
+        }
+
+        $wpdb->prepared = [];
+        $wpdb->queries = [];
+        $storage->replace_doc_postings(9001, $polish);
+        assert_same(10, count(wp_fts_quality_prepared_like($wpdb, 'INSERT INTO wp_fts_postings')), 'disjoint replacement should batch its new posting rows');
+        assert_same(10, count(wp_fts_quality_prepared_like($wpdb, 'UPDATE wp_fts_terms')), 'disjoint replacement should batch old document-frequency decrements');
+        assert_same(10, count(wp_fts_quality_prepared_like($wpdb, "DELETE FROM wp_fts_terms\nWHERE term IN")), 'disjoint replacement should batch zero-frequency cleanup');
+        assert_true(count($wpdb->prepared) <= 42, 'representative disjoint replacement should stay within 42 prepared statements');
+        assert_same(1000, count($wpdb->terms), 'set-wise deltas should leave exactly the replacement term set');
+        assert_same(1000, count($wpdb->postings), 'batched posting replacement should leave exactly the replacement posting rows');
+        assert_true(!isset($wpdb->terms[(string) array_key_first($english)]), 'set-wise decrements should remove an old zero-frequency term');
+        assert_same(1, $wpdb->terms[(string) array_key_first($polish)]['doc_freq'] ?? null, 'set-wise increments should create the replacement term frequency');
+
+        $wpdb->prepared = [];
+        $wpdb->queries = [];
+        $compatibilityPostings = [];
+        for ($docId = 1; $docId <= 1000; $docId++) {
+            $compatibilityPostings[$docId] = ($docId % 3) + 1;
+        }
+        $compatibilityTerm = WP_FTS_TermNamespace::namespace_term('en', 'compatibility-batch');
+        $storage->put_term($compatibilityTerm, 1000, WP_FTS_PostingsCodec::encode($compatibilityPostings));
+        assert_same(10, count(wp_fts_quality_prepared_like($wpdb, 'INSERT INTO wp_fts_postings')), 'legacy term-blob writes should share the bounded posting chunks');
+        assert_true(count($wpdb->prepared) <= 12, 'one thousand compatibility postings should stay within 12 prepared statements');
+        assert_same(1000, $wpdb->terms[$compatibilityTerm]['doc_freq'] ?? null, 'compatibility write should retain its exact document frequency');
+        assert_same(1000, count($wpdb->postings[$compatibilityTerm] ?? []), 'compatibility write should retain every decoded posting row');
+    });
+
+    test_case('batched mysql indexing writes retain SQLite state parity through single-row compatibility SQL', function (): void {
+        $mysqlWpdb = new WP_FTS_Test_WPDB();
+        $sqliteWpdb = new WP_FTS_Test_WPDB();
+        $sqliteWpdb->dbh = new WP_FTS_Test_SQLite_Driver();
+        $mysql = new WP_FTS_Storage_Mysql($mysqlWpdb);
+        $sqlite = new WP_FTS_Storage_Mysql($sqliteWpdb);
+        $alpha = WP_FTS_TermNamespace::namespace_term('en', 'alpha');
+        $beta = WP_FTS_TermNamespace::namespace_term('en', 'beta');
+        $gamma = WP_FTS_TermNamespace::namespace_term('en', 'gamma');
+        $delta = WP_FTS_TermNamespace::namespace_term('en', 'delta');
+
+        foreach ([$mysql, $sqlite] as $storage) {
+            $storage->replace_doc_postings(1, [$alpha => 2, $beta => 3, $gamma => 1]);
+            $storage->replace_doc_postings(2, [$alpha => 4]);
+            $storage->replace_doc_postings(1, [$alpha => 5, $gamma => 2, $delta => 6]);
+        }
+
+        assert_same($mysqlWpdb->terms, $sqliteWpdb->terms, 'batched MySQL and one-row SQLite paths should retain identical document frequencies');
+        assert_same($mysqlWpdb->postings, $sqliteWpdb->postings, 'batched MySQL and one-row SQLite paths should retain identical postings');
+        $mysqlPostingWrites = wp_fts_quality_prepared_like($mysqlWpdb, 'INSERT INTO wp_fts_postings');
+        $sqlitePostingWrites = wp_fts_quality_prepared_like($sqliteWpdb, 'INSERT INTO wp_fts_postings');
+        assert_contains("),\n(", $mysqlPostingWrites[0]['sql'], 'MySQL should combine one document posting set into a multi-row statement');
+        assert_same(3, count($mysqlPostingWrites), 'MySQL should use one posting statement for each small replacement');
+        assert_same(7, count($sqlitePostingWrites), 'SQLite compatibility should retain one translated statement per posting row');
+        foreach ($sqlitePostingWrites as $entry) {
+            assert_same(3, count($entry['args']), 'SQLite compatibility posting statements should remain single-row upserts');
+        }
+    });
+
+    test_case('batched mysql indexing write failures stop later set-wise mutations', function (): void {
+        $wpdb = new WP_FTS_Test_WPDB();
+        $wpdb->failQueryPrefix = 'INSERT INTO wp_fts_postings';
+        $storage = new WP_FTS_Storage_Mysql($wpdb);
+        $terms = [];
+        for ($index = 0; $index < 250; $index++) {
+            $terms[WP_FTS_TermNamespace::namespace_term('en', 'failure-' . $index)] = 1;
+        }
+
+        $thrown = null;
+        try {
+            $storage->replace_doc_postings(9100, $terms);
+        } catch (RuntimeException $error) {
+            $thrown = $error;
+        }
+
+        assert_true($thrown instanceof RuntimeException, 'a failed posting chunk should surface to the transaction owner');
+        assert_contains('write FTS row postings', $thrown?->getMessage() ?? '', 'a failed posting chunk should identify the batched operation');
+        assert_same(1, count(wp_fts_quality_prepared_like($wpdb, 'INSERT INTO wp_fts_postings')), 'a failed first chunk should stop later posting chunks');
+        assert_same([], wp_fts_quality_prepared_like($wpdb, 'INSERT INTO wp_fts_terms'), 'posting failure should stop before document-frequency deltas');
+
+        $deltaWpdb = new WP_FTS_Test_WPDB();
+        $deltaStorage = new WP_FTS_Storage_Mysql($deltaWpdb);
+        $old = WP_FTS_TermNamespace::namespace_term('en', 'old');
+        $new = WP_FTS_TermNamespace::namespace_term('en', 'new');
+        $deltaStorage->replace_doc_postings(9200, [$old => 1]);
+        $deltaWpdb->prepared = [];
+        $deltaWpdb->queries = [];
+        $deltaWpdb->failQueryPrefix = 'UPDATE wp_fts_terms';
+        $deltaThrown = null;
+        try {
+            $deltaStorage->replace_doc_postings(9200, [$new => 1]);
+        } catch (RuntimeException $error) {
+            $deltaThrown = $error;
+        }
+
+        assert_true($deltaThrown instanceof RuntimeException, 'a failed set-wise decrement should surface to the transaction owner');
+        assert_contains('decrement FTS document frequencies', $deltaThrown?->getMessage() ?? '', 'a failed set-wise decrement should identify the batched operation');
+        assert_same(1, count(wp_fts_quality_prepared_like($deltaWpdb, 'UPDATE wp_fts_terms')), 'a failed decrement chunk should stop later decrement chunks');
+        assert_same([], wp_fts_quality_prepared_like($deltaWpdb, "DELETE FROM wp_fts_terms\nWHERE term IN"), 'a failed decrement should not run zero-frequency cleanup');
     });
 
     test_case('quality mysql sqlite term reads use bounded binary comparisons', function (): void {
