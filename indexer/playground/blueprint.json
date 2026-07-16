@@ -2,7 +2,7 @@
   "$schema": "https://playground.wordpress.net/blueprint-schema.json",
   "meta": {
     "title": "Language FTS Preview",
-    "description": "Installs and activates Language FTS from the indexer/ directory and opens the Settings > Full-Text Search sandbox.",
+    "description": "Downloads, verifies, installs, and activates the published Language FTS core package, then opens the Settings > Full-Text Search sandbox.",
     "author": "adamziel"
   },
   "preferredVersions": {
@@ -16,13 +16,22 @@
   },
   "steps": [
     {
+      "step": "writeFile",
+      "path": "/tmp/language-fts-core.zip",
+      "data": {
+        "resource": "url",
+        "url": "https://github.com/adamziel/wp-extensions/releases/download/language-fts-v0.1.12/language-fts-core.zip"
+      }
+    },
+    {
+      "step": "runPHP",
+      "code": "<?php\n$path = '/tmp/language-fts-core.zip';\n$expected = '4a7baff284b74d7fc72d071f589730269748c66bb82f68b0ce426739f57bdc7f';\n$actual = hash_file('sha256', $path);\nif (! is_string($actual) || ! hash_equals($expected, $actual)) {\n    throw new RuntimeException('Language FTS release checksum mismatch.');\n}"
+    },
+    {
       "step": "installPlugin",
       "pluginData": {
-        "resource": "git:directory",
-        "url": "https://github.com/adamziel/wp-extensions",
-        "path": "indexer",
-        "ref": "main",
-        "refType": "branch"
+        "resource": "vfs",
+        "path": "/tmp/language-fts-core.zip"
       },
       "options": {
         "activate": true,

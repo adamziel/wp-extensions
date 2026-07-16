@@ -11,12 +11,13 @@ WP-CLI, and diagnostic tools for understanding search behavior.
 
 [![Try in Playground](https://github.com/WordPress/action-wp-playground-pr-preview/raw/main/assets/playground-preview-button.svg)](https://playground.wordpress.net/?blueprint-url=https://raw.githubusercontent.com/adamziel/wp-extensions/main/indexer/playground/blueprint.json)
 
-The Playground preview installs the `indexer/` plugin directly from this GitHub
-repository and opens `Settings > Full-Text Search` on the Sandbox tab. It is a
-quick way to inspect the workflow, not a promise that every host, database,
-cache, provider, language, or traffic pattern has been validated. Evaluate on
-staging, keep backups and a rollback path, and use the status tools with your
-own content.
+The Playground preview downloads the
+[version-and-digest-pinned core release](https://github.com/adamziel/wp-extensions/releases/download/language-fts-v0.1.12/language-fts-core.zip),
+verifies it before activation, and opens `Settings > Full-Text Search` on the
+Sandbox tab. It is a quick way to inspect the workflow, not a promise that every
+host, database, cache, provider, language, or traffic pattern has been
+validated. Evaluate on staging, keep backups and a rollback path, and use the
+status tools with your own content.
 
 See [indexer/README.md](indexer/README.md) for setup, architecture,
 language/analyzer notes, and development checks.

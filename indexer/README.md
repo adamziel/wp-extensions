@@ -22,15 +22,15 @@ The plugin is now a thin WordPress adapter around the reusable
 engine; this plugin owns WordPress hooks, post extraction, MySQL storage, admin
 UI, WP-CLI, REST/search integration, and Playground packaging.
 
-The Playground preview installs this `indexer/` plugin directly from the GitHub
-repository with a `git:directory` Blueprint resource and opens the admin-only
-Settings > Full-Text Search Sandbox tab. The sandbox searches content already
-present in the full-text index and never creates demo posts or hidden sample
-content. It shows indexed posts with pagination, lets you run language-aware
-searches, and indexes new or updated published posts when they are saved.
-Playground is useful for trying the workflow quickly; production suitability
-still depends on the site, host, database, cron, cache, content, traffic, and
-plugin/theme mix.
+The Playground preview downloads the version-pinned core release ZIP, verifies
+its SHA-256 digest before activation, and opens the admin-only Settings >
+Full-Text Search Sandbox tab. The sandbox searches content already present in
+the full-text index and never creates demo posts or hidden sample content. It
+shows indexed posts with pagination, lets you run language-aware searches, and
+indexes new or updated published posts when they are saved. Playground is
+useful for trying the workflow quickly; production suitability still depends
+on the site, host, database, cron, cache, content, traffic, and plugin/theme
+mix.
 
 The plugin does not use MySQL `FULLTEXT`, replaces normal front-end main-query
 search and eligible wp-admin Posts list searches with ranked FTS results by
@@ -48,16 +48,26 @@ paths and custom field selection still use the documented options and filters.
 
 ## Quickstart
 
-Install the `indexer` directory as the plugin root. Do not install the whole
-monorepo under `wp-content/plugins`, because WordPress will not discover
-`indexer/indexer.php` from a nested checkout.
+Install the published self-contained core ZIP. It includes the production
+Composer dependencies and reusable FTS component that WordPress needs at
+activation. The version and digest below match the package used by the public
+Playground preview.
 
 ```sh
-rsync -a --delete /path/to/wp-extensions/indexer/ /path/to/wordpress/wp-content/plugins/indexer/
-cd /path/to/wordpress/wp-content/plugins/indexer
-composer install --no-dev --optimize-autoloader
-wp plugin activate indexer
+curl -fL https://github.com/adamziel/wp-extensions/releases/download/language-fts-v0.1.12/language-fts-core.zip \
+  -o language-fts-core.zip
+echo '4a7baff284b74d7fc72d071f589730269748c66bb82f68b0ce426739f57bdc7f  language-fts-core.zip' \
+  | shasum -a 256 --check \
+  && wp plugin install ./language-fts-core.zip --activate
+rm language-fts-core.zip
 ```
+
+Do not copy `indexer/` out of a source checkout and run Composer there. Its
+development-only Composer path repository points to the adjacent
+`components/full-text-search/` directory, which is not present after that copy.
+Developers working in the monorepo can build the same standalone package with
+`php indexer/tools/build-release-zip.php` as described in
+[`docs/release-packaging.md`](docs/release-packaging.md).
 
 Activation creates or repairs the `fts_*` tables and schedules the bounded
 runtime queue processor. Run a first reindex to backfill existing posts that

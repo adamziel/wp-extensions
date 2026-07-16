@@ -26,7 +26,7 @@ Support and feedback are best effort. Safety issues, install or activation failu
 
 == Installation ==
 
-1. Install the approved Language FTS plugin package through the WordPress admin plugin screen, or copy the `indexer` plugin folder to `wp-content/plugins/indexer`.
+1. Install the published self-contained Language FTS core ZIP through the WordPress admin plugin screen. A copied source `indexer` directory is incomplete without its adjacent monorepo component.
 2. Activate **Language FTS** from the Plugins screen.
 3. Open **Settings > Full-Text Search** and review Health, Settings, Sandbox, Indexed content, and Analyzer packs.
 4. Run an initial reindex from WP-CLI, for example: `wp fts reindex --post_type=post --batch_size=200`.
