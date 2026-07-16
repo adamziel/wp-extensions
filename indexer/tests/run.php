@@ -12637,6 +12637,7 @@ test_case('front-end search totals are not capped by visibility refill scan size
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => $context === 'frontend search';
 
     try {
         $totalMatches = 260;
@@ -12665,6 +12666,10 @@ test_case('front-end search totals are not capped by visibility refill scan size
         assert_same(25, count($posts), 'front-end replacement should still return only the requested page of many matches');
         assert_same($totalMatches, $query->found_posts, 'front-end found_posts should count every visible match beyond the refill scan size');
         assert_same(11, $query->max_num_pages, 'front-end max pages should be computed from the uncapped visible total');
+        $traces = WP_FTS_Plugin::debug_traces();
+        $trace = $traces[0] ?? [];
+        assert_true((int) ($trace['counts']['search_batches'] ?? 0) > 1, 'large visible totals should still scan more than one bounded result page');
+        assert_true((int) ($trace['counts']['ranking_reuses'] ?? 0) > 0, 'later visibility pages should reuse the first full ranking instead of rescoring postings');
     } finally {
         $wpdb = $oldWpdb;
     }
