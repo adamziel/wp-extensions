@@ -264,7 +264,7 @@ test_case('quality component field-specific explain diagnostics are weighted bou
     assert_same(true, $boundedFields[0]['terms_more'] ?? null, 'quality field explain should flag omitted field terms');
 });
 
-test_case('quality component snippets preserve visible marks without exposing hidden HTML', function (): void {
+test_case('quality component snippets return escaped text and generated marks only', function (): void {
     $analyzer = new WP_FTS_Analyzer([
         'auto_detect_language' => false,
         'enable_stemming' => false,
@@ -275,7 +275,7 @@ test_case('quality component snippets preserve visible marks without exposing hi
 
     for ($i = 0; $i < 360; $i++) {
         $query = $queries[$i % count($queries)];
-        $html = "<article><p>Lead {$query} <strong>visible{$i}</strong> tail</p><script>{$query} scriptsecret{$i}</script><style>.x{content:\"{$query}\"}</style></article>";
+        $html = "<article><p>Lead {$query} <strong onclick=\"unsafe{$i}()\">visible{$i}</strong> tail</p><script>{$query} scriptsecret{$i}</script><style>.x{content:\"{$query}\"}</style></article>";
         $snippet = $searcher->snippet_for_text($html, $query, [
             'lang' => 'en',
             'highlight' => true,
@@ -286,5 +286,15 @@ test_case('quality component snippets preserve visible marks without exposing hi
         assert_true(str_contains(WP_FTS_Html_Text_Stream::visible_text($snippet), $query), "component snippet {$i} should retain visible query text");
         assert_true(!str_contains($snippet, 'scriptsecret'), "component snippet {$i} should not expose script text");
         assert_true(!str_contains(strtolower($snippet), '<script'), "component snippet {$i} should not return script tags");
+        assert_true(!str_contains($snippet, '<strong') && !str_contains($snippet, "unsafe{$i}"), "component snippet {$i} should not return source tags or attributes");
     }
+
+    $entitySnippet = $searcher->snippet_for_text(
+        '<p>alpha &lt;img src=x onerror=alert(1)&gt; tail</p>',
+        'alpha',
+        ['lang' => 'en', 'highlight' => true, 'snippet_length' => 100]
+    );
+    $withoutMarks = str_replace(['<mark>', '</mark>'], '', $entitySnippet);
+    assert_true(!str_contains($withoutMarks, '<'), 'component snippet should escape entity-decoded markup');
+    assert_contains('&lt;img', $entitySnippet, 'component snippet should retain entity-decoded markup as escaped text');
 });
