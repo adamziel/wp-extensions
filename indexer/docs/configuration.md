@@ -4,8 +4,9 @@ Settings > Full-Text Search provides the operator-facing Health, Settings,
 Sandbox, Indexed content, and Analyzer packs tabs. The Settings tab controls
 indexed post types, automatic indexing, front-end and wp-admin Posts search
 replacement, search-provider compatibility, result limits, snippets,
-highlighting, prefix matching and thresholds, field ranking weights, optional
-recency ranking boosts, and language fallback defaults. WordPress runtime indexing, REST/admin
+highlighting, prefix matching and thresholds, optional public REST search,
+field ranking weights, optional recency ranking boosts, and language fallback
+defaults. WordPress runtime indexing, REST/admin
 search, the PHP plugin search helper, and WP-CLI use
 `WP_FTS_Plugin::runtime_analyzer()`. Analyzer-pack paths are still configured
 through the `wp_fts_analyzer_options` option or filter, operational internals
@@ -74,6 +75,40 @@ for that CLI search, plus `--prefix_min_length` / `--prefix-min-length` and
 `--prefix_max_terms` / `--prefix-max-terms` for bounded threshold overrides.
 The lower-level searcher constants `WP_FTS_PREFIX_MIN_LENGTH` and
 `WP_FTS_PREFIX_MAX_TERMS` still exist for code-level direct-searcher callers.
+
+## Public REST Search
+
+The Settings tab keeps the anonymous REST surface separate from normal site
+search:
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `rest_api_enabled` | off | Registers the public `wp-fts/v1/search` route. When off, the route is absent. |
+| `rest_prefix_matching` | off | Allows the route to use bounded word-beginning expansion. A REST request cannot enable this setting or override its limits. |
+
+When enabled, the route always uses approximate top-K search with fixed global
+term, prefix, posting-row, candidate-document, SQL-query, and elapsed-time
+budgets. These limits are deliberately not client-configurable. Anonymous
+successful responses use a 30-second transient cache. All clients without
+operator access share a serialized 60-per-minute fixed IP window. See
+[Operations](operations.md#public-rest-search) for the exact limits, response
+codes, cache visibility behavior, and infrastructure caveats.
+
+## Lower-Level Search Budgets
+
+`WP_FTS_Searcher::search()` also accepts request-wide `max_query_terms`,
+`max_prefix_expansions`, and `max_candidate_rows` options. Their finite defaults
+are 1,024 analyzed alternatives, 256 added prefix alternatives, and 100,000
+posting rows. Exact scoring throws `WP_FTS_Search_Budget_Exceeded` rather than
+silently truncating a posting-row budget; explicitly approximate scoring may
+return a bounded subset. A `request_budget_guard` callback can stop the search
+between storage and scoring steps by throwing or returning `false`.
+
+Storage adapters that implement `WP_FTS_Budgeted_Postings_Storage` apply the
+posting-row limit during retrieval. The native MySQL path and bundled in-memory
+adapter do so. Compatibility adapters without that optional contract cap the
+rows returned to the searcher but may still materialize more work inside their
+own read.
 
 ## Ranking Field Weights
 

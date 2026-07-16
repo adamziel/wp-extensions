@@ -346,11 +346,57 @@ The boost is disabled by default. Changing the strength or half-life does not
 require a reindex when post dates are already indexed, and explain/debug
 diagnostics report whether the boost applied.
 
-The plugin registers a `wp-fts/v1/search` REST helper and a PHP
-`WP_FTS_Plugin::search()` helper. Both rely on WordPress post visibility checks
-so public results are returned only for readable posts; private results require
-the current user to pass `read_post`. By default both helpers return only
-visible ranked rows:
+## Public REST Search
+
+The PHP `WP_FTS_Plugin::search()` helper is always available to plugin code.
+The public `wp-fts/v1/search` route is different: it is not registered until an
+operator enables **Settings > Full-Text Search > Public REST search > REST
+endpoint**. Leave it disabled unless a separate client actually needs anonymous
+search.
+
+Once enabled, the endpoint intentionally trades exhaustive recall for bounded
+anonymous work:
+
+- query text is truncated to 200 bytes and may produce at most 12 analyzed term
+  alternatives;
+- word-beginning expansion is independently disabled by default and, when an
+  operator enables it, may add at most 24 stored terms across the whole query;
+- approximate top-K scoring reads at most 2,000 posting rows and scores at most
+  500 candidate documents in one scoring pass; clients cannot request exact
+  scoring or raise these limits;
+- the search/cache path stops between bounded operations after 32 counted
+  database queries or 250 ms; and
+- clients without operator access receive at most 60 requests per fixed
+  60-second IP window.
+
+The candidate limits mean a broad REST query can omit a matching or more
+relevant document. Use the PHP or WP-CLI surfaces when exhaustive behavior is
+required. The time circuit is checked between storage and visibility steps; it
+cannot cancel a database statement that is already running.
+
+Successful anonymous responses are cached in a WordPress transient for 30
+seconds. Every cache hit rechecks current post visibility, so a post that
+becomes private is not returned from a stale cache entry. Ranking or newly
+indexed content can remain stale until that short entry expires, and a
+visibility change can make a cached page shorter rather than refill it.
+Authenticated and explain responses are not cached. Attaching a
+`wp_fts_search_results` filter also bypasses the response cache because its
+output can depend on request context that is not safe to encode in a shared
+cache key.
+
+The transient-backed non-operator counter serializes each client/window update
+with an atomic WordPress option lock and rejects a contending request rather
+than allowing a lost increment. On multi-node installations, the counter is
+only shared if the nodes use the same WordPress database and transient backend;
+use an edge or infrastructure rate limiter when a strict traffic guarantee is
+required.
+
+The `prefix_matching` request parameter cannot enable expansion. Operators must
+enable **REST word beginnings** separately from normal site search. Budget
+failures return `400` for excessive query complexity, `429` for the
+non-operator rate limit, or `503` when the runtime circuit stops the request.
+
+After enabling the endpoint, call it with:
 
 ```sh
 curl 'https://example.test/wp-json/wp-fts/v1/search?q=release%20notes'
@@ -362,7 +408,7 @@ The default REST response shape is:
 {"results":[{"doc_id":123,"score":1.25}]}
 ```
 
-The default PHP helper remains:
+The PHP helper remains:
 
 ```php
 $rows = WP_FTS_Plugin::search('release notes', ['limit' => 10]);
@@ -376,7 +422,8 @@ curl -H 'X-WP-Nonce: ...' \
   'https://example.test/wp-json/wp-fts/v1/search?q=release%20notes&explain=1'
 ```
 
-Authorized REST explain responses add an `explain` object beside `results`.
+Authorized REST explain responses remain subject to the REST work and runtime
+budgets and add an `explain` object beside `results`.
 That object contains bounded `query_plan`, `fast_mode`, `scoring`, recency, and
 per-result match diagnostics. Per-result explain rows are filtered to the
 returned visible result IDs. Public or unauthorized `explain=1` requests keep
@@ -398,9 +445,9 @@ Settings > Full-Text Search exposes Health, Settings, Sandbox, Indexed content,
 and Analyzer packs tabs to users who can `manage_options`. The Settings tab can
 toggle automatic indexing, public search replacement, wp-admin Posts search
 replacement, search-provider compatibility, highlighting, snippets, prefix
-matching, result limits, language fallback, and indexed post types. Use the
-documented options and filters for analyzer pack paths and custom field
-selection.
+matching, optional public REST search, result limits, language fallback, and
+indexed post types. Use the documented options and filters for analyzer pack
+paths and custom field selection.
 
 The Health tab shows schema status, stored and expected schema versions, safe
 indexing lock state, indexing counts, stale reindex debt progress, and the

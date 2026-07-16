@@ -156,6 +156,11 @@ function wp_fts_playground_register_rest_route(): void
     }
     $registered = true;
 
+    $settings = get_option(WP_FTS_Plugin::SETTINGS_OPTION, []);
+    $settings = is_array($settings) ? $settings : [];
+    $settings['rest_api_enabled'] = true;
+    update_option(WP_FTS_Plugin::SETTINGS_OPTION, $settings, false);
+
     if (function_exists('do_action')) {
         do_action('rest_api_init');
         return;

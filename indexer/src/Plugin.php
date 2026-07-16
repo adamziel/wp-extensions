@@ -42,6 +42,16 @@ final class WP_FTS_Plugin
     public const DEFAULT_CRON_INDEX_BATCH_SIZE = 20;
     public const DEFAULT_MANUAL_INDEX_BATCH_SIZE = 100;
     public const MAX_SEARCH_LIMIT = 50;
+    private const REST_CACHE_SCHEMA = 'wp-fts-rest-search-v1';
+    private const REST_CACHE_TTL = 30;
+    private const REST_RATE_LIMIT = 60;
+    private const REST_RATE_WINDOW = 60;
+    private const REST_MAX_QUERY_TERMS = 12;
+    private const REST_MAX_PREFIX_EXPANSIONS = 24;
+    private const REST_CANDIDATE_CAP = 500;
+    private const REST_MAX_CANDIDATE_ROWS = 2000;
+    private const REST_MAX_SQL_QUERIES = 32;
+    private const REST_TIME_BUDGET_SECONDS = 0.25;
     private const DEFAULT_CRON_INDEX_TIME_BUDGET = 10.0;
     private const DEFAULT_MANUAL_INDEX_TIME_BUDGET = 20.0;
     private const DEFAULT_SEARCH_TOTAL_BUDGET_MS = 100.0;
@@ -264,6 +274,8 @@ final class WP_FTS_Plugin
         'prefix_matching' => true,
         'prefix_min_length' => self::PREFIX_MIN_LENGTH_DEFAULT,
         'prefix_max_terms' => self::PREFIX_MAX_TERMS_DEFAULT,
+        'rest_api_enabled' => false,
+        'rest_prefix_matching' => false,
         'result_limit' => 10,
         'language_fallback' => true,
         'field_boosts' => self::FIELD_BOOST_DEFAULTS,
@@ -4898,11 +4910,11 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Register the public REST search endpoint.
+     * Register the public REST search endpoint only after explicit opt-in.
      */
     public static function register_rest_routes(): void
     {
-        if (!function_exists('register_rest_route')) {
+        if (!function_exists('register_rest_route') || empty(self::settings()['rest_api_enabled'])) {
             return;
         }
 
@@ -6605,6 +6617,24 @@ final class WP_FTS_Plugin
         self::render_settings_checkbox_row('highlight', 'Highlight matches in search result excerpts', $settings['highlight'], 'Highlights matching words in generated excerpts so readers can see why each result matched.');
         echo '</tbody></table>';
 
+        self::render_settings_section_heading('Public REST search', 'The anonymous search endpoint is absent unless an operator deliberately enables it. Its request limits are stricter than normal site and admin search.');
+        echo '<table class="form-table" role="presentation"><tbody>';
+        self::render_settings_single_checkbox_row(
+            'rest_api_enabled',
+            'REST endpoint',
+            'Register the public wp-fts/v1/search endpoint',
+            !empty($settings['rest_api_enabled']),
+            'Leave this off unless a separate client needs anonymous REST search. Enabled requests are rate limited, cached briefly, and stopped by global work budgets.'
+        );
+        self::render_settings_single_checkbox_row(
+            'rest_prefix_matching',
+            'REST word beginnings',
+            'Allow bounded word-beginning expansion on the REST endpoint',
+            !empty($settings['rest_prefix_matching']),
+            'This stays off independently of normal site search because one prefix can add many stored terms. REST clients cannot turn it on per request.'
+        );
+        echo '</tbody></table>';
+
         self::render_settings_section_heading('Ranking weights', 'Whole numbers from 1 to 100 are supported. Higher numbers make matches in that field count more strongly. Changed weights affect content when it is reindexed, because weights are stored in the index.');
         echo '<table class="form-table" role="presentation"><tbody>';
         self::render_settings_field_boost_rows($settings);
@@ -7030,6 +7060,8 @@ final class WP_FTS_Plugin
             'prefix_matching' => array_key_exists('prefix_matching', $value) ? self::truthy_admin_value($value['prefix_matching']) : $defaults['prefix_matching'],
             'prefix_min_length' => self::sanitize_prefix_min_length($value['prefix_min_length'] ?? $defaults['prefix_min_length']),
             'prefix_max_terms' => self::sanitize_prefix_max_terms($value['prefix_max_terms'] ?? $defaults['prefix_max_terms']),
+            'rest_api_enabled' => array_key_exists('rest_api_enabled', $value) ? self::truthy_admin_value($value['rest_api_enabled']) : $defaults['rest_api_enabled'],
+            'rest_prefix_matching' => array_key_exists('rest_prefix_matching', $value) ? self::truthy_admin_value($value['rest_prefix_matching']) : $defaults['rest_prefix_matching'],
             'result_limit' => self::clamp_int($value['result_limit'] ?? $defaults['result_limit'], 1, self::MAX_SEARCH_LIMIT),
             'language_fallback' => array_key_exists('language_fallback', $value) ? self::truthy_admin_value($value['language_fallback']) : $defaults['language_fallback'],
             'field_boosts' => self::sanitize_field_boosts($value['field_boosts'] ?? []),
@@ -7583,6 +7615,8 @@ final class WP_FTS_Plugin
      *   prefix_matching:bool,
      *   prefix_min_length:int,
      *   prefix_max_terms:int,
+     *   rest_api_enabled:bool,
+     *   rest_prefix_matching:bool,
      *   result_limit:int,
      *   language_fallback:bool,
      *   field_boosts:array<string,float>,
@@ -11004,11 +11038,11 @@ JS;
     }
 
     /**
-     * Public REST endpoint permission is open; result filtering enforces visibility.
+     * The route is public only after the operator enables it.
      */
     public static function rest_search_permission(mixed ...$unused): bool
     {
-        return true;
+        return !empty(self::settings()['rest_api_enabled']);
     }
 
     /**
@@ -11019,6 +11053,20 @@ JS;
      */
     public static function rest_search(mixed $request): array|object
     {
+        $settings = self::settings();
+        if (empty($settings['rest_api_enabled'])) {
+            return self::rest_error(
+                'wp_fts_rest_search_disabled',
+                'REST search is not enabled for this site.',
+                404
+            );
+        }
+
+        $rateLimitError = self::rest_rate_limit_error();
+        if ($rateLimitError !== null) {
+            return $rateLimitError;
+        }
+
         $query = self::rest_query($request);
         if ($query === '') {
             return self::rest_error(
@@ -11038,22 +11086,247 @@ JS;
         }
 
         $search_args = [
-            'lang' => self::request_param($request, 'lang', null),
+            'lang' => self::rest_language($request),
             'mode' => $mode,
-            'limit' => self::request_param($request, 'limit', 10),
+            'limit' => self::rest_limit($request),
+            'prefix_matching' => !empty($settings['rest_prefix_matching']),
+            'fast_top_k' => true,
+            'candidate_cap' => self::REST_CANDIDATE_CAP,
+            'max_query_terms' => self::REST_MAX_QUERY_TERMS,
+            'max_prefix_expansions' => self::REST_MAX_PREFIX_EXPANSIONS,
+            'max_candidate_rows' => self::REST_MAX_CANDIDATE_ROWS,
+            'request_budget_guard' => self::rest_search_budget_guard(),
         ];
-        $prefix_matching = self::request_param($request, 'prefix_matching', null);
-        if ($prefix_matching !== null) {
-            $search_args['prefix_matching'] = $prefix_matching;
+
+        try {
+            if (self::rest_explain_requested($request) && self::current_user_can_search_explain()) {
+                return self::search_visible_payload($query, $search_args, true);
+            }
+
+            $cacheKey = self::rest_response_cache_key($query, $search_args, $settings);
+            if ($cacheKey !== null) {
+                $cached = self::rest_cached_response($cacheKey, $search_args);
+                self::invoke_search_budget_guard($search_args);
+                if ($cached !== null) {
+                    return $cached;
+                }
+            }
+
+            $response = [
+                'results' => self::search($query, $search_args),
+            ];
+            if ($cacheKey !== null) {
+                self::set_rest_cached_response($cacheKey, $response);
+                self::invoke_search_budget_guard($search_args);
+            }
+
+            return $response;
+        } catch (WP_FTS_Search_Budget_Exceeded $e) {
+            $clientBudget = $e->budget() === 'analyzed terms';
+            return self::rest_error(
+                $clientBudget ? 'wp_fts_query_too_complex' : 'wp_fts_search_budget_exceeded',
+                $clientBudget
+                    ? 'REST search query exceeds the public complexity limit.'
+                    : 'REST search stopped before exceeding its resource budget.',
+                $clientBudget ? 400 : 503,
+                ['budget' => $e->budget()]
+            );
+        }
+    }
+
+    /**
+     * Apply a small fixed-window limit to clients without operator access.
+     */
+    private static function rest_rate_limit_error(): object|array|null
+    {
+        $operator = self::rest_current_user_id() > 0
+            && function_exists('current_user_can')
+            && current_user_can(self::ADMIN_CAPABILITY);
+        if (
+            $operator
+            || !function_exists('get_transient')
+            || !function_exists('set_transient')
+            || !function_exists('add_option')
+            || !function_exists('delete_option')
+        ) {
+            return null;
         }
 
-        if (self::rest_explain_requested($request) && self::current_user_can_search_explain()) {
-            return self::search_visible_payload($query, $search_args, true);
+        $now = time();
+        $bucket = intdiv($now, self::REST_RATE_WINDOW);
+        $remoteAddress = isset($_SERVER['REMOTE_ADDR']) && is_scalar($_SERVER['REMOTE_ADDR'])
+            ? trim((string) $_SERVER['REMOTE_ADDR'])
+            : '';
+        if (filter_var($remoteAddress, FILTER_VALIDATE_IP) === false) {
+            $remoteAddress = 'unknown';
+        }
+        $keyHash = substr(hash('sha256', $remoteAddress . '|' . $bucket), 0, 32);
+        $key = 'wp_fts_rr_' . $keyHash;
+        $lockKey = 'wp_fts_rl_' . $keyHash;
+        if (!add_option($lockKey, $now, '', false)) {
+            return self::rest_error(
+                'wp_fts_rest_rate_limited',
+                'Another REST search request from this client is already being counted. Retry shortly.',
+                429,
+                ['retry_after' => 1]
+            );
         }
 
-        return [
-            'results' => self::search($query, $search_args),
+        try {
+            $stored = get_transient($key);
+            $count = is_numeric($stored) ? max(0, (int) $stored) : 0;
+            if ($count >= self::REST_RATE_LIMIT) {
+                return self::rest_error(
+                    'wp_fts_rest_rate_limited',
+                    'Too many REST search requests. Retry after the current rate-limit window.',
+                    429,
+                    ['retry_after' => max(1, self::REST_RATE_WINDOW - ($now % self::REST_RATE_WINDOW))]
+                );
+            }
+
+            set_transient($key, $count + 1, self::REST_RATE_WINDOW + 5);
+        } finally {
+            delete_option($lockKey);
+        }
+
+        return null;
+    }
+
+    /**
+     * Cache only anonymous results; authenticated visibility can vary per user.
+     *
+     * @param array<string,mixed> $searchArgs
+     * @param array<string,mixed> $settings
+     */
+    private static function rest_response_cache_key(string $query, array $searchArgs, array $settings): ?string
+    {
+        if (
+            self::rest_current_user_id() > 0
+            || !function_exists('get_transient')
+            || !function_exists('set_transient')
+            || (function_exists('has_filter') && has_filter('wp_fts_search_results') !== false)
+        ) {
+            return null;
+        }
+
+        $payload = [
+            'schema' => self::REST_CACHE_SCHEMA,
+            'query' => $query,
+            'lang' => is_scalar($searchArgs['lang'] ?? null) ? (string) $searchArgs['lang'] : '',
+            'mode' => (string) ($searchArgs['mode'] ?? 'OR'),
+            'limit' => self::clamp_int($searchArgs['limit'] ?? 10, 1, self::MAX_SEARCH_LIMIT),
+            'prefix_matching' => !empty($searchArgs['prefix_matching']),
+            'candidate_cap' => (int) ($searchArgs['candidate_cap'] ?? 0),
+            'max_query_terms' => (int) ($searchArgs['max_query_terms'] ?? 0),
+            'max_prefix_expansions' => (int) ($searchArgs['max_prefix_expansions'] ?? 0),
+            'max_candidate_rows' => (int) ($searchArgs['max_candidate_rows'] ?? 0),
+            'prefix_min_length' => self::sanitize_prefix_min_length(
+                $settings['prefix_min_length'] ?? self::PREFIX_MIN_LENGTH_DEFAULT
+            ),
+            'prefix_max_terms' => self::sanitize_prefix_max_terms(
+                $settings['prefix_max_terms'] ?? self::PREFIX_MAX_TERMS_DEFAULT
+            ),
+            'recency_boost_strength' => self::sanitize_recency_boost_strength(
+                $settings['recency_boost_strength'] ?? 0.0
+            ),
+            'recency_boost_half_life_days' => self::sanitize_recency_boost_half_life(
+                $settings['recency_boost_half_life_days'] ?? self::RECENCY_BOOST_HALF_LIFE_DEFAULT
+            ),
         ];
+        $json = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        if (!is_string($json)) {
+            return null;
+        }
+
+        return 'wp_fts_rs_' . hash('sha256', $json);
+    }
+
+    /**
+     * Return a cached response after rechecking current post visibility.
+     *
+     * @param array<string,mixed> $searchArgs
+     * @return array{results:array<int,array{doc_id:int,score:float}>}|null
+     */
+    private static function rest_cached_response(string $key, array $searchArgs): ?array
+    {
+        $cached = get_transient($key);
+        if (!is_array($cached) || ($cached['schema'] ?? null) !== self::REST_CACHE_SCHEMA || !is_array($cached['results'] ?? null)) {
+            return null;
+        }
+
+        $limit = self::clamp_int($searchArgs['limit'] ?? 10, 1, self::MAX_SEARCH_LIMIT);
+        self::prime_posts_for_visibility($cached['results'], $searchArgs);
+        $results = [];
+        foreach ($cached['results'] as $row) {
+            if (!is_array($row) || !is_numeric($row['doc_id'] ?? null) || !is_numeric($row['score'] ?? null)) {
+                continue;
+            }
+            self::invoke_search_budget_guard($searchArgs);
+            $docId = (int) $row['doc_id'];
+            $canRead = $docId > 0 && self::can_read_post_result($docId);
+            self::invoke_search_budget_guard($searchArgs);
+            if ($canRead) {
+                $results[] = ['doc_id' => $docId, 'score' => (float) $row['score']];
+                if (count($results) >= $limit) {
+                    break;
+                }
+            }
+        }
+
+        return ['results' => $results];
+    }
+
+    /**
+     * @param array{results:array<int,array{doc_id:int,score:float}>} $response
+     */
+    private static function set_rest_cached_response(string $key, array $response): void
+    {
+        set_transient($key, [
+            'schema' => self::REST_CACHE_SCHEMA,
+            'results' => $response['results'],
+        ], self::REST_CACHE_TTL);
+    }
+
+    private static function rest_current_user_id(): int
+    {
+        return function_exists('get_current_user_id') ? max(0, (int) get_current_user_id()) : 0;
+    }
+
+    /**
+     * Stop before one anonymous request can keep issuing SQL or consuming time.
+     */
+    private static function rest_search_budget_guard(): callable
+    {
+        $started = microtime(true);
+        $initialQueryCount = self::wpdb_query_count();
+
+        return static function () use ($started, $initialQueryCount): bool {
+            if (microtime(true) - $started >= self::REST_TIME_BUDGET_SECONDS) {
+                throw new WP_FTS_Search_Budget_Exceeded('request time');
+            }
+
+            $queryCount = self::wpdb_query_count();
+            if (
+                $initialQueryCount !== null
+                && $queryCount !== null
+                && $queryCount - $initialQueryCount >= self::REST_MAX_SQL_QUERIES
+            ) {
+                throw new WP_FTS_Search_Budget_Exceeded('SQL queries');
+            }
+
+            return true;
+        };
+    }
+
+    private static function wpdb_query_count(): ?int
+    {
+        global $wpdb;
+
+        if (!isset($wpdb) || !is_object($wpdb) || !isset($wpdb->num_queries) || !is_numeric($wpdb->num_queries)) {
+            return null;
+        }
+
+        return max(0, (int) $wpdb->num_queries);
     }
 
     /**
@@ -11103,45 +11376,84 @@ JS;
         $limit = self::clamp_int($opts['limit'] ?? 10, 1, self::MAX_SEARCH_LIMIT);
         $mode = strtoupper((string) ($opts['mode'] ?? 'OR'));
         $settings = self::settings();
+        $guardedRequest = is_callable($opts['request_budget_guard'] ?? null);
+        $boundedApproximateRequest = $guardedRequest
+            && (
+                self::truthy_admin_value($opts['fast_top_k'] ?? false)
+                || self::truthy_admin_value($opts['approximate_top_k'] ?? false)
+            );
         $search_options = [
             'mode' => $mode,
             'limit' => $limit,
             'prefix_matching' => self::search_prefix_matching_value($opts, $settings),
-            'candidate_doc_ids_filter' => static fn(array $doc_ids): array => self::readable_search_candidate_ids($doc_ids),
         ] + self::searcher_prefix_threshold_options($settings, $opts) + self::searcher_recency_boost_options($settings);
+        if (!$boundedApproximateRequest) {
+            $search_options['candidate_doc_ids_filter'] = static fn(array $doc_ids): array => self::readable_search_candidate_ids($doc_ids);
+        }
         if (isset($opts['lang']) && is_scalar($opts['lang']) && trim((string) $opts['lang']) !== '') {
             $search_options['lang'] = (string) $opts['lang'];
+        }
+        foreach (['fast_top_k', 'approximate_top_k', 'candidate_cap', 'max_candidates', 'max_query_terms', 'max_prefix_expansions', 'max_candidate_rows', 'request_budget_guard'] as $key) {
+            if (array_key_exists($key, $opts)) {
+                $search_options[$key] = $opts[$key];
+            }
         }
         if ($include_explain) {
             $search_options['include_total'] = true;
             $search_options['explain'] = true;
             $search_options['explain_result_matches'] = true;
+            if ($boundedApproximateRequest) {
+                // Authorize the capped page before document-level explain
+                // lookups. Ranking remains approximate, while hidden rows do
+                // not consume the public SQL budget merely to be discarded.
+                $search_options['explain_doc_ids_filter'] = static fn(array $doc_ids): array => self::readable_search_candidate_ids($doc_ids);
+            }
+        }
+        if ($boundedApproximateRequest) {
+            // A public guarded request gets one globally bounded scoring pass.
+            // A larger result window preserves some visibility refill without
+            // allowing hidden rows to multiply term, posting, or candidate work.
+            $search_options['limit'] = self::VISIBILITY_REFILL_MAX_SCAN;
         }
 
         $searcher = new WP_FTS_Searcher(self::storage(false), self::runtime_analyzer());
-        $visible = [];
+        self::invoke_search_budget_guard($search_options);
+        $payload = $searcher->search($query, $search_options);
+        self::invoke_search_budget_guard($search_options);
+        $rows = is_array($payload['results'] ?? null)
+            ? $payload['results']
+            : (is_array($payload) ? $payload : []);
+
         $explain = [];
         $explain_rows_by_doc = [];
-        $payload = $searcher->search($query, $search_options);
-        if ($include_explain) {
-            $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
-            if (is_array($payload['explain'] ?? null)) {
-                $explain = $payload['explain'];
-                foreach (self::search_explain_results_by_doc($payload['explain']['results'] ?? null) as $doc_id => $row) {
-                    $explain_rows_by_doc[$doc_id] = $row;
-                }
+        if ($include_explain && is_array($payload['explain'] ?? null)) {
+            $explain = $payload['explain'];
+            foreach (self::search_explain_results_by_doc($payload['explain']['results'] ?? null) as $doc_id => $row) {
+                $explain_rows_by_doc[$doc_id] = $row;
             }
-        } else {
-            $rows = $payload;
         }
 
+        self::prime_posts_for_visibility($rows, $search_options);
+        $visible = [];
         foreach ($rows as $row) {
+            if (!is_array($row) || !is_numeric($row['doc_id'] ?? null) || !is_numeric($row['score'] ?? null)) {
+                continue;
+            }
+
             $doc_id = (int) $row['doc_id'];
-            if (self::can_read_post_result($doc_id)) {
-                $visible[] = [
-                    'doc_id' => $doc_id,
-                    'score' => (float) $row['score'],
-                ];
+            self::invoke_search_budget_guard($search_options);
+            $canRead = $doc_id > 0 && self::can_read_post_result($doc_id);
+            self::invoke_search_budget_guard($search_options);
+            if (!$canRead) {
+                continue;
+            }
+
+            $visible[] = [
+                'doc_id' => $doc_id,
+                'score' => (float) $row['score'],
+            ];
+            if (count($visible) >= $limit) {
+                break;
             }
         }
 
@@ -11150,12 +11462,14 @@ JS;
             if (is_array($filtered)) {
                 $visible = $filtered;
             }
+            self::invoke_search_budget_guard($search_options);
         }
 
         $result = ['results' => $visible];
         if ($include_explain) {
             $result['explain'] = self::filter_search_explain_for_results($explain, $visible, $explain_rows_by_doc);
         }
+        self::invoke_search_budget_guard($search_options);
 
         return $result;
     }
@@ -11274,6 +11588,48 @@ JS;
         }
 
         return $rows_by_id;
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     */
+    private static function invoke_search_budget_guard(array $options): void
+    {
+        $guard = $options['request_budget_guard'] ?? null;
+        if (is_callable($guard) && $guard() === false) {
+            throw new WP_FTS_Search_Budget_Exceeded('request circuit breaker');
+        }
+    }
+
+    /**
+     * Prime one bounded post batch so visibility checks do not issue one query
+     * per candidate on a cold object cache.
+     *
+     * @param array<int,mixed> $rows
+     * @param array<string,mixed> $options
+     */
+    private static function prime_posts_for_visibility(array $rows, array $options): void
+    {
+        if (!function_exists('_prime_post_caches')) {
+            return;
+        }
+
+        $docIds = [];
+        foreach ($rows as $row) {
+            if (is_array($row) && is_numeric($row['doc_id'] ?? null)) {
+                $docId = (int) $row['doc_id'];
+                if ($docId > 0) {
+                    $docIds[$docId] = $docId;
+                }
+            }
+        }
+        if ($docIds === []) {
+            return;
+        }
+
+        self::invoke_search_budget_guard($options);
+        _prime_post_caches(array_values($docIds), false, false);
+        self::invoke_search_budget_guard($options);
     }
 
     /**
@@ -16601,6 +16957,13 @@ WHERE d.is_deleted = 0"
         return self::ADMIN_POST_SEARCH_POST_STATUSES;
     }
 
+    private static function bounded_unslash_scalar(mixed $value, int $maxLength): string
+    {
+        $bounded = self::truncate_request_text((string) $value, $maxLength);
+
+        return self::truncate_request_text(self::unslash_scalar($bounded), $maxLength);
+    }
+
     private static function unslash_scalar(mixed $value): string
     {
         if (function_exists('wp_unslash')) {
@@ -16864,7 +17227,8 @@ WHERE d.is_deleted = 0"
         foreach (['q', 'query'] as $key) {
             $value = self::request_param($request, $key, null);
             if (is_scalar($value)) {
-                $query = self::truncate_request_text(self::sanitize_text(self::unslash_scalar($value)), 200);
+                $rawQuery = self::bounded_unslash_scalar($value, 200);
+                $query = self::truncate_request_text(self::sanitize_text($rawQuery), 200);
                 if ($query !== '') {
                     return $query;
                 }
@@ -16884,28 +17248,63 @@ WHERE d.is_deleted = 0"
             return null;
         }
 
-        $mode = strtoupper(trim((string) $mode));
+        $mode = strtoupper(trim(self::bounded_unslash_scalar($mode, 8)));
         return in_array($mode, ['OR', 'AND'], true) ? $mode : null;
+    }
+
+    /**
+     * Bound REST language input before analyzer canonicalization.
+     */
+    private static function rest_language(mixed $request): ?string
+    {
+        $language = self::request_param($request, 'lang', null);
+        if (!is_scalar($language)) {
+            return null;
+        }
+
+        $language = self::truncate_request_text(self::sanitize_text(
+            self::bounded_unslash_scalar($language, 40)
+        ), 40);
+
+        return $language !== '' ? $language : null;
+    }
+
+    private static function rest_limit(mixed $request): int
+    {
+        $limit = self::request_param($request, 'limit', 10);
+        if (is_scalar($limit)) {
+            $limit = self::bounded_unslash_scalar($limit, 12);
+        }
+
+        return self::clamp_int($limit, 1, self::MAX_SEARCH_LIMIT);
     }
 
     private static function rest_explain_requested(mixed $request): bool
     {
-        return self::truthy_admin_value(self::request_param($request, 'explain', false));
+        $value = self::request_param($request, 'explain', false);
+        if (is_scalar($value)) {
+            $value = self::bounded_unslash_scalar($value, 8);
+        }
+
+        return self::truthy_admin_value($value);
     }
 
     /**
      * Build a WordPress-style REST error with a test-friendly fallback shape.
+     *
+     * @param array<string,mixed> $data
      */
-    private static function rest_error(string $code, string $message, int $status): object|array
+    private static function rest_error(string $code, string $message, int $status, array $data = []): object|array
     {
+        $data = ['status' => $status] + $data;
         if (class_exists('WP_Error')) {
-            return new WP_Error($code, $message, ['status' => $status]);
+            return new WP_Error($code, $message, $data);
         }
 
         return [
             'code' => $code,
             'message' => $message,
-            'data' => ['status' => $status],
+            'data' => $data,
         ];
     }
 

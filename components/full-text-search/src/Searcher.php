@@ -2,6 +2,22 @@
 declare(strict_types=1);
 
 /**
+ * Signals a caller-configured search resource limit before more work is read.
+ */
+final class WP_FTS_Search_Budget_Exceeded extends RuntimeException
+{
+    public function __construct(private string $budget)
+    {
+        parent::__construct("Search request exceeded its {$budget} budget.");
+    }
+
+    public function budget(): string
+    {
+        return $this->budget;
+    }
+}
+
+/**
  * Scores indexed documents for a query using language-aware BM25.
  *
  * The searcher builds a language-aware query plan, reads matching postings and
@@ -13,6 +29,10 @@ final class WP_FTS_Searcher
     private const DEFAULT_FAST_MODE_CANDIDATE_CAP = 1000;
     private const DEFAULT_PREFIX_MIN_LENGTH = 4;
     private const DEFAULT_PREFIX_MAX_TERMS = 64;
+    private const DEFAULT_MAX_QUERY_TERMS = 1024;
+    private const DEFAULT_MAX_PREFIX_EXPANSIONS = 256;
+    private const DEFAULT_MAX_CANDIDATE_ROWS = 100000;
+    private const BUDGET_GUARD_INTERVAL = 256;
     private const EXPLAIN_MAX_TERMS = 12;
     private const EXPLAIN_MAX_RESULT_ROWS = 20;
     private const EXPLAIN_MAX_MATCHES_PER_RESULT = 8;
@@ -25,6 +45,10 @@ final class WP_FTS_Searcher
     private const DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS = 30.0;
     private const MIN_RECENCY_BOOST_HALF_LIFE_DAYS = 1.0;
     private const MAX_RECENCY_BOOST_HALF_LIFE_DAYS = 3650.0;
+    /** @var callable|null */
+    private $activeRequestBudgetGuard = null;
+    /** @var array<string,mixed> */
+    private array $activeSearchOptions = [];
 
     /**
      * Last full ranking retained for explicit same-request pagination reuse.
@@ -87,8 +111,11 @@ final class WP_FTS_Searcher
      * one full ranking on this searcher instance so subsequent pagination calls
      * with the same scoring inputs only slice and enrich another page. Callers
      * must not mutate storage between those calls. Reuse is disabled when an
-     * authoritative candidate filter is present because its mutable visibility
-     * behavior cannot be represented in the ranking fingerprint.
+     * authoritative candidate filter or request budget guard is present because
+     * their mutable behavior cannot be represented in the ranking fingerprint.
+     * `max_query_terms`, `max_prefix_expansions`, and `max_candidate_rows`
+     * impose request-wide work limits. `request_budget_guard` may stop work
+     * between bounded storage/scoring steps by throwing or returning false.
      *
      * @param array<string,mixed> $opts
      * @return array<int,array<string,mixed>>|array{total:int,total_is_exact:bool,retrieval_mode:string,results_may_be_incomplete:bool,candidate_cap:?int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
@@ -97,12 +124,38 @@ final class WP_FTS_Searcher
      *         `include_total` or candidate-capped retrieval is active.
      * @throws InvalidArgumentException If `mode` is not `OR` or `AND`.
      * @throws LogicException If the analyzer does not provide a query analyzer.
+     * @throws WP_FTS_Search_Budget_Exceeded If a request budget is exhausted.
      */
     public function search(string $query, array $opts = []): array
+    {
+        $previousGuard = $this->activeRequestBudgetGuard;
+        $previousOptions = $this->activeSearchOptions;
+        $this->activeRequestBudgetGuard = is_callable($opts['request_budget_guard'] ?? null)
+            ? $opts['request_budget_guard']
+            : null;
+        $this->activeSearchOptions = $opts;
+
+        try {
+            $this->guard_request_budget();
+            return $this->search_with_active_budget($query, $opts);
+        } finally {
+            $this->activeRequestBudgetGuard = $previousGuard;
+            $this->activeSearchOptions = $previousOptions;
+        }
+    }
+
+    /**
+     * Execute one search while the caller's request budget is active.
+     *
+     * @param array<string,mixed> $opts
+     * @return array<int,array<string,mixed>>|array{total:int,total_is_exact:bool,retrieval_mode:string,results_may_be_incomplete:bool,candidate_cap:?int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
+     */
+    private function search_with_active_budget(string $query, array $opts): array
     {
         $candidateFilter = $this->candidate_doc_ids_filter($opts);
         $extensionResults = $this->extension_results($query, $opts, $candidateFilter !== null);
         if ($extensionResults !== null) {
+            $this->guard_request_budget();
             return $extensionResults;
         }
 
@@ -115,6 +168,7 @@ final class WP_FTS_Searcher
 
         $recencyBoost = $this->recency_boost_config($opts);
         $queryPlan = $this->build_query_plan($query, $opts);
+        $this->guard_request_budget();
         $queryPlan['match_mode'] = $mode;
         $groups = $queryPlan['groups'];
         $responseLang = $this->response_query_language($opts, $groups);
@@ -135,11 +189,13 @@ final class WP_FTS_Searcher
 
         $metadataFilter = $this->has_metadata_filters($opts) ? $this->metadata_filter_values($opts) : null;
         $fastMode = $this->resolve_fast_mode($opts, $limit + $offset, $candidateFilter !== null);
+        $this->guard_request_budget();
         $useBoundedTopK = !$recencyBoost['enabled']
             && $fastMode['candidate_cap'] === null
             && $this->can_use_bounded_top_k($opts, $offset);
         $cacheKey = !$useBoundedTopK
             && $candidateFilter === null
+            && $this->activeRequestBudgetGuard === null
             && $this->truthy_option($opts['reuse_ranked_results'] ?? false)
             ? $this->ranked_result_cache_key(
                 $groups,
@@ -147,7 +203,8 @@ final class WP_FTS_Searcher
                 $metadataFilter,
                 $fastMode['candidate_cap'],
                 $recencyBoost,
-                $opts['now_gmt'] ?? ($opts['recency_now'] ?? null)
+                $opts['now_gmt'] ?? ($opts['recency_now'] ?? null),
+                $this->max_candidate_rows($opts)
             )
             : null;
         if ($cacheKey !== null && ($this->rankedResultCache['key'] ?? null) === $cacheKey) {
@@ -158,9 +215,12 @@ final class WP_FTS_Searcher
         } else {
             $scoreStats = $this->empty_score_stats();
             $results = $this->score_query_groups($groups, $mode, $useBoundedTopK ? $limit : null, $metadataFilter, $candidateFilter, $fastMode['candidate_cap'], $scoreStats);
+            $this->guard_request_budget();
             $recencyStats = $this->apply_recency_boost($results, $recencyBoost);
+            $this->guard_request_budget();
             if (!$useBoundedTopK) {
                 usort($results, [self::class, 'compare_ranked_results']);
+                $this->guard_request_budget();
             }
             if ($cacheKey !== null) {
                 $this->rankedResultCache = [
@@ -179,7 +239,9 @@ final class WP_FTS_Searcher
             : [];
         if ($this->should_enrich_results($opts) && $page !== []) {
             $pageIds = array_column($page, 'doc_id');
+            $this->guard_request_budget();
             $pageMetadata = WP_FTS_StorageCompat::get_doc_metadata($this->storage, $pageIds);
+            $this->guard_request_budget();
             $page = $this->enrich_results($page, $pageMetadata, $query, $opts, $groups, $responseLang);
         }
 
@@ -199,8 +261,9 @@ final class WP_FTS_Searcher
      * @param array{post_types:string[],post_statuses:string[],date_after:?string,date_before:?string}|null $metadataFilter
      * @param array{enabled:bool,strength:float,half_life_days:float,now_timestamp:int,now_gmt:string} $recencyBoost
      * @param mixed $requestedNow Caller-provided stable recency clock, if any.
+     * @param int $maxCandidateRows Work budget that must not be bypassed by reuse.
      */
-    private function ranked_result_cache_key(array $groups, string $mode, ?array $metadataFilter, ?int $candidateCap, array $recencyBoost, mixed $requestedNow): string
+    private function ranked_result_cache_key(array $groups, string $mode, ?array $metadataFilter, ?int $candidateCap, array $recencyBoost, mixed $requestedNow, int $maxCandidateRows): string
     {
         unset($recencyBoost['now_timestamp'], $recencyBoost['now_gmt']);
 
@@ -211,6 +274,7 @@ final class WP_FTS_Searcher
             'candidate_cap' => $candidateCap,
             'recency_boost' => $recencyBoost,
             'requested_now' => is_scalar($requestedNow) ? (string) $requestedNow : null,
+            'max_candidate_rows' => $maxCandidateRows,
         ]));
     }
 
@@ -250,9 +314,23 @@ final class WP_FTS_Searcher
             return [];
         }
 
-        $postingsByTerm = WP_FTS_StorageCompat::get_postings($this->storage, array_keys($termsByKey), $candidateCap);
+        $candidateRowBudget = $this->max_candidate_rows($this->activeSearchOptions);
+        $storageRowCap = $candidateCap === null && $candidateRowBudget < PHP_INT_MAX
+            ? $candidateRowBudget + 1
+            : $candidateRowBudget;
+        $this->guard_request_budget();
+        $postingsByTerm = WP_FTS_StorageCompat::get_postings(
+            $this->storage,
+            array_keys($termsByKey),
+            $candidateCap,
+            $storageRowCap
+        );
+        $this->guard_request_budget();
         $stats['posting_terms_fetched'] = count($postingsByTerm);
         $stats['candidate_rows_fetched'] = $this->posting_row_count($postingsByTerm, $termsByKey);
+        if ($stats['candidate_rows_fetched'] > $candidateRowBudget) {
+            throw new WP_FTS_Search_Budget_Exceeded('candidate rows');
+        }
         if ($postingsByTerm === []) {
             return [];
         }
@@ -336,12 +414,15 @@ final class WP_FTS_Searcher
         /** @var array<string,array{doc_count:int,len_sum:int}> $metaByLang */
         $metaByLang = [];
         foreach (array_keys($languages) as $lang) {
+            $this->guard_request_budget();
             $docLengths = WP_FTS_StorageCompat::get_doc_lengths($this->storage, $docLengthCandidateIds, $lang);
+            $this->guard_request_budget();
             if ($docLengths === []) {
                 continue;
             }
 
             $meta = WP_FTS_StorageCompat::get_meta($this->storage, $lang);
+            $this->guard_request_budget();
             if ((int) $meta['doc_count'] <= 0) {
                 continue;
             }
@@ -361,6 +442,7 @@ final class WP_FTS_Searcher
         }
 
         if ($metadataFilter !== null) {
+            $this->guard_request_budget();
             $matchingDocIds = WP_FTS_StorageCompat::filter_doc_ids_by_metadata(
                 $this->storage,
                 array_keys($scoringDocIds),
@@ -369,6 +451,7 @@ final class WP_FTS_Searcher
                 $metadataFilter['date_after'],
                 $metadataFilter['date_before']
             );
+            $this->guard_request_budget();
             $scoringDocIds = array_fill_keys($matchingDocIds, true);
             if ($scoringDocIds === []) {
                 $stats['candidate_docs_scored'] = 0;
@@ -643,7 +726,9 @@ final class WP_FTS_Searcher
         }
 
         $docIds = array_values(array_unique(array_map('intval', array_column($results, 'doc_id'))));
+        $this->guard_request_budget();
         $metadata = WP_FTS_StorageCompat::get_doc_metadata($this->storage, $docIds);
+        $this->guard_request_budget();
         $stats['documents_considered'] = count($docIds);
         if ($metadata === []) {
             $stats['missing_or_invalid_dates'] = count($docIds);
@@ -767,7 +852,9 @@ final class WP_FTS_Searcher
         array &$bestRankByDoc,
         array &$matchedGroupRanksByDoc
     ): void {
+        $iteration = 0;
         foreach ($scoringDocIds as $docId => $_present) {
+            $this->guard_request_budget_interval($iteration++);
             $docId = (int) $docId;
             foreach ($scoringTerms as $term => $termInfo) {
                 $lang = $termInfo['lang'];
@@ -822,10 +909,12 @@ final class WP_FTS_Searcher
         array &$bestRankByDoc,
         array &$matchedGroupRanksByDoc
     ): void {
+        $iteration = 0;
         foreach ($scoringTerms as $term => $termInfo) {
             $lang = $termInfo['lang'];
             $docLengths = $docLengthsByLang[$lang];
             foreach ($decodedByTerm[$term] as $docId => $tf) {
+                $this->guard_request_budget_interval($iteration++);
                 $docId = (int) $docId;
                 if (!isset($scoringDocIds[$docId], $docLengths[$docId])) {
                     continue;
@@ -1089,6 +1178,27 @@ final class WP_FTS_Searcher
     }
 
     /**
+     * Let a request owner stop work between bounded storage and scoring steps.
+     */
+    private function guard_request_budget(): void
+    {
+        if (!is_callable($this->activeRequestBudgetGuard)) {
+            return;
+        }
+
+        if (($this->activeRequestBudgetGuard)() === false) {
+            throw new WP_FTS_Search_Budget_Exceeded('request circuit breaker');
+        }
+    }
+
+    private function guard_request_budget_interval(int $iteration): void
+    {
+        if ($iteration % self::BUDGET_GUARD_INTERVAL === 0) {
+            $this->guard_request_budget();
+        }
+    }
+
+    /**
      * Return a positive integer option or null for unset/invalid values.
      */
     private function positive_int_option(mixed $value): ?int
@@ -1246,6 +1356,9 @@ final class WP_FTS_Searcher
     private function query_plan_from_base_groups(array $groups, array $opts): array
     {
         $prePrefixGroups = $this->dedupe_query_groups($groups);
+        if ($this->query_group_term_count($prePrefixGroups) > $this->max_query_terms($opts)) {
+            throw new WP_FTS_Search_Budget_Exceeded('analyzed terms');
+        }
         $expandedGroups = $this->expand_prefix_query_groups($prePrefixGroups, $opts);
 
         return [
@@ -1289,6 +1402,10 @@ final class WP_FTS_Searcher
 
         $minLength = $this->prefix_min_length($opts);
         $maxTerms = $this->prefix_max_terms($opts);
+        $remainingExpansions = $this->max_prefix_expansions($opts);
+        if ($remainingExpansions <= 0) {
+            return $groups;
+        }
         $expanded = [];
         foreach ($groups as $group) {
             $byKey = [];
@@ -1300,12 +1417,22 @@ final class WP_FTS_Searcher
 
             $prefixRank = $maxRank + 1;
             foreach ($group as $candidate) {
+                if ($remainingExpansions <= 0) {
+                    break;
+                }
                 if (strlen($candidate['term']) < $minLength) {
                     continue;
                 }
 
                 $prefix = WP_FTS_TermNamespace::namespace_term($candidate['lang'], $candidate['term']);
-                foreach (WP_FTS_StorageCompat::terms_with_prefix($this->storage, $prefix, $maxTerms) as $termKey) {
+                $this->guard_request_budget();
+                $prefixTerms = WP_FTS_StorageCompat::terms_with_prefix(
+                    $this->storage,
+                    $prefix,
+                    min($maxTerms, $remainingExpansions)
+                );
+                $this->guard_request_budget();
+                foreach ($prefixTerms as $termKey) {
                     if (isset($byKey[$termKey])) {
                         continue;
                     }
@@ -1324,6 +1451,10 @@ final class WP_FTS_Searcher
                     ];
                     if (isset($candidate['surface']) && is_scalar($candidate['surface']) && (string) $candidate['surface'] !== '') {
                         $byKey[$termKey]['surface'] = (string) $candidate['surface'];
+                    }
+                    $remainingExpansions--;
+                    if ($remainingExpansions <= 0) {
+                        break;
                     }
                 }
             }
@@ -1392,6 +1523,33 @@ final class WP_FTS_Searcher
         }
 
         return self::DEFAULT_PREFIX_MAX_TERMS;
+    }
+
+    /**
+     * Maximum analyzed alternatives across the complete query plan.
+     */
+    private function max_query_terms(array $opts): int
+    {
+        return $this->positive_int_option($opts['max_query_terms'] ?? null)
+            ?? self::DEFAULT_MAX_QUERY_TERMS;
+    }
+
+    /**
+     * Maximum stored prefix alternatives added across the complete request.
+     */
+    private function max_prefix_expansions(array $opts): int
+    {
+        return $this->non_negative_int_option($opts['max_prefix_expansions'] ?? null)
+            ?? self::DEFAULT_MAX_PREFIX_EXPANSIONS;
+    }
+
+    /**
+     * Maximum decoded posting rows materialized for one scoring pass.
+     */
+    private function max_candidate_rows(array $opts): int
+    {
+        return $this->positive_int_option($opts['max_candidate_rows'] ?? null)
+            ?? self::DEFAULT_MAX_CANDIDATE_ROWS;
     }
 
     /**
@@ -1985,7 +2143,9 @@ final class WP_FTS_Searcher
                 $pageDocIds[$docId] = true;
             }
         }
+        $this->guard_request_budget();
         $metadataByDoc = WP_FTS_StorageCompat::get_doc_metadata($this->storage, array_keys($pageDocIds));
+        $this->guard_request_budget();
 
         $rows = [];
         foreach ($page as $row) {
@@ -1997,7 +2157,10 @@ final class WP_FTS_Searcher
             $matches = [];
             $matchCount = 0;
             $languages = [];
-            foreach (WP_FTS_StorageCompat::terms_for_doc($this->storage, $docId, 0) as $termKey) {
+            $this->guard_request_budget();
+            $documentTerms = WP_FTS_StorageCompat::terms_for_doc($this->storage, $docId, 0);
+            $this->guard_request_budget();
+            foreach ($documentTerms as $termKey) {
                 if (!isset($candidateByKey[$termKey])) {
                     continue;
                 }
@@ -2022,11 +2185,14 @@ final class WP_FTS_Searcher
                 }
             }
 
+            $this->guard_request_budget();
+            $document = $this->storage->get_doc($docId);
+            $this->guard_request_budget();
             $fieldMatches = $this->explain_field_matches(
                 is_numeric($row['score'] ?? null) ? (float) $row['score'] : 0.0,
                 $candidateByKey,
                 $metadataByDoc[$docId] ?? [],
-                $this->storage->get_doc($docId)
+                $document
             );
 
             $rows[] = [

@@ -104,6 +104,10 @@ function wp_fts_mysql_proof_run_inside_wordpress(): void
 
     $token = wp_fts_mysql_proof_token();
     $postIds = [];
+    $previousSettings = get_option(WP_FTS_Plugin::SETTINGS_OPTION, null);
+    $restSettings = is_array($previousSettings) ? $previousSettings : [];
+    $restSettings['rest_api_enabled'] = true;
+    update_option(WP_FTS_Plugin::SETTINGS_OPTION, $restSettings, false);
     $evidence = [
         'status' => 'PASS',
         'proof_token' => $token,
@@ -158,6 +162,11 @@ function wp_fts_mysql_proof_run_inside_wordpress(): void
         $evidence['memory_peak_bytes'] = memory_get_peak_usage(true);
     } finally {
         wp_fts_mysql_proof_cleanup($postIds);
+        if ($previousSettings === null) {
+            delete_option(WP_FTS_Plugin::SETTINGS_OPTION);
+        } else {
+            update_option(WP_FTS_Plugin::SETTINGS_OPTION, $previousSettings, false);
+        }
     }
 
     echo json_encode($evidence, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) . "\n";

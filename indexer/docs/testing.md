@@ -809,10 +809,11 @@ Playground without mounting the source checkout, asserts SQLite runtime
 evidence, inserts a small multilingual post set, indexes through
 `WP_FTS_Indexer`, and searches through `WP_FTS_Searcher`. It probes Polish
 stemming/detection, German detection, explicit language override, and fallback
-behavior for text without detector evidence. It also covers the public REST
-search route (`q`, `query`, invalid `mode`, missing query, and visible result
-refill after hidden stale rows) plus WP-CLI `wp fts reindex` and `wp fts search`
-when the Playground WP-CLI library is available.
+behavior for text without detector evidence. It explicitly enables and covers
+the otherwise-disabled public REST search route (`q`, `query`, invalid
+`mode`, missing query, and visible result refill after hidden stale rows) plus
+WP-CLI `wp fts reindex` and `wp fts search` when the Playground WP-CLI library
+is available.
 
 ## Optional BM25 Python Reference
 

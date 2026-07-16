@@ -5,8 +5,8 @@
 Language FTS is a WordPress plugin that builds a local full-text search index
 for WordPress content. It stores derived index data in WordPress database
 tables, keeps that data current through bounded WordPress lifecycle and queue
-workflows, and exposes practical admin, WP-CLI, REST/search, and diagnostic
-surfaces for understanding how search behaves on a site.
+workflows, and exposes practical admin, WP-CLI, optional REST/search, and
+diagnostic surfaces for understanding how search behaves on a site.
 
 It is intended for careful evaluation and controlled rollout. Try it in
 Playground or staging first, check results with your own content, keep backups
@@ -40,11 +40,12 @@ content.
 Settings > Full-Text Search provides Health, Settings, Sandbox, Indexed content,
 and Analyzer packs tabs. It manages the indexed post types, automatic indexing,
 search replacement surfaces, search-provider compatibility, highlighting,
-snippets, prefix matching, result limits, field ranking weights, an optional
-recency ranking boost, language fallback defaults, schema status, and a Health
-tab schema repair action. The Analyzer packs tab can enable or disable bundled
-runtime lemma packs when PHP gzip support is available; custom analyzer-pack
-paths and custom field selection still use the documented options and filters.
+snippets, prefix matching, optional public REST search, result limits, field
+ranking weights, an optional recency ranking boost, language fallback defaults,
+schema status, and a Health tab schema repair action. The Analyzer packs tab can
+enable or disable bundled runtime lemma packs when PHP gzip support is
+available; custom analyzer-pack paths and custom field selection still use the
+documented options and filters.
 
 ## Quickstart
 
@@ -135,12 +136,17 @@ accepts `--prefix_matching`, `--prefix_min_length` / `--prefix-min-length`, and
 searcher callers can still use the existing `WP_FTS_PREFIX_MIN_LENGTH` and
 `WP_FTS_PREFIX_MAX_TERMS` constants for code-level overrides.
 
+Public REST search is a separate opt-in setting and is absent by default. Its
+word-beginning expansion is also off by default and cannot be enabled by a
+request parameter. See [Operations](docs/operations.md#public-rest-search) for
+the endpoint's stricter work, rate, and cache limits.
+
 ## Architecture
 
 - `wp-php-toolkit/full-text-search` provides the analyzer, term generation,
   storage contracts, in-memory/file storage, `WP_FTS_Indexer`, and
   `WP_FTS_Searcher`.
-- WordPress activation, post-save/status/delete hooks, cron, REST, and WP-CLI
+- WordPress activation, post-save/status/delete hooks, cron, optional REST, and WP-CLI
   live in the plugin adapter and wire WordPress posts into the component.
 - `WP_FTS_PostContentExtractor` extracts title, content, excerpt, taxonomy terms,
   configured custom fields, and optional rendered block deltas into weighted
@@ -227,7 +233,7 @@ same provisioning path.
 | Language routing | Terms are stored in language namespaces. Explicit `--lang`, the wp-admin `FTS Language` field, Polylang/WPML metadata, and HTML `lang`/`xml:lang` scopes route content before conservative detector fallback. |
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. The PHP and REST helpers resolve every candidate against current WordPress post/password/capability state before ranking, so hidden rows cannot consume the result window and explain totals use the same readable corpus. |
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
-| Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
+| Surfaces | WP-CLI is the main operational surface. The plugin also provides an explicitly enabled REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
 | Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query surfaces and analyzed terms, retrieval mode, scoring, recency boost status, per-result and field-specific match details, performance-budget status, a bounded `posts_pre_query` hook pipeline around Language FTS, and redacted SQL query summaries when the environment already collects `$wpdb->queries`; they are request-local diagnostics rather than persistent logs. |
 
 ## Exact Retrieval And Explicit Candidate Caps

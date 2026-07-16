@@ -41,21 +41,38 @@ final class WP_FTS_StorageCompat
      * @param string[] $terms
      * @param int|null $candidateCap Optional approximate per-term document-id
      *        cap.
+     * @param int|null $rowCap Optional maximum rows returned across all terms.
      * @return array<string,array<int,int>>
      */
-    public static function get_postings(WP_FTS_Storage $storage, array $terms, ?int $candidateCap = null): array
+    public static function get_postings(
+        WP_FTS_Storage $storage,
+        array $terms,
+        ?int $candidateCap = null,
+        ?int $rowCap = null
+    ): array
     {
         $terms = array_values(array_unique(array_map('strval', $terms)));
         if ($terms === []) {
             return [];
         }
 
+        $rowCap = $rowCap !== null ? max(1, $rowCap) : null;
+        if ($candidateCap !== null && $candidateCap > 0 && $rowCap !== null) {
+            $candidateCap = min($candidateCap, max(1, intdiv($rowCap, count($terms))));
+        }
+        if ($rowCap !== null && $storage instanceof WP_FTS_Budgeted_Postings_Storage) {
+            return self::limit_posting_rows(
+                $storage->get_budgeted_postings($terms, $candidateCap, $rowCap),
+                $rowCap
+            );
+        }
+
         if ($candidateCap !== null && $candidateCap > 0 && $storage instanceof WP_FTS_Capped_Postings_Storage) {
-            return $storage->get_capped_postings($terms, $candidateCap);
+            return self::limit_posting_rows($storage->get_capped_postings($terms, $candidateCap), $rowCap);
         }
 
         if ($storage instanceof WP_FTS_Row_Postings_Storage) {
-            return $storage->get_postings($terms);
+            return self::limit_posting_rows($storage->get_postings($terms), $rowCap);
         }
 
         $postingsByTerm = [];
@@ -69,7 +86,38 @@ final class WP_FTS_StorageCompat
             $postingsByTerm[$term] = $postings;
         }
 
-        return $postingsByTerm;
+        return self::limit_posting_rows($postingsByTerm, $rowCap);
+    }
+
+    /**
+     * Keep a deterministic global prefix of decoded posting rows.
+     *
+     * @param array<string,array<int,int>> $postingsByTerm
+     * @return array<string,array<int,int>>
+     */
+    private static function limit_posting_rows(array $postingsByTerm, ?int $rowCap): array
+    {
+        ksort($postingsByTerm, SORT_STRING);
+        if ($rowCap === null) {
+            return $postingsByTerm;
+        }
+
+        $remaining = max(1, $rowCap);
+        $bounded = [];
+        foreach ($postingsByTerm as $term => $postings) {
+            if ($remaining <= 0) {
+                break;
+            }
+
+            ksort($postings, SORT_NUMERIC);
+            $postings = array_slice($postings, 0, $remaining, true);
+            if ($postings !== []) {
+                $bounded[(string) $term] = $postings;
+                $remaining -= count($postings);
+            }
+        }
+
+        return $bounded;
     }
 
     /**
