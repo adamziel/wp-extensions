@@ -232,11 +232,11 @@ test_case('quality real mysql proof helper excludes composer auth files from cop
     assert_true(is_int($pluginCopy) && is_int($componentCopy), 'proof helper should use the shared auth-excluding copy path for plugin and component trees');
 });
 
-test_case('quality real mysql harness source tracks current six-table row-postings schema', function (): void {
+test_case('quality real mysql harness source tracks current seven-table row-postings schema', function (): void {
     $script = (string) file_get_contents(dirname(__DIR__) . '/integration/real-wordpress-mysql.php');
     $proof = (string) file_get_contents(dirname(__DIR__) . '/integration/real-mysql-production-proof.php');
 
-    foreach (['fts_terms', 'fts_postings', 'fts_docs', 'fts_doc_lengths', 'fts_docmeta', 'fts_meta'] as $table) {
+    foreach (['fts_terms', 'fts_postings', 'fts_docs', 'fts_doc_lengths', 'fts_docmeta', 'fts_meta', 'fts_queue'] as $table) {
         assert_contains($table, $script, "real integration harness should mention {$table}");
         assert_contains($table, $proof, "real MySQL proof should mention {$table}");
     }

@@ -10,7 +10,7 @@ declare(strict_types=1);
  */
 final class WP_FTS_Plugin
 {
-    public const SCHEMA_VERSION = 2;
+    public const SCHEMA_VERSION = 3;
     public const SCHEMA_VERSION_OPTION = 'wp_fts_schema_version';
     public const QUEUE_OPTION = 'wp_fts_pending_index_post_ids';
     public const CRON_HOOK = 'wp_fts_process_index_queue';
@@ -59,8 +59,8 @@ final class WP_FTS_Plugin
     private const FAILURE_RECOVERY_RECENT_ITEMS = 10;
     private const FAILURE_RECOVERY_MAX_JSON_BYTES = 8192;
     private const FAILURE_RECOVERY_QUARANTINE_AFTER = 3;
-    private const FAILURE_RECOVERY_BASE_BACKOFF_SECONDS = 300;
-    private const FAILURE_RECOVERY_MAX_BACKOFF_SECONDS = 3600;
+    private const FAILURE_RECOVERY_BASE_BACKOFF_SECONDS = WP_FTS_Index_Queue::BASE_BACKOFF_SECONDS;
+    private const FAILURE_RECOVERY_MAX_BACKOFF_SECONDS = WP_FTS_Index_Queue::MAX_BACKOFF_SECONDS;
     private const SUPPORT_SNAPSHOT_SCHEMA = 'wp-fts-support-snapshot-v1';
     private const SUPPORT_SNAPSHOT_MAX_JSON_BYTES = 32768;
     private const SUPPORT_SNAPSHOT_MAX_DEPTH = 6;
@@ -287,6 +287,7 @@ final class WP_FTS_Plugin
         'fts_doc_lengths',
         'fts_docmeta',
         'fts_meta',
+        'fts_queue',
     ];
 
     /**
@@ -372,6 +373,9 @@ final class WP_FTS_Plugin
             return;
         }
 
+        // WordPress does not rerun activation hooks when an already-active
+        // plugin is updated, so schema migrations also need a runtime entry.
+        add_action('init', [self::class, 'maybe_upgrade_schema'], 1, 0);
         add_action('wp_after_insert_post', [self::class, 'handle_post_save'], 10, 4);
         add_action('save_post', [self::class, 'handle_post_save'], 10, 3);
         add_action('transition_post_status', [self::class, 'handle_status_transition'], 10, 3);
@@ -771,6 +775,13 @@ final class WP_FTS_Plugin
         self::clear_scheduled_queue_processor();
         self::clear_scheduled_schema_provisioning();
 
+        try {
+            self::index_queue(false)->clear();
+        } catch (Throwable $e) {
+            // A partial install may not have created the queue table yet. The
+            // option cleanup below must still be allowed to finish.
+        }
+
         foreach (self::uninstall_option_names() as $option_name) {
             self::delete_option($option_name);
         }
@@ -852,6 +863,7 @@ final class WP_FTS_Plugin
             throw new RuntimeException('FTS schema verification failed: ' . self::schema_verification_failure_summary($physical));
         }
 
+        self::migrate_legacy_queue_option(self::index_queue(false));
         self::set_option(self::SCHEMA_VERSION_OPTION, self::SCHEMA_VERSION);
     }
 
@@ -866,6 +878,15 @@ final class WP_FTS_Plugin
             // Version 2 formalizes the complete six-table row-postings contract.
             // Existing version-1 installs already have most or all of this DDL,
             // so only repair when physical inspection finds a gap.
+            if (empty($storage->verify_schema()['valid'])) {
+                $storage->create_tables();
+                return true;
+            }
+            return false;
+        }
+
+        if ($version === 3) {
+            // Version 3 adds the generation-aware durable indexing queue.
             if (empty($storage->verify_schema()['valid'])) {
                 $storage->create_tables();
                 return true;
@@ -976,6 +997,7 @@ final class WP_FTS_Plugin
 
         if ($post !== null) {
             self::queue_post($post_id);
+            self::clear_failed_item_recovery_metadata([$post_id]);
         }
     }
 
@@ -1001,6 +1023,7 @@ final class WP_FTS_Plugin
             }
 
             self::queue_post($post_id);
+            self::clear_failed_item_recovery_metadata([$post_id]);
             return;
         }
 
@@ -1032,34 +1055,42 @@ final class WP_FTS_Plugin
      */
     public static function process_queue(int $batch_size = self::DEFAULT_BATCH_SIZE): int
     {
-        $queue = self::pending_queue();
-        if ($queue === []) {
+        $queue = self::index_queue(true);
+        $claims = $queue->claim(max(1, $batch_size));
+        if ($claims === []) {
             return 0;
         }
 
-        $batch_size = max(1, $batch_size);
-        $batch = array_slice($queue, 0, $batch_size);
-        $remaining = array_slice($queue, count($batch));
         $processed = 0;
+        $next_claim = 0;
 
-        foreach ($batch as $post_id) {
-            if (self::failure_recovery_post_blocked($post_id)) {
-                continue;
+        try {
+            foreach ($claims as $index => $claim) {
+                $post_id = $claim['post_id'];
+                try {
+                    $post = self::post_object($post_id);
+                    if ($post !== null && self::is_indexable_post($post)) {
+                        self::index_post($post, [], self::runtime_analyzer());
+                        self::clear_failed_item_recovery_metadata([$post_id]);
+                    } else {
+                        self::tombstone_post($post_id);
+                        self::clear_failed_item_recovery_metadata([$post_id]);
+                    }
+                    $queue->acknowledge($claim);
+                    $processed++;
+                } catch (Throwable $e) {
+                    $queue->fail($claim);
+                    throw $e;
+                }
+                $next_claim = $index + 1;
             }
-
-            $post = self::post_object($post_id);
-            if ($post !== null && self::is_indexable_post($post)) {
-                self::index_post($post, [], self::runtime_analyzer());
-                self::clear_failed_item_recovery_metadata([$post_id]);
-            } else {
-                self::tombstone_post($post_id);
-                self::clear_failed_item_recovery_metadata([$post_id]);
+        } finally {
+            foreach (array_slice($claims, $next_claim) as $claim) {
+                $queue->release($claim);
             }
-            $processed++;
         }
 
-        $queue = self::finish_queue_batch($batch, $remaining);
-        if ($queue !== []) {
+        if ($queue->count() > 0) {
             self::schedule_queue_processor();
         }
 
@@ -1160,7 +1191,7 @@ final class WP_FTS_Plugin
     {
         $state = self::index_health_state();
         $state = array_replace($state, self::index_debt_state($state));
-        $pending_queue_count = count(self::pending_queue());
+        $pending_queue_count = self::pending_queue_count();
         $stale_remaining_count = self::count_stale_debt_remaining_content($state);
         $has_more = false;
         if ($pending_queue_count > 0) {
@@ -1320,18 +1351,20 @@ final class WP_FTS_Plugin
             return self::failure_recovery_action_result('retry', 'no_match', [], 0, 'No matching failed item recovery record was found.');
         }
 
-        $state['failure_history'] = self::bound_failure_recovery_records(array_values($records));
-        self::set_option(self::INDEX_HEALTH_OPTION, $state);
-
         $queued = 0;
+        $queue = self::index_queue(true);
         foreach ($updated as $record) {
             $id = max(0, (int) ($record['post_id'] ?? 0));
             if ($id <= 0) {
                 continue;
             }
-            self::queue_post($id);
+            $queue->retry($id);
+            self::schedule_queue_processor();
             $queued++;
         }
+
+        $state['failure_history'] = self::bound_failure_recovery_records(array_values($records));
+        self::set_option(self::INDEX_HEALTH_OPTION, $state);
 
         return self::failure_recovery_action_result('retry', 'retryable', $updated, $queued, 'Selected failed items were marked retryable and queued for a later bounded indexing pass.');
     }
@@ -2414,11 +2447,12 @@ final class WP_FTS_Plugin
             throw new RuntimeException('Configured FTS storage does not support index reset.');
         }
 
-        $queue_before = count(self::pending_queue());
+        $queue_before = self::pending_queue_count();
         $health_before = self::index_health_state();
         $counts = $storage->reset_index();
 
-        self::set_option(self::QUEUE_OPTION, []);
+        self::index_queue(false)->clear();
+        self::delete_option(self::QUEUE_OPTION);
         self::clear_scheduled_queue_processor();
         self::reset_index_health_state();
 
@@ -2494,7 +2528,7 @@ final class WP_FTS_Plugin
     {
         $total = self::count_eligible_content();
         $indexed = min($total, self::count_indexed_eligible_content());
-        $pending = count(self::pending_queue());
+        $pending = self::pending_queue_count();
 
         return [
             'total_eligible' => $total,
@@ -2512,7 +2546,7 @@ final class WP_FTS_Plugin
         return [
             'total_eligible' => 0,
             'indexed' => 0,
-            'pending' => count(self::pending_queue()),
+            'pending' => self::pending_queue_count(),
             'remaining' => 0,
         ];
     }
@@ -13156,16 +13190,11 @@ JS;
     }
 
     /**
-     * Add a post id to the pending queue without duplicates.
+     * Coalesce a post save into the durable pending queue.
      */
     private static function queue_post(int $post_id): void
     {
-        $queue = self::pending_queue();
-        if (!in_array($post_id, $queue, true)) {
-            $queue[] = $post_id;
-            sort($queue, SORT_NUMERIC);
-            self::set_option(self::QUEUE_OPTION, $queue);
-        }
+        self::index_queue(true)->enqueue($post_id);
 
         self::schedule_queue_processor();
     }
@@ -13188,55 +13217,27 @@ JS;
             return;
         }
 
-        $queue = [];
-        foreach (self::pending_queue() as $post_id) {
-            if (!isset($remove[$post_id])) {
-                $queue[] = $post_id;
-            }
-        }
-        self::set_option(self::QUEUE_OPTION, $queue);
+        self::index_queue(true)->remove(array_keys($remove));
     }
 
     /**
-     * Remove finished IDs from the latest queue state without losing later saves.
-     *
-     * The queue is stored in an option, so processing cannot claim rows
-     * atomically. Re-reading here preserves IDs enqueued after the initial
-     * snapshot while still dropping the batch this worker finished.
-     *
-     * @param int[] $processed Successfully processed or recorded-failed IDs.
-     * @param int[] $snapshot_remaining
      * @return int[]
      */
-    private static function finish_queue_batch(array $processed, array $snapshot_remaining): array
+    private static function pending_queue_count(): int
     {
-        $processed_lookup = [];
-        foreach ($processed as $post_id) {
-            $post_id = (int) $post_id;
-            if ($post_id > 0) {
-                $processed_lookup[$post_id] = true;
-            }
+        if (!self::option_matches_schema_version(self::get_option(self::SCHEMA_VERSION_OPTION, null))) {
+            return count(self::legacy_pending_queue());
         }
 
-        $next = [];
-        foreach (array_merge($snapshot_remaining, self::pending_queue()) as $post_id) {
-            $post_id = (int) $post_id;
-            if ($post_id > 0 && !isset($processed_lookup[$post_id])) {
-                $next[$post_id] = true;
-            }
-        }
-
-        $queue = array_keys($next);
-        sort($queue, SORT_NUMERIC);
-        self::set_option(self::QUEUE_OPTION, $queue);
-
-        return $queue;
+        return self::index_queue(false)->count();
     }
 
     /**
+     * Read the pre-migration queue without repairing schema or mutating options.
+     *
      * @return int[]
      */
-    private static function pending_queue(): array
+    private static function legacy_pending_queue(): array
     {
         $raw = self::get_option(self::QUEUE_OPTION, []);
         if (!is_array($raw)) {
@@ -13291,7 +13292,7 @@ JS;
             $budget = self::index_resource_budget($mode, $opts);
             $analyzer = self::runtime_analyzer();
             $block_backoff = $mode === 'cron';
-            $failed_queue_ids = self::process_queue_for_index_batch($batch_size, $budget, $summary, $analyzer, $block_backoff);
+            $failed_queue_ids = self::process_queue_for_index_batch($batch_size, $budget, $summary, $analyzer);
 
             $remaining_capacity = self::remaining_index_batch_capacity($batch_size, $summary);
             $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
@@ -13321,7 +13322,7 @@ JS;
                 $summary['has_more'] = true;
             }
 
-            if (self::pending_queue() !== []) {
+            if (self::pending_queue_count() > 0) {
                 $summary['has_more'] = true;
             }
         } catch (Throwable $e) {
@@ -13414,7 +13415,7 @@ JS;
         $schema = self::schema_status();
         $summary['source'] = self::index_batch_source($summary['mode'] ?? 'manual', $opts);
         $summary['started_at'] = self::current_gmt_datetime();
-        $summary['queue_before'] = count(self::pending_queue());
+        $summary['queue_before'] = self::pending_queue_count();
         $summary['lock_before'] = self::index_lock_status();
         $summary['schema_status'] = (string) $schema['status'];
         $summary['schema_version'] = max(0, (int) $schema['stored_version']);
@@ -13492,60 +13493,67 @@ JS;
      * @param array<string,mixed> $summary
      * @return int[] Failed queue IDs recorded and intentionally skipped for the rest of this batch.
      */
-    private static function process_queue_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer, bool $block_backoff = true): array
+    private static function process_queue_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer): array
     {
-        $queue = self::pending_queue();
-        if ($queue === [] || $limit <= 0) {
+        if ($limit <= 0) {
             return [];
         }
 
-        $claimed = array_slice($queue, 0, $limit);
-        $remaining = array_slice($queue, count($claimed));
-        $processed_ids = [];
+        $queue = self::index_queue(true);
+        $claims = $queue->claim($limit);
+        if ($claims === []) {
+            return [];
+        }
+
         $failed_ids = [];
-        $skipped_ids = [];
-        $index = 0;
+        $next_claim = 0;
 
-        for ($index = 0, $count = count($claimed); $index < $count; $index++) {
-            $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
-            if ($stop_reason !== '') {
-                self::remember_index_batch_stop($summary, $stop_reason);
-                break;
-            }
-
-            $post_id = (int) $claimed[$index];
-            if (self::failure_recovery_post_blocked($post_id, null, $block_backoff)) {
-                $skipped_ids[] = $post_id;
-                $summary['failure_recovery_skipped'] = max(0, (int) ($summary['failure_recovery_skipped'] ?? 0)) + 1;
-                continue;
-            }
-
-            $post = self::post_object($post_id);
-            try {
-                if ($post !== null && self::is_indexable_post($post)) {
-                    self::index_post($post, [], $analyzer);
-                    self::remember_indexed_post_in_summary($summary, $post);
-                } else {
-                    self::tombstone_post($post_id);
-                    self::remember_resolved_failure_post_in_summary($summary, $post_id);
+        try {
+            for ($index = 0, $count = count($claims); $index < $count; $index++) {
+                $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
+                if ($stop_reason !== '') {
+                    self::remember_index_batch_stop($summary, $stop_reason);
+                    break;
                 }
 
-                $processed_ids[] = $post_id;
-                $summary['processed'] = (int) $summary['processed'] + 1;
-                $summary['queue_processed'] = (int) $summary['queue_processed'] + 1;
-            } catch (Throwable $e) {
-                $failed_ids[] = $post_id;
-                self::remember_index_failure_in_summary($summary, $post_id, $post, $e);
+                $claim = $claims[$index];
+                $post_id = $claim['post_id'];
+                $post = null;
+                try {
+                    $post = self::post_object($post_id);
+                    if ($post !== null && self::is_indexable_post($post)) {
+                        self::index_post($post, [], $analyzer);
+                        self::remember_indexed_post_in_summary($summary, $post);
+                    } else {
+                        self::tombstone_post($post_id);
+                        self::remember_resolved_failure_post_in_summary($summary, $post_id);
+                    }
+
+                    $queue->acknowledge($claim);
+                    $summary['processed'] = (int) $summary['processed'] + 1;
+                    $summary['queue_processed'] = (int) $summary['queue_processed'] + 1;
+                } catch (Throwable $e) {
+                    if (max(0, (int) ($claim['attempts'] ?? 0)) + 1 >= self::FAILURE_RECOVERY_QUARANTINE_AFTER) {
+                        $queue->acknowledge($claim);
+                    } else {
+                        $queue->fail($claim);
+                    }
+                    $failed_ids[] = $post_id;
+                    self::remember_index_failure_in_summary($summary, $post_id, $post, $e);
+                }
+                $next_claim = $index + 1;
+            }
+        } finally {
+            foreach (array_slice($claims, $next_claim) as $claim) {
+                $queue->release($claim);
             }
         }
 
-        $unprocessed_claimed = array_slice($claimed, $index);
-        $queue = self::finish_queue_batch(array_merge($processed_ids, $failed_ids, $skipped_ids), array_merge($unprocessed_claimed, $remaining));
-        if ($queue !== []) {
+        if ($queue->count() > 0) {
             $summary['has_more'] = true;
         }
 
-        return array_merge($failed_ids, $skipped_ids);
+        return $failed_ids;
     }
 
     /**
@@ -14174,7 +14182,7 @@ WHERE p.post_password = ''
     {
         $summary['finished_at'] = self::current_gmt_datetime();
         $summary['elapsed_ms'] = max(0.0, (microtime(true) - $started) * 1000.0);
-        $summary['queue_after'] = count(self::pending_queue());
+        $summary['queue_after'] = self::pending_queue_count();
         $summary['lock_after'] = self::index_lock_status();
 
         if (
@@ -14799,7 +14807,7 @@ WHERE p.post_password = ''
             'updated_count' => $status === 'no_match' ? 0 : count($display_items),
             'queued_count' => max(0, $queued),
             'items' => $display_items,
-            'pending_queue_count' => count(self::pending_queue()),
+            'pending_queue_count' => self::pending_queue_count(),
             'message' => self::sanitize_index_failure_text($message, self::MAX_INDEX_FAILURE_ERROR_BYTES, false),
         ];
     }
@@ -15562,6 +15570,44 @@ WHERE p.post_password = ''
     {
         self::maybe_upgrade_schema();
         (new WP_FTS_Indexer(self::storage(false), new WP_FTS_Analyzer()))->delete_document($post_id);
+    }
+
+    /**
+     * Build the durable queue against the active WordPress database connection.
+     */
+    private static function index_queue(bool $ensure_schema = false): WP_FTS_Index_Queue
+    {
+        global $wpdb;
+
+        if (!isset($wpdb) || !is_object($wpdb)) {
+            throw new RuntimeException('Pure PHP FTS requires the WordPress $wpdb global.');
+        }
+
+        if ($ensure_schema) {
+            self::maybe_upgrade_schema();
+        }
+
+        return new WP_FTS_Index_Queue($wpdb);
+    }
+
+    /**
+     * Move pending work from releases that stored the queue in one option.
+     *
+     * The option is deleted only after every id is durably upserted. Repeating a
+     * partially completed migration may advance generations, but cannot lose
+     * work.
+     */
+    private static function migrate_legacy_queue_option(WP_FTS_Index_Queue $queue): void
+    {
+        $legacy = self::get_option(self::QUEUE_OPTION, null);
+        if ($legacy === null) {
+            return;
+        }
+
+        if (is_array($legacy)) {
+            $queue->import($legacy);
+        }
+        self::delete_option(self::QUEUE_OPTION);
     }
 
     /**

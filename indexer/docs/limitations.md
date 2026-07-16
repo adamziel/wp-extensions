@@ -18,8 +18,10 @@ caveats operators need to account for.
   language fallback. Analyzer pack paths and custom field indexing remain
   option/filter configuration, and operational state such as schema version and
   pending queue state is managed internally.
-- Runtime saves are processed through a bounded option-backed queue. This keeps
-  hook work small, but it is not a durable external job queue.
+- Runtime saves are processed through a bounded database-backed queue. Saves
+  atomically advance a post generation, workers lease exact generations, and
+  failed work retries with bounded backoff. This keeps hook work small and
+  survives worker interruption, but it is not an external job queue.
 - Multisite support is limited to lifecycle schema and cleanup paths: activation
   or repair affects the current site, new sites get empty FTS tables, uninstall
   clears plugin operational options per site, and WordPress site deletion can

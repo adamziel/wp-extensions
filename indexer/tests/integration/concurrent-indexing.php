@@ -156,7 +156,7 @@ for ($worker = 0; $worker < $workers; $worker++) {
 }
 $prefix = getenv('WP_FTS_REAL_WPCLI_PREFIX');
 if (preg_match('/^[A-Za-z0-9_]+$/', $prefix) === 1) {
-    foreach (['fts_terms', 'fts_docs', 'fts_doc_lengths', 'fts_meta'] as $suffix) {
+    foreach (['fts_terms', 'fts_docs', 'fts_doc_lengths', 'fts_meta', 'fts_queue'] as $suffix) {
         $wpdb->query('DROP TABLE IF EXISTS `' . $prefix . $suffix . '`');
     }
 }

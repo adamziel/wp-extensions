@@ -141,8 +141,11 @@ PRIMARY KEY  (doc_id)
     wp_fts_real_integration_assert_index($wpdb, $tables['docmeta'], 'post_type_status_date');
     wp_fts_real_integration_assert_column($wpdb, $tables['meta'], 'k');
     wp_fts_real_integration_assert_column($wpdb, $tables['meta'], 'v');
+    wp_fts_real_integration_assert_column($wpdb, $tables['queue'], 'generation');
+    wp_fts_real_integration_assert_column($wpdb, $tables['queue'], 'claim_token');
+    wp_fts_real_integration_assert_index($wpdb, $tables['queue'], 'ready');
 
-    echo "ok dbDelta created and migrated six FTS row-postings tables\n";
+    echo "ok dbDelta created and migrated seven FTS row-postings tables\n";
 }
 
 function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix): void
@@ -318,6 +321,7 @@ function wp_fts_real_integration_tables(string $prefix): array
         'doc_lengths' => $prefix . 'fts_doc_lengths',
         'docmeta' => $prefix . 'fts_docmeta',
         'meta' => $prefix . 'fts_meta',
+        'queue' => $prefix . 'fts_queue',
     ];
 }
 

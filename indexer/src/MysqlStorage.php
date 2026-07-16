@@ -27,6 +27,7 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_
     private string $docLengthsTable;
     private string $docMetaTable;
     private string $metaTable;
+    private string $queueTable;
     private ?bool $sqliteRuntime = null;
 
     /**
@@ -46,6 +47,7 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_
         $this->docLengthsTable = $prefix . 'fts_doc_lengths';
         $this->docMetaTable = $prefix . 'fts_docmeta';
         $this->metaTable = $prefix . 'fts_meta';
+        $this->queueTable = $prefix . 'fts_queue';
     }
 
     /**
@@ -108,6 +110,17 @@ lang varchar(16) NOT NULL,
 k varchar(64) NOT NULL,
 v bigint NOT NULL,
 PRIMARY KEY  (lang,k)
+) ENGINE=InnoDB {$charset};",
+            "CREATE TABLE {$this->queueTable} (
+post_id bigint unsigned NOT NULL,
+generation bigint unsigned NOT NULL DEFAULT 1,
+available_at bigint unsigned NOT NULL DEFAULT 0,
+attempts int unsigned NOT NULL DEFAULT 0,
+claim_token varchar(64) NOT NULL DEFAULT '',
+claimed_generation bigint unsigned NOT NULL DEFAULT 0,
+claim_expires_at bigint unsigned NOT NULL DEFAULT 0,
+PRIMARY KEY  (post_id),
+KEY ready (available_at,claim_expires_at,post_id)
 ) ENGINE=InnoDB {$charset};",
         ];
 

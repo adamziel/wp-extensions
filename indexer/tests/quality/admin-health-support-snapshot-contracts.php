@@ -112,7 +112,7 @@ function wp_fts_support_snapshot_seed_state(WP_FTS_Test_WPDB $fake): void
         'search',
         'raw-provider-payload-must-not-render',
     ];
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [902];
+    wp_fts_test_seed_queue($fake, [902]);
     $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK] = [
         'timestamp' => time() + 120,
         'hook' => WP_FTS_Plugin::CRON_HOOK,

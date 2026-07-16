@@ -133,9 +133,13 @@ namespace {
             'k varchar(64) NOT NULL',
             'v bigint NOT NULL',
             'PRIMARY KEY  (lang,k)',
+            'CREATE TABLE wp_fts_queue',
+            'generation bigint unsigned NOT NULL DEFAULT 1',
+            "claim_token varchar(64) NOT NULL DEFAULT ''",
+            'KEY ready (available_at,claim_expires_at,post_id)',
         ];
 
-        assert_same(6, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create exactly six FTS tables');
+        assert_same(7, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create exactly seven FTS tables');
         foreach ($schemaNeedles as $needle) {
             assert_contains($needle, $schemaSql, "schema should contain {$needle}");
         }
@@ -148,7 +152,7 @@ namespace {
         $custom = new WP_FTS_Storage_Mysql($customWpdb, 'custom_');
         $custom->create_tables();
         $customSql = implode("\n", $customWpdb->queries);
-        foreach (['custom_fts_terms', 'custom_fts_postings', 'custom_fts_docs', 'custom_fts_doc_lengths', 'custom_fts_docmeta', 'custom_fts_meta'] as $table) {
+        foreach (['custom_fts_terms', 'custom_fts_postings', 'custom_fts_docs', 'custom_fts_doc_lengths', 'custom_fts_docmeta', 'custom_fts_meta', 'custom_fts_queue'] as $table) {
             assert_contains($table, $customSql, "custom prefix schema should create {$table}");
         }
     });
@@ -891,6 +895,7 @@ namespace {
             'admin_init',
             'admin_menu',
             'before_delete_post',
+            'init',
             'loop_end',
             'loop_start',
             'pre_get_posts',

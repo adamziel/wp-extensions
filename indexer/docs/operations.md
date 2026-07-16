@@ -13,7 +13,7 @@ state before indexing or tombstoning posts.
 
 On multisite, activation, the Health-tab repair action, and `wp fts repair`
 operate on the current site's table prefix. When WordPress initializes a new
-site, the plugin switches into that site, creates or repairs the six FTS tables,
+site, the plugin switches into that site, creates or repairs the seven FTS tables,
 schedules bounded queue work, and does not index content or set the activation
 redirect flag.
 
@@ -101,7 +101,7 @@ To create or repair the schema and index content, run:
 wp fts reindex --post_type=post
 ```
 
-The MySQL backend creates six tables under the active WordPress table prefix:
+The MySQL backend creates seven tables under the active WordPress table prefix:
 
 - `fts_terms`: binary term keys and document frequency.
 - `fts_postings`: row postings keyed by `(term, doc_id)` with term frequency.
@@ -111,6 +111,8 @@ The MySQL backend creates six tables under the active WordPress table prefix:
 - `fts_docmeta`: bounded WordPress result metadata for filters, snippets, and
   CLI/REST enrichment.
 - `fts_meta`: per-language document counts and length sums.
+- `fts_queue`: coalesced post generations, retry timing, and leased worker
+  ownership for pending indexing work.
 
 When WordPress `dbDelta()` is available, schema creation uses it so existing
 tables can evolve in place. Outside that path, raw `CREATE TABLE` statements
@@ -118,7 +120,7 @@ are executed. Database write failures are surfaced with the failed operation
 name so activation, repair, and runtime indexing do not silently continue after
 a schema or storage error.
 
-During multisite site deletion, the plugin contributes the target site's six
+During multisite site deletion, the plugin contributes the target site's seven
 `fts_*` table names to WordPress table discovery so core can clean them up with
 the deleted site. Plugin uninstall remains intentionally conservative: it clears
 plugin operational options and pending queue state for each site on multisite,
@@ -141,7 +143,7 @@ Upgrade release evidence is available through
 reviews when a previous direct-install package is supplied. That smoke creates
 an isolated Docker WordPress/MariaDB multisite network, network-activates the previous direct-install package, indexes generated fixture content, upgrades to
 the current package, checks schema version/status, proves repair idempotence after upgrade, checks search continuity and queue health after upgrade, creates
-an additional disposable site, proves that site's six `fts_*` tables use its
+an additional disposable site, proves that site's seven `fts_*` tables use its
 own table prefix, proves subsite indexing/search/queue/repair behavior, proves
 the WordPress site-deletion table filter contributes the target site's FTS
 tables, and deletes generated fixture content before the disposable stack is

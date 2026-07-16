@@ -29,6 +29,7 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
         'fts_doc_lengths',
         'fts_docmeta',
         'fts_meta',
+        'fts_queue',
     ];
     private const OPERATIONAL_OPTIONS = [
         'wp_fts_schema_version',
@@ -280,7 +281,7 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
             $afterDeactivation = $this->inspect_site('after_deactivation', $baseCommand, $createdPostIds, $report);
             $this->assert_cron_not_scheduled($afterDeactivation, 'deactivation should clear scheduled queue processing');
             $this->assert_fts_row_counts_same($beforeDeactivation, $afterDeactivation, 'deactivation should retain FTS table data');
-            $this->assert_pending_queue($afterDeactivation, 'deactivation should not erase pending queue option state');
+            $this->assert_pending_queue($afterDeactivation, 'deactivation should not erase durable pending queue state');
 
             $this->require_success(
                 'uninstall plugin',
@@ -604,6 +605,9 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
         $beforeCounts = is_array($before['fts_row_counts'] ?? null) ? $before['fts_row_counts'] : [];
         $afterCounts = is_array($after['fts_row_counts'] ?? null) ? $after['fts_row_counts'] : [];
         foreach (self::FTS_TABLE_SUFFIXES as $suffix) {
+            if ($suffix === 'fts_queue') {
+                continue;
+            }
             if ((int) ($beforeCounts[$suffix] ?? -1) !== (int) ($afterCounts[$suffix] ?? -2)) {
                 throw new RuntimeException($message . " Row count changed for {$suffix}.");
             }
@@ -665,9 +669,8 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
      */
     private function assert_pending_queue(array $inspection, string $message): void
     {
-        $options = is_array($inspection['options'] ?? null) ? $inspection['options'] : [];
-        $queue = is_array($options['wp_fts_pending_index_post_ids'] ?? null) ? $options['wp_fts_pending_index_post_ids'] : [];
-        if (empty($queue['exists']) || (int) ($queue['queue_count'] ?? 0) < 1) {
+        $counts = is_array($inspection['fts_row_counts'] ?? null) ? $inspection['fts_row_counts'] : [];
+        if ((int) ($counts['fts_queue'] ?? 0) < 1) {
             throw new RuntimeException($message);
         }
     }
@@ -682,6 +685,11 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
             if (!empty($options[$option]['exists'])) {
                 throw new RuntimeException($message . " Option still exists: {$option}.");
             }
+        }
+
+        $counts = is_array($inspection['fts_row_counts'] ?? null) ? $inspection['fts_row_counts'] : [];
+        if ((int) ($counts['fts_queue'] ?? 0) !== 0) {
+            throw new RuntimeException($message . ' Durable queue rows remain.');
         }
     }
 

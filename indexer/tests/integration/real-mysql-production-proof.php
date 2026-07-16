@@ -144,7 +144,7 @@ function wp_fts_mysql_proof_run_inside_wordpress(): void
             '<p lang="en">queuepath ' . $token . ' queued public content</p>'
         );
         $postIds[] = $queueId;
-        update_option(WP_FTS_Plugin::QUEUE_OPTION, [$queueId], false);
+        (new WP_FTS_Index_Queue($wpdb))->enqueue($queueId);
         $processed = WP_FTS_Plugin::process_queue(1);
         wp_fts_mysql_proof_assert_same(1, $processed, 'process_queue() should process the generated queued post.');
         $fixture['queue_id'] = $queueId;
@@ -627,6 +627,7 @@ function wp_fts_mysql_proof_cleanup(array $postIds): void
     if (function_exists('delete_option') && class_exists('WP_FTS_Plugin')) {
         delete_option(WP_FTS_Plugin::QUEUE_OPTION);
     }
+    (new WP_FTS_Index_Queue($GLOBALS['wpdb']))->clear();
 
     if (class_exists('WP_FTS_Plugin')) {
         $storage = WP_FTS_Plugin::storage(false);
@@ -673,6 +674,7 @@ function wp_fts_mysql_proof_tables(string $prefix): array
         'doc_lengths' => $prefix . 'fts_doc_lengths',
         'docmeta' => $prefix . 'fts_docmeta',
         'meta' => $prefix . 'fts_meta',
+        'queue' => $prefix . 'fts_queue',
     ];
 }
 
