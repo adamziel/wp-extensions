@@ -199,10 +199,15 @@ and failure diagnostics rather than force-unlocking. This slice intentionally
 does not provide a force-unlock control, because deleting an active lock can
 allow overlapping index writes.
 
-The Health tab shows whether the stored schema version is current, missing, or
-stale. Its repair button runs the same table/schema repair path as
-`wp fts repair`; it touches schema and table definitions only and does not index
-content or create sample posts.
+The Health tab shows whether the schema is current, missing, stale, or
+physically damaged. Status inspects every required table, column, and index;
+the version option is only the ordered migration cursor. Its repair button runs
+the same idempotent migration and verification path as `wp fts repair`, and the
+new version is stored only after the physical contract passes. Repair touches
+schema and table definitions only and does not index content or create sample
+posts. Network activation provisions the current site and starts a cursor-driven
+cron chain that repairs at most ten existing sites per event; new sites use the
+same provisioning path.
 
 ## Feature Summary
 

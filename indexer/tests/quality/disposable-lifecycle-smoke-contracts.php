@@ -249,7 +249,7 @@ function wp_fts_lifecycle_contract_inspection_payload(string $phase): array
         $options[$option] = [
             'exists' => $option === 'wp_fts_pending_index_post_ids' ? ($optionExists || $queueCount > 0) : $optionExists,
             'queue_count' => $option === 'wp_fts_pending_index_post_ids' ? $queueCount : 0,
-            'schema_version' => $option === 'wp_fts_schema_version' && $optionExists ? 1 : 0,
+            'schema_version' => $option === 'wp_fts_schema_version' && $optionExists ? WP_FTS_Plugin::SCHEMA_VERSION : 0,
         ];
     }
 
@@ -434,16 +434,16 @@ test_case('quality disposable lifecycle smoke builds bounded lifecycle WP-CLI co
                 if (str_contains($joined, "\nfts\nstatus")) {
                     return ['exit' => 0, 'stdout' => wp_fts_lifecycle_contract_json([
                         'schema_status' => 'current',
-                        'schema_version' => 1,
-                        'expected_schema_version' => 1,
+                        'schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
+                        'expected_schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
                         'pending_queue_count' => 0,
                     ]), 'stderr' => ''];
                 }
                 if (str_contains($joined, "\nfts\nrepair")) {
                     return ['exit' => 0, 'stdout' => wp_fts_lifecycle_contract_json([
                         'schema_status' => 'current',
-                        'schema_version' => 1,
-                        'expected_schema_version' => 1,
+                        'schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
+                        'expected_schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
                     ]), 'stderr' => ''];
                 }
                 if (str_contains($joined, "\nfts\nprocess_batch")) {

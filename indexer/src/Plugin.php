@@ -10,10 +10,11 @@ declare(strict_types=1);
  */
 final class WP_FTS_Plugin
 {
-    public const SCHEMA_VERSION = 1;
+    public const SCHEMA_VERSION = 2;
     public const SCHEMA_VERSION_OPTION = 'wp_fts_schema_version';
     public const QUEUE_OPTION = 'wp_fts_pending_index_post_ids';
     public const CRON_HOOK = 'wp_fts_process_index_queue';
+    public const SCHEMA_SITE_CRON_HOOK = 'wp_fts_provision_site_schema';
     public const INDEX_LOCK_OPTION = 'wp_fts_indexing_lock';
     public const INDEX_HEALTH_OPTION = 'wp_fts_index_health';
     public const REST_NAMESPACE = 'wp-fts/v1';
@@ -42,6 +43,7 @@ final class WP_FTS_Plugin
     private const DEFAULT_SEARCH_STORAGE_BUDGET_MS = 50.0;
     private const DEFAULT_INDEX_MEMORY_MARGIN_BYTES = 16777216;
     private const DEFAULT_INDEX_LOCK_TTL = 300;
+    private const SCHEMA_SITE_BATCH_SIZE = 10;
     private const MAX_INDEX_LOCK_DIAGNOSTIC_SECONDS = 2592000;
     private const MAX_CRON_INDEX_BATCH_SIZE = 500;
     private const MAX_MANUAL_INDEX_BATCH_SIZE = 1000;
@@ -336,6 +338,10 @@ final class WP_FTS_Plugin
      */
     private static array $language_support_details_cache = [];
 
+    /** Last database/prefix whose physical schema was verified this request. */
+    private static ?object $verified_schema_connection = null;
+    private static string $verified_schema_prefix = '';
+
     /**
      * Same-request flag set only after the Health support snapshot action
      * passes capability and nonce checks.
@@ -374,6 +380,7 @@ final class WP_FTS_Plugin
         add_action('wp_initialize_site', [self::class, 'handle_site_initialization'], 10, 2);
         add_action('wp_loaded', [self::class, 'detect_index_profile_drift'], 1, 0);
         add_action(self::CRON_HOOK, [self::class, 'process_scheduled_indexing'], 10, 0);
+        add_action(self::SCHEMA_SITE_CRON_HOOK, [self::class, 'handle_scheduled_site_schema'], 10, 1);
         add_action('rest_api_init', [self::class, 'register_rest_routes'], 10, 0);
         add_action('admin_menu', [self::class, 'register_admin_menu'], 10, 0);
         add_action('admin_init', [self::class, 'maybe_redirect_after_activation'], 1, 0);
@@ -409,6 +416,9 @@ final class WP_FTS_Plugin
     public static function activate(bool $network_wide = false): void
     {
         self::upgrade_schema();
+        if ($network_wide) {
+            self::schedule_existing_network_site_schema();
+        }
         self::schedule_queue_processor();
         self::maybe_set_activation_redirect_flag($network_wide);
     }
@@ -465,6 +475,52 @@ final class WP_FTS_Plugin
     public static function handle_site_initialization(mixed $site, mixed $args = []): void
     {
         $site_id = self::site_id_from_value($site);
+        self::provision_site_schema($site_id);
+    }
+
+    public static function handle_scheduled_site_schema(int $offset): void
+    {
+        if (!function_exists('get_sites')) {
+            return;
+        }
+
+        $offset = max(0, $offset);
+        $sites = get_sites([
+            'fields' => 'ids',
+            'number' => self::SCHEMA_SITE_BATCH_SIZE,
+            'offset' => $offset,
+            'orderby' => 'id',
+            'order' => 'ASC',
+        ]);
+        if (!is_array($sites)) {
+            return;
+        }
+
+        $current_site_id = function_exists('get_current_blog_id') ? (int) get_current_blog_id() : 0;
+        $failure = null;
+        foreach ($sites as $site) {
+            $site_id = self::site_id_from_value($site);
+            if ($site_id <= 0 || $site_id === $current_site_id) {
+                continue;
+            }
+
+            try {
+                self::provision_site_schema($site_id);
+            } catch (Throwable $error) {
+                $failure ??= $error;
+            }
+        }
+
+        if (count($sites) === self::SCHEMA_SITE_BATCH_SIZE) {
+            self::schedule_network_schema_batch($offset + self::SCHEMA_SITE_BATCH_SIZE);
+        }
+        if ($failure !== null) {
+            throw $failure;
+        }
+    }
+
+    private static function provision_site_schema(int $site_id): void
+    {
         if ($site_id <= 0 || !function_exists('switch_to_blog') || !function_exists('restore_current_blog')) {
             return;
         }
@@ -479,6 +535,39 @@ final class WP_FTS_Plugin
         } finally {
             restore_current_blog();
         }
+    }
+
+    /**
+     * Network activation starts one cursor-driven repair chain. Each cron event
+     * provisions at most SCHEMA_SITE_BATCH_SIZE sites and schedules only its
+     * successor, so a large network cannot enqueue an unbounded event storm.
+     * New sites continue through wp_initialize_site, and storage(true) remains
+     * a lazy repair boundary if WP-Cron is unavailable.
+     */
+    private static function schedule_existing_network_site_schema(): void
+    {
+        if (
+            !function_exists('is_multisite')
+            || !is_multisite()
+        ) {
+            return;
+        }
+
+        self::schedule_network_schema_batch(0);
+    }
+
+    private static function schedule_network_schema_batch(int $offset): void
+    {
+        if (!function_exists('wp_schedule_single_event')) {
+            return;
+        }
+
+        $args = [max(0, $offset)];
+        if (function_exists('wp_next_scheduled') && wp_next_scheduled(self::SCHEMA_SITE_CRON_HOOK, $args)) {
+            return;
+        }
+
+        wp_schedule_single_event(time() + 60, self::SCHEMA_SITE_CRON_HOOK, $args);
     }
 
     /**
@@ -603,6 +692,7 @@ final class WP_FTS_Plugin
     public static function deactivate(): void
     {
         self::clear_scheduled_queue_processor();
+        self::clear_scheduled_schema_provisioning();
     }
 
     /**
@@ -645,6 +735,7 @@ final class WP_FTS_Plugin
     private static function uninstall_current_site_options(): void
     {
         self::clear_scheduled_queue_processor();
+        self::clear_scheduled_schema_provisioning();
 
         foreach (self::uninstall_option_names() as $option_name) {
             self::delete_option($option_name);
@@ -708,8 +799,67 @@ final class WP_FTS_Plugin
      */
     public static function upgrade_schema(): void
     {
-        self::mysql_storage()->create_tables();
+        $storage = self::mysql_storage();
+        $stored_version = self::schema_version_from_option(self::get_option(self::SCHEMA_VERSION_OPTION, null));
+        if ($stored_version > self::SCHEMA_VERSION) {
+            throw new RuntimeException("The installed FTS schema version {$stored_version} is newer than this plugin supports.");
+        }
+        $ddl_applied = false;
+        for ($version = $stored_version + 1; $version <= self::SCHEMA_VERSION; $version++) {
+            $ddl_applied = self::run_schema_migration($storage, $version) || $ddl_applied;
+        }
+        if (!$ddl_applied) {
+            // Explicit repair remains idempotent even when the version is current.
+            $storage->create_tables();
+        }
+
+        $physical = $storage->verify_schema();
+        if (empty($physical['valid'])) {
+            throw new RuntimeException('FTS schema verification failed: ' . self::schema_verification_failure_summary($physical));
+        }
+
         self::set_option(self::SCHEMA_VERSION_OPTION, self::SCHEMA_VERSION);
+    }
+
+    private static function run_schema_migration(WP_FTS_Storage_Mysql $storage, int $version): bool
+    {
+        if ($version === 1) {
+            $storage->create_tables();
+            return true;
+        }
+
+        if ($version === 2) {
+            // Version 2 formalizes the complete six-table row-postings contract.
+            // Existing version-1 installs already have most or all of this DDL,
+            // so only repair when physical inspection finds a gap.
+            if (empty($storage->verify_schema()['valid'])) {
+                $storage->create_tables();
+                return true;
+            }
+            return false;
+        }
+
+        throw new RuntimeException("No FTS schema migration is registered for version {$version}.");
+    }
+
+    /**
+     * @param array{missing_tables?:mixed,missing_columns?:mixed,missing_indexes?:mixed} $physical
+     */
+    private static function schema_verification_failure_summary(array $physical): string
+    {
+        $parts = [];
+        foreach (['missing_tables', 'missing_columns', 'missing_indexes'] as $key) {
+            $values = is_array($physical[$key] ?? null) ? $physical[$key] : [];
+            $values = array_values(array_filter(array_map(
+                static fn(mixed $value): string => is_scalar($value) ? (string) $value : '',
+                $values
+            )));
+            if ($values !== []) {
+                $parts[] = $key . '=' . implode(',', array_slice($values, 0, 12));
+            }
+        }
+
+        return $parts !== [] ? implode('; ', $parts) : 'unknown physical schema mismatch';
     }
 
     /**
@@ -718,10 +868,39 @@ final class WP_FTS_Plugin
     public static function maybe_upgrade_schema(): void
     {
         if (self::option_matches_schema_version(self::get_option(self::SCHEMA_VERSION_OPTION, null))) {
-            return;
+            if (self::schema_verification_is_cached()) {
+                return;
+            }
+
+            if (!empty(self::mysql_storage()->verify_schema()['valid'])) {
+                self::remember_schema_verification();
+                return;
+            }
         }
 
         self::upgrade_schema();
+    }
+
+    private static function schema_verification_is_cached(): bool
+    {
+        global $wpdb;
+
+        return isset($wpdb)
+            && is_object($wpdb)
+            && self::$verified_schema_connection === $wpdb
+            && self::$verified_schema_prefix === (string) ($wpdb->prefix ?? '');
+    }
+
+    private static function remember_schema_verification(): void
+    {
+        global $wpdb;
+
+        if (!isset($wpdb) || !is_object($wpdb)) {
+            return;
+        }
+
+        self::$verified_schema_connection = $wpdb;
+        self::$verified_schema_prefix = (string) ($wpdb->prefix ?? '');
     }
 
     /**
@@ -2243,9 +2422,23 @@ final class WP_FTS_Plugin
     {
         $raw = self::get_option(self::SCHEMA_VERSION_OPTION, null);
         $stored_version = self::schema_version_from_option($raw);
+        global $wpdb;
+        $physical = isset($wpdb) && is_object($wpdb)
+            ? self::mysql_storage()->verify_schema()
+            : [
+                'valid' => false,
+                'available' => false,
+                'missing_tables' => [],
+                'missing_columns' => [],
+                'missing_indexes' => [],
+            ];
         $status = 'stale';
-        if (self::option_matches_schema_version($raw)) {
+        if (self::option_matches_schema_version($raw) && !empty($physical['valid'])) {
             $status = 'current';
+        } elseif (self::option_matches_schema_version($raw) && isset($physical['available']) && !$physical['available']) {
+            $status = 'unavailable';
+        } elseif (self::option_matches_schema_version($raw)) {
+            $status = 'damaged';
         } elseif ($raw === null || $raw === false || $raw === '') {
             $status = 'missing';
         }
@@ -2254,6 +2447,7 @@ final class WP_FTS_Plugin
             'status' => $status,
             'stored_version' => $stored_version,
             'expected_version' => self::SCHEMA_VERSION,
+            'physical' => $physical,
         ];
     }
 
@@ -5358,6 +5552,8 @@ final class WP_FTS_Plugin
     {
         return match ($status) {
             'current' => 'Current',
+            'damaged' => 'Damaged',
+            'unavailable' => 'Unavailable',
             'missing' => 'Missing',
             'stale' => 'Stale',
             default => 'Unknown',
@@ -15523,6 +15719,13 @@ WHERE p.post_password = ''
     {
         if (function_exists('wp_clear_scheduled_hook')) {
             wp_clear_scheduled_hook(self::CRON_HOOK);
+        }
+    }
+
+    private static function clear_scheduled_schema_provisioning(): void
+    {
+        if (function_exists('wp_clear_scheduled_hook')) {
+            wp_clear_scheduled_hook(self::SCHEMA_SITE_CRON_HOOK);
         }
     }
 

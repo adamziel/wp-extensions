@@ -215,8 +215,8 @@ function wp_fts_upgrade_contract_status_payload(int $pending = 0): array
 {
     return [
         'schema_status' => 'current',
-        'schema_version' => 1,
-        'expected_schema_version' => 1,
+        'schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
+        'expected_schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
         'pending_queue_count' => $pending,
     ];
 }
@@ -226,6 +226,9 @@ function wp_fts_upgrade_contract_status_payload(int $pending = 0): array
  */
 function wp_fts_upgrade_contract_inspection_payload(string $phase, bool $isMultisite = false, string $prefix = 'wp_'): array
 {
+    $schemaVersion = in_array($phase, ['after_current_upgrade', 'after_repeated_repair'], true)
+        ? WP_FTS_Plugin::SCHEMA_VERSION
+        : 1;
     $tables = [];
     $counts = [];
     foreach ([
@@ -265,7 +268,7 @@ function wp_fts_upgrade_contract_inspection_payload(string $phase, bool $isMulti
         'fts_tables' => $tables,
         'fts_row_counts' => $counts,
         'options' => [
-            'wp_fts_schema_version' => ['exists' => $phase !== 'before_previous_activation', 'schema_version' => 1],
+            'wp_fts_schema_version' => ['exists' => $phase !== 'before_previous_activation', 'schema_version' => $schemaVersion],
             'wp_fts_pending_index_post_ids' => ['exists' => true, 'queue_count' => $phase === 'after_repeated_repair' ? 1 : 0],
         ],
         'cron' => [
