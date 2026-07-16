@@ -12,7 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import"
+        "unimorph-source-import",
+        "indexed-runtime-lookups"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -23,11 +24,17 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "78722b529a5cc95195b9b256a25f717e08647f6a81a79e30e9d489655ca8ebf8",
+                "sha256": "f8ba77ca68ace2a813ae072f4b702d81cfce2c48fee873bddb3b371275c3ab3f",
                 "rows": 1049,
                 "first_surface": "అంటించాడు",
                 "last_surface": "స్తుతించింది",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0001.tsv.gz.lookup",
+                    "sha256": "af82d98f01bcf5be6777531456d9de955a1721f1fdc95c607f52a8028f64f0fa",
+                    "blocks": 1
+                }
             }
         ]
     },

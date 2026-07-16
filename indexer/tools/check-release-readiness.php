@@ -76,6 +76,7 @@ final class WP_FTS_ReleaseReadinessChecker
         'tools/build-release-zip.php',
         'vendor/autoload.php',
         'vendor/wp-php-toolkit/full-text-search/src/bootstrap.php',
+        'vendor/wp-php-toolkit/full-text-search/src/LemmaPackLookupIndex.php',
     ];
 
     private const PROHIBITED_PACKAGE_PREFIXES = [
@@ -775,6 +776,8 @@ final class WP_FTS_ReleaseReadinessChecker
             ]
         );
 
+        $this->check_direct_analyzer_packs($packageDir, $checks, $blockers);
+
         $scan = $this->scan_package_paths($packageDir);
         $prohibitedOk = $scan['paths'] === [] && $scan['sensitive_path_count'] === 0;
         $details = [];
@@ -793,6 +796,107 @@ final class WP_FTS_ReleaseReadinessChecker
                 ? 'No prohibited release artifacts or local-only paths are present in the package.'
                 : 'Package contains prohibited release artifacts, local-only paths, or redacted secret-like paths.',
             $details
+        );
+    }
+
+    /**
+     * Fully validate every shipped analyzer pack and execute one runtime lookup.
+     * Layout-only checks cannot detect a truncated gzip stream or a sidecar that
+     * does not contain the rows it claims to index.
+     *
+     * @param array<int,array<string,mixed>> $checks
+     * @param array<int,array<string,mixed>> $blockers
+     */
+    private function check_direct_analyzer_packs(string $packageDir, array &$checks, array &$blockers): void
+    {
+        $root = $packageDir . '/resources/analyzer-packs';
+        if (!is_dir($root)) {
+            $this->record($checks, $blockers, 'direct_analyzer_pack_runtime_integrity', 'pass', 'No analyzer packs are shipped in this package.', [
+                'pack_count' => 0,
+            ]);
+            return;
+        }
+
+        $manifests = [];
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)
+        );
+        foreach ($iterator as $item) {
+            if ($item->isFile() && $item->getBasename() === 'manifest.json') {
+                $manifests[] = $item->getPathname();
+            }
+        }
+        sort($manifests, SORT_STRING);
+        if ($manifests === []) {
+            $this->record($checks, $blockers, 'direct_analyzer_pack_runtime_integrity', 'fail', 'Analyzer pack directory contains no manifests.');
+            return;
+        }
+
+        $bootstrap = $packageDir . '/vendor/wp-php-toolkit/full-text-search/src/bootstrap.php';
+        if (!class_exists('WP_FTS_AnalyzerPackValidator', false) && is_file($bootstrap)) {
+            require_once $bootstrap;
+        }
+        if (!class_exists('WP_FTS_AnalyzerPackValidator', false) || !class_exists('WP_FTS_LanguageLemmaPack', false)) {
+            $this->record($checks, $blockers, 'direct_analyzer_pack_runtime_integrity', 'fail', 'Analyzer pack runtime classes are not loadable from the staged package.');
+            return;
+        }
+
+        $packIds = [];
+        $indexedRuntimeFiles = 0;
+        try {
+            foreach ($manifests as $manifestPath) {
+                $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath, false);
+                $language = (string) $validation['manifest']['language'];
+                $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifestPath, null, $language);
+                $probe = null;
+                foreach ($validation['runtime_files'] as $runtimeFile) {
+                    if (isset($runtimeFile['lookup'])) {
+                        $indexedRuntimeFiles++;
+                    }
+                    if ($probe === null && is_string($runtimeFile['first_surface'] ?? null)) {
+                        $probe = (string) $runtimeFile['first_surface'];
+                    }
+                }
+                if ($probe === null) {
+                    throw new RuntimeException('Validated analyzer pack has no runtime lookup probe.');
+                }
+
+                $analyses = $pack->analyze($probe, $language);
+                $loaded = false;
+                foreach ($analyses as $analysis) {
+                    if (is_array($analysis) && ($analysis['source'] ?? null) === 'lemma-pack') {
+                        $loaded = true;
+                        break;
+                    }
+                }
+                if (!$loaded) {
+                    throw new RuntimeException('Analyzer pack runtime lookup did not load its first declared surface.');
+                }
+                $packIds[] = $pack->pack_id();
+            }
+        } catch (Throwable $e) {
+            $this->record(
+                $checks,
+                $blockers,
+                'direct_analyzer_pack_runtime_integrity',
+                'fail',
+                'Shipped analyzer pack failed strict digest, stream, sidecar, or runtime lookup verification: ' . $e->getMessage()
+            );
+            return;
+        }
+
+        sort($packIds, SORT_STRING);
+        $this->record(
+            $checks,
+            $blockers,
+            'direct_analyzer_pack_runtime_integrity',
+            'pass',
+            'Shipped analyzer packs passed full digest, stream, sidecar, and runtime lookup verification.',
+            [
+                'pack_count' => count($packIds),
+                'pack_ids' => $packIds,
+                'indexed_runtime_file_count' => $indexedRuntimeFiles,
+            ]
         );
     }
 

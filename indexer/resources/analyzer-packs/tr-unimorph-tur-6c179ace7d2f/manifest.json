@@ -12,7 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import"
+        "unimorph-source-import",
+        "indexed-runtime-lookups"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -23,27 +24,45 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "2d73017f7f26451884931f201e450b8cce160e0279cf1903d69e9f3d2453a944",
+                "sha256": "8eef31280f87355846ddf88bc8a70c4033c1510b5627da31090f99411cca3ff1",
                 "rows": 100000,
                 "first_surface": "abacı",
                 "last_surface": "kanıtlıyor",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0001.tsv.gz.lookup",
+                    "sha256": "0d195efb7296a4007003c208689ec39cdbd46299e6315df59bcf288c399e0881",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "f3000c21960d9fd42aa7d65896d039590a8e01dfae8c5e8d96f82261112e0893",
+                "sha256": "f9208ea5cd14d7ac4adb43bc2c9fcca2b1de39a744cc4ff03ccf1f9a209cf06d",
                 "rows": 100000,
                 "first_surface": "kanıtlıyordu",
                 "last_surface": "utuyuz",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0002.tsv.gz.lookup",
+                    "sha256": "19bd96bbbdbd93490fce7f65b7836e46e502e3450fd0f554c40153905aecb2c5",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0003.tsv.gz",
-                "sha256": "8dbbf681bc1b1be4886308f6e0337e04c3a92925a8b353248e548d53a672fffd",
+                "sha256": "a6af479db38a73cbfa9a853481385ccca05af6636ec870cd86c871c6b2d3420d",
                 "rows": 23646,
                 "first_surface": "uy",
                 "last_surface": "ısıyı",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0003.tsv.gz.lookup",
+                    "sha256": "b79909897e3f910f582325849adb4773690eb499f0f2bc2e6cfc0678d3757bf2",
+                    "blocks": 12
+                }
             }
         ]
     },

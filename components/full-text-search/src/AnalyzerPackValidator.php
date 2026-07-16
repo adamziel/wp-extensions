@@ -14,7 +14,13 @@ final class WP_FTS_AnalyzerPackValidator
     public const RUNTIME_FORMAT_LEMMA_TSV = 'wp-fts-lemma-tsv-v1';
     public const RUNTIME_FORMAT_POLISH_LEGACY_TSV = 'wp-fts-polish-lemma-tsv-v1';
     private const DEFAULT_MAX_COLLECTED_RUNTIME_ROWS = 50000;
+    private const MAX_DIGEST_ATTESTATIONS = 256;
     public const RUNTIME_COMPRESSION_GZIP = 'gzip';
+
+    /** @var array<string,true> */
+    private static array $digestAttestations = [];
+    /** @var string[] */
+    private static array $digestAttestationOrder = [];
 
     private int $maxCollectedRuntimeRows;
 
@@ -124,7 +130,8 @@ final class WP_FTS_AnalyzerPackValidator
 
     /**
      * Validate manifest shape, pack-local file references, optional compressed
-     * file digests, and declared runtime metadata without parsing all runtime rows.
+     * file digests, lookup-sidecar attestations, and declared runtime metadata
+     * without parsing all runtime rows.
      *
      * Use this for runtime construction of full packs; call validate() when a
      * full row/digest audit is required.
@@ -136,7 +143,7 @@ final class WP_FTS_AnalyzerPackValidator
      *   rows:array<int,array{surface:string,lemma:string,file:string,line:int}>,
      *   runtime_rows:int,
      *   rows_collected:bool,
-     *   runtime_files:array<string,array{sha256:string,rows:int,path:string,compression?:string,first_surface?:string,last_surface?:string}>
+     *   runtime_files:array<string,array{sha256:string,rows:int,path:string,compression?:string,first_surface?:string,last_surface?:string,lookup?:array<string,mixed>}>
      * }
      */
     public function validate_metadata(string $manifestPath, bool $verifyRuntimeFileDigests = true): array
@@ -154,11 +161,7 @@ final class WP_FTS_AnalyzerPackValidator
             $this->ensure_runtime_compression_available($compression);
             $digest = (string) $file['sha256'];
             if ($verifyRuntimeFileDigests) {
-                $computedDigest = hash_file('sha256', $runtimePath);
-                if (!is_string($computedDigest) || $computedDigest !== $digest) {
-                    throw new RuntimeException("Runtime digest mismatch for {$file['path']}.");
-                }
-                $digest = $computedDigest;
+                $digest = $this->attest_file_digest($runtimePath, $digest, "Runtime digest mismatch for {$file['path']}.");
             }
 
             $runtimeFile = [
@@ -174,6 +177,15 @@ final class WP_FTS_AnalyzerPackValidator
             }
             if (isset($file['last_surface'])) {
                 $runtimeFile['last_surface'] = (string) $file['last_surface'];
+            }
+            if (isset($file['lookup'])) {
+                $runtimeFile['lookup'] = $this->lookup_index_metadata(
+                    $packDir,
+                    $file,
+                    $digest,
+                    (int) $file['rows'],
+                    $verifyRuntimeFileDigests
+                );
             }
             $runtimeFiles[(string) $file['path']] = $runtimeFile;
             $totalRows += (int) $file['rows'];
@@ -218,7 +230,7 @@ final class WP_FTS_AnalyzerPackValidator
      *   rows:array<int,array{surface:string,lemma:string,file:string,line:int}>,
      *   runtime_rows:int,
      *   rows_collected:bool,
-     *   runtime_files:array<string,array{sha256:string,rows:int,path:string,compression?:string,first_surface?:string,last_surface?:string}>
+     *   runtime_files:array<string,array{sha256:string,rows:int,path:string,compression?:string,first_surface?:string,last_surface?:string,lookup?:array<string,mixed>}>
      * }
      */
     public function validate(string $manifestPath, bool $collectRows = true): array
@@ -240,10 +252,11 @@ final class WP_FTS_AnalyzerPackValidator
             $runtimePath = $this->runtime_file_path($packDir, $file['path']);
             $compression = $this->runtime_file_compression($file);
             $this->ensure_runtime_compression_available($compression);
-            $digest = hash_file('sha256', $runtimePath);
-            if (!is_string($digest) || $digest !== $file['sha256']) {
-                throw new RuntimeException("Runtime digest mismatch for {$file['path']}.");
-            }
+            $digest = $this->attest_file_digest(
+                $runtimePath,
+                (string) $file['sha256'],
+                "Runtime digest mismatch for {$file['path']}."
+            );
 
             $fileResult = $this->parse_runtime_rows(
                 $runtimePath,
@@ -272,6 +285,11 @@ final class WP_FTS_AnalyzerPackValidator
             }
             if ($fileResult['last_surface'] !== null) {
                 $runtimeFile['last_surface'] = $fileResult['last_surface'];
+            }
+            if (isset($file['lookup'])) {
+                $lookup = $this->lookup_index_metadata($packDir, $file, $digest, $fileResult['rows_count'], true);
+                WP_FTS_LemmaPackLookupIndex::validate_content($lookup, $fileResult['rows_sha256']);
+                $runtimeFile['lookup'] = $lookup;
             }
             $runtimeFiles[(string) $file['path']] = $runtimeFile;
             $totalRows += $fileResult['rows_count'];
@@ -302,6 +320,31 @@ final class WP_FTS_AnalyzerPackValidator
             'rows_collected' => $collectRuntimeRows,
             'runtime_files' => $runtimeFiles,
         ];
+    }
+
+    /**
+     * Attest one candidate runtime shard and its optional lookup sidecar before
+     * a lazy dictionary lookup reads either file.
+     *
+     * @param array{path:string,sha256:string,lookup?:array{path:string,sha256:string}} $runtimeFile
+     */
+    public function attest_runtime_file(array $runtimeFile): void
+    {
+        $this->attest_file_digest(
+            $runtimeFile['path'],
+            $runtimeFile['sha256'],
+            'Runtime digest mismatch for the candidate analyzer shard.'
+        );
+
+        if (!isset($runtimeFile['lookup'])) {
+            return;
+        }
+
+        $this->attest_file_digest(
+            $runtimeFile['lookup']['path'],
+            $runtimeFile['lookup']['sha256'],
+            'Runtime lookup digest mismatch for the candidate analyzer shard.'
+        );
     }
 
     /**
@@ -411,6 +454,24 @@ final class WP_FTS_AnalyzerPackValidator
                     throw new RuntimeException('Analyzer pack gzip runtime files must use a .gz path.');
                 }
             }
+            if (array_key_exists('lookup', $file)) {
+                $lookup = $file['lookup'];
+                if (!is_array($lookup)) {
+                    throw new RuntimeException('Analyzer pack runtime lookup entry must be an object.');
+                }
+                if (($lookup['format'] ?? null) !== WP_FTS_LemmaPackLookupIndex::FORMAT) {
+                    throw new RuntimeException('Analyzer pack runtime lookup format is not supported.');
+                }
+                if (!is_string($lookup['path'] ?? null) || trim($lookup['path']) === '' || $this->is_absolute_path($lookup['path'])) {
+                    throw new RuntimeException('Analyzer pack runtime lookup path must be a relative non-empty string.');
+                }
+                if (!is_string($lookup['sha256'] ?? null) || strlen($lookup['sha256']) !== 64 || !$this->is_hex_digest($lookup['sha256'])) {
+                    throw new RuntimeException('Analyzer pack runtime lookup sha256 must be a 64-character hex digest.');
+                }
+                if (!is_int($lookup['blocks'] ?? null) || $lookup['blocks'] < 1) {
+                    throw new RuntimeException('Analyzer pack runtime lookup blocks must be a positive integer.');
+                }
+            }
         }
     }
 
@@ -423,7 +484,8 @@ final class WP_FTS_AnalyzerPackValidator
      * @return array{
      *   rows_count:int,
      *   first_surface:?string,
-     *   last_surface:?string
+     *   last_surface:?string,
+     *   rows_sha256:string
      * }
      */
     private function parse_runtime_rows(
@@ -442,65 +504,177 @@ final class WP_FTS_AnalyzerPackValidator
         $normalizer = new WP_FTS_Normalizer();
         $lineNumber = 0;
         $rowsCount = 0;
+        $rowsDigest = hash_init('sha256');
         $firstSurface = null;
         $lastSurface = null;
-        while (($line = $this->read_runtime_line($handle, $compression)) !== false) {
-            $lineNumber++;
-            $line = rtrim((string) $line, "\n");
-            $line = rtrim($line, "\r");
-            if ($line === '' || $line[0] === '#') {
-                continue;
-            }
-
-            $columns = explode("\t", $line);
-            if (count($columns) !== 2) {
-                throw new RuntimeException("Runtime row {$path}:{$lineNumber} must have surface and lemma columns.");
-            }
-
-            $surface = trim($columns[0]);
-            $lemma = trim($columns[1]);
-            $this->validate_normalized_runtime_token($surface, $normalizer, $language, $path, $lineNumber, 'surface');
-            $this->validate_normalized_runtime_token($lemma, $normalizer, $language, $path, $lineNumber, 'lemma');
-
-            $key = $surface . "\t" . $lemma;
-            if ($previousKey !== null && strcmp($previousKey, $key) >= 0) {
-                $this->close_runtime_file($handle, $compression);
-                throw new RuntimeException("Runtime rows in {$path} must be unique and sorted by surface then lemma.");
-            }
-            if ($previousGlobalKey !== null && strcmp($previousGlobalKey, $key) >= 0) {
-                $this->close_runtime_file($handle, $compression);
-                throw new RuntimeException('Analyzer pack runtime rows must be globally unique and sorted.');
-            }
-            $previousKey = $key;
-            $previousGlobalKey = $key;
-            $firstSurface ??= $surface;
-            $lastSurface = $surface;
-            $rowsCount++;
-            hash_update($runtimeDigest, $key . "\n");
-
-            if ($collectRows) {
-                if (count($rows) >= $this->maxCollectedRuntimeRows) {
-                    $rows = [];
-                    $collectRows = false;
+        try {
+            while (($line = $this->read_runtime_line($handle, $compression)) !== false) {
+                $lineNumber++;
+                $line = rtrim((string) $line, "\n");
+                $line = rtrim($line, "\r");
+                if ($line === '' || $line[0] === '#') {
                     continue;
                 }
 
-                $rows[] = [
-                    'surface' => $surface,
-                    'lemma' => $lemma,
-                    'file' => $path,
-                    'line' => $lineNumber,
-                ];
-            }
-        }
+                $columns = explode("\t", $line);
+                if (count($columns) !== 2) {
+                    throw new RuntimeException("Runtime row {$path}:{$lineNumber} must have surface and lemma columns.");
+                }
 
-        $this->close_runtime_file($handle, $compression);
+                $surface = trim($columns[0]);
+                $lemma = trim($columns[1]);
+                $this->validate_normalized_runtime_token($surface, $normalizer, $language, $path, $lineNumber, 'surface');
+                $this->validate_normalized_runtime_token($lemma, $normalizer, $language, $path, $lineNumber, 'lemma');
+
+                $key = $surface . "\t" . $lemma;
+                if ($previousKey !== null && strcmp($previousKey, $key) >= 0) {
+                    throw new RuntimeException("Runtime rows in {$path} must be unique and sorted by surface then lemma.");
+                }
+                if ($previousGlobalKey !== null && strcmp($previousGlobalKey, $key) >= 0) {
+                    throw new RuntimeException('Analyzer pack runtime rows must be globally unique and sorted.');
+                }
+                $previousKey = $key;
+                $previousGlobalKey = $key;
+                $firstSurface ??= $surface;
+                $lastSurface = $surface;
+                $rowsCount++;
+                hash_update($runtimeDigest, $key . "\n");
+                hash_update($rowsDigest, $key . "\n");
+
+                if ($collectRows) {
+                    if (count($rows) >= $this->maxCollectedRuntimeRows) {
+                        $rows = [];
+                        $collectRows = false;
+                        continue;
+                    }
+
+                    $rows[] = [
+                        'surface' => $surface,
+                        'lemma' => $lemma,
+                        'file' => $path,
+                        'line' => $lineNumber,
+                    ];
+                }
+            }
+        } finally {
+            $this->close_runtime_file($handle, $compression);
+        }
 
         return [
             'rows_count' => $rowsCount,
             'first_surface' => $firstSurface,
             'last_surface' => $lastSurface,
+            'rows_sha256' => hash_final($rowsDigest),
         ];
+    }
+
+    /**
+     * Resolve and attest one optional seekable lookup sidecar.
+     *
+     * @param array<string,mixed> $runtimeFile
+     * @return array<string,mixed>
+     */
+    private function lookup_index_metadata(
+        string $packDir,
+        array $runtimeFile,
+        string $runtimeDigest,
+        int $runtimeRows,
+        bool $verifyDigest
+    ): array {
+        if (!function_exists('gzdecode')) {
+            throw new RuntimeException('Indexed lemma runtime files require PHP zlib gzip decode support.');
+        }
+        $lookup = $runtimeFile['lookup'];
+        $lookupPath = $this->runtime_file_path($packDir, (string) $lookup['path']);
+        if ($verifyDigest) {
+            $this->attest_file_digest(
+                $lookupPath,
+                (string) $lookup['sha256'],
+                "Runtime lookup digest mismatch for {$lookup['path']}."
+            );
+        }
+
+        $metadata = WP_FTS_LemmaPackLookupIndex::metadata(
+            $lookupPath,
+            $this->runtime_file_path($packDir, (string) $runtimeFile['path']),
+            $runtimeDigest,
+            $runtimeRows
+        );
+        if (count($metadata['blocks']) !== (int) $lookup['blocks']) {
+            throw new RuntimeException("Runtime lookup block count mismatch for {$lookup['path']}.");
+        }
+        if (
+            isset($runtimeFile['first_surface'])
+            && $metadata['blocks'][0]['first_surface'] !== $runtimeFile['first_surface']
+        ) {
+            throw new RuntimeException("Runtime lookup first_surface mismatch for {$lookup['path']}.");
+        }
+        $lastBlock = $metadata['blocks'][count($metadata['blocks']) - 1];
+        if (
+            isset($runtimeFile['last_surface'])
+            && $lastBlock['last_surface'] !== $runtimeFile['last_surface']
+        ) {
+            throw new RuntimeException("Runtime lookup last_surface mismatch for {$lookup['path']}.");
+        }
+
+        return $metadata + [
+            'sha256' => strtolower((string) $lookup['sha256']),
+        ];
+    }
+
+    /**
+     * Cache successful file attestations by path, filesystem generation, and
+     * expected digest so repeated lookups do not rehash unchanged shards. A
+     * generation from the current or a future clock second remains uncached
+     * because PHP may expose only second-resolution mtime and ctime values.
+     */
+    private function attest_file_digest(string $path, string $expectedDigest, string $mismatchMessage): string
+    {
+        clearstatcache(true, $path);
+        $stat = @stat($path);
+        if (!is_array($stat)) {
+            throw new RuntimeException("Could not stat analyzer pack file {$path}.");
+        }
+
+        $expectedDigest = strtolower($expectedDigest);
+        $generation = [];
+        foreach (['dev', 'ino', 'size', 'mtime', 'ctime'] as $field) {
+            if (!isset($stat[$field]) || !is_int($stat[$field])) {
+                throw new RuntimeException("Could not identify analyzer pack file generation for {$path}.");
+            }
+            $generation[] = (string) $stat[$field];
+        }
+        foreach (['mtime_nsec', 'ctime_nsec', 'mtimensec', 'ctimensec'] as $field) {
+            if (isset($stat[$field]) && is_int($stat[$field])) {
+                $generation[] = $field . '=' . $stat[$field];
+            }
+        }
+        $key = hash('sha256', $path . "\0" . implode("\0", $generation) . "\0" . $expectedDigest);
+        $now = time();
+        $cacheableGeneration = $stat['mtime'] < $now && $stat['ctime'] < $now;
+        if ($cacheableGeneration && isset(self::$digestAttestations[$key])) {
+            return $expectedDigest;
+        }
+
+        $computedDigest = @hash_file('sha256', $path);
+        if (!is_string($computedDigest) || !hash_equals($expectedDigest, strtolower($computedDigest))) {
+            throw new RuntimeException($mismatchMessage);
+        }
+
+        if (!$cacheableGeneration) {
+            return strtolower($computedDigest);
+        }
+
+        self::$digestAttestations[$key] = true;
+        self::$digestAttestationOrder[] = $key;
+        while (count(self::$digestAttestationOrder) > self::MAX_DIGEST_ATTESTATIONS) {
+            $oldest = array_shift(self::$digestAttestationOrder);
+            if (is_string($oldest)) {
+                unset(self::$digestAttestations[$oldest]);
+            }
+        }
+
+        return strtolower($computedDigest);
     }
 
     /**
@@ -627,7 +801,7 @@ final class WP_FTS_AnalyzerPackValidator
     {
         if ($compression === self::RUNTIME_COMPRESSION_GZIP) {
             $this->ensure_runtime_compression_available($compression);
-            $handle = gzopen($path, 'rb');
+            $handle = @gzopen($path, 'rb');
             if (!is_resource($handle)) {
                 throw new RuntimeException("Could not read analyzer pack gzip runtime file {$path}.");
             }
@@ -649,7 +823,7 @@ final class WP_FTS_AnalyzerPackValidator
     private function read_runtime_line(mixed $handle, ?string $compression): string|false
     {
         if ($compression === self::RUNTIME_COMPRESSION_GZIP) {
-            return gzgets($handle);
+            return @gzgets($handle);
         }
 
         return fgets($handle);

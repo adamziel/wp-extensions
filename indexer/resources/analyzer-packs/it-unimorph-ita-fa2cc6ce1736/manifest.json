@@ -12,7 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import"
+        "unimorph-source-import",
+        "indexed-runtime-lookups"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -23,35 +24,59 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "dfc1d2b1c551af47cc065194e65deab6e1115fb9dc7b437f99bc4004593271e9",
+                "sha256": "90c6f9d32920f6dbb2db3975092bb2fc8b0fb8ba062d59ad49433e9fc9e97bb1",
                 "rows": 100000,
                 "first_surface": "abaliena",
                 "last_surface": "divenissi",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0001.tsv.gz.lookup",
+                    "sha256": "9ee507b9c20ea0a73590e8f1d1f46f2f2ae4caee05a50cc1ba6a264ac72b9b24",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "3750c3a4deb3d519e8eb20750de9ec7c00d0ce3322790b2552e71a5c87c8a9d5",
+                "sha256": "bc459e21a2c4019763a41daf9766237571d4b82d1bd9c23c80dc9f63c59b2fa2",
                 "rows": 100000,
                 "first_surface": "divenissimo",
                 "last_surface": "radiotelegrafante",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0002.tsv.gz.lookup",
+                    "sha256": "785a2cd67a71b79fe2f8c335cb8276cc27c75e7f9afa63c204b7c23473b39ba9",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0003.tsv.gz",
-                "sha256": "9d53cdf2ef9a389dc6586bf3ef2cbc00487947d0e4d21335f1fbc6d5ffe59676",
+                "sha256": "3618c1d114dfa208ae90c78df714a897e2fcda0c93d0d00616cf615c64866241",
                 "rows": 100000,
                 "first_surface": "radiotelegrafare",
                 "last_surface": "tallonano",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0003.tsv.gz.lookup",
+                    "sha256": "a0e665c922d1b7a90019ff66dd9fd34af95da36f1e5721a0fb13dee2e8265366",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0004.tsv.gz",
-                "sha256": "2c6965df1e6e04ad17681ee898dd5edce42f117be765c10c048bdcb4b4c044e1",
+                "sha256": "d20a1b09d4b937e507a5a2d5ba2ec99f1890f153bcf0e8a5065473aa90e554e9",
                 "rows": 21279,
                 "first_surface": "tallonante",
                 "last_surface": "zuppo",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0004.tsv.gz.lookup",
+                    "sha256": "592ddd3793449c71ff36a081e93df4c906ae048c8e0ce8cb5fb8f390b3607852",
+                    "blocks": 11
+                }
             }
         ]
     },

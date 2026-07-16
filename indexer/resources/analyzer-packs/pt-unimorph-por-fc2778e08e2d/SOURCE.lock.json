@@ -45,14 +45,17 @@
         "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=pt --pack-id=pt-unimorph-por-fc2778e08e2d --version=fc2778e08e2d-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/por/blob/fc2778e08e2da476d9d2f27f15f218b1cbb25ad5/por --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
     },
     "runtime": {
-        "manifest_sha256": "b309cb091742d92b32b1e1aa85016bb01c8f855f9f6f757c4506780714abc0e5",
+        "manifest_sha256": "ad1ce1ad85015b522e04a90849b302642f1a12707551d3b37dcd18190109ad8e",
         "row_count": 195342,
         "file_count": 2,
-        "byte_count": 426447,
+        "byte_count": 428774,
         "digest_sha256": "2493486031bb2daf012920c6de51c36383b3d2f495e313ecbf15741bfd4391a5",
         "contains_third_party_data": true,
         "committed": true,
-        "compression": "gzip"
+        "compression": "gzip",
+        "lookup_index_format": "wp-fts-lemma-block-index-v1",
+        "lookup_index_file_count": 2,
+        "lookup_index_byte_count": 10168
     },
     "behavior": {
         "oov_policy": "return_original_normalized_term",

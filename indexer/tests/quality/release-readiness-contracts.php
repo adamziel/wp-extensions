@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../../tools/check-release-readiness.php';
+require_once dirname(__DIR__, 3) . '/components/full-text-search/src/bootstrap.php';
 
 final class WP_FTS_Release_Readiness_Contract_Pending extends RuntimeException
 {
@@ -474,8 +475,75 @@ function wp_fts_release_readiness_contract_package_fixture(string $tmp, string $
     wp_fts_release_readiness_contract_write_file($package . '/tools/build-release-zip.php', "<?php\n");
     wp_fts_release_readiness_contract_write_file($package . '/vendor/autoload.php', "<?php\n");
     wp_fts_release_readiness_contract_write_file($package . '/vendor/wp-php-toolkit/full-text-search/src/bootstrap.php', "<?php\n");
+    wp_fts_release_readiness_contract_write_file($package . '/vendor/wp-php-toolkit/full-text-search/src/LemmaPackLookupIndex.php', "<?php\n");
 
     return $package;
+}
+
+/**
+ * @return array{manifest:string,runtime:string,lookup:string}
+ */
+function wp_fts_release_readiness_contract_add_analyzer_pack(string $package): array
+{
+    $directory = $package . '/resources/analyzer-packs/qaa-release-fixture';
+    $runtime = $directory . '/runtime.tsv.gz';
+    $lookup = $runtime . '.lookup';
+    $rows = "qaaform\tqaalemma\n";
+    $compressed = gzencode($rows, 9, ZLIB_ENCODING_GZIP);
+    if (!is_string($compressed)) {
+        throw new RuntimeException('Could not compress the release analyzer fixture.');
+    }
+    wp_fts_release_readiness_contract_write_file($runtime, $compressed);
+    $indexed = WP_FTS_LemmaPackLookupIndex::build(
+        $runtime,
+        WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+        (string) hash_file('sha256', $runtime),
+        $lookup
+    );
+    wp_fts_release_readiness_contract_write_file($directory . '/NOTICE.txt', "Project-owned release analyzer fixture.\n");
+
+    $manifest = $directory . '/manifest.json';
+    wp_fts_release_readiness_contract_write_json($manifest, [
+        'schema_version' => 1,
+        'pack_id' => 'qaa-release-readiness-fixture',
+        'language' => 'qaa',
+        'version' => '1.0.0',
+        'fixture_only' => true,
+        'default_enabled' => false,
+        'capabilities' => ['dictionary-lemmatizer'],
+        'runtime' => [
+            'format' => WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV,
+            'total_rows' => 1,
+            'total_sha256' => hash('sha256', $rows),
+            'files' => [[
+                'path' => 'runtime.tsv.gz',
+                'sha256' => $indexed['runtime_sha256'],
+                'rows' => 1,
+                'first_surface' => 'qaaform',
+                'last_surface' => 'qaaform',
+                'compression' => WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+                'lookup' => [
+                    'format' => $indexed['format'],
+                    'path' => 'runtime.tsv.gz.lookup',
+                    'sha256' => $indexed['sha256'],
+                    'blocks' => $indexed['blocks'],
+                ],
+            ]],
+        ],
+        'source' => [],
+        'license' => [],
+        'attribution' => [],
+        'provenance' => [
+            'no_runtime_network_access' => true,
+            'no_full_third_party_dictionary_dump' => true,
+        ],
+    ]);
+
+    return [
+        'manifest' => $manifest,
+        'runtime' => $runtime,
+        'lookup' => $lookup,
+    ];
 }
 
 /**
@@ -528,6 +596,73 @@ function wp_fts_release_readiness_contract_direct_ready(): void
         wp_fts_release_readiness_contract_true(
             wp_fts_release_readiness_contract_has_check($report, 'direct_package_prohibited_paths', 'pass'),
             'direct-install readiness should validate the package exclusion boundary'
+        );
+    } finally {
+        wp_fts_release_readiness_contract_remove_tree($tmp);
+    }
+}
+
+function wp_fts_release_readiness_contract_analyzer_pack_tampering(): void
+{
+    $tmp = wp_fts_release_readiness_contract_temp_dir();
+    try {
+        $source = wp_fts_release_readiness_contract_source_fixture($tmp);
+        $package = wp_fts_release_readiness_contract_package_fixture($tmp);
+        $pack = wp_fts_release_readiness_contract_add_analyzer_pack($package);
+        $options = [
+            'target' => 'direct-install',
+            'plugin_src' => $source,
+            'monorepo_root' => $tmp,
+            'package_dir' => $package,
+        ];
+
+        $checker = new WP_FTS_ReleaseReadinessChecker();
+        $ready = $checker->check($options);
+        wp_fts_release_readiness_contract_same('ready', $ready['status'] ?? null, 'release gate should functionally load an untampered analyzer pack');
+        wp_fts_release_readiness_contract_true(
+            wp_fts_release_readiness_contract_has_check($ready, 'direct_analyzer_pack_runtime_integrity', 'pass'),
+            'release gate should record strict analyzer runtime verification'
+        );
+
+        $changedRows = "qaaform\tchanged\n";
+        $changedRuntime = gzencode($changedRows, 9, ZLIB_ENCODING_GZIP);
+        if (!is_string($changedRuntime)) {
+            throw new RuntimeException('Could not compress the changed release analyzer fixture.');
+        }
+        wp_fts_release_readiness_contract_write_file($pack['runtime'], $changedRuntime);
+        $changedIndex = WP_FTS_LemmaPackLookupIndex::build(
+            $pack['runtime'],
+            WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+            (string) hash_file('sha256', $pack['runtime']),
+            $pack['lookup']
+        );
+        $manifest = json_decode((string) file_get_contents($pack['manifest']), true, 512, JSON_THROW_ON_ERROR);
+        $manifest['runtime']['files'][0]['sha256'] = $changedIndex['runtime_sha256'];
+        $manifest['runtime']['files'][0]['lookup']['sha256'] = $changedIndex['sha256'];
+        wp_fts_release_readiness_contract_write_json($pack['manifest'], $manifest);
+        $blocked = $checker->check($options);
+        wp_fts_release_readiness_contract_same('blocked', $blocked['status'] ?? null, 'release gate should block changed runtime rows even after file attestations are updated');
+        wp_fts_release_readiness_contract_true(
+            in_array('direct_analyzer_pack_runtime_integrity', wp_fts_release_readiness_contract_blocker_ids($blocked), true),
+            'runtime tampering should be attributed to analyzer pack integrity'
+        );
+
+        $pack = wp_fts_release_readiness_contract_add_analyzer_pack($package);
+        $lookupBytes = file_get_contents($pack['lookup']);
+        if (!is_string($lookupBytes)) {
+            throw new RuntimeException('Could not read the release analyzer lookup fixture.');
+        }
+        $changedLookup = str_replace('qaaform', 'raaform', $lookupBytes, $replacements);
+        wp_fts_release_readiness_contract_same(2, $replacements, 'release lookup fixture should expose one first/last surface range');
+        wp_fts_release_readiness_contract_write_file($pack['lookup'], $changedLookup);
+        $manifest = json_decode((string) file_get_contents($pack['manifest']), true, 512, JSON_THROW_ON_ERROR);
+        $manifest['runtime']['files'][0]['lookup']['sha256'] = hash_file('sha256', $pack['lookup']);
+        wp_fts_release_readiness_contract_write_json($pack['manifest'], $manifest);
+        $sidecarBlocked = $checker->check($options);
+        wp_fts_release_readiness_contract_same('blocked', $sidecarBlocked['status'] ?? null, 'release gate should block sidecar ranges changed with a matching file attestation');
+        wp_fts_release_readiness_contract_true(
+            in_array('direct_analyzer_pack_runtime_integrity', wp_fts_release_readiness_contract_blocker_ids($sidecarBlocked), true),
+            'sidecar tampering should be attributed to analyzer pack integrity'
         );
     } finally {
         wp_fts_release_readiness_contract_remove_tree($tmp);
@@ -1055,6 +1190,12 @@ function wp_fts_release_readiness_contract_cases(): array
             'name' => 'quality release readiness accepts a staged direct-install package',
             'fn' => static function (): void {
                 wp_fts_release_readiness_contract_direct_ready();
+            },
+        ],
+        [
+            'name' => 'quality release readiness blocks analyzer pack tampering',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_analyzer_pack_tampering();
             },
         ],
         [

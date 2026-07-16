@@ -408,10 +408,18 @@ $analyzer = new WP_FTS_Analyzer([
 The alias `lemmatizer_packs_by_lang` accepts the same map shape. Each enabled
 pack must validate locally and its manifest `language` must match the configured
 language key. A valid pack takes precedence over the built-in baseline or
-Snowball path for that language. Missing, invalid, or language-mismatched packs
-are ignored so the existing fallback analyzer remains available. Enabled packs
-participate in the language-pipeline signature, so unchanged documents are
-rewritten when a pack changes.
+Snowball path for that language. WordPress fully streams and verifies a pack
+before an enable action is stored. Normal runtime construction reads bounded
+manifest and lookup metadata without hashing every shard. Immediately before a
+candidate shard is used, the runtime verifies the shard and sidecar digests.
+Stable file-generation attestations are cached; generations with current or
+future timestamps are rehashed because PHP timestamps may have one-second
+resolution. Candidate attestation or read failures throw instead of silently
+storing fallback terms under the healthy pack signature. Missing, structurally
+invalid, or language-mismatched packs use the existing fallback analyzer.
+WordPress diagnostics hash all declared files and report digest failures as
+corrupt. Enabled packs participate in the language-pipeline signature, so
+unchanged documents are rewritten when a pack changes.
 
 WordPress runtime configuration uses the same map shape. The plugin starts with
 its bundled runtime defaults, merges the `wp_fts_analyzer_options` option, then
@@ -452,8 +460,11 @@ reindex when analyzer behavior changes.
 language. The legacy `polish_lemma_pack` / `polish_lemmatizer_pack` aliases map
 to `pl` when no explicit Polish entry is present. Explicit `false`, `null`,
 `"0"`, `"false"`, `"no"`, or `"off"` disables that configured language entry.
-Invalid, missing, and language-mismatched manifests are reported as ignored in
-the admin sandbox and fall back to the built-in analyzer path for that language.
+Invalid, missing, and language-mismatched manifests are reported as not active
+or corrupt in analyzer-pack status. Missing or structurally invalid packs fall
+back to the built-in analyzer path. A candidate digest or indexed-read failure
+after construction fails closed so indexing cannot persist different terms
+under the configured pack's healthy signature.
 
 The Playground/admin sandbox preserves the bundled Polish runtime default and
 also auto-loads all bundled source-backed UniMorph packs when compressed shards
@@ -514,7 +525,11 @@ normalized for the target language. Each non-comment row uses
 `surface<TAB>lemma`; optional third and fourth columns may carry source tags or
 notes. The importer sorts and deduplicates rows, writes runtime shards, and
 emits `manifest.json` plus `NOTICE.txt` with source, license, attribution, and
-provenance metadata.
+provenance metadata. With `--runtime-compression=gzip`, it writes the runtime as
+independent concatenated gzip members plus a digest-attested offset sidecar. The
+sidecar contains ranges and offsets, not a second dictionary copy. Runtime
+lookup inflates one bounded member instead of repeatedly scanning or
+materializing a whole gzip shard.
 
 ```sh
 php tools/import-lemma-tsv-pack.php \
@@ -534,6 +549,16 @@ Validate the generated pack before configuring it:
 
 ```sh
 php tools/validate-analyzer-pack.php /srv/wp-fts-packs/example-lemma-pack/manifest.json
+```
+
+Existing gzip packs created by an older importer can add the same sidecars and
+manifest entries before validation. The retrofit rewrites gzip shards into
+independent members and updates their digests, so run it on the controlled pack
+copy that will be published:
+
+```sh
+php tools/build-lemma-pack-lookup-index.php \
+  --manifest=/srv/wp-fts-packs/example-lemma-pack/manifest.json
 ```
 
 Real dictionary imports require source approval, license compatibility review,
