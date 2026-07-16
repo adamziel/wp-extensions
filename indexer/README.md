@@ -104,7 +104,9 @@ it with the `wp_fts_post_index_fields` filter instead of assigning a zero weight
 
 The defaults match the extractor defaults: title `5.0`, content `1.0`, excerpt
 `2.0`, taxonomy terms `2.0`, selected custom fields `1.0`, and rendered-only
-content `1.0`. These are index-time weights stored with indexed content, so
+content `1.0`. Dynamic block rendering is disabled by default; the rendered
+weight applies only when a caller deliberately enables it. These are index-time
+weights stored with indexed content, so
 changed weights fully affect existing content only after it is reindexed.
 Saving changed weights marks stale reindex debt in Health/status; it does not
 index content during the settings save.
@@ -140,8 +142,8 @@ searcher callers can still use the existing `WP_FTS_PREFIX_MIN_LENGTH` and
   `WP_FTS_Searcher`.
 - WordPress activation, post-save/status/delete hooks, cron, REST, and WP-CLI
   live in the plugin adapter and wire WordPress posts into the component.
-- `WP_FTS_PostContentExtractor` extracts title, content, excerpt, rendered
-  block deltas, taxonomy terms, and configured custom fields into weighted
+- `WP_FTS_PostContentExtractor` extracts title, content, excerpt, taxonomy terms,
+  configured custom fields, and optional rendered block deltas into weighted
   fields plus bounded result metadata.
 - `WP_FTS_Analyzer` strips non-visible HTML, normalizes and tokenizes text,
   routes language gaps, and stems or lemmatizes through the language pipeline.
@@ -220,8 +222,8 @@ same provisioning path.
 
 | Area | Current support |
 | --- | --- |
-| Indexing | Builds derived `fts_*` tables from WordPress posts, including title, content, excerpt, rendered block deltas, taxonomy terms, selected custom fields, boosts, and bounded result metadata. |
-| Lifecycle updates | Activation repairs schema, WP-Cron drains bounded runtime work, save/status hooks queue eligible updates, status/delete hooks tombstone posts that leave searchable scopes, and `wp fts reindex` can rebuild a scoped corpus. |
+| Indexing | Builds derived `fts_*` tables from WordPress posts, including title, content, excerpt, taxonomy terms, selected custom fields, optional rendered block deltas, boosts, and bounded result metadata. |
+| Lifecycle updates | Activation repairs schema, WP-Cron drains bounded runtime work, save/status/taxonomy/selected-meta hooks queue eligible updates, status/delete hooks tombstone posts that leave searchable scopes, explicit dependency invalidation covers opted-in dynamic output, and `wp fts reindex` can rebuild a scoped corpus. |
 | Language routing | Terms are stored in language namespaces. Explicit `--lang`, the wp-admin `FTS Language` field, Polylang/WPML metadata, and HTML `lang`/`xml:lang` scopes route content before conservative detector fallback. |
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |

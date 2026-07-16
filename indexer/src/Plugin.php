@@ -26,6 +26,7 @@ final class WP_FTS_Plugin
     public const SANDBOX_DEMO_POSTS_OPTION = 'wp_fts_sandbox_demo_post_ids';
     public const ANALYZER_OPTIONS_OPTION = 'wp_fts_analyzer_options';
     public const ANALYZER_OPTIONS_FILTER = 'wp_fts_analyzer_options';
+    public const POST_INDEX_OPTIONS_FILTER = 'wp_fts_post_index_options';
     public const FRONTEND_SEARCH_REPLACEMENT_FILTER = 'wp_fts_replace_frontend_search';
     public const ADMIN_POST_SEARCH_REPLACEMENT_FILTER = 'wp_fts_replace_admin_post_search';
     public const DEBUG_ENABLED_FILTER = 'wp_fts_debug_enabled';
@@ -69,7 +70,7 @@ final class WP_FTS_Plugin
     private const SUPPORT_SNAPSHOT_PLUGIN_NAME = 'Language FTS';
     private const SUPPORT_SNAPSHOT_PLUGIN_VERSION = '0.1.9';
     private const INDEX_PROFILE_SCHEMA = 'wp-fts-index-profile-v1';
-    private const INDEX_PROFILE_INDEXER_SIGNATURE = 'wp-fts-indexer-v2';
+    private const INDEX_PROFILE_INDEXER_SIGNATURE = 'wp-fts-indexer-v3';
     private const RANKING_TUNING_SCHEMA = 'wp-fts-ranking-tuning-v1';
     private const STALE_DEBT_REASON_LABELS = [
         'analyzer_options_changed' => 'Analyzer options changed',
@@ -382,6 +383,13 @@ final class WP_FTS_Plugin
         add_action('transition_post_status', [self::class, 'handle_status_transition'], 10, 3);
         add_action('trashed_post', [self::class, 'handle_post_delete'], 10, 1);
         add_action('before_delete_post', [self::class, 'handle_post_delete'], 10, 1);
+        add_action('added_term_relationship', [self::class, 'handle_term_relationship_change'], 10, 3);
+        add_action('deleted_term_relationships', [self::class, 'handle_term_relationship_change'], 10, 3);
+        add_action('edited_term', [self::class, 'handle_taxonomy_term_edit'], 10, 4);
+        add_action('delete_term', [self::class, 'handle_taxonomy_term_delete'], 10, 5);
+        add_action('added_post_meta', [self::class, 'handle_post_meta_change'], 10, 4);
+        add_action('updated_post_meta', [self::class, 'handle_post_meta_change'], 10, 4);
+        add_action('deleted_post_meta', [self::class, 'handle_post_meta_change'], 10, 4);
         add_action('wp_initialize_site', [self::class, 'handle_site_initialization'], 10, 2);
         add_action('wp_loaded', [self::class, 'detect_index_profile_drift'], 1, 0);
         add_action(self::CRON_HOOK, [self::class, 'process_scheduled_indexing'], 10, 0);
@@ -1043,6 +1051,152 @@ final class WP_FTS_Plugin
         self::tombstone_post($post_id);
         self::remove_from_queue([$post_id]);
         self::clear_failed_item_recovery_metadata([$post_id]);
+    }
+
+    /**
+     * Queue a post after one of its taxonomy relationships changes.
+     */
+    public static function handle_term_relationship_change(int $object_id, mixed ...$unused): void
+    {
+        self::queue_automatic_dependency_posts([$object_id]);
+    }
+
+    /**
+     * Queue every indexable post whose extracted term label may have changed.
+     */
+    public static function handle_taxonomy_term_edit(int $term_id, int $tt_id, string $taxonomy, mixed $args = []): void
+    {
+        if (
+            $term_id <= 0
+            || $taxonomy === ''
+            || !self::settings()['auto_index']
+            || !function_exists('get_objects_in_term')
+        ) {
+            return;
+        }
+
+        $object_ids = get_objects_in_term($term_id, $taxonomy);
+        if (is_array($object_ids)) {
+            self::invalidate_post_content_dependencies($object_ids);
+        }
+    }
+
+    /**
+     * Queue the former term members supplied by WordPress after deletion.
+     */
+    public static function handle_taxonomy_term_delete(
+        int $term_id,
+        int $tt_id,
+        string $taxonomy,
+        mixed $deleted_term,
+        mixed $object_ids
+    ): void {
+        if (is_array($object_ids)) {
+            self::queue_automatic_dependency_posts($object_ids);
+        }
+    }
+
+    /**
+     * Queue a post only when metadata consumed by the extractor changed.
+     */
+    public static function handle_post_meta_change(
+        mixed $meta_id,
+        int $post_id,
+        string $meta_key,
+        mixed $meta_value = null
+    ): void {
+        if (!self::is_normal_post_id($post_id) || $meta_key === '' || !self::settings()['auto_index']) {
+            return;
+        }
+
+        if ($meta_key !== self::LANGUAGE_META_KEY) {
+            $configured = self::get_option(WP_FTS_PostContentExtractor::CUSTOM_FIELDS_OPTION, []);
+            $configured_selection = is_array($configured)
+                ? $configured !== []
+                : is_scalar($configured) && trim((string) $configured) !== '';
+            $filtered_selection = function_exists('has_filter')
+                && (
+                    has_filter('wp_fts_post_custom_fields') !== false
+                    || has_filter(self::POST_INDEX_OPTIONS_FILTER) !== false
+                );
+            if (!$configured_selection && !$filtered_selection) {
+                return;
+            }
+        }
+
+        $post = self::post_object($post_id);
+        if ($post === null) {
+            return;
+        }
+
+        if ($meta_key === self::LANGUAGE_META_KEY) {
+            self::invalidate_post_content_dependencies([$post_id]);
+            return;
+        }
+
+        $options = self::prepare_post_index_options($post);
+        $selected_keys = (new WP_FTS_PostContentExtractor())->selected_custom_field_keys($post, $options);
+        if (!in_array($meta_key, $selected_keys, true)) {
+            return;
+        }
+
+        self::invalidate_post_content_dependencies([$post_id]);
+    }
+
+    /**
+     * Explicitly invalidate host posts whose rendered output depends on external state.
+     *
+     * Dynamic blocks can depend on other posts, options, users, or remote data.
+     * Callers that opt into rendering must call this method when those dependencies
+     * change. Repeated invalidations advance the durable queue generation.
+     *
+     * @param int|int[] $post_ids
+     * @return int Number of unique indexable posts enqueued.
+     */
+    public static function invalidate_post_content_dependencies(int|array $post_ids): int
+    {
+        return self::queue_posts(self::indexable_dependency_post_ids($post_ids));
+    }
+
+    /**
+     * Automatic dependency hooks honor the existing auto-index setting.
+     *
+     * @param array<int,mixed> $post_ids
+     */
+    private static function queue_automatic_dependency_posts(array $post_ids): void
+    {
+        if (!self::settings()['auto_index']) {
+            return;
+        }
+
+        self::invalidate_post_content_dependencies($post_ids);
+    }
+
+    /**
+     * Ignore taxonomy objects that are not indexable WordPress posts.
+     *
+     * @param int|array<int,mixed> $post_ids
+     * @return int[]
+     */
+    private static function indexable_dependency_post_ids(int|array $post_ids): array
+    {
+        $ids = [];
+        foreach (is_array($post_ids) ? $post_ids : [$post_ids] as $post_id) {
+            $post_id = (int) $post_id;
+            if ($post_id <= 0 || isset($ids[$post_id]) || !self::is_normal_post_id($post_id)) {
+                continue;
+            }
+
+            $post = self::post_object($post_id);
+            if ($post !== null && self::is_indexable_post($post)) {
+                $ids[$post_id] = true;
+            }
+        }
+
+        $result = array_keys($ids);
+        sort($result, SORT_NUMERIC);
+
+        return $result;
     }
 
     /**
@@ -7713,12 +7867,20 @@ final class WP_FTS_Plugin
         if (!array_key_exists('field_boosts', $options)) {
             $options['field_boosts'] = self::settings_field_boosts(self::settings()['field_boosts'] ?? []);
         }
+        $options['render_blocks'] ??= false;
 
         if (WP_FTS_TermNamespace::language_from_options($options, null, ['lang', 'language', 'primary_lang', 'document_lang']) === null) {
             $metadata_language = self::wordpress_post_language($post);
             if ($metadata_language !== null) {
                 $options['lang'] = $metadata_language;
                 $options['document_lang'] = $metadata_language;
+            }
+        }
+
+        if (function_exists('apply_filters')) {
+            $filtered = apply_filters(self::POST_INDEX_OPTIONS_FILTER, $options, $post);
+            if (is_array($filtered)) {
+                $options = $filtered;
             }
         }
 
@@ -13208,9 +13370,36 @@ JS;
      */
     private static function queue_post(int $post_id): void
     {
-        self::index_queue(true)->enqueue($post_id);
+        self::queue_posts([$post_id]);
+    }
 
+    /**
+     * Coalesce a dependency batch into durable generation-aware queue rows.
+     *
+     * @param array<int,mixed> $post_ids
+     * @return int Number of unique valid posts enqueued.
+     */
+    private static function queue_posts(array $post_ids): int
+    {
+        $queued = [];
+        foreach ($post_ids as $post_id) {
+            $post_id = (int) $post_id;
+            if ($post_id > 0 && !isset($queued[$post_id])) {
+                $queued[$post_id] = true;
+            }
+        }
+
+        if ($queued === []) {
+            return 0;
+        }
+
+        $queue = self::index_queue(true);
+        foreach (array_keys($queued) as $post_id) {
+            $queue->enqueue($post_id);
+        }
         self::schedule_queue_processor();
+
+        return count($queued);
     }
 
     /**

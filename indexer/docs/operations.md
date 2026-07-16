@@ -197,11 +197,14 @@ Important current behaviors:
 - comma-separated values are accepted, for example `--post_type=post,page`.
 - language can be forced with `--lang=pl-PL`.
 - full reindex and runtime post-save indexing share the same extractor path for
-  title, content, excerpt, rendered block deltas, taxonomy terms, selected
-  custom fields, field boosts, and stored product metadata.
+  title, content, excerpt, taxonomy terms, selected custom fields, optional
+  rendered block deltas, field boosts, and stored product metadata.
 - save/insert hooks queue bounded indexing work, and status/delete/trash hooks
   tombstone posts that leave the supported front-end or admin-searchable status
   scopes.
+- WordPress taxonomy relationship, term edit/delete, and selected post-meta
+  hooks coalesce affected post IDs into the same bounded queue. Direct database
+  writes need explicit dependency invalidation or a scoped reindex.
 - password-protected, trashed, deleted, unsupported-status, or otherwise
   non-searchable posts are tombstoned instead of left visible in search results.
 - posts that no longer match a later manual reindex scope should still be

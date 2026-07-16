@@ -680,8 +680,9 @@ The WordPress runtime analyzer does not configure stopwords by default.
 
 Bulk reindexing and runtime post-save indexing both use
 `WP_FTS_PostContentExtractor`. The extractor builds weighted fields for title,
-content, excerpt, rendered block deltas, taxonomy terms, selected custom fields,
-and product metadata used by filters, snippets, and CLI/REST enrichment.
+content, excerpt, taxonomy terms, selected custom fields, optional rendered
+block deltas, and product metadata used by filters, snippets, and CLI/REST
+enrichment.
 
 Custom fields can be selected with extractor options:
 
@@ -715,14 +716,54 @@ add_filter('wp_fts_post_index_fields', static function (array $fields, object $p
 }, 10, 3);
 ```
 
-Rendered block output is included by default when `do_blocks()` is available,
-but only the rendered-only delta is added so static block text is not counted
-twice. Shortcode rendering is opt-in:
+Changes made through WordPress's post-meta and taxonomy APIs enqueue affected
+posts when a custom-field key selected by `wp_fts_index_custom_fields`,
+`wp_fts_post_custom_fields`, or the plugin's `wp_fts_post_index_options` filter,
+a term relationship, or a term label changes. Repeated events for one post are
+coalesced in the pending queue. Custom fields supplied only to a direct
+extractor/indexer call need explicit invalidation. Direct database writes bypass
+WordPress hooks and must call
+`WP_FTS_Plugin::invalidate_post_content_dependencies()` with the affected post
+IDs after clearing the corresponding WordPress object/meta/term caches, or run a
+scoped reindex.
+
+Static block text already lives in `post_content` and is indexed without
+executing block callbacks. Dynamic block and shortcode rendering are opt-in:
+
+After upgrading from a build that rendered blocks by default, run
+`wp fts reindex` for every affected post type and status to remove previously
+derived dynamic terms from unchanged documents.
 
 ```php
 $indexer->index_post($post, [
+    'render_blocks' => true,
     'render_shortcodes' => true,
+    'rendered_text_limit' => 20000,
 ]);
+```
+
+The normal plugin path can opt in through the post index options filter:
+
+```php
+add_filter(WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER, static function (array $options, object $post): array {
+    if ($post->post_type === 'product') {
+        $options['render_blocks'] = true;
+        $options['rendered_text_limit'] = 20000;
+    }
+
+    return $options;
+}, 10, 2);
+```
+
+Only the rendered-only delta is indexed, and its visible text is capped at
+20,000 bytes by default and 200,000 bytes at most. `do_blocks()` itself runs
+synchronously and cannot be safely interrupted by this plugin, so do not opt in
+blocks that perform unbounded or remote work. Code that opts in also owns the
+dependency map. When another post, option, user, or external refresh changes a
+host post's rendered output, enqueue that host explicitly:
+
+```php
+WP_FTS_Plugin::invalidate_post_content_dependencies([$host_post_id]);
 ```
 
 Programmatic callers can still compose custom HTML and index it directly with

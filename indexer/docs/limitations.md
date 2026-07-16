@@ -65,13 +65,18 @@ filtered to the visible rows returned in that response.
 
 - Full WP-CLI reindexing and runtime post-save indexing share the same
   `WP_FTS_PostContentExtractor` path.
-- The extractor indexes title, content, excerpt, rendered block deltas, taxonomy
-  terms, selected custom fields, field boosts, and bounded product metadata.
+- The extractor indexes title, content, excerpt, taxonomy terms, selected custom
+  fields, field boosts, bounded product metadata, and rendered block deltas only
+  when a caller explicitly opts in.
 - Custom fields must be selected through `custom_fields`, `custom_field_keys`,
   the `wp_fts_index_custom_fields` option, or the `wp_fts_post_custom_fields`
   filter.
-- Shortcode rendering is opt-in because shortcode callbacks can run arbitrary
-  site code.
+- Dynamic block and shortcode rendering are opt-in because their callbacks can
+  run arbitrary site code and depend on state outside the host post. The plugin
+  bounds indexed rendered text, but it cannot interrupt one callback; opt-in
+  callers must keep execution bounded and explicitly invalidate dependent hosts.
+- WordPress metadata and taxonomy API mutations enqueue affected posts. Direct
+  SQL writes bypass those hooks and require explicit invalidation or reindexing.
 - Comments, media attachment contents, and complete template-rendered pages are
   not indexed by the default workflow.
 - Programmatic callers can still index custom HTML with `WP_FTS_Indexer` when

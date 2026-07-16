@@ -6,12 +6,17 @@ declare(strict_types=1);
  *
  * This class deliberately separates extraction from indexing: site owners can
  * filter the field list, choose custom fields through options, and tune field
- * boosts without changing the postings storage format. Rendered block content
- * is included when WordPress can render it; shortcode rendering is opt-in
- * because shortcode callbacks can be arbitrary application code.
+ * boosts without changing the postings storage format. Static block text is
+ * extracted from post_content. Dynamic block and shortcode rendering are
+ * opt-in because their callbacks can execute arbitrary application code and
+ * depend on state outside the post being indexed.
  */
 final class WP_FTS_PostContentExtractor
 {
+    public const CUSTOM_FIELDS_OPTION = 'wp_fts_index_custom_fields';
+    private const DEFAULT_RENDERED_TEXT_LIMIT = 20000;
+    private const MAX_RENDERED_TEXT_LIMIT = 200000;
+
     /** @var array<string,float> */
     private array $defaultFieldBoosts = [
         'title' => 5.0,
@@ -33,7 +38,7 @@ final class WP_FTS_PostContentExtractor
      * @param array<string,mixed> $opts Extraction options:
      *        `custom_fields`/`custom_field_keys`, `field_boosts`,
      *        `render_blocks`, `render_shortcodes`, `render_content_callback`,
-     *        `metadata_text_limit`, and `filters`.
+     *        `rendered_text_limit`, `metadata_text_limit`, and `filters`.
      * @return array{
      *   fields:array<int,array{name:string,text:string,html?:string,boost:float}>,
      *   metadata:array<string,mixed>,
@@ -64,8 +69,15 @@ final class WP_FTS_PostContentExtractor
 
         $rendered = $this->render_content($content, $post, $opts);
         if ($rendered !== '' && $rendered !== $content) {
+            $renderedTextLimit = max(
+                1,
+                min(self::MAX_RENDERED_TEXT_LIMIT, (int) ($opts['rendered_text_limit'] ?? self::DEFAULT_RENDERED_TEXT_LIMIT))
+            );
             $renderedText = $this->plain_text($rendered);
-            $renderedDeltaText = $this->rendered_delta_text($contentText, $renderedText);
+            $renderedDeltaText = $this->limit_text(
+                $this->rendered_delta_text($contentText, $renderedText),
+                $renderedTextLimit
+            );
             if ($renderedDeltaText !== '') {
                 $fields[] = $this->field('rendered', $renderedDeltaText, $fieldBoosts['rendered'] ?? 1.0);
             }
@@ -269,11 +281,11 @@ final class WP_FTS_PostContentExtractor
      *
      * @return string[]
      */
-    private function selected_custom_field_keys(object $post, array $opts): array
+    public function selected_custom_field_keys(object $post, array $opts = []): array
     {
         $keys = $opts['custom_fields'] ?? $opts['custom_field_keys'] ?? [];
         if ($keys === [] && function_exists('get_option')) {
-            $keys = get_option('wp_fts_index_custom_fields', []);
+            $keys = get_option(self::CUSTOM_FIELDS_OPTION, []);
         }
         $keys = $this->apply_filter('wp_fts_post_custom_fields', $keys, $post, $opts);
 
@@ -294,7 +306,7 @@ final class WP_FTS_PostContentExtractor
     }
 
     /**
-     * Render block content by default and shortcodes only when explicitly asked.
+     * Render dynamic content only when a caller accepts its dependency surface.
      */
     private function render_content(string $content, object $post, array $opts): string
     {
@@ -308,7 +320,7 @@ final class WP_FTS_PostContentExtractor
         }
 
         $rendered = $content;
-        if (($opts['render_blocks'] ?? true) && function_exists('do_blocks')) {
+        if (($opts['render_blocks'] ?? false) && function_exists('do_blocks')) {
             $rendered = (string) do_blocks($rendered);
         }
         if (($opts['render_shortcodes'] ?? false)) {

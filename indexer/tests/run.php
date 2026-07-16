@@ -3718,6 +3718,8 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_next_post_id'] = 1000;
     $GLOBALS['wp_fts_test_get_post_callbacks'] = [];
     $GLOBALS['wp_fts_test_do_blocks'] = [];
+    $GLOBALS['wp_fts_test_do_blocks_calls'] = 0;
+    $GLOBALS['wp_fts_test_term_object_ids'] = [];
     $GLOBALS['wp_fts_test_filters'] = [];
     $GLOBALS['wp_fts_test_upload_dir'] = null;
     $GLOBALS['wp_fts_test_upload_error'] = false;
@@ -4607,9 +4609,27 @@ if (!function_exists('apply_filters')) {
 if (!function_exists('do_blocks')) {
     function do_blocks(string $content): string
     {
+        $GLOBALS['wp_fts_test_do_blocks_calls'] = max(0, (int) ($GLOBALS['wp_fts_test_do_blocks_calls'] ?? 0)) + 1;
         $rendered = $GLOBALS['wp_fts_test_do_blocks'][$content] ?? null;
 
         return is_string($rendered) ? $rendered : $content;
+    }
+}
+
+if (!function_exists('get_objects_in_term')) {
+    function get_objects_in_term(int|array $term_ids, string|array $taxonomies, array|string $args = []): array
+    {
+        $object_ids = [];
+        foreach ((array) $taxonomies as $taxonomy) {
+            foreach ((array) $term_ids as $term_id) {
+                $key = (string) $taxonomy . ':' . (int) $term_id;
+                foreach ($GLOBALS['wp_fts_test_term_object_ids'][$key] ?? [] as $object_id) {
+                    $object_ids[] = (string) (int) $object_id;
+                }
+            }
+        }
+
+        return $object_ids;
     }
 }
 
@@ -5054,11 +5074,17 @@ PHP;
         WP_FTS_Plugin::CRON_HOOK,
         WP_FTS_Plugin::SCHEMA_SITE_CRON_HOOK,
         'add_meta_boxes',
+        'added_post_meta',
+        'added_term_relationship',
         'admin_init',
         'admin_init',
         'admin_menu',
         'before_delete_post',
         'init',
+        'delete_term',
+        'deleted_post_meta',
+        'deleted_term_relationships',
+        'edited_term',
         'loop_end',
         'loop_start',
         'pre_get_posts',
@@ -5068,6 +5094,7 @@ PHP;
         'save_post',
         'transition_post_status',
         'trashed_post',
+        'updated_post_meta',
         'wp_initialize_site',
         'wp_after_insert_post',
         'wp_ajax_wp_fts_sandbox_result_details',
@@ -5098,6 +5125,35 @@ PHP;
     }
     assert_same([WP_FTS_Plugin::class, 'handle_site_initialization'], $siteLifecycleAction['callback'] ?? null, 'bootstrap should register current multisite site-initialization hook');
     assert_same(2, $siteLifecycleAction['accepted_args'] ?? null, 'site-initialization hook should accept the WP_Site and args payloads');
+
+    $dependencyHooks = [];
+    foreach ($GLOBALS['wp_fts_test_actions'] as $action) {
+        $hook = (string) ($action['hook'] ?? '');
+        if (in_array($hook, [
+            'added_post_meta',
+            'added_term_relationship',
+            'delete_term',
+            'deleted_post_meta',
+            'deleted_term_relationships',
+            'edited_term',
+            'updated_post_meta',
+        ], true)) {
+            $dependencyHooks[$hook] = [
+                'callback' => $action['callback'] ?? null,
+                'accepted_args' => $action['accepted_args'] ?? null,
+            ];
+        }
+    }
+    ksort($dependencyHooks, SORT_STRING);
+    assert_same([
+        'added_post_meta' => ['callback' => [WP_FTS_Plugin::class, 'handle_post_meta_change'], 'accepted_args' => 4],
+        'added_term_relationship' => ['callback' => [WP_FTS_Plugin::class, 'handle_term_relationship_change'], 'accepted_args' => 3],
+        'delete_term' => ['callback' => [WP_FTS_Plugin::class, 'handle_taxonomy_term_delete'], 'accepted_args' => 5],
+        'deleted_post_meta' => ['callback' => [WP_FTS_Plugin::class, 'handle_post_meta_change'], 'accepted_args' => 4],
+        'deleted_term_relationships' => ['callback' => [WP_FTS_Plugin::class, 'handle_term_relationship_change'], 'accepted_args' => 3],
+        'edited_term' => ['callback' => [WP_FTS_Plugin::class, 'handle_taxonomy_term_edit'], 'accepted_args' => 4],
+        'updated_post_meta' => ['callback' => [WP_FTS_Plugin::class, 'handle_post_meta_change'], 'accepted_args' => 4],
+    ], $dependencyHooks, 'bootstrap should register post dependency invalidation after metadata and taxonomy mutations');
 
     $siteDeletionFilter = null;
     foreach ($GLOBALS['wp_fts_test_filter_registrations'] as $filter) {
@@ -5434,13 +5490,23 @@ test_case('prepare post index options uses saved field boosts unless caller over
 
     $settingsOptions = WP_FTS_Plugin::prepare_post_index_options($post, ['lang' => 'en']);
     assert_same($normalizedSavedBoosts, $settingsOptions['field_boosts'] ?? null, 'prepare_post_index_options should normalize legacy fractional settings to stored integer precision');
+    assert_same(false, $settingsOptions['render_blocks'] ?? null, 'runtime indexing should keep dynamic block rendering disabled by default');
 
     $override = ['title' => 9.0, 'content' => 2.0];
     $callerOptions = WP_FTS_Plugin::prepare_post_index_options($post, [
         'lang' => 'en',
         'field_boosts' => $override,
+        'render_blocks' => true,
     ]);
     assert_same($override, $callerOptions['field_boosts'] ?? null, 'explicit caller field_boosts should override saved plugin settings');
+    assert_same(true, $callerOptions['render_blocks'] ?? null, 'explicit caller render_blocks should opt into dynamic rendering');
+
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER] = static function (array $options): array {
+        $options['render_blocks'] = true;
+        return $options;
+    };
+    $filteredOptions = WP_FTS_Plugin::prepare_post_index_options($post, ['lang' => 'en']);
+    assert_same(true, $filteredOptions['render_blocks'] ?? null, 'the post index options filter should support deliberate runtime rendering opt-in');
 });
 
 test_case('post language meta box defaults to automatic detection and stores overrides', function (): void {
@@ -11169,6 +11235,139 @@ test_case('multisite uninstall falls back to current-site cleanup when site enum
     }
 });
 
+test_case('taxonomy and selected metadata mutations coalesce dependent post reindexing', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $posts = [
+        201 => (object) [
+            'ID' => 201,
+            'post_title' => 'First dependency host',
+            'post_content' => '<p>dependency body one</p>',
+            'post_excerpt' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-07-01 00:00:00',
+            'terms' => ['category' => ['FormerTaxonomySignal']],
+            'custom_fields' => ['subtitle' => 'FormerMetadataSignal'],
+        ],
+        202 => (object) [
+            'ID' => 202,
+            'post_title' => 'Second dependency host',
+            'post_content' => '<p>dependency body two</p>',
+            'post_excerpt' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-07-01 00:00:00',
+            'terms' => ['category' => ['FormerTaxonomySignal']],
+            'custom_fields' => ['subtitle' => 'StableMetadataSignal'],
+        ],
+    ];
+    $GLOBALS['wp_fts_test_posts'] = $posts;
+    $fake->postRows = array_values($posts);
+    $GLOBALS['wp_fts_test_options']['wp_fts_index_custom_fields'] = ['subtitle'];
+
+    try {
+        WP_FTS_Plugin::handle_post_save(201, $posts[201]);
+        WP_FTS_Plugin::handle_post_save(202, $posts[202]);
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
+        assert_same([201, 202], array_column(WP_FTS_Plugin::search('FormerTaxonomySignal', ['limit' => 10]), 'doc_id'), 'initial indexing should include the shared taxonomy label');
+        assert_same([201], array_column(WP_FTS_Plugin::search('FormerMetadataSignal', ['limit' => 10]), 'doc_id'), 'initial indexing should include the selected metadata value');
+
+        $posts[201]->terms = ['category' => ['CurrentTaxonomySignal']];
+        $posts[202]->terms = ['category' => ['CurrentTaxonomySignal']];
+        $posts[201]->custom_fields = ['subtitle' => 'CurrentMetadataSignal'];
+        $GLOBALS['wp_fts_test_term_object_ids']['category:7'] = [202, 201, 202, 9999];
+        $GLOBALS['wp_fts_test_updated_options'] = [];
+        $GLOBALS['wp_fts_test_schedule_calls'] = [];
+        $GLOBALS['wp_fts_test_scheduled'] = [];
+
+        WP_FTS_Plugin::handle_taxonomy_term_edit(7, 70, 'category', ['name' => 'CurrentTaxonomySignal']);
+        WP_FTS_Plugin::handle_post_meta_change(501, 201, 'subtitle', 'CurrentMetadataSignal');
+        WP_FTS_Plugin::handle_term_relationship_change(201, 70, 'category');
+
+        assert_same([201, 202], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'dependency invalidation should coalesce duplicate term and metadata events by post id');
+        $queueWrites = array_values(array_filter(
+            $GLOBALS['wp_fts_test_updated_options'],
+            static fn(array $update): bool => ($update['name'] ?? null) === WP_FTS_Plugin::QUEUE_OPTION
+        ));
+        assert_same(1, count($queueWrites), 'one term mutation should merge all affected posts into the queue with one option write');
+        assert_same(1, count($GLOBALS['wp_fts_test_schedule_calls']), 'coalesced dependency events should schedule one pending worker');
+
+        $summary = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
+        assert_same(2, $summary['queue_processed'] ?? null, 'the processor should reindex both dependent posts');
+        assert_same([], WP_FTS_Plugin::search('FormerTaxonomySignal', ['limit' => 10]), 'term rename processing should remove the former taxonomy label');
+        assert_same([201, 202], array_column(WP_FTS_Plugin::search('CurrentTaxonomySignal', ['limit' => 10]), 'doc_id'), 'term rename processing should index the current taxonomy label');
+        assert_same([], WP_FTS_Plugin::search('FormerMetadataSignal', ['limit' => 10]), 'selected metadata processing should remove the former value');
+        assert_same([201], array_column(WP_FTS_Plugin::search('CurrentMetadataSignal', ['limit' => 10]), 'doc_id'), 'selected metadata processing should index the current value');
+        assert_same([], WP_FTS_Plugin::search('IgnoredMetadataSignal', ['limit' => 10]), 'unselected metadata should remain outside the index');
+
+        $posts[201]->custom_fields = ['subtitle' => 'LatestMetadataSignal'];
+        WP_FTS_Plugin::handle_post_meta_change(502, 201, 'subtitle', 'LatestMetadataSignal');
+        assert_same([201], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'one configured metadata mutation should enqueue its host post');
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        assert_same([], WP_FTS_Plugin::search('CurrentMetadataSignal', ['limit' => 10]), 'configured metadata invalidation should remove the previous value');
+        assert_same([201], array_column(WP_FTS_Plugin::search('LatestMetadataSignal', ['limit' => 10]), 'doc_id'), 'configured metadata invalidation should index the replacement value');
+
+        WP_FTS_Plugin::handle_term_relationship_change(202, 71, 'category');
+        assert_same([202], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'one relationship mutation should enqueue its host post');
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        WP_FTS_Plugin::handle_taxonomy_term_delete(7, 70, 'category', (object) ['name' => 'FormerTaxonomySignal'], [201, 202]);
+        assert_same([201, 202], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'term deletion should enqueue every former host supplied by WordPress');
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
+
+        WP_FTS_Plugin::handle_post_meta_change(503, 201, 'unselected_key', 'IgnoredMetadataSignal');
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'unselected metadata changes should not enqueue the post');
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER] = static function (array $options): array {
+            $options['custom_fields'] = ['runtime_selected_key'];
+            return $options;
+        };
+        WP_FTS_Plugin::handle_post_meta_change(504, 201, 'runtime_selected_key', 'RuntimeSelectedSignal');
+        assert_same([201], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'runtime plugin index options should use the same metadata selection during invalidation');
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        unset($GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER]);
+        WP_FTS_Plugin::handle_post_meta_change(505, 201, WP_FTS_Plugin::LANGUAGE_META_KEY, 'pl');
+        assert_same([201], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'direct language metadata changes should also invalidate the indexed post');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('explicit content dependency invalidation bypasses disabled automatic indexing', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $wpdb = new WP_FTS_Test_WPDB();
+    wp_fts_test_reset_wordpress_fakes();
+    $post = (object) [
+        'ID' => 211,
+        'post_title' => 'Explicit dependency host',
+        'post_content' => '<p>static dependency host</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-07-01 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][211] = $post;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['auto_index' => false]
+    );
+
+    try {
+        WP_FTS_Plugin::handle_term_relationship_change(211, 71, 'category');
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'automatic dependency hooks should honor disabled automatic indexing');
+        assert_same(1, WP_FTS_Plugin::invalidate_post_content_dependencies([211, 211, 9999]), 'explicit invalidation should queue one existing indexable host post');
+        assert_same([211], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'explicit invalidation should expose the coalesced host queue');
+        assert_same(0, WP_FTS_Plugin::invalidate_post_content_dependencies(211), 'repeated explicit invalidation should report no new queue row');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('runtime post hooks queue eligible saves and status transitions then processors index them', function (): void {
     global $wpdb;
 
@@ -11228,7 +11427,7 @@ test_case('runtime post hooks queue eligible saves and status transitions then p
         assert_same([101], array_column(WP_FTS_Plugin::search('alpha', ['limit' => 10]), 'doc_id'), 'search helper should expose the indexed public post');
         assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeExcerptSignal', ['limit' => 10]), 'doc_id'), 'queued indexing should include extracted excerpts');
         assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeCustomSignal', ['limit' => 10]), 'doc_id'), 'queued indexing should include selected custom fields');
-        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeRenderedSignal', ['limit' => 10]), 'doc_id'), 'queued indexing should include rendered-only block output');
+        assert_same([], WP_FTS_Plugin::search('RuntimeRenderedSignal', ['limit' => 10]), 'runtime indexing should not execute dynamic blocks by default');
         $filtered = (new WP_FTS_Searcher(WP_FTS_Plugin::storage(false), new WP_FTS_Analyzer()))->search('Needle', [
             'lang' => 'en',
             'include_total' => true,
@@ -11237,7 +11436,17 @@ test_case('runtime post hooks queue eligible saves and status transitions then p
         assert_same(1, $filtered['total'], 'queued indexing should write metadata usable by status filters');
         assert_contains('RuntimeExcerptSignal', $fake->docMeta[101]['search_text'] ?? '', 'queued metadata should keep excerpt text for snippets');
         assert_contains('RuntimeCustomSignal', $fake->docMeta[101]['search_text'] ?? '', 'queued metadata should keep custom field text for snippets');
-        assert_contains('RuntimeRenderedSignal', $fake->docMeta[101]['search_text'] ?? '', 'queued metadata should keep rendered text for snippets');
+        assert_true(!str_contains($fake->docMeta[101]['search_text'] ?? '', 'RuntimeRenderedSignal'), 'default queued metadata should exclude dynamic block output');
+
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER] = static function (array $options): array {
+            $options['render_blocks'] = true;
+            return $options;
+        };
+        assert_same(1, WP_FTS_Plugin::invalidate_post_content_dependencies(101), 'dynamic block opt-in should expose explicit host invalidation');
+        $rendered = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        assert_same(1, $rendered['queue_processed'] ?? null, 'explicit dependency invalidation should run through the bounded queue processor');
+        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeRenderedSignal', ['limit' => 10]), 'doc_id'), 'opted-in dynamic block output should become searchable after explicit invalidation');
+        assert_contains('RuntimeRenderedSignal', $fake->docMeta[101]['search_text'] ?? '', 'opted-in dynamic block output should be bounded in stored metadata');
         $health = WP_FTS_Plugin::search_health();
         assert_same(1, $health['last_batch_queue_processed'] ?? null, 'health should record latest queued-save processing count');
         $diagnostics = $health['latest_batch_diagnostics'] ?? [];
@@ -18420,6 +18629,40 @@ test_case('search requests occurrence output through query fallback', function (
     assert_same('pl', $analyzer->queryOptions[0]['language'], 'query fallback should receive language option');
     assert_same('pl', $analyzer->queryOptions[0]['query_lang'], 'query fallback should receive query_lang option');
     assert_same('occurrences', $analyzer->queryOptions[0]['return'], 'query fallback should request occurrence output');
+});
+
+test_case('post content extractor keeps dynamic block rendering opt-in and bounds its text', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $extractor = new WP_FTS_PostContentExtractor();
+    $staticText = str_repeat('Static Block Signal ', 100);
+    $post = (object) [
+        'ID' => 1000,
+        'post_title' => '',
+        'post_content' => '<!-- wp:paragraph --><p>' . $staticText . '</p><!-- /wp:paragraph -->',
+        'post_excerpt' => '',
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'post_date_gmt' => '2026-02-03 04:05:06',
+    ];
+    $GLOBALS['wp_fts_test_do_blocks'][$post->post_content] = '<p>' . $staticText . '</p><p>' . str_repeat('DynamicOutput ', 50) . '</p>';
+
+    $static = $extractor->extract($post);
+    assert_same(0, $GLOBALS['wp_fts_test_do_blocks_calls'], 'default extraction should not execute dynamic block callbacks');
+    assert_true(!in_array('rendered', array_column($static['fields'], 'name'), true), 'default extraction should rely on static post content only');
+
+    $dynamic = $extractor->extract($post, [
+        'render_blocks' => true,
+        'rendered_text_limit' => 64,
+    ]);
+    assert_same(1, $GLOBALS['wp_fts_test_do_blocks_calls'], 'explicit render_blocks opt-in should execute the block renderer once');
+    $renderedFields = array_values(array_filter(
+        $dynamic['fields'],
+        static fn(array $field): bool => ($field['name'] ?? '') === 'rendered'
+    ));
+    assert_same(1, count($renderedFields), 'opted-in dynamic output should add one rendered-only field');
+    assert_true(strlen((string) ($renderedFields[0]['text'] ?? '')) <= 64, 'rendered-only field text should obey the configured byte limit');
+    assert_contains('DynamicOutput', $renderedFields[0]['text'] ?? '', 'bounded rendered-only text should retain the dynamic delta');
+    assert_true(!str_contains($renderedFields[0]['text'] ?? '', 'Static Block Signal'), 'rendered text should remove the complete static source before applying its byte limit');
 });
 
 test_case('post content extractor indexes realistic WordPress fields and filters', function (): void {
