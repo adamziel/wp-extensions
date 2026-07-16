@@ -880,23 +880,6 @@ final class WP_FTS_Analyzer
      */
     private function extractWithFallbackParser(string $html, string $documentLang): array
     {
-        $parts = preg_split(
-            '/(<!--.*?-->|<!\[CDATA\[.*?\]\]>|<[^>]+>)/s',
-            $html,
-            -1,
-            PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY
-        );
-        if ($parts === false) {
-            $plain = $this->stripAllTags($html);
-            return trim($plain) === '' ? [] : [[
-                'text' => $plain,
-                'weight' => 1.0,
-                'lang' => $documentLang,
-                'explicit_lang' => false,
-                'detect_group' => 0,
-            ]];
-        }
-
         $stack = [];
         $segments = [];
         $textGroupCounter = 0;
@@ -918,46 +901,48 @@ final class WP_FTS_Analyzer
             'WBR',
         ], true);
 
-        foreach ($parts as $part) {
+        foreach ($this->fallbackHtmlTokens($html) as $token) {
+            $part = $token['raw'];
             if ($part === '') {
                 continue;
             }
 
-            if ($part[0] === '<') {
-                if (str_starts_with($part, '<!--') || str_starts_with($part, '<![')) {
+            if ($token['type'] !== 'text') {
+                if ($token['type'] !== 'tag') {
                     continue;
                 }
 
-                if (preg_match('/^<\s*\/\s*([A-Za-z][A-Za-z0-9:-]*)/s', $part, $m)) {
-                    $closing = strtoupper($m[1]);
-                    while ($stack !== []) {
-                        $entry = array_pop($stack);
-                        if ($entry['tag'] === $closing) {
+                $tag = $this->fallbackTagDescriptor($part);
+                if ($tag === null) {
+                    continue;
+                }
+
+                if ($tag['closing']) {
+                    for ($i = count($stack) - 1; $i >= 0; $i--) {
+                        if ($stack[$i]['tag'] === $tag['name']) {
+                            array_splice($stack, $i);
                             break;
                         }
                     }
                     continue;
                 }
 
-                if (preg_match('/^<\s*([A-Za-z][A-Za-z0-9:-]*)/s', $part, $m)) {
-                    $opening = strtoupper($m[1]);
-                    $selfClosing = (bool) preg_match('/\/\s*>$/', $part);
-                    $this->closeFallbackOptionalEndTags($stack, $opening);
-                    if (!isset($voidTags[$opening]) && !$selfClosing) {
-                        $isTextGroupBoundary = $this->isTextGroupBoundaryTag($opening);
-                        $detectGroup = null;
-                        if ($isTextGroupBoundary) {
-                            $this->retireFallbackCurrentTextGroup($stack, $rootTextGroup);
-                            $textGroupCounter++;
-                            $detectGroup = $textGroupCounter;
-                        }
-                        $stack[] = [
-                            'tag' => $opening,
-                            'lang' => $this->tagLangAttribute($part),
-                            'detect_group' => $detectGroup,
-                            'text_group_boundary' => $isTextGroupBoundary,
-                        ];
+                $opening = $tag['name'];
+                $this->closeFallbackOptionalEndTags($stack, $opening);
+                if (!isset($voidTags[$opening]) && !$this->fallbackTagIsSelfClosing($part)) {
+                    $isTextGroupBoundary = $this->isTextGroupBoundaryTag($opening);
+                    $detectGroup = null;
+                    if ($isTextGroupBoundary) {
+                        $this->retireFallbackCurrentTextGroup($stack, $rootTextGroup);
+                        $textGroupCounter++;
+                        $detectGroup = $textGroupCounter;
                     }
+                    $stack[] = [
+                        'tag' => $opening,
+                        'lang' => $this->tagLangAttribute($part),
+                        'detect_group' => $detectGroup,
+                        'text_group_boundary' => $isTextGroupBoundary,
+                    ];
                 }
                 continue;
             }
@@ -987,6 +972,168 @@ final class WP_FTS_Analyzer
         }
 
         return $segments;
+    }
+
+    /**
+     * Stream fallback HTML into text, tag, and declaration tokens.
+     *
+     * Tag boundaries are found one byte at a time so `>` inside a quoted
+     * attribute cannot end a tag. Invalid `<` sequences stay visible text.
+     *
+     * @return iterable<int,array{type:'text'|'tag'|'declaration',raw:string}>
+     */
+    private function fallbackHtmlTokens(string $html): iterable
+    {
+        $length = strlen($html);
+        $offset = 0;
+
+        while ($offset < $length) {
+            $tagStart = strpos($html, '<', $offset);
+            if ($tagStart === false) {
+                yield ['type' => 'text', 'raw' => substr($html, $offset)];
+                break;
+            }
+
+            if ($tagStart > $offset) {
+                yield ['type' => 'text', 'raw' => substr($html, $offset, $tagStart - $offset)];
+            }
+
+            if (substr($html, $tagStart, 4) === '<!--') {
+                $commentEnd = strpos($html, '-->', $tagStart + 4);
+                $end = $commentEnd === false ? $length : $commentEnd + 3;
+                yield ['type' => 'declaration', 'raw' => substr($html, $tagStart, $end - $tagStart)];
+                $offset = $end;
+                continue;
+            }
+
+            if (substr($html, $tagStart, 9) === '<![CDATA[') {
+                $cdataEnd = strpos($html, ']]>', $tagStart + 9);
+                $end = $cdataEnd === false ? $length : $cdataEnd + 3;
+                yield ['type' => 'declaration', 'raw' => substr($html, $tagStart, $end - $tagStart)];
+                $offset = $end;
+                continue;
+            }
+
+            $tagEnd = $this->fallbackMarkupEndOffset($html, $tagStart + 1);
+            if ($tagEnd === null) {
+                yield ['type' => 'text', 'raw' => substr($html, $tagStart)];
+                break;
+            }
+
+            $raw = substr($html, $tagStart, $tagEnd - $tagStart + 1);
+            if ($this->fallbackTagDescriptor($raw) !== null) {
+                yield ['type' => 'tag', 'raw' => $raw];
+                $offset = $tagEnd + 1;
+                continue;
+            }
+
+            $marker = $raw[1] ?? '';
+            if ($marker === '!' || $marker === '?') {
+                yield ['type' => 'declaration', 'raw' => $raw];
+                $offset = $tagEnd + 1;
+                continue;
+            }
+
+            yield ['type' => 'text', 'raw' => '<'];
+            $offset = $tagStart + 1;
+        }
+    }
+
+    /**
+     * Find a markup-closing `>` while respecting quoted attribute values.
+     */
+    private function fallbackMarkupEndOffset(string $html, int $offset): ?int
+    {
+        $quote = null;
+        $length = strlen($html);
+        for (; $offset < $length; $offset++) {
+            $char = $html[$offset];
+            if ($quote !== null) {
+                if ($char === $quote) {
+                    $quote = null;
+                }
+                continue;
+            }
+
+            if ($char === '"' || $char === "'") {
+                $quote = $char;
+                continue;
+            }
+
+            if ($char === '>') {
+                return $offset;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Read a fallback tag name and whether the token closes that tag.
+     *
+     * @return array{name:string,closing:bool,name_end:int}|null
+     */
+    private function fallbackTagDescriptor(string $tag): ?array
+    {
+        $length = strlen($tag);
+        if ($length < 3 || $tag[0] !== '<') {
+            return null;
+        }
+
+        $offset = 1;
+        while ($offset < $length && $this->isHtmlWhitespace($tag[$offset])) {
+            $offset++;
+        }
+
+        $closing = $offset < $length && $tag[$offset] === '/';
+        if ($closing) {
+            $offset++;
+            while ($offset < $length && $this->isHtmlWhitespace($tag[$offset])) {
+                $offset++;
+            }
+        }
+
+        if ($offset >= $length || !$this->isFallbackTagNameStart($tag[$offset])) {
+            return null;
+        }
+
+        $start = $offset;
+        while ($offset < $length && $this->isFallbackTagNameByte($tag[$offset])) {
+            $offset++;
+        }
+
+        return [
+            'name' => strtoupper(substr($tag, $start, $offset - $start)),
+            'closing' => $closing,
+            'name_end' => $offset,
+        ];
+    }
+
+    private function fallbackTagIsSelfClosing(string $tag): bool
+    {
+        $offset = strlen($tag) - 2;
+        while ($offset >= 0 && $this->isHtmlWhitespace($tag[$offset])) {
+            $offset--;
+        }
+
+        return $offset >= 0 && $tag[$offset] === '/';
+    }
+
+    private function isFallbackTagNameStart(string $byte): bool
+    {
+        $ord = ord($byte);
+
+        return ($ord >= 65 && $ord <= 90) || ($ord >= 97 && $ord <= 122);
+    }
+
+    private function isFallbackTagNameByte(string $byte): bool
+    {
+        $ord = ord($byte);
+
+        return $this->isFallbackTagNameStart($byte)
+            || ($ord >= 48 && $ord <= 57)
+            || $byte === ':'
+            || $byte === '-';
     }
 
     /**
@@ -1182,21 +1329,6 @@ final class WP_FTS_Analyzer
         }
 
         return $weight;
-    }
-
-    /**
-     * Convert markup to plain text when structured parsing is unavailable.
-     *
-     * Non-visible script/style-like blocks are removed before entities are
-     * decoded.
-     *
-     * @param string $html HTML document or fragment.
-     * @return string Plain text candidate for analysis.
-     */
-    private function stripAllTags(string $html): string
-    {
-        $html = preg_replace('/<(script|style|noscript|template)\b[^>]*>.*?<\/\1>/is', ' ', $html) ?? $html;
-        return html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
     }
 
     /**
@@ -1733,13 +1865,14 @@ final class WP_FTS_Analyzer
      */
     private function fallbackTagAttributes(string $tag): array
     {
-        if (!preg_match('/^<\s*[A-Za-z][A-Za-z0-9:-]*/', $tag, $m)) {
+        $descriptor = $this->fallbackTagDescriptor($tag);
+        if ($descriptor === null || $descriptor['closing']) {
             return [];
         }
 
         $attributes = [];
         $length = strlen($tag);
-        $offset = strlen($m[0]);
+        $offset = $descriptor['name_end'];
 
         while ($offset < $length) {
             while ($offset < $length && $this->isHtmlWhitespace($tag[$offset])) {
