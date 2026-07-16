@@ -97,11 +97,13 @@ queries.
 
 Settings > Full-Text Search > Settings includes ranking weights for the
 WordPress post fields extracted into the index: title, main content, excerpt,
-taxonomy terms, selected custom fields, and rendered-only content. Higher
-numbers make matches in that field count more strongly during ranking.
+taxonomy terms, selected custom fields, and rendered-only content. The controls
+accept whole numbers from `1` through `100`; higher numbers make matches in that
+field count more strongly during ranking. To exclude a field entirely, remove
+it with the `wp_fts_post_index_fields` filter instead of assigning a zero weight.
 
 The defaults match the extractor defaults: title `5.0`, content `1.0`, excerpt
-`2.0`, taxonomy terms `1.5`, selected custom fields `1.0`, and rendered-only
+`2.0`, taxonomy terms `2.0`, selected custom fields `1.0`, and rendered-only
 content `1.0`. These are index-time weights stored with indexed content, so
 changed weights fully affect existing content only after it is reindexed.
 Saving changed weights marks stale reindex debt in Health/status; it does not

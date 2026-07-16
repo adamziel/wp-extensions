@@ -133,7 +133,7 @@ final class WP_FTS_Plugin
     private const PREFIX_MAX_TERMS_MIN = 1;
     private const PREFIX_MAX_TERMS_MAX = 256;
     private const PREFIX_MAX_TERMS_DEFAULT = 64;
-    private const FIELD_BOOST_MIN = 0.01;
+    private const FIELD_BOOST_MIN = 1.0;
     private const FIELD_BOOST_MAX = 100.0;
     private const RECENCY_BOOST_STRENGTH_MIN = 0.0;
     private const RECENCY_BOOST_STRENGTH_DEFAULT = 0.25;
@@ -145,7 +145,7 @@ final class WP_FTS_Plugin
         'title' => 5.0,
         'content' => 1.0,
         'excerpt' => 2.0,
-        'terms' => 1.5,
+        'terms' => 2.0,
         'custom_fields' => 1.0,
         'rendered' => 1.0,
     ];
@@ -6122,7 +6122,7 @@ final class WP_FTS_Plugin
         self::render_settings_checkbox_row('highlight', 'Highlight matches in search result excerpts', $settings['highlight'], 'Highlights matching words in generated excerpts so readers can see why each result matched.');
         echo '</tbody></table>';
 
-        self::render_settings_section_heading('Ranking weights', 'Higher numbers make matches in that field count more strongly. Changed weights affect content when it is reindexed, because weights are stored in the index.');
+        self::render_settings_section_heading('Ranking weights', 'Whole numbers from 1 to 100 are supported. Higher numbers make matches in that field count more strongly. Changed weights affect content when it is reindexed, because weights are stored in the index.');
         echo '<table class="form-table" role="presentation"><tbody>';
         self::render_settings_field_boost_rows($settings);
         self::render_settings_recency_boost_rows($settings);
@@ -6156,7 +6156,7 @@ final class WP_FTS_Plugin
         foreach (self::FIELD_BOOST_LABELS as $field => $copy) {
             $id = 'wp-fts-settings-field-boost-' . self::sanitize_key($field);
             echo '<tr><th scope="row"><label for="' . self::esc_attr($id) . '">' . self::esc_html($copy['label']) . '</label></th><td>';
-            echo '<input id="' . self::esc_attr($id) . '" type="number" min="' . self::esc_attr((string) self::FIELD_BOOST_MIN) . '" max="' . self::esc_attr((string) self::FIELD_BOOST_MAX) . '" step="0.01" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[field_boosts][' . self::esc_attr($field) . ']" value="' . self::esc_attr(self::format_field_boost((float) ($boosts[$field] ?? self::FIELD_BOOST_DEFAULTS[$field]))) . '">';
+            echo '<input id="' . self::esc_attr($id) . '" type="number" min="' . self::esc_attr((string) self::FIELD_BOOST_MIN) . '" max="' . self::esc_attr((string) self::FIELD_BOOST_MAX) . '" step="1" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[field_boosts][' . self::esc_attr($field) . ']" value="' . self::esc_attr(self::format_field_boost((float) ($boosts[$field] ?? self::FIELD_BOOST_DEFAULTS[$field]))) . '">';
             echo '<p class="description">' . self::esc_html($copy['description']) . '</p>';
             echo '</td></tr>';
         }
@@ -6632,7 +6632,7 @@ final class WP_FTS_Plugin
             return $default;
         }
 
-        return self::clamp_float($boost, self::FIELD_BOOST_MIN, self::FIELD_BOOST_MAX);
+        return (float) round(self::clamp_float($boost, self::FIELD_BOOST_MIN, self::FIELD_BOOST_MAX));
     }
 
     public static function sanitize_prefix_min_length(mixed $value): int
