@@ -61,7 +61,45 @@ final class WP_FTS_TermNamespace
             }
         }
 
+        if (($canonical[0] ?? null) === 'zh') {
+            return self::canonicalize_chinese($canonical);
+        }
+
         return $canonical !== [] ? implode('-', $canonical) : self::canonicalize_lang($fallback, 'en');
+    }
+
+    /**
+     * Canonicalize Chinese language tags to their analyzer partition.
+     *
+     * Script subtags win over regions. Regions using Simplified Chinese share
+     * `zh-Hans`; regions using Traditional Chinese share `zh-Hant`. A tag with
+     * neither hint remains in the generic `zh` partition.
+     *
+     * @param string[] $parts Canonical language subtags.
+     * @return string `zh`, `zh-Hans`, or `zh-Hant`.
+     */
+    private static function canonicalize_chinese(array $parts): string
+    {
+        $subtags = array_map('strtolower', array_slice($parts, 1));
+        foreach ($subtags as $subtag) {
+            if ($subtag === 'hans') {
+                return 'zh-Hans';
+            }
+            if ($subtag === 'hant') {
+                return 'zh-Hant';
+            }
+        }
+
+        foreach ($subtags as $subtag) {
+            if (in_array($subtag, ['cn', 'sg'], true)) {
+                return 'zh-Hans';
+            }
+            if (in_array($subtag, ['tw', 'hk', 'mo'], true)) {
+                return 'zh-Hant';
+            }
+        }
+
+        return 'zh';
     }
 
     /**

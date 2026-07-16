@@ -49,49 +49,7 @@ final class WP_FTS_Normalizer
      */
     public function canonicalize_language(string $language): string
     {
-        $language = trim(str_replace('_', '-', $language));
-        if ($language === '') {
-            return 'und';
-        }
-
-        $parts = array_values(array_filter(explode('-', $language), static fn(string $part): bool => $part !== ''));
-        if ($parts === []) {
-            return 'und';
-        }
-
-        $primary = strtolower($parts[0]);
-        if ($primary === 'zh') {
-            return $this->canonicalize_chinese($parts);
-        }
-
-        if (count($parts) === 1) {
-            return $primary;
-        }
-
-        $canonical = [$primary];
-        foreach (array_slice($parts, 1) as $part) {
-            if (strlen($part) === 2 || strlen($part) === 3 && $this->is_ascii_digit($part)) {
-                $canonical[] = strtoupper($part);
-                continue;
-            }
-
-            if (strlen($part) === 4) {
-                $canonical[] = ucfirst(strtolower($part));
-                continue;
-            }
-
-            $canonical[] = strtolower($part);
-        }
-
-        return implode('-', $canonical);
-    }
-
-    /**
-     * Check whether a language subtag is made only of ASCII digits.
-     */
-    private function is_ascii_digit(string $value): bool
-    {
-        return $value !== '' && preg_match('/^[0-9]+$/', $value) === 1;
+        return WP_FTS_TermNamespace::canonicalize_lang($language, 'und');
     }
 
     /**
@@ -720,36 +678,4 @@ final class WP_FTS_Normalizer
         ];
     }
 
-    /**
-     * Canonicalize Chinese language tags to generic, Simplified, or Traditional.
-     *
-     * Script subtags (`Hans`, `Hant`) win over regions. Without either hint the
-     * generic `zh` partition is used.
-     *
-     * @param string[] $parts
-     * @return string `zh`, `zh-Hans`, or `zh-Hant`.
-     */
-    private function canonicalize_chinese(array $parts): string
-    {
-        $subtags = array_map('strtolower', array_slice($parts, 1));
-        foreach ($subtags as $subtag) {
-            if ($subtag === 'hans') {
-                return 'zh-Hans';
-            }
-            if ($subtag === 'hant') {
-                return 'zh-Hant';
-            }
-        }
-
-        foreach ($subtags as $subtag) {
-            if (in_array($subtag, ['cn', 'sg'], true)) {
-                return 'zh-Hans';
-            }
-            if (in_array($subtag, ['tw', 'hk', 'mo'], true)) {
-                return 'zh-Hant';
-            }
-        }
-
-        return 'zh';
-    }
 }

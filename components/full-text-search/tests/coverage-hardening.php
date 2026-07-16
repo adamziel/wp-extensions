@@ -70,6 +70,22 @@ $analyzer = new WP_FTS_Analyzer([
     'default_lang' => 'en',
 ]);
 
+wp_fts_component_hardening_same('zh-Hans', WP_FTS_TermNamespace::canonicalize_lang('zh-CN'), 'Chinese mainland region should share the Simplified partition');
+wp_fts_component_hardening_same('zh-Hant', WP_FTS_TermNamespace::canonicalize_lang('zh_TW'), 'Chinese Taiwan region should share the Traditional partition');
+wp_fts_component_hardening_same('zh-Hant', WP_FTS_TermNamespace::canonicalize_lang('zh-Hant-CN'), 'explicit Chinese script should win over region');
+wp_fts_component_hardening_same('zh-Hans', (new WP_FTS_Normalizer())->canonicalize_language('zh-CN'), 'analyzer and term namespace should canonicalize Chinese identically');
+wp_fts_component_hardening_same(
+    'zh-Hans' . WP_FTS_TermNamespace::SEPARATOR . 'portable',
+    WP_FTS_TermNamespace::namespace_term('zh-CN', 'portable'),
+    'Chinese aliases should build the analyzer partition key'
+);
+
+$chineseStorage = new WP_FTS_Storage_InMemory();
+$chineseIndexer = new WP_FTS_Indexer($chineseStorage, $analyzer);
+$chineseIndexer->index_document(9001, '<p>portable search</p>', ['lang' => 'zh-CN']);
+$chineseResults = (new WP_FTS_Searcher($chineseStorage, $analyzer))->search('portable', ['lang' => 'zh-CN']);
+wp_fts_component_hardening_same(9001, $chineseResults[0]['doc_id'] ?? null, 'explicit Chinese region should query the partition used while indexing');
+
 foreach ($htmlCases as $index => [$html, $visibleText, $expectedTerms, $absentTerms]) {
     wp_fts_component_hardening_same(
         $visibleText,
