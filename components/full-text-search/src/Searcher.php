@@ -520,16 +520,11 @@ final class WP_FTS_Searcher
             $groupsForTerm = $termsByKey[$term]['groups'];
             $avgDocLen = $meta['len_sum'] > 0 ? $meta['len_sum'] / $docCount : 1.0;
             $idf = log(1.0 + (($docCount - $df + 0.5) / ($df + 0.5)));
-            $multiplier = $this->query_rank_score_multiplier($groupsForTerm);
             $scoringTerms[$term] = [
                 'lang' => $lang,
-                'doc_count' => $docCount,
                 'avg_doc_len' => $avgDocLen,
                 'idf' => $idf,
                 'groups' => $groupsForTerm,
-                'min_rank' => min($groupsForTerm),
-                'max_rank' => max($groupsForTerm),
-                'multiplier' => $multiplier,
             ];
         }
         if ($scoringTerms === []) {
@@ -538,22 +533,15 @@ final class WP_FTS_Searcher
         }
         $stats['scoring_terms'] = count($scoringTerms);
 
-        /** @var array<int,float> $scores */
-        $scores = [];
-        /** @var array<int,int> $bestRankByDoc */
-        $bestRankByDoc = [];
-        /** @var array<int,array<int,int>> $matchedGroupRanksByDoc */
-        $matchedGroupRanksByDoc = [];
+        /** @var array<int,array<int,array{term:string,rank:int,score:float}>> $bestGroupMatchesByDoc */
+        $bestGroupMatchesByDoc = [];
         if ($this->should_score_by_doc($scoringDocIds, $decodedByTerm, $scoringTerms, $mode, $metadataFilter, $candidateCap)) {
             $this->score_candidate_docs(
                 $scoringDocIds,
                 $decodedByTerm,
                 $docLengthsByLang,
                 $scoringTerms,
-                $mode,
-                $scores,
-                $bestRankByDoc,
-                $matchedGroupRanksByDoc
+                $bestGroupMatchesByDoc
             );
         } else {
             $this->score_posting_terms(
@@ -561,12 +549,10 @@ final class WP_FTS_Searcher
                 $decodedByTerm,
                 $docLengthsByLang,
                 $scoringTerms,
-                $mode,
-                $scores,
-                $bestRankByDoc,
-                $matchedGroupRanksByDoc
+                $bestGroupMatchesByDoc
             );
         }
+        [$scores, $bestRankByDoc, $matchedGroupRanksByDoc] = $this->finalize_group_match_scores($bestGroupMatchesByDoc);
         if ($scores === []) {
             return [];
         }
@@ -806,7 +792,7 @@ final class WP_FTS_Searcher
      *
      * @param array<int,bool> $scoringDocIds
      * @param array<string,array<int,int>> $decodedByTerm
-     * @param array<string,array{lang:string,doc_count:int,avg_doc_len:float,idf:float,groups:array<int,int>,min_rank:int,max_rank:int,multiplier:float}> $scoringTerms
+     * @param array<string,array{lang:string,avg_doc_len:float,idf:float,groups:array<int,int>}> $scoringTerms
      * @param array{post_types:string[],post_statuses:string[],date_after:?string,date_before:?string}|null $metadataFilter
      */
     private function should_score_by_doc(
@@ -826,7 +812,7 @@ final class WP_FTS_Searcher
 
     /**
      * @param array<string,array<int,int>> $decodedByTerm
-     * @param array<string,array{lang:string,doc_count:int,avg_doc_len:float,idf:float,groups:array<int,int>,min_rank:int,max_rank:int,multiplier:float}> $scoringTerms
+     * @param array<string,array{lang:string,avg_doc_len:float,idf:float,groups:array<int,int>}> $scoringTerms
      */
     private function posting_row_count(array $decodedByTerm, array $scoringTerms): int
     {
@@ -845,20 +831,15 @@ final class WP_FTS_Searcher
      * @param array<int,bool> $scoringDocIds
      * @param array<string,array<int,int>> $decodedByTerm
      * @param array<string,array<int,int>> $docLengthsByLang
-     * @param array<string,array{lang:string,doc_count:int,avg_doc_len:float,idf:float,groups:array<int,int>,min_rank:int,max_rank:int,multiplier:float}> $scoringTerms
-     * @param array<int,float> $scores
-     * @param array<int,int> $bestRankByDoc
-     * @param array<int,array<int,int>> $matchedGroupRanksByDoc
+     * @param array<string,array{lang:string,avg_doc_len:float,idf:float,groups:array<int,int>}> $scoringTerms
+     * @param array<int,array<int,array{term:string,rank:int,score:float}>> $bestGroupMatchesByDoc
      */
     private function score_candidate_docs(
         array $scoringDocIds,
         array $decodedByTerm,
         array $docLengthsByLang,
         array $scoringTerms,
-        string $mode,
-        array &$scores,
-        array &$bestRankByDoc,
-        array &$matchedGroupRanksByDoc
+        array &$bestGroupMatchesByDoc
     ): void {
         $iteration = 0;
         foreach ($scoringDocIds as $docId => $_present) {
@@ -870,27 +851,17 @@ final class WP_FTS_Searcher
                     continue;
                 }
 
-                $score = $this->bm25_with_idf(
+                $baseScore = $this->bm25_with_idf(
                     (int) $decodedByTerm[$term][$docId],
                     $docLengthsByLang[$lang][$docId],
                     $termInfo['idf'],
                     $termInfo['avg_doc_len']
-                ) * $termInfo['multiplier'];
-                if ($score <= 0.0) {
+                );
+                if ($baseScore <= 0.0) {
                     continue;
                 }
 
-                $scores[$docId] = ($scores[$docId] ?? 0.0) + $score;
-                if ($mode === 'AND') {
-                    foreach ($termInfo['groups'] as $groupId => $rank) {
-                        $matchedGroupRanksByDoc[$docId][$groupId] = min(
-                            $matchedGroupRanksByDoc[$docId][$groupId] ?? $rank,
-                            $rank
-                        );
-                    }
-                } else {
-                    $bestRankByDoc[$docId] = min($bestRankByDoc[$docId] ?? $termInfo['min_rank'], $termInfo['min_rank']);
-                }
+                $this->record_best_group_matches($bestGroupMatchesByDoc, $docId, $term, $baseScore, $termInfo['groups']);
             }
         }
     }
@@ -902,20 +873,15 @@ final class WP_FTS_Searcher
      * @param array<int,bool> $scoringDocIds
      * @param array<string,array<int,int>> $decodedByTerm
      * @param array<string,array<int,int>> $docLengthsByLang
-     * @param array<string,array{lang:string,doc_count:int,avg_doc_len:float,idf:float,groups:array<int,int>,min_rank:int,max_rank:int,multiplier:float}> $scoringTerms
-     * @param array<int,float> $scores
-     * @param array<int,int> $bestRankByDoc
-     * @param array<int,array<int,int>> $matchedGroupRanksByDoc
+     * @param array<string,array{lang:string,avg_doc_len:float,idf:float,groups:array<int,int>}> $scoringTerms
+     * @param array<int,array<int,array{term:string,rank:int,score:float}>> $bestGroupMatchesByDoc
      */
     private function score_posting_terms(
         array $scoringDocIds,
         array $decodedByTerm,
         array $docLengthsByLang,
         array $scoringTerms,
-        string $mode,
-        array &$scores,
-        array &$bestRankByDoc,
-        array &$matchedGroupRanksByDoc
+        array &$bestGroupMatchesByDoc
     ): void {
         $iteration = 0;
         foreach ($scoringTerms as $term => $termInfo) {
@@ -928,29 +894,78 @@ final class WP_FTS_Searcher
                     continue;
                 }
 
-                $score = $this->bm25_with_idf(
+                $baseScore = $this->bm25_with_idf(
                     (int) $tf,
                     $docLengths[$docId],
                     $termInfo['idf'],
                     $termInfo['avg_doc_len']
-                ) * $termInfo['multiplier'];
-                if ($score <= 0.0) {
+                );
+                if ($baseScore <= 0.0) {
                     continue;
                 }
 
-                $scores[$docId] = ($scores[$docId] ?? 0.0) + $score;
-                if ($mode === 'AND') {
-                    foreach ($termInfo['groups'] as $groupId => $rank) {
-                        $matchedGroupRanksByDoc[$docId][$groupId] = min(
-                            $matchedGroupRanksByDoc[$docId][$groupId] ?? $rank,
-                            $rank
-                        );
-                    }
-                } else {
-                    $bestRankByDoc[$docId] = min($bestRankByDoc[$docId] ?? $termInfo['min_rank'], $termInfo['min_rank']);
-                }
+                $this->record_best_group_matches($bestGroupMatchesByDoc, $docId, $term, $baseScore, $termInfo['groups']);
             }
         }
+    }
+
+    /**
+     * Keep one best stored-term interpretation for each logical query token.
+     *
+     * Lower analyzer ranks win before BM25 so an exact lemma is not displaced
+     * by a rarer fallback. Equal-rank alternatives compete by their actual BM25
+     * contribution instead of being added together.
+     *
+     * @param array<int,array<int,array{term:string,rank:int,score:float}>> $bestGroupMatchesByDoc
+     * @param array<int,int> $groupRanks
+     */
+    private function record_best_group_matches(array &$bestGroupMatchesByDoc, int $docId, string $term, float $baseScore, array $groupRanks): void
+    {
+        foreach ($groupRanks as $groupId => $rank) {
+            $rank = max(0, (int) $rank);
+            $candidate = [
+                'term' => $term,
+                'rank' => $rank,
+                'score' => $baseScore * $this->query_rank_score_multiplier($rank),
+            ];
+            $current = $bestGroupMatchesByDoc[$docId][$groupId] ?? null;
+            if (
+                $current === null
+                || $candidate['rank'] < $current['rank']
+                || $candidate['rank'] === $current['rank'] && $candidate['score'] > $current['score']
+                || $candidate['rank'] === $current['rank'] && $candidate['score'] === $current['score'] && strcmp($candidate['term'], $current['term']) < 0
+            ) {
+                $bestGroupMatchesByDoc[$docId][$groupId] = $candidate;
+            }
+        }
+    }
+
+    /**
+     * Collapse selected logical-group matches into public score/rank maps.
+     *
+     * One stored key can represent repeated query surfaces that stem to the
+     * same term. It is counted once, preserving the previous query-term-frequency
+     * behavior while still choosing only one alternative inside each group.
+     *
+     * @param array<int,array<int,array{term:string,rank:int,score:float}>> $bestGroupMatchesByDoc
+     * @return array{0:array<int,float>,1:array<int,int>,2:array<int,array<int,int>>}
+     */
+    private function finalize_group_match_scores(array $bestGroupMatchesByDoc): array
+    {
+        $scores = [];
+        $bestRankByDoc = [];
+        $matchedGroupRanksByDoc = [];
+        foreach ($bestGroupMatchesByDoc as $docId => $groupMatches) {
+            $termScores = [];
+            foreach ($groupMatches as $groupId => $match) {
+                $matchedGroupRanksByDoc[$docId][$groupId] = $match['rank'];
+                $bestRankByDoc[$docId] = min($bestRankByDoc[$docId] ?? $match['rank'], $match['rank']);
+                $termScores[$match['term']] = max($termScores[$match['term']] ?? 0.0, $match['score']);
+            }
+            $scores[$docId] = array_sum($termScores);
+        }
+
+        return [$scores, $bestRankByDoc, $matchedGroupRanksByDoc];
     }
 
     /**
@@ -1298,16 +1313,9 @@ final class WP_FTS_Searcher
      * Keep exact query candidates strongest while allowing secondary pack
      * candidates to contribute recall.
      *
-     * @param array<int,int> $groupRanks
      */
-    private function query_rank_score_multiplier(array $groupRanks): float
+    private function query_rank_score_multiplier(int $rank): float
     {
-        if ($groupRanks === []) {
-            return 1.0;
-        }
-
-        $rank = min(array_map('intval', $groupRanks));
-
         return 1.0 / (1.0 + max(0, $rank));
     }
 
@@ -2767,7 +2775,8 @@ final class WP_FTS_Searcher
         foreach ($terms as $term) {
             $position = stripos($text, $term);
             if ($position !== false) {
-                $start = max(0, $position - intdiv($length, 3));
+                $characterPosition = WP_FTS_Utf8::length(substr($text, 0, $position));
+                $start = max(0, $characterPosition - intdiv($length, 3));
                 $literalPositionFound = true;
                 break;
             }
@@ -2783,15 +2792,17 @@ final class WP_FTS_Searcher
                 $analysisCache
             );
             if ($position !== null) {
-                $start = max(0, $position - intdiv($length, 3));
+                $characterPosition = WP_FTS_Utf8::length(substr($text, 0, $position));
+                $start = max(0, $characterPosition - intdiv($length, 3));
             }
         }
 
-        $snippet = trim(substr($text, $start, $length));
+        $textLength = WP_FTS_Utf8::length($text);
+        $snippet = trim(WP_FTS_Utf8::slice($text, $start, $length));
         if ($start > 0) {
             $snippet = '...' . ltrim($snippet);
         }
-        if ($start + $length < strlen($text)) {
+        if ($start + $length < $textLength) {
             $snippet = rtrim($snippet) . '...';
         }
 

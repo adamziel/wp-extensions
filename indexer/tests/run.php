@@ -16046,7 +16046,7 @@ test_case('generic lemma packs by language beat baseline and fall back safely', 
     $defaultSignature = $baseline->index_signature();
     $packSignature = $packPipeline->index_signature();
     assert_true($defaultSignature !== $packSignature, 'language pipeline signature should change when a generic pack is enabled');
-    assert_contains('wp-fts-language-pipeline-v17:', $packSignature, 'language pipeline signature should identify the generic-pack contract');
+    assert_contains('wp-fts-language-pipeline-v18:', $packSignature, 'language pipeline signature should identify the generic-pack contract');
 
     $defaultAnalyzer = new WP_FTS_Analyzer();
     $packAnalyzer = new WP_FTS_Analyzer([
@@ -18763,7 +18763,7 @@ test_case('T8 per-language analyzer fixtures are enforced when language pipeline
         ['Polish folding', 'pl', 'Wrocław Łódź zażółć', ['wroclaw', 'lodz', 'zazolc']],
         ['German folding', 'de', 'Straße Ärger Öl', ['strasse', 'aerger', 'oel']],
         ['Turkish dotted I folding', 'tr', 'Isparta İstanbul ışık', ['ısparta', 'istanbul', 'ısık']],
-        ['Bengali baseline stemming', 'bn', 'বইটিকে শিক্ষকদেরকে বিদ্যালয়ের সূচিতে', ['বই', 'শিক্ষক', 'বিদ্যালয়', 'সূচি']],
+        ['Bengali baseline stemming', 'bn', 'বইটিকে শিক্ষকদেরকে বিদ্যালয়ের সূচিতে', ['বই', 'শিক্ষক', 'বিদ্যালয়', 'সূচি']],
         ['Urdu baseline stemming', 'ur', 'لڑکیوں لڑکیاں لڑکے حالات معلومات', ['لڑکی', 'لڑکی', 'لڑک', 'حال', 'معلوم']],
         ['CJK fallback n-grams', 'zh-Hans', '搜索引擎', ['搜', '索', '引', '擎', '搜索', '索引', '引擎', '搜索引', '索引擎', '搜索引擎']],
     ];
@@ -19835,7 +19835,8 @@ test_case('metadata-less replacement clears stale product metadata', function ()
         assert_same(0, $filtered['total'], "{$name} replacement without metadata should not match stale status filters");
         assert_same(1, $unfiltered['total'], "{$name} replacement should keep the new postings searchable");
         assert_same('', $unfiltered['results'][0]['title'] ?? null, "{$name} replacement should clear stale result title");
-        assert_same('', $unfiltered['results'][0]['snippet'] ?? null, "{$name} replacement should clear stale snippet text");
+        $expectedSnippet = $name === 'legacy' ? 'needle new' : '';
+        assert_same($expectedSnippet, $unfiltered['results'][0]['snippet'] ?? null, "{$name} replacement should not retain stale snippet text");
         assert_same('', $metadata['post_status'] ?? null, "{$name} replacement should write normalized empty metadata");
     }
 });
@@ -21111,7 +21112,7 @@ test_case('wp cli reindex accepts language source filters and limit', function (
     assert_same(['Indexed 1 posts in pl-PL.'], WP_CLI::$successMessages, 'CLI should report canonical language and limited count');
     assert_same([10], array_keys($fake->docs), 'CLI limit should restrict indexed posts');
     assert_same('pl-PL', $fake->docs[10]['lang'], 'CLI language option should reach MySQL docs');
-    $expectedDocLength = WP_FTS_AnalyzerPackValidator::gzip_available() ? 9 : 7;
+    $expectedDocLength = WP_FTS_AnalyzerPackValidator::gzip_available() ? 8 : 7;
     assert_same(['pl-PL' => $expectedDocLength], $fake->docLengths[10], 'CLI reindex should write boosted per-language doc length for the active Polish pack');
     assert_same('post', $fake->docMeta[10]['post_type'], 'CLI reindex should store post type metadata');
     assert_same('publish', $fake->docMeta[10]['post_status'], 'CLI reindex should store status metadata');

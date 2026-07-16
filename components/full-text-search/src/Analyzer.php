@@ -1239,6 +1239,7 @@ final class WP_FTS_Analyzer
      */
     private function lexicalChunks(string $text): array
     {
+        $text = $this->languagePipeline->normalize_unicode_text($text);
         if ($text === '') {
             return [];
         }

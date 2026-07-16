@@ -28,7 +28,12 @@ $indexer->index_document(1, '<h1>Hello search</h1><p>Portable FTS.</p>', [
 ]);
 
 $searcher = new WP_FTS_Searcher($storage, $analyzer);
-$results = $searcher->search('portable search', ['lang' => 'en']);
+$results = $searcher->search('portable search', [
+    'lang' => 'en',
+    'include_snippets' => true,
+]);
+
+echo $results[0]['snippet'];
 ```
 
 ## Retrieval Accuracy
@@ -94,6 +99,23 @@ try {
 An instance exposes the snapshot it most recently loaded; read methods do not
 poll for commits made by other processes. Reopen the storage for a fresh read
 snapshot. A new write transaction always reloads under the lock.
+
+`index_document()` stores a bounded plain-text snippet source automatically.
+Callers may override it with `metadata.search_text`; field-oriented integrations
+can continue to use `index_document_fields()` and their own metadata.
+
+## Multilingual Normalization And Alternatives
+
+Document and query text is normalized to Unicode NFKC before case folding,
+dialect rules, and stemming. The component directly requires the pure-PHP intl
+normalizer polyfill, so canonically equivalent and compatibility forms use the
+same stored keys even when the native `intl` extension is unavailable.
+
+When one dictionary surface has several possible lemmas, every candidate keeps
+a posting for recall, but the source token contributes only once to document
+length. Search selects the best-ranked, strongest BM25 candidate inside each
+logical query-token group instead of adding every ambiguous interpretation to
+the score.
 
 ## Search Explain Payloads
 

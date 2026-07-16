@@ -635,10 +635,11 @@
             "dist": {
                 "type": "path",
                 "url": "../components/full-text-search",
-                "reference": "df1b85cfe979ae2de3c03bef2e0bb91b41deba64"
+                "reference": "d8a45bcc0b72dc2c1c800ec29a2624e82d892089"
             },
             "require": {
                 "php": ">=8.1",
+                "symfony/polyfill-intl-normalizer": "^1.31",
                 "wamania/php-stemmer": "^3.0"
             },
             "type": "library",

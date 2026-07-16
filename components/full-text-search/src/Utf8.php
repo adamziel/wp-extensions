@@ -47,6 +47,23 @@ final class WP_FTS_Utf8
     }
 
     /**
+     * Replace malformed byte sequences with spaces before lexical analysis.
+     *
+     * Dropping an invalid byte can join the words on either side into a term
+     * that never appeared in the source. A space preserves the conservative
+     * word boundary while the byte-wise decoder keeps this path independent of
+     * iconv and mbstring.
+     */
+    public static function repair_word_boundaries(string $text): string
+    {
+        if (self::is_valid($text)) {
+            return $text;
+        }
+
+        return self::strip_invalid_sequences($text, ' ');
+    }
+
+    /**
      * Truncate to at most `$limit` bytes without splitting a UTF-8 character.
      *
      * A zero limit preserves the historic "unlimited" behavior.
@@ -65,6 +82,31 @@ final class WP_FTS_Utf8
         }
 
         return $truncated;
+    }
+
+    /**
+     * Slice by Unicode code points without requiring mbstring.
+     */
+    public static function slice(string $text, int $start, ?int $length = null): string
+    {
+        $text = self::repair($text);
+        $start = max(0, $start);
+        $length = $length === null ? null : max(0, $length);
+        if ($length === 0 || $text === '') {
+            return '';
+        }
+
+        if (function_exists('mb_substr')) {
+            return $length === null
+                ? mb_substr($text, $start, null, 'UTF-8')
+                : mb_substr($text, $start, $length, 'UTF-8');
+        }
+
+        if (preg_match_all('/./us', $text, $matches) === false) {
+            return '';
+        }
+
+        return implode('', array_slice($matches[0], $start, $length));
     }
 
     /**
@@ -132,7 +174,7 @@ final class WP_FTS_Utf8
     /**
      * Byte-wise UTF-8 decoder that drops invalid sequences without extensions.
      */
-    private static function strip_invalid_sequences(string $text): string
+    private static function strip_invalid_sequences(string $text, string $replacement = ''): string
     {
         $result = '';
         $length = strlen($text);
@@ -156,10 +198,12 @@ final class WP_FTS_Utf8
                 $needed = 3;
                 $codepoint = $byte & 0x07;
             } else {
+                $result .= $replacement;
                 continue;
             }
 
             if ($i + $needed >= $length) {
+                $result .= $replacement;
                 break;
             }
 
@@ -176,6 +220,7 @@ final class WP_FTS_Utf8
             }
 
             if (!$valid || !self::is_valid_codepoint($codepoint, $needed)) {
+                $result .= $replacement;
                 continue;
             }
 

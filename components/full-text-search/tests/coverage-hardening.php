@@ -457,4 +457,161 @@ wp_fts_component_hardening_check(
     'snippet should escape entity-decoded markup before returning HTML'
 );
 
+$minimalStorage = new WP_FTS_Storage_InMemory();
+$minimalIndexer = new WP_FTS_Indexer($minimalStorage, $analyzer);
+wp_fts_component_hardening_check(
+    $minimalIndexer->index_document(701, '<article><h1>Minimal flow</h1><p>Portable snippet source is retained.</p></article>', ['lang' => 'en']),
+    'minimal index_document flow should index without caller metadata'
+);
+$minimalMetadata = WP_FTS_StorageCompat::get_doc_metadata($minimalStorage, [701]);
+wp_fts_component_hardening_same(
+    'Minimal flow Portable snippet source is retained.',
+    $minimalMetadata[701]['search_text'] ?? null,
+    'minimal index_document flow should store a plain snippet source'
+);
+$minimalResults = (new WP_FTS_Searcher($minimalStorage, $analyzer))->search('portable', [
+    'lang' => 'en',
+    'include_snippets' => true,
+    'snippet_length' => 40,
+]);
+wp_fts_component_hardening_check(
+    str_contains((string) ($minimalResults[0]['snippet'] ?? ''), 'Portable snippet'),
+    'README-style minimal search should return a non-empty stored-content snippet'
+);
+
+$preservedHtml = '<p>Identical minimal document</p>';
+$minimalIndexer->index_document(703, $preservedHtml, [
+    'lang' => 'en',
+    'metadata' => [
+        'title' => 'Caller title',
+        'post_type' => 'post',
+        'search_text' => 'Caller snippet',
+    ],
+]);
+$preservedMetadata = WP_FTS_StorageCompat::get_doc_metadata($minimalStorage, [703])[703] ?? [];
+wp_fts_component_hardening_check(
+    !$minimalIndexer->index_document(703, $preservedHtml, ['lang' => 'en']),
+    'same-hash minimal indexing should remain a no-op'
+);
+wp_fts_component_hardening_same(
+    $preservedMetadata,
+    WP_FTS_StorageCompat::get_doc_metadata($minimalStorage, [703])[703] ?? [],
+    'omitted metadata on a hash hit should preserve caller-provided metadata'
+);
+
+$unicodeNormalizer = new WP_FTS_Normalizer(['fold_diacritics' => false]);
+wp_fts_component_hardening_same(
+    $unicodeNormalizer->normalize_token("caf\u{00e9}", 'fr'),
+    $unicodeNormalizer->normalize_token("cafe\u{0301}", 'fr'),
+    'NFKC should make composed and decomposed canonical forms identical'
+);
+wp_fts_component_hardening_same(
+    'office',
+    $unicodeNormalizer->normalize_token("\u{ff2f}\u{ff26}\u{ff26}\u{ff29}\u{ff23}\u{ff25}", 'en'),
+    'NFKC should fold full-width Latin compatibility forms'
+);
+wp_fts_component_hardening_same(
+    'office',
+    $unicodeNormalizer->normalize_unicode("\u{24de}\u{24d5}\u{24d5}\u{24d8}\u{24d2}\u{24d4}"),
+    'whole-text NFKC should normalize compatibility symbols before tokenization'
+);
+$unicodeAnalyzer = new WP_FTS_Analyzer([
+    'auto_detect_language' => false,
+    'default_lang' => 'fr',
+    'enable_stemming' => false,
+    'fold_diacritics' => false,
+]);
+$unicodeStorage = new WP_FTS_Storage_InMemory();
+(new WP_FTS_Indexer($unicodeStorage, $unicodeAnalyzer))->index_document(
+    702,
+    "<p>cafe\u{0301} \u{24de}\u{24d5}\u{24d5}\u{24d8}\u{24d2}\u{24d4}</p>",
+    ['lang' => 'fr']
+);
+$unicodeSearcher = new WP_FTS_Searcher($unicodeStorage, $unicodeAnalyzer);
+wp_fts_component_hardening_same([702], array_column($unicodeSearcher->search("caf\u{00e9}", ['lang' => 'fr']), 'doc_id'), 'canonical query form should retrieve decomposed document text');
+wp_fts_component_hardening_same([702], array_column($unicodeSearcher->search('office', ['lang' => 'fr']), 'doc_id'), 'ASCII query should retrieve compatibility-symbol document text');
+
+$detectedUnicodeAnalyzer = new WP_FTS_Analyzer(['default_lang' => 'fr']);
+$detectedUnicodeStorage = new WP_FTS_Storage_InMemory();
+(new WP_FTS_Indexer($detectedUnicodeStorage, $detectedUnicodeAnalyzer))->index_document(
+    704,
+    '<p>ⓢⓔⓐⓡⓒⓗ ⓣⓗⓔ ⓐⓝⓓ</p>',
+    ['default_lang' => 'fr']
+);
+wp_fts_component_hardening_same(
+    [704],
+    array_column((new WP_FTS_Searcher($detectedUnicodeStorage, $detectedUnicodeAnalyzer))->search('search the and', [
+        'mode' => 'AND',
+        'default_lang' => 'fr',
+    ]), 'doc_id'),
+    'language detection should route compatibility-equivalent document and query text together'
+);
+
+$unicodeSnippet = $searcher->snippet_for_text(
+    str_repeat("\u{1f642}", 60) . ' needle ' . str_repeat("\u{754c}", 60),
+    'needle',
+    ['lang' => 'en', 'snippet_length' => 40]
+);
+wp_fts_component_hardening_same(1, preg_match('//u', $unicodeSnippet), 'plain snippet windows should never split a UTF-8 character');
+wp_fts_component_hardening_check(str_contains($unicodeSnippet, 'needle'), 'character-oriented snippet window should remain centered on the match');
+wp_fts_component_hardening_check(WP_FTS_Utf8::length($unicodeSnippet) <= 46, 'plain snippet length should be bounded in Unicode code points plus ellipses');
+
+$ambiguousAnalyzer = new class {
+    /** @return array<int,array<string,mixed>> */
+    public function analyze_content(string $html, array $options = []): array
+    {
+        if (str_contains($html, 'only-a')) {
+            return [['term' => 'lemma-a', 'lang' => 'en', 'weight' => 1.0]];
+        }
+        if (str_contains($html, 'only-b')) {
+            return [['term' => 'lemma-b', 'lang' => 'en', 'weight' => 1.0]];
+        }
+
+        return [
+            ['term' => 'lemma-a', 'lang' => 'en', 'weight' => 1.0, 'position' => 0, 'rank' => 0, 'source' => 'lemma-pack'],
+            ['term' => 'lemma-b', 'lang' => 'en', 'weight' => 1.0, 'position' => 0, 'rank' => 0, 'source' => 'lemma-pack'],
+        ];
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function analyze_query_occurrences(string $query, array $options = []): array
+    {
+        return [
+            ['term' => 'lemma-a', 'lang' => 'en', 'position' => 0, 'rank' => 0, 'source' => 'lemma-pack'],
+            ['term' => 'lemma-b', 'lang' => 'en', 'position' => 0, 'rank' => 0, 'source' => 'lemma-pack'],
+        ];
+    }
+
+    public function index_signature(): string
+    {
+        return 'ambiguous-alternative-fixture-v1';
+    }
+};
+$ambiguousStorage = new WP_FTS_Storage_InMemory();
+$ambiguousIndexer = new WP_FTS_Indexer($ambiguousStorage, $ambiguousAnalyzer);
+$ambiguousIndexer->index_document(801, '<p>ambiguous</p>', ['lang' => 'en']);
+$ambiguousIndexer->index_document(802, '<p>only-a</p>', ['lang' => 'en']);
+$ambiguousIndexer->index_document(803, '<p>only-b</p>', ['lang' => 'en']);
+wp_fts_component_hardening_same(1, $ambiguousStorage->get_doc(801)['lang_lengths']['en'] ?? null, 'one ambiguous source token should contribute one document-length unit');
+wp_fts_component_hardening_same(['doc_count' => 3, 'len_sum' => 3], $ambiguousStorage->get_meta('en'), 'ambiguous alternatives should not inflate collection length statistics');
+$ambiguousPayload = (new WP_FTS_Searcher($ambiguousStorage, $ambiguousAnalyzer))->search('ambiguous', [
+    'lang' => 'en',
+    'include_total' => true,
+    'limit' => 10,
+]);
+$scoresByDoc = [];
+foreach ($ambiguousPayload['results'] as $row) {
+    $scoresByDoc[(int) $row['doc_id']] = (float) $row['score'];
+}
+wp_fts_component_hardening_check(
+    abs(($scoresByDoc[801] ?? -1.0) - ($scoresByDoc[802] ?? -2.0)) < 1.0e-12
+        && abs(($scoresByDoc[801] ?? -1.0) - ($scoresByDoc[803] ?? -3.0)) < 1.0e-12,
+    'matching two lemma interpretations for one query token should not add both BM25 contributions'
+);
+$ambiguousIndexer->index_document_fields(804, [
+    ['name' => 'first', 'text' => 'ambiguous-one'],
+    ['name' => 'second', 'text' => 'ambiguous-two'],
+], ['lang' => 'en']);
+wp_fts_component_hardening_same(2, $ambiguousStorage->get_doc(804)['lang_lengths']['en'] ?? null, 'alternative positions from separate fields should remain separate source tokens');
+
 return $wp_fts_component_hardening_checks;

@@ -16,10 +16,10 @@
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
-        "normalization": "WP_FTS_Normalizer en with fold_diacritics=true",
+        "normalization": "WP_FTS_Normalizer NFKC en with fold_diacritics=true",
         "ambiguity_policy": "ambiguous_surface_noop",
-        "total_rows": 566761,
-        "total_sha256": "5db7690f96aac3e07cefb1465cbc4cd02ba1b440be118ddf87108adb0c1b217f",
+        "total_rows": 566752,
+        "total_sha256": "4224435548bb7263b365f2cecad908a934d8b53333c2515e26b62325e49263f4",
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
@@ -31,16 +31,16 @@
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "06988d845c87665ac0b038d95b7753564fe989f810fa48cc9cdf936b82f13684",
-                "rows": 100000,
+                "sha256": "cc1ffd9f219d7c59741b5a19f0c2c70059ee26cfc310ae938298f62f1f5f82f2",
+                "rows": 99998,
                 "first_surface": "confuzzlement",
                 "last_surface": "glomangiomyoma",
                 "compression": "gzip"
             },
             {
                 "path": "runtime/0003.tsv.gz",
-                "sha256": "9f6db3841bd39d609bdbd3a21c0da6b291d6b470b796d8f10083adc8c1bae6f3",
-                "rows": 100000,
+                "sha256": "b5acec0765371cda677d6f067429ca687619f85509b943dc5041e9ed674dde86",
+                "rows": 99997,
                 "first_surface": "glomangiomyomas",
                 "last_surface": "minireview",
                 "compression": "gzip"
@@ -63,8 +63,8 @@
             },
             {
                 "path": "runtime/0006.tsv.gz",
-                "sha256": "595b90dd5e6376767edb52ce6e5b71066748800cbc6c7d2741930b52eb8c7bac",
-                "rows": 66760,
+                "sha256": "90b1e4d738804f3f5e26cf5d2d46dcf5f20afd7a032c9783313f18690f4df6e5",
+                "rows": 66756,
                 "first_surface": "teriflunomide",
                 "last_surface": "ṛgvedic",
                 "compression": "gzip"
