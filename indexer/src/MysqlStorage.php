@@ -160,27 +160,17 @@ PRIMARY KEY  (lang,k)
             return [];
         }
 
-        $placeholders = implode(',', array_fill(0, count($terms), '%s'));
-        $sql = $this->wpdb->prepare(
-            "SELECT term, doc_id, tf FROM {$this->postingsTable}
-WHERE term IN ({$placeholders})
-ORDER BY term ASC, doc_id ASC",
-            ...$terms
-        );
+        $termValues = $this->term_query_values($terms);
+        $termSql = implode(',', $termValues['values']);
+        $sql = "SELECT term, doc_id, tf FROM {$this->postingsTable}
+WHERE term IN ({$termSql})
+ORDER BY term ASC, doc_id ASC";
+        if ($termValues['args'] !== []) {
+            $sql = $this->wpdb->prepare($sql, ...$termValues['args']);
+        }
         $rows = $this->get_results($sql, 'read FTS row postings');
 
         $postingsByTerm = $this->postings_from_rows($rows ?: [], $terms);
-        $missing = array_diff_key(array_fill_keys($terms, true), $postingsByTerm);
-        if ($missing !== [] && $this->is_sqlite_runtime()) {
-            $fallbackRows = $this->get_results(
-                "SELECT term, doc_id, tf FROM {$this->postingsTable} ORDER BY term ASC, doc_id ASC",
-                'read FTS SQLite fallback row postings'
-            );
-            foreach ($this->postings_from_rows($fallbackRows, array_keys($missing)) as $term => $postings) {
-                $postingsByTerm[$term] = $postings;
-            }
-        }
-
         ksort($postingsByTerm, SORT_STRING);
 
         return $postingsByTerm;
@@ -206,27 +196,17 @@ ORDER BY term ASC, doc_id ASC",
         $candidate_cap = max(1, (int) $candidate_cap);
         $postingsByTerm = [];
         foreach ($terms as $term) {
+            $termValue = $this->term_query_values([$term]);
+            $queryArgs = [...$termValue['args'], $candidate_cap];
             $rows = $this->get_results($this->wpdb->prepare(
                 "SELECT term, doc_id, tf FROM {$this->postingsTable}
-WHERE term = %s
+WHERE term = {$termValue['values'][0]}
 ORDER BY doc_id ASC
 LIMIT %d",
-                $term,
-                $candidate_cap
+                ...$queryArgs
             ), 'read capped FTS row postings');
             foreach ($this->postings_from_rows($rows ?: [], [$term]) as $rowTerm => $postings) {
                 $postingsByTerm[$rowTerm] = array_slice($postings, 0, $candidate_cap, true);
-            }
-        }
-
-        $missing = array_diff_key(array_fill_keys($terms, true), $postingsByTerm);
-        if ($missing !== [] && $this->is_sqlite_runtime()) {
-            $fallbackRows = $this->get_results(
-                "SELECT term, doc_id, tf FROM {$this->postingsTable} ORDER BY term ASC, doc_id ASC",
-                'read capped FTS SQLite fallback row postings'
-            );
-            foreach ($this->postings_from_rows($fallbackRows, array_keys($missing)) as $term => $postings) {
-                $postingsByTerm[$term] = array_slice($postings, 0, $candidate_cap, true);
             }
         }
 
@@ -253,26 +233,28 @@ LIMIT %d",
 
         $upperBound = $this->binary_successor($prefix);
         if ($upperBound !== null) {
+            $termValues = $this->term_query_values([$prefix, $upperBound]);
+            [$lowerValue, $upperValue] = $termValues['values'];
+            $queryArgs = [...$termValues['args'], $limit];
             $rows = $this->get_results($this->wpdb->prepare(
                 "SELECT term FROM {$this->termsTable}
-WHERE term >= %s AND term < %s
+WHERE term >= {$lowerValue} AND term < {$upperValue}
 ORDER BY term ASC
 LIMIT %d",
-                $prefix,
-                $upperBound,
-                $limit
+                ...$queryArgs
             ), 'read FTS prefix terms');
 
             return $this->prefix_terms_from_rows($rows ?: [], $prefix, $limit);
         }
 
+        $termValue = $this->term_query_values([$prefix]);
+        $queryArgs = [...$termValue['args'], $limit];
         $rows = $this->get_results($this->wpdb->prepare(
             "SELECT term FROM {$this->termsTable}
-WHERE term >= %s
+WHERE term >= {$termValue['values'][0]}
 ORDER BY term ASC
 LIMIT %d",
-            $prefix,
-            $limit
+            ...$queryArgs
         ), 'read FTS lower-bound prefix terms');
 
         return $this->prefix_terms_from_rows($rows ?: [], $prefix, $limit);
@@ -976,33 +958,54 @@ GROUP BY term",
             return [];
         }
 
-        $placeholders = implode(',', array_fill(0, count($terms), '%s'));
-        $rows = $this->get_results($this->wpdb->prepare(
-            "SELECT term, doc_freq FROM {$this->termsTable} WHERE term IN ({$placeholders})",
-            ...$terms
-        ), 'read FTS document frequencies');
-
-        $docFreqs = $this->doc_freqs_from_rows($rows ?: [], $terms);
-        $missing = array_diff_key(array_fill_keys($terms, true), $docFreqs);
-        if ($missing !== [] && $this->is_sqlite_runtime()) {
-            $fallbackRows = $this->get_results(
-                "SELECT term, doc_freq FROM {$this->termsTable} ORDER BY term ASC",
-                'read FTS SQLite fallback document frequencies'
-            );
-            foreach ($this->doc_freqs_from_rows($fallbackRows, array_keys($missing)) as $term => $docFreq) {
-                $docFreqs[$term] = $docFreq;
-            }
+        $termValues = $this->term_query_values($terms);
+        $termSql = implode(',', $termValues['values']);
+        $sql = "SELECT term, doc_freq FROM {$this->termsTable} WHERE term IN ({$termSql})";
+        if ($termValues['args'] !== []) {
+            $sql = $this->wpdb->prepare($sql, ...$termValues['args']);
         }
+        $rows = $this->get_results($sql, 'read FTS document frequencies');
 
-        return $docFreqs;
+        return $this->doc_freqs_from_rows($rows ?: [], $terms);
     }
 
     /**
-     * Convert posting rows into a term-keyed map, optionally filtering in PHP.
+     * Return SQL values and prepared arguments for binary term keys.
      *
-     * The PHP filter is used only for SQLite-backed Playground runtimes where
-     * the MySQL compatibility layer can miss prepared comparisons against term
-     * keys containing the namespace separator byte.
+     * WordPress' SQLite integration stores MySQL `VARBINARY` values as BLOBs,
+     * while a normal `%s` comparison is a TEXT value. MySQL `X'...'` literals
+     * remain SQLite BLOB literals and keep the term primary key usable
+     * for exact and range lookups. Hex encoding makes the SQL interpolation
+     * data-only. Native MySQL keeps the existing prepared `%s` query shape.
+     *
+     * @param string[] $terms
+     * @return array{values:string[],args:string[]}
+     */
+    private function term_query_values(array $terms): array
+    {
+        if (!$this->is_sqlite_runtime()) {
+            return [
+                'values' => array_fill(0, count($terms), '%s'),
+                'args' => $terms,
+            ];
+        }
+
+        $literals = [];
+        foreach ($terms as $term) {
+            $literals[] = "X'" . bin2hex($term) . "'";
+        }
+
+        return [
+            'values' => $literals,
+            'args' => [],
+        ];
+    }
+
+    /**
+     * Convert posting rows into a term-keyed map for the requested term keys.
+     *
+     * Keep the requested-key check even though SQL is bounded to those keys so
+     * a database adapter cannot introduce an unrelated posting row.
      *
      * @param object[] $rows
      * @param string[] $terms

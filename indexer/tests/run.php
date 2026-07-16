@@ -2353,13 +2353,17 @@ final class WP_FTS_Test_WPDB
         if ($this->missPreparedTermLookups && $args !== [] && (
             str_starts_with($sql, 'SELECT term, doc_freq FROM wp_fts_terms')
             || str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')
-        )) {
+        ) && $this->binary_term_literals($sql) === []) {
             return [];
         }
 
         if (str_starts_with($sql, 'SELECT term, doc_freq FROM wp_fts_terms')) {
             $rows = [];
-            foreach ($args === [] ? array_keys($this->terms) : $args as $term) {
+            $terms = $this->binary_term_literals($sql);
+            if ($terms === []) {
+                $terms = $args === [] ? array_keys($this->terms) : $args;
+            }
+            foreach ($terms as $term) {
                 $term = (string) $term;
                 if (isset($this->terms[$term])) {
                     $rows[] = (object) [
@@ -2371,11 +2375,16 @@ final class WP_FTS_Test_WPDB
             return $rows;
         }
 
-        if (str_starts_with($sql, 'SELECT term FROM wp_fts_terms') && str_contains($sql, 'WHERE term >= %s')) {
-            $lower = (string) ($args[0] ?? '');
-            $hasUpper = str_contains($sql, 'term < %s');
-            $upper = $hasUpper ? (string) ($args[1] ?? '') : null;
-            $limitArg = $hasUpper ? ($args[2] ?? 0) : ($args[1] ?? 0);
+        if (str_starts_with($sql, 'SELECT term FROM wp_fts_terms') && str_contains($sql, 'WHERE term >=')) {
+            $termLiterals = $this->binary_term_literals($sql);
+            $lower = (string) ($termLiterals[0] ?? $args[0] ?? '');
+            $hasUpper = str_contains($sql, 'term <');
+            $upper = $hasUpper ? (string) ($termLiterals[1] ?? $args[1] ?? '') : null;
+            if ($termLiterals !== []) {
+                $limitArg = $args[0] ?? 0;
+            } else {
+                $limitArg = $hasUpper ? ($args[2] ?? 0) : ($args[1] ?? 0);
+            }
             $limit = max(0, (int) $limitArg);
             $terms = array_keys($this->terms);
             sort($terms, SORT_STRING);
@@ -2397,11 +2406,13 @@ final class WP_FTS_Test_WPDB
 
         if (
             str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')
-            && str_contains($sql, 'WHERE term = %s')
+            && str_contains($sql, 'WHERE term =')
             && str_contains($sql, 'LIMIT %d')
         ) {
-            $term = (string) ($args[0] ?? '');
-            $limit = max(0, (int) ($args[1] ?? 0));
+            $termLiterals = $this->binary_term_literals($sql);
+            $term = (string) ($termLiterals[0] ?? $args[0] ?? '');
+            $limitArg = $termLiterals !== [] ? ($args[0] ?? 0) : ($args[1] ?? 0);
+            $limit = max(0, (int) $limitArg);
             $rows = [];
             $postings = $this->postings[$term] ?? [];
             ksort($postings, SORT_NUMERIC);
@@ -2413,7 +2424,11 @@ final class WP_FTS_Test_WPDB
 
         if (str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')) {
             $rows = [];
-            foreach ($args === [] ? array_keys($this->postings) : $args as $term) {
+            $terms = $this->binary_term_literals($sql);
+            if ($terms === []) {
+                $terms = $args === [] ? array_keys($this->postings) : $args;
+            }
+            foreach ($terms as $term) {
                 $term = (string) $term;
                 foreach ($this->postings[$term] ?? [] as $docId => $tf) {
                     $rows[] = (object) ['term' => $term, 'doc_id' => (int) $docId, 'tf' => (int) $tf];
@@ -2738,6 +2753,34 @@ final class WP_FTS_Test_WPDB
         $count = substr_count($matches[1], $placeholder);
         $values = array_slice($args, $offset, $count);
         $offset += $count;
+
+        return $values;
+    }
+
+    /**
+     * Read MySQL binary literals from a generated SQL statement.
+     *
+     * @return string[]
+     */
+    private function binary_term_literals(string $sql): array
+    {
+        $values = [];
+        $offset = 0;
+        while (($start = strpos($sql, "X'", $offset)) !== false) {
+            $end = strpos($sql, "'", $start + 2);
+            if ($end === false) {
+                break;
+            }
+
+            $hex = substr($sql, $start + 2, $end - $start - 2);
+            if (strlen($hex) % 2 === 0 && strspn($hex, '0123456789abcdefABCDEF') === strlen($hex)) {
+                $value = hex2bin($hex);
+                if ($value !== false) {
+                    $values[] = $value;
+                }
+            }
+            $offset = $end + 1;
+        }
 
         return $values;
     }
