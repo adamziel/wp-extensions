@@ -189,7 +189,7 @@ ORDER BY term ASC, doc_id ASC",
     /**
      * Fetch a deterministic document-id prefix for each requested term.
      *
-     * This powers approximate fast top-K search without materializing broad
+     * This powers explicit approximate retrieval without materializing broad
      * posting lists. One bounded query per term keeps SQL portable across MySQL
      * variants and the SQLite-backed Playground runtime.
      *

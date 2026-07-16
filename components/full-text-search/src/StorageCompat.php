@@ -39,8 +39,8 @@ final class WP_FTS_StorageCompat
      * keep using `get_terms()` plus `WP_FTS_PostingsCodec` for compatibility.
      *
      * @param string[] $terms
-     * @param int|null $candidateCap Optional approximate per-term cap for fast
-     *        top-K searches.
+     * @param int|null $candidateCap Optional approximate per-term document-id
+     *        cap.
      * @return array<string,array<int,int>>
      */
     public static function get_postings(WP_FTS_Storage $storage, array $terms, ?int $candidateCap = null): array

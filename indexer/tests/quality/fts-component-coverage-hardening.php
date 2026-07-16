@@ -146,7 +146,7 @@ test_case('quality component generated search policies match deterministic metad
 
         $exact = $searcher->search($topic, ['lang' => 'en', 'limit' => 20, 'exact' => true]);
         $fast = $searcher->search($topic, ['lang' => 'en', 'limit' => 20, 'fast_top_k' => true, 'candidate_cap' => 80]);
-        assert_same(array_column($exact, 'doc_id'), array_column($fast, 'doc_id'), "component explicit fast top-k for {$topic} should match exact ordering with safe cap");
+        assert_same(array_column($exact, 'doc_id'), array_column($fast['results'], 'doc_id'), "component explicit candidate cap for {$topic} should match exact ordering with a safe cap");
     }
 });
 

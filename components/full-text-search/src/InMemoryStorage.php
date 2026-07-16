@@ -159,8 +159,8 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
     }
 
     /**
-     * Fetch a deterministic prefix of each requested posting list for opt-in
-     * approximate fast top-K search.
+     * Fetch a deterministic document-id prefix of each requested posting list
+     * for explicit approximate retrieval.
      *
      * @param string[] $terms Stored term keys.
      * @return array<string,array<int,int>>

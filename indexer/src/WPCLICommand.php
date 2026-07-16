@@ -155,7 +155,7 @@ final class WP_FTS_WPCLI_Command
         $searchOptions = $this->search_options_from_cli_args($assoc_args);
         $explain = !empty($searchOptions['explain']);
 
-        /** @var array{total:int,results:array<int,array<string,mixed>>} $payload */
+        /** @var array{total:int,total_is_exact:bool,retrieval_mode:string,results_may_be_incomplete:bool,candidate_cap:?int,results:array<int,array<string,mixed>>} $payload */
         $payload = $searcher->search($query, $searchOptions);
         if ($format === 'json') {
             $this->line($this->json_payload($payload));
@@ -255,7 +255,7 @@ final class WP_FTS_WPCLI_Command
         $searcher = new WP_FTS_Searcher($this->storage(false), WP_FTS_Plugin::runtime_analyzer());
         $operatorStatus = WP_FTS_Plugin::operator_status();
 
-        /** @var array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>} $searchPayload */
+        /** @var array{total:int,total_is_exact:bool,retrieval_mode:string,results_may_be_incomplete:bool,candidate_cap:?int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>} $searchPayload */
         $searchPayload = $searcher->search($query, $searchOptions);
         $queryArgs = $this->diagnostic_query_args($searchOptions, $searchPayload);
         $bundle = [
