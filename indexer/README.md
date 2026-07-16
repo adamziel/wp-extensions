@@ -167,7 +167,14 @@ participate in the current index profile shown on the Health tab and in
 `wp fts process-batch` process queued updates first, missing eligible content
 next, and stale existing rows with any remaining batch/time budget. The stale
 cursor is tied to the current index profile and restarts if that profile changes
-before completion.
+before completion. Each sweep records its highest retained document ID so posts
+indexed after the sweep begins are handled once by their queue/backfill path
+rather than extending the sweep indefinitely. A scope change reconciles every
+retained live index row, not only rows in the new scope, so removed post types
+and deleted source posts are tombstoned. Activation also starts this retained-row
+reconciliation whenever index data already exists. This covers content changed
+while the plugin was inactive and a reinstall after uninstall retained the
+derived tables but removed their old profile state.
 
 The same Health/status surfaces include a read-only queue processor schedule.
 `scheduled` means WordPress has a `wp_fts_process_index_queue` event waiting;

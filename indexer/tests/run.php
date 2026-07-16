@@ -2093,6 +2093,26 @@ final class WP_FTS_Test_WPDB
             return count($this->queue);
         }
 
+        if (str_starts_with($sql, 'SELECT COALESCE(MAX(d.doc_id), 0)') && str_contains($sql, 'FROM wp_fts_docs d')) {
+            $ids = array_keys(array_filter(
+                $this->docs,
+                static fn(array $doc): bool => ($doc['is_deleted'] ?? 1) === 0
+            ));
+
+            return $ids === [] ? 0 : max(array_map('intval', $ids));
+        }
+
+        if (str_starts_with($sql, 'SELECT COUNT(*)') && str_contains($sql, 'FROM wp_fts_docs d')) {
+            $afterCursor = max(0, (int) ($args[0] ?? 0));
+            $maxDocId = max(0, (int) ($args[1] ?? 0));
+
+            return count(array_filter(
+                $this->docs,
+                static fn(array $doc, int $docId): bool => $docId > $afterCursor && $docId <= $maxDocId && ($doc['is_deleted'] ?? 1) === 0,
+                ARRAY_FILTER_USE_BOTH
+            ));
+        }
+
         if (str_starts_with($sql, 'SELECT COUNT(DISTINCT p.ID)')) {
             $offset = 0;
             $publicStatus = str_contains($sql, 'p.post_status = %s') ? (string) ($args[$offset++] ?? '') : '';
@@ -2875,6 +2895,34 @@ final class WP_FTS_Test_WPDB
                 $rows[] = (object) ['k' => $key, 'v' => $value];
             }
             return $rows;
+        }
+
+        if (
+            str_starts_with($sql, 'SELECT d.doc_id AS ID, p.post_content, p.post_title')
+            && str_contains($sql, 'FROM wp_fts_docs d')
+        ) {
+            $last = max(0, (int) ($args[0] ?? 0));
+            $maxDocId = max(0, (int) ($args[1] ?? 0));
+            $limit = max(0, (int) ($args[2] ?? 0));
+            $postsById = [];
+            foreach ($this->postRows as $row) {
+                if (is_object($row) && isset($row->ID)) {
+                    $postsById[(int) $row->ID] = $row;
+                }
+            }
+
+            $rows = [];
+            foreach ($this->docs as $docId => $doc) {
+                $docId = (int) $docId;
+                if ($docId <= $last || $docId > $maxDocId || ($doc['is_deleted'] ?? 1) !== 0) {
+                    continue;
+                }
+
+                $rows[] = $postsById[$docId] ?? (object) ['ID' => $docId];
+            }
+            usort($rows, static fn(object $a, object $b): int => (int) $a->ID <=> (int) $b->ID);
+
+            return array_slice($rows, 0, $limit);
         }
 
         if (
@@ -10689,6 +10737,84 @@ test_case('bounded stale debt batch reindexes a slice and later clears debt on c
     assert_same(0, $completeHealth['stale_debt_remaining_count'], 'clean stale completion should report no remaining stale rows');
 });
 
+test_case('scope shrink reconciles retained rows outside the new configured post types', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_post_types']['product'] = (object) ['public' => true, 'exclude_from_search' => false];
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = ['index_post_types' => ['post', 'product']];
+        wp_fts_test_seed_indexed_posts($fake, 1, 1101, 'product');
+        wp_fts_test_seed_indexed_posts($fake, 1, 1102, 'post');
+
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $_POST = [
+            'option_page' => WP_FTS_Plugin::SETTINGS_OPTION,
+            'action' => 'update',
+            '_wpnonce' => wp_create_nonce(WP_FTS_Plugin::SETTINGS_OPTION . '-options'),
+        ];
+        $settings = WP_FTS_Plugin::sanitize_settings_for_save(['index_post_types' => ['post']]);
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = $settings;
+
+        $marked = WP_FTS_Plugin::search_health();
+        $result = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
+        $complete = WP_FTS_Plugin::search_health();
+    } finally {
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(true, $marked['stale_debt_active'] ?? null, 'removing a configured post type should mark retained rows for reconciliation');
+    assert_same(['indexed_scope_changed'], $marked['stale_debt_reasons'] ?? null, 'scope removal should retain its explicit debt reason');
+    assert_same(2, $result['stale_processed'] ?? null, 'scope reconciliation should inspect both old-scope and retained current-scope rows');
+    assert_same(1, $fake->docs[1101]['is_deleted'] ?? null, 'a retained row from the removed post type should be tombstoned');
+    assert_same(0, $fake->docs[1102]['is_deleted'] ?? null, 'a retained row still in scope should be reindexed');
+    assert_same(false, $complete['stale_debt_active'] ?? null, 'scope reconciliation should clear debt only after every retained row is visited');
+});
+
+test_case('activation reconciles retained rows after inactive edits and uninstall state loss', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+        wp_fts_test_seed_indexed_posts($fake, 2, 1201);
+        $oldHash = $fake->docs[1201]['content_hash'] ?? '';
+
+        $changed = wp_fts_test_backfill_post(1201, 'post', 'publish', 'Changed While Inactive');
+        $changed->post_content = '<p>fresh orchard content</p>';
+        $fake->postRows = [$changed];
+        $GLOBALS['wp_fts_test_posts'][1201] = $changed;
+        unset($GLOBALS['wp_fts_test_posts'][1202]);
+
+        WP_FTS_Plugin::uninstall();
+        WP_FTS_Plugin::activate();
+        $marked = WP_FTS_Plugin::search_health();
+        $result = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
+        $complete = WP_FTS_Plugin::search_health();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(true, $marked['stale_debt_active'] ?? null, 'activation should distrust retained rows when operational profile state was removed');
+    assert_same(['retained_rows_may_be_stale'], $marked['stale_debt_reasons'] ?? null, 'activation reconciliation should expose a stable operator reason');
+    assert_same(2, $result['stale_processed'] ?? null, 'activation reconciliation should visit every retained live row');
+    assert_true(($fake->docs[1201]['content_hash'] ?? '') !== $oldHash, 'content changed while hooks were inactive should be reindexed on activation');
+    assert_same([1201], array_keys($fake->postings[WP_FTS_TermNamespace::namespace_term('en', 'orchard')] ?? []), 'activation reconciliation should replace postings for inactive content edits');
+    assert_same(1, $fake->docs[1202]['is_deleted'] ?? null, 'a retained row whose source post disappeared should be tombstoned');
+    assert_same(false, $complete['stale_debt_active'] ?? null, 'activation reconciliation should clear debt after all retained rows converge');
+});
+
 test_case('queued work has priority over stale debt and preserves bounded processing', function (): void {
     global $wpdb;
 
@@ -10720,6 +10846,7 @@ test_case('queued work has priority over stale debt and preserves bounded proces
     assert_true(($fake->docs[501]['content_hash'] ?? '') !== 'old-profile-501', 'only one stale row should be rewritten after queued work');
     assert_same('old-profile-502', $fake->docs[502]['content_hash'] ?? null, 'remaining stale rows should wait for later batches');
     assert_same(true, $health['stale_debt_active'], 'debt should remain active when stale rows remain');
+    assert_same(504, $health['stale_debt_max_doc_id'] ?? null, 'stale debt should retain the document boundary captured before queued posts were indexed');
     assert_same(3, $health['stale_debt_remaining_count'], 'health should report remaining stale rows after queue-priority processing');
 });
 
