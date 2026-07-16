@@ -18728,6 +18728,42 @@ test_case('mysql storage emits language-aware binary schema and stores per-langu
     assert_same(['doc_count' => 2, 'len_sum' => 6], $storage->get_meta(), 'global meta should aggregate partitions');
 });
 
+test_case('mysql document metadata failures abort indexing and reads', function (): void {
+    $writeFailingWpdb = new WP_FTS_Test_WPDB();
+    $writeFailingWpdb->failQueryPrefix = 'INSERT INTO wp_fts_docmeta';
+    $storage = new WP_FTS_Storage_Mysql($writeFailingWpdb);
+    $indexer = new WP_FTS_Indexer($storage, new WP_FTS_Analyzer([
+        'auto_detect_language' => false,
+        'enable_stemming' => false,
+    ]));
+
+    $writeFailed = false;
+    try {
+        $indexer->index_document(81, '<p>metadata failure</p>', [
+            'lang' => 'en',
+            'metadata' => ['post_id' => 81, 'post_status' => 'publish'],
+        ]);
+    } catch (RuntimeException $e) {
+        $writeFailed = str_contains($e->getMessage(), 'write FTS document metadata');
+    }
+    assert_true($writeFailed, 'metadata write failures should escape the storage boundary');
+    assert_true(in_array('ROLLBACK', $writeFailingWpdb->queries, true), 'metadata write failures should roll back the index transaction');
+
+    $readFailingWpdb = new WP_FTS_Test_WPDB();
+    $readStorage = new WP_FTS_Storage_Mysql($readFailingWpdb);
+    $readStorage->put_doc(82, 'en', ['en' => 1], 'metadata-read');
+    $readStorage->put_doc_metadata(82, ['post_id' => 82, 'post_status' => 'publish']);
+    $readFailingWpdb->last_error = 'simulated metadata read failure';
+
+    $readFailed = false;
+    try {
+        $readStorage->get_doc_metadata([82]);
+    } catch (RuntimeException $e) {
+        $readFailed = str_contains($e->getMessage(), 'read FTS document metadata');
+    }
+    assert_true($readFailed, 'metadata read failures should not look like empty metadata');
+});
+
 test_case('mysql row-posting indexing skips oversized namespaced terms before storage validation', function (): void {
     $lang = 'en';
     $normalTerm = 'normalneedle';
