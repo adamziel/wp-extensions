@@ -39,8 +39,11 @@ function wp_fts_spanish_fixture_lines(string $path): array
 }
 
 $dataDir = getenv('SNOWBALL_DATA_DIR');
-$dataDir = $dataDir === false || trim($dataDir) === '' ? '/home/claude/.cache/snowball-data' : $dataDir;
-$dataDir = rtrim($dataDir, DIRECTORY_SEPARATOR);
+if (!is_string($dataDir) || trim($dataDir) === '') {
+    fwrite(STDERR, "Set SNOWBALL_DATA_DIR to a local checkout of the official Snowball test data.\n");
+    exit(2);
+}
+$dataDir = rtrim(trim($dataDir), DIRECTORY_SEPARATOR);
 $voc = wp_fts_spanish_fixture_lines($dataDir . '/spanish/voc.txt');
 $expected = wp_fts_spanish_fixture_lines($dataDir . '/spanish/output.txt');
 

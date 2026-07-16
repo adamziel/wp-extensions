@@ -397,9 +397,13 @@ test_case('quality disposable upgrade smoke builds bounded upgrade WP-CLI comman
         $currentZip = $tmp . '/current.zip';
         wp_fts_upgrade_contract_write_file($previousZip, 'previous');
         wp_fts_upgrade_contract_write_file($currentZip, 'current');
+        $canonicalPreviousZip = realpath($previousZip);
+        $canonicalCurrentZip = realpath($currentZip);
+        wp_fts_upgrade_contract_true(is_string($canonicalPreviousZip), 'previous release ZIP should resolve before upgrade commands run');
+        wp_fts_upgrade_contract_true(is_string($canonicalCurrentZip), 'current release ZIP should resolve before upgrade commands run');
 
         $runner = new WP_FTS_DisposableUpgradeSmokeRunner(
-            function (array $command) use (&$commands, &$createdPostIds, $previousZip, $currentZip): array {
+            function (array $command) use (&$commands, &$createdPostIds, $canonicalPreviousZip, $canonicalCurrentZip): array {
                 $commands[] = $command;
                 $joined = implode("\n", $command);
                 if (str_contains($joined, "\ncore\nis-installed")) {
@@ -409,10 +413,10 @@ test_case('quality disposable upgrade smoke builds bounded upgrade WP-CLI comman
                     $postId = array_shift($createdPostIds);
                     return ['exit' => 0, 'stdout' => (string) $postId . "\n", 'stderr' => ''];
                 }
-                if (str_contains($joined, "\nplugin\ninstall\n{$previousZip}")) {
+                if (str_contains($joined, "\nplugin\ninstall\n{$canonicalPreviousZip}")) {
                     return ['exit' => 0, 'stdout' => 'Previous plugin installed.', 'stderr' => ''];
                 }
-                if (str_contains($joined, "\nplugin\ninstall\n{$currentZip}")) {
+                if (str_contains($joined, "\nplugin\ninstall\n{$canonicalCurrentZip}")) {
                     return ['exit' => 0, 'stdout' => 'Current plugin installed.', 'stderr' => ''];
                 }
                 if (str_contains($joined, "\nfts\nstatus")) {
@@ -462,11 +466,13 @@ test_case('quality disposable upgrade smoke builds bounded upgrade WP-CLI comman
         );
         $result = $runner->run();
 
-        wp_fts_upgrade_contract_same('passed', $result['status'], 'fake disposable upgrade command sequence should pass');
+        wp_fts_upgrade_contract_same('passed', $result['status'], 'fake disposable upgrade command sequence should pass: ' . ($result['message'] ?? 'missing result message'));
         wp_fts_upgrade_contract_true($commands !== [], 'fake WP-CLI should record commands');
+        $canonicalWpRoot = realpath($wpRoot);
+        wp_fts_upgrade_contract_true(is_string($canonicalWpRoot), 'disposable WordPress root should resolve before command assertions');
         foreach ($commands as $command) {
             wp_fts_upgrade_contract_same('custom-wp', $command[0], 'WP_FTS_WP_CLI should override the wp binary');
-            wp_fts_upgrade_contract_true(in_array('--path=' . $wpRoot, $command, true), 'each WP-CLI command should include --path');
+            wp_fts_upgrade_contract_true(in_array('--path=' . $canonicalWpRoot, $command, true), 'each WP-CLI command should include the canonical --path');
         }
         foreach ([['plugin', 'install'], ['fts', 'status'], ['fts', 'repair'], ['fts', 'search'], ['fts', 'process_batch']] as [$first, $second]) {
             wp_fts_upgrade_contract_true(
@@ -510,9 +516,13 @@ test_case('quality disposable upgrade smoke records passed multisite runtime pro
         $currentZip = $tmp . '/current.zip';
         wp_fts_upgrade_contract_write_file($previousZip, 'previous');
         wp_fts_upgrade_contract_write_file($currentZip, 'current');
+        $canonicalPreviousZip = realpath($previousZip);
+        $canonicalCurrentZip = realpath($currentZip);
+        wp_fts_upgrade_contract_true(is_string($canonicalPreviousZip), 'previous release ZIP should resolve before multisite upgrade commands run');
+        wp_fts_upgrade_contract_true(is_string($canonicalCurrentZip), 'current release ZIP should resolve before multisite upgrade commands run');
 
         $runner = new WP_FTS_DisposableUpgradeSmokeRunner(
-            function (array $command) use (&$commands, &$createdPostIds, $previousZip, $currentZip): array {
+            function (array $command) use (&$commands, &$createdPostIds, $canonicalPreviousZip, $canonicalCurrentZip): array {
                 $commands[] = $command;
                 $joined = implode("\n", $command);
                 $isSubsiteCommand = str_contains($joined, '--url=http://wordpress/wp-fts-ms-proof-');
@@ -524,7 +534,7 @@ test_case('quality disposable upgrade smoke records passed multisite runtime pro
                     $postId = array_shift($createdPostIds);
                     return ['exit' => 0, 'stdout' => (string) $postId . "\n", 'stderr' => ''];
                 }
-                if (str_contains($joined, "\nplugin\ninstall\n{$previousZip}") || str_contains($joined, "\nplugin\ninstall\n{$currentZip}")) {
+                if (str_contains($joined, "\nplugin\ninstall\n{$canonicalPreviousZip}") || str_contains($joined, "\nplugin\ninstall\n{$canonicalCurrentZip}")) {
                     return ['exit' => 0, 'stdout' => 'Plugin installed network-wide.', 'stderr' => ''];
                 }
                 if (str_contains($joined, "\nsite\ncreate")) {
@@ -611,7 +621,7 @@ test_case('quality disposable upgrade smoke records passed multisite runtime pro
         );
         $result = $runner->run();
 
-        wp_fts_upgrade_contract_same('passed', $result['status'], 'fake disposable multisite command sequence should pass');
+        wp_fts_upgrade_contract_same('passed', $result['status'], 'fake disposable multisite command sequence should pass: ' . ($result['message'] ?? 'missing result message'));
         wp_fts_upgrade_contract_same('passed', $result['report']['multisite_evidence']['status'] ?? null, 'multisite evidence should record a real pass');
         wp_fts_upgrade_contract_same('network', $result['report']['multisite_evidence']['activation_scope'] ?? null, 'multisite evidence should record network activation');
         wp_fts_upgrade_contract_same(true, $result['report']['covered_behaviors']['multisite_runtime_proof'] ?? null, 'covered behaviors should mark runtime multisite proof true only after the subsite proof');
