@@ -372,6 +372,7 @@ final class WP_FTS_Plugin
         add_action('trashed_post', [self::class, 'handle_post_delete'], 10, 1);
         add_action('before_delete_post', [self::class, 'handle_post_delete'], 10, 1);
         add_action('wp_initialize_site', [self::class, 'handle_site_initialization'], 10, 2);
+        add_action('init', [self::class, 'detect_index_profile_drift'], 1, 0);
         add_action(self::CRON_HOOK, [self::class, 'process_scheduled_indexing'], 10, 0);
         add_action('rest_api_init', [self::class, 'register_rest_routes'], 10, 0);
         add_action('admin_menu', [self::class, 'register_admin_menu'], 10, 0);
@@ -410,6 +411,49 @@ final class WP_FTS_Plugin
         self::upgrade_schema();
         self::schedule_queue_processor();
         self::maybe_set_activation_redirect_flag($network_wide);
+    }
+
+    /**
+     * Mark existing documents stale when runtime index behavior changes.
+     *
+     * This runs after plugins have registered analyzer filters and before a
+     * scheduled batch can accept a new profile without sweeping old rows.
+     */
+    public static function detect_index_profile_drift(): void
+    {
+        $currentProfile = self::current_index_profile();
+        $currentHash = self::sanitize_index_profile_hash($currentProfile['hash'] ?? '');
+        if ($currentHash === '') {
+            return;
+        }
+
+        $state = self::index_health_state();
+        $acceptedHash = self::sanitize_index_profile_hash($state['accepted_index_profile_hash'] ?? '');
+        if ($acceptedHash === '') {
+            if (self::count_indexed_eligible_content() > 0) {
+                $previousHash = self::sanitize_index_profile_hash($state['index_profile_hash'] ?? '');
+                $previousHash = $previousHash !== '' ? $previousHash : sha1('wp-fts-unknown-index-profile');
+                self::mark_stale_index_debt(['index_profile_changed'], ['hash' => $previousHash], $currentProfile);
+                self::schedule_queue_processor();
+                return;
+            }
+
+            $state['index_profile_hash'] = $currentHash;
+            $state['accepted_index_profile_hash'] = $currentHash;
+            self::set_option(self::INDEX_HEALTH_OPTION, $state);
+            return;
+        }
+
+        if ($acceptedHash === $currentHash) {
+            return;
+        }
+
+        if (!empty($state['stale_debt_active']) && self::sanitize_index_profile_hash($state['index_profile_hash'] ?? '') === $currentHash) {
+            return;
+        }
+
+        self::mark_stale_index_debt(['index_profile_changed'], ['hash' => $acceptedHash], $currentProfile);
+        self::schedule_queue_processor();
     }
 
     /**

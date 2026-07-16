@@ -2023,7 +2023,7 @@ final class WP_FTS_Analyzer
     /**
      * Return a deterministic descriptor for a callback.
      */
-    private function callableSignature(mixed $callback): ?string
+    private function callableSignature(mixed $callback, bool $includeCapturedState = true): ?string
     {
         if (!is_callable($callback)) {
             return null;
@@ -2035,28 +2035,62 @@ final class WP_FTS_Analyzer
             }
 
             if (is_array($callback) && count($callback) === 2) {
-                $target = is_object($callback[0]) ? get_class($callback[0]) : (string) $callback[0];
+                $target = is_object($callback[0]) ? $this->objectSignature($callback[0]) : (string) $callback[0];
                 return 'method:' . $target . '::' . (string) $callback[1];
             }
 
             if ($callback instanceof Closure) {
                 $reflection = new ReflectionFunction($callback);
+                $capturedState = $includeCapturedState
+                    ? ':' . sha1($this->stableJson($this->signatureValue($reflection->getStaticVariables())))
+                    : '';
                 return sprintf(
-                    'closure:%s:%d-%d',
+                    'closure:%s:%d-%d%s',
                     $reflection->getFileName() ?: 'internal',
                     $reflection->getStartLine(),
-                    $reflection->getEndLine()
+                    $reflection->getEndLine(),
+                    $capturedState
                 );
             }
 
             if (is_object($callback)) {
-                return 'invokable:' . get_class($callback);
+                return 'invokable:' . $this->objectSignature($callback);
             }
         } catch (Throwable) {
             return 'callable:' . get_debug_type($callback);
         }
 
         return 'callable:' . get_debug_type($callback);
+    }
+
+    /**
+     * Normalize callback state without exposing captured values in signatures.
+     */
+    private function signatureValue(mixed $value): mixed
+    {
+        if ($value === null || is_scalar($value)) {
+            return $value;
+        }
+
+        if (is_callable($value)) {
+            return $this->callableSignature($value, false);
+        }
+
+        if (is_object($value)) {
+            return $this->objectSignature($value);
+        }
+
+        if (!is_array($value)) {
+            return get_debug_type($value);
+        }
+
+        $result = [];
+        foreach ($value as $key => $item) {
+            $result[(string) $key] = $this->signatureValue($item);
+        }
+        ksort($result, SORT_STRING);
+
+        return $result;
     }
 
     /**
