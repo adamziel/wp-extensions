@@ -69,6 +69,8 @@ final class WP_FTS_Plugin
     private const MAX_INDEX_FAILURE_ERROR_BYTES = 240;
     private const MAX_INDEX_DIAGNOSTIC_TEXT_BYTES = 160;
     private const MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES = 120;
+    private const INITIAL_INDEX_STATUS_PENDING = 'pending';
+    private const INITIAL_INDEX_STATUS_READY = 'ready';
     private const FAILURE_RECOVERY_SCHEMA = 'wp-fts-failure-recovery-v1';
     private const FAILURE_RECOVERY_MAX_ITEMS = 20;
     private const FAILURE_RECOVERY_RECENT_ITEMS = 10;
@@ -358,6 +360,11 @@ final class WP_FTS_Plugin
     private static ?array $sandbox_demo_analyzer_pack_statuses_cache = null;
 
     /**
+     * @var array<string,array<string,mixed>>
+     */
+    private static array $search_takeover_status_cache = [];
+
+    /**
      * @var array<string,array{label:string,full:bool,reason:string,matched_language:string}>
      */
     private static array $language_support_details_cache = [];
@@ -379,6 +386,7 @@ final class WP_FTS_Plugin
     {
         self::$runtime_analyzer_pack_statuses_cache = null;
         self::$sandbox_demo_analyzer_pack_statuses_cache = null;
+        self::$search_takeover_status_cache = [];
         self::$language_support_details_cache = [];
         self::$debug_traces = [];
         self::$debug_next_trace_id = 1;
@@ -413,6 +421,7 @@ final class WP_FTS_Plugin
         add_action('deleted_post_meta', [self::class, 'handle_post_meta_change'], 10, 4);
         add_action('wp_initialize_site', [self::class, 'handle_site_initialization'], 10, 2);
         add_action('wp_loaded', [self::class, 'detect_index_profile_drift'], 1, 0);
+        add_action('init', [self::class, 'maybe_schedule_initial_index_readiness'], 10, 0);
         add_action(self::CRON_HOOK, [self::class, 'process_scheduled_indexing'], 10, 0);
         add_action(self::SCHEMA_SITE_CRON_HOOK, [self::class, 'handle_scheduled_site_schema'], 10, 1);
         add_action('rest_api_init', [self::class, 'register_rest_routes'], 10, 0);
@@ -449,6 +458,7 @@ final class WP_FTS_Plugin
      */
     public static function activate(bool $network_wide = false): void
     {
+        self::mark_initial_index_pending();
         self::upgrade_schema();
         if ($network_wide) {
             self::schedule_existing_network_site_schema();
@@ -599,6 +609,7 @@ final class WP_FTS_Plugin
         }
 
         try {
+            self::mark_initial_index_pending();
             self::upgrade_schema();
             self::schedule_queue_processor();
         } finally {
@@ -637,6 +648,24 @@ final class WP_FTS_Plugin
         }
 
         wp_schedule_single_event(time() + 60, self::SCHEMA_SITE_CRON_HOOK, $args);
+    }
+
+    /**
+     * Migrate legacy installs and keep their one-shot readiness work scheduled.
+     * A dropped WP-Cron event must not leave search replacement pending forever.
+     */
+    public static function maybe_schedule_initial_index_readiness(): void
+    {
+        $raw = self::get_option(self::INDEX_HEALTH_OPTION, null);
+        $status = is_array($raw) ? ($raw['initial_index_status'] ?? null) : null;
+        if ($status === self::INITIAL_INDEX_STATUS_READY) {
+            return;
+        }
+
+        if ($status !== self::INITIAL_INDEX_STATUS_PENDING) {
+            self::mark_initial_index_pending();
+        }
+        self::schedule_queue_processor();
     }
 
     /**
@@ -1397,6 +1426,7 @@ final class WP_FTS_Plugin
                 if (!array_key_exists('record_health', $opts) || (bool) $opts['record_health']) {
                     self::update_index_health_state($summary);
                 }
+                self::maybe_complete_initial_index_readiness($summary);
             }
         }
 
@@ -1447,6 +1477,7 @@ final class WP_FTS_Plugin
     public static function operator_status(): array
     {
         $schema = self::schema_status();
+        $takeover = self::search_takeover_status();
         $health = self::search_health();
         $lock = self::index_lock_status();
         $eligible_count = self::count_eligible_content();
@@ -1467,6 +1498,13 @@ final class WP_FTS_Plugin
             'schema_version' => $schema['stored_version'],
             'expected_schema_version' => $schema['expected_version'],
             'storage_backend' => self::index_storage_backend_label(),
+            'search_takeover_ready' => (bool) $takeover['ready'],
+            'search_takeover_reason' => (string) $takeover['reason'],
+            'initial_index_status' => (string) $takeover['initial_index_status'],
+            'initial_index_started_at' => (string) $takeover['initial_index_started_at'],
+            'initial_index_completed_at' => (string) $takeover['initial_index_completed_at'],
+            'physical_schema_checked' => (bool) $takeover['physical_schema_checked'],
+            'physical_schema_usable' => (bool) $takeover['physical_schema_usable'],
             'index_profile_hash' => is_scalar($health['index_profile_hash'] ?? null) ? (string) $health['index_profile_hash'] : '',
             'accepted_index_profile_hash' => is_scalar($health['accepted_index_profile_hash'] ?? null) ? (string) $health['accepted_index_profile_hash'] : '',
             'stale_debt_active' => (bool) ($health['stale_debt_active'] ?? false),
@@ -2748,6 +2786,72 @@ final class WP_FTS_Plugin
             'expected_version' => self::SCHEMA_VERSION,
             'physical' => $physical,
         ];
+    }
+
+    /**
+     * Report whether FTS may replace a WordPress search query in this request.
+     *
+     * A saved schema version is not proof that the tables still exist. The
+     * physical probe is therefore required after the initial corpus sweep has
+     * completed, and its result is cached per site for the current request.
+     *
+     * @return array{ready:bool,reason:string,initial_index_status:string,initial_index_started_at:string,initial_index_completed_at:string,schema_status:string,physical_schema_checked:bool,physical_schema_usable:bool}
+     */
+    public static function search_takeover_status(): array
+    {
+        $cache_key = self::search_takeover_cache_key();
+        if (isset(self::$search_takeover_status_cache[$cache_key])) {
+            return self::$search_takeover_status_cache[$cache_key];
+        }
+
+        try {
+            $schema = self::schema_status();
+            $health = self::index_health_state();
+            $initial_status = self::sanitize_initial_index_status($health['initial_index_status'] ?? '');
+            $status = [
+                'ready' => false,
+                'reason' => 'schema_not_current',
+                'initial_index_status' => $initial_status,
+                'initial_index_started_at' => self::sanitize_index_timestamp($health['initial_index_started_at'] ?? ''),
+                'initial_index_completed_at' => self::sanitize_index_timestamp($health['initial_index_completed_at'] ?? ''),
+                'schema_status' => (string) $schema['status'],
+                'physical_schema_checked' => false,
+                'physical_schema_usable' => false,
+            ];
+
+            if ($schema['status'] !== 'current') {
+                self::$search_takeover_status_cache[$cache_key] = $status;
+                return $status;
+            }
+
+            if ($initial_status !== self::INITIAL_INDEX_STATUS_READY) {
+                $status['reason'] = 'initial_index_pending';
+                self::$search_takeover_status_cache[$cache_key] = $status;
+                return $status;
+            }
+
+            $status['physical_schema_checked'] = true;
+            $status['physical_schema_usable'] = self::physical_index_schema_usable();
+            $status['ready'] = $status['physical_schema_usable'];
+            $status['reason'] = $status['ready'] ? 'ready' : 'physical_schema_unusable';
+            self::$search_takeover_status_cache[$cache_key] = $status;
+
+            return $status;
+        } catch (Throwable) {
+            $status = [
+                'ready' => false,
+                'reason' => 'readiness_check_failed',
+                'initial_index_status' => self::INITIAL_INDEX_STATUS_PENDING,
+                'initial_index_started_at' => '',
+                'initial_index_completed_at' => '',
+                'schema_status' => 'unknown',
+                'physical_schema_checked' => false,
+                'physical_schema_usable' => false,
+            ];
+            self::$search_takeover_status_cache[$cache_key] = $status;
+
+            return $status;
+        }
     }
 
     /**
@@ -5676,6 +5780,7 @@ final class WP_FTS_Plugin
         $known_provider_advisory = self::known_search_provider_advisory($settings);
         $health = self::search_health();
         $schema = self::schema_status();
+        $takeover = self::search_takeover_status();
         $lock = self::index_lock_status();
         try {
             $counts = self::search_health_counts();
@@ -5694,6 +5799,7 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Schema status', self::schema_status_label((string) $schema['status']));
         self::render_health_status_row('Stored schema version', (string) max(0, (int) $schema['stored_version']));
         self::render_health_status_row('Expected schema version', (string) max(0, (int) $schema['expected_version']));
+        self::render_health_status_row('Search replacement readiness', self::search_takeover_status_label($takeover));
         self::render_health_status_row('Indexing lock', self::lock_state_summary($lock));
         self::render_health_status_row('Lock mode', self::lock_mode_summary($lock));
         self::render_health_status_row('Lock started', self::lock_time_summary($lock['started_at'] ?? ''));
@@ -5856,6 +5962,20 @@ final class WP_FTS_Plugin
             'missing' => 'Missing',
             'stale' => 'Stale',
             default => 'Unknown',
+        };
+    }
+
+    /**
+     * @param array<string,mixed> $status
+     */
+    private static function search_takeover_status_label(array $status): string
+    {
+        return match ((string) ($status['reason'] ?? '')) {
+            'ready' => 'Ready; FTS may replace configured WordPress searches',
+            'initial_index_pending' => 'Waiting for the initial index; WordPress search remains active',
+            'schema_not_current' => 'Waiting for current schema; WordPress search remains active',
+            'physical_schema_unusable' => 'Index tables are unavailable; WordPress search remains active',
+            default => 'Readiness check unavailable; WordPress search remains active',
         };
     }
 
@@ -11053,6 +11173,28 @@ JS;
      */
     public static function rest_search(mixed $request): array|object
     {
+        try {
+            return self::rest_search_response($request);
+        } catch (Throwable $error) {
+            self::debug_record_search_boundary_failure(
+                'REST search',
+                $error,
+                'The REST endpoint returned a sanitized 503 response after the FTS failure.'
+            );
+
+            return self::rest_error(
+                'wp_fts_search_unavailable',
+                'Search is temporarily unavailable.',
+                503
+            );
+        }
+    }
+
+    /**
+     * @return array{results:array<int,array{doc_id:int,score:float}>}|object|array<string,mixed>
+     */
+    private static function rest_search_response(mixed $request): array|object
+    {
         $settings = self::settings();
         if (empty($settings['rest_api_enabled'])) {
             return self::rest_error(
@@ -11784,6 +11926,22 @@ JS;
      */
     public static function replace_frontend_search_posts(mixed $posts, mixed $query): mixed
     {
+        try {
+            return self::run_frontend_search_replacement($posts, $query);
+        } catch (Throwable $error) {
+            self::clear_frontend_search_replacement_state($query);
+            self::debug_record_search_boundary_failure(
+                'frontend search',
+                $error,
+                'WordPress search retained control after the FTS failure.'
+            );
+
+            return $posts;
+        }
+    }
+
+    private static function run_frontend_search_replacement(mixed $posts, mixed $query): mixed
+    {
         if (!self::should_replace_frontend_search($query)) {
             if (self::debug_collection_enabled('frontend search')) {
                 self::debug_record_bailout(
@@ -11892,6 +12050,22 @@ JS;
      */
     public static function replace_admin_post_search_posts(mixed $posts, mixed $query): mixed
     {
+        try {
+            return self::run_admin_post_search_replacement($posts, $query);
+        } catch (Throwable $error) {
+            self::clear_admin_post_search_replacement_state($query);
+            self::debug_record_search_boundary_failure(
+                'admin post search',
+                $error,
+                'WordPress search retained control after the FTS failure.'
+            );
+
+            return $posts;
+        }
+    }
+
+    private static function run_admin_post_search_replacement(mixed $posts, mixed $query): mixed
+    {
         if (!self::should_replace_admin_post_search($query)) {
             if (self::debug_collection_enabled('admin post search')) {
                 self::debug_record_bailout(
@@ -11949,6 +12123,61 @@ JS;
         );
 
         return $result['posts'];
+    }
+
+    private static function clear_frontend_search_replacement_state(mixed $query): void
+    {
+        try {
+            $query_key = self::query_object_key($query);
+            if ($query_key > 0) {
+                unset(self::$front_end_search_query_state[$query_key]);
+                self::debug_forget_search_final_ownership_query($query_key, $query);
+            }
+        } catch (Throwable) {
+            // The boundary must preserve WordPress search even if cleanup fails.
+        }
+    }
+
+    private static function clear_admin_post_search_replacement_state(mixed $query): void
+    {
+        try {
+            $query_key = self::query_object_key($query);
+            if ($query_key > 0) {
+                unset(self::$admin_post_search_query_state[$query_key]);
+                self::debug_forget_search_final_ownership_query($query_key, $query);
+            }
+        } catch (Throwable) {
+            // The boundary must preserve WordPress search even if cleanup fails.
+        }
+    }
+
+    private static function debug_record_search_boundary_failure(string $context, Throwable $error, string $outcome): void
+    {
+        try {
+            $reason = self::sanitize_index_failure_text(
+                get_class($error) . ': ' . $error->getMessage(),
+                self::MAX_INDEX_DIAGNOSTIC_TEXT_BYTES
+            );
+            $reason = $reason !== '' ? 'FTS search failed: ' . $reason : 'FTS search failed.';
+
+            $trace_id = 0;
+            foreach (array_reverse(array_keys(self::$debug_traces)) as $candidate_id) {
+                $trace = self::$debug_traces[$candidate_id] ?? [];
+                if (($trace['context'] ?? '') === $context && ($trace['status'] ?? '') === 'started') {
+                    $trace_id = (int) $candidate_id;
+                    break;
+                }
+            }
+            if ($trace_id <= 0) {
+                $trace_id = self::debug_start_trace($context);
+            }
+            if ($trace_id > 0) {
+                self::debug_add_notes($trace_id, [$outcome]);
+                self::debug_finish_trace($trace_id, 'failed', $reason);
+            }
+        } catch (Throwable) {
+            // Diagnostics must never replace the original fail-safe response.
+        }
     }
 
     /**
@@ -12374,14 +12603,14 @@ JS;
         }
 
         if (is_bool($replace)) {
-            return $replace;
+            $enabled = $replace;
+        } elseif (is_scalar($replace)) {
+            $enabled = !in_array(strtolower(trim((string) $replace)), ['', '0', 'false', 'no', 'off'], true);
+        } else {
+            $enabled = (bool) $replace;
         }
 
-        if (is_scalar($replace)) {
-            return !in_array(strtolower(trim((string) $replace)), ['', '0', 'false', 'no', 'off'], true);
-        }
-
-        return (bool) $replace;
+        return $enabled && !empty(self::search_takeover_status()['ready']);
     }
 
     /**
@@ -12457,14 +12686,14 @@ JS;
         }
 
         if (is_bool($replace)) {
-            return $replace;
+            $enabled = $replace;
+        } elseif (is_scalar($replace)) {
+            $enabled = !in_array(strtolower(trim((string) $replace)), ['', '0', 'false', 'no', 'off'], true);
+        } else {
+            $enabled = (bool) $replace;
         }
 
-        if (is_scalar($replace)) {
-            return !in_array(strtolower(trim((string) $replace)), ['', '0', 'false', 'no', 'off'], true);
-        }
-
-        return (bool) $replace;
+        return $enabled && !empty(self::search_takeover_status()['ready']);
     }
 
     private static function frontend_search_bailout_reason(mixed $query): string
@@ -12505,6 +12734,11 @@ JS;
         $reason = self::frontend_search_bailout_reason($query);
         if ($reason !== '') {
             return $reason;
+        }
+
+        $takeover = self::search_takeover_status();
+        if (empty($takeover['ready'])) {
+            return 'Search replacement is unavailable until initial indexing and schema readiness checks complete.';
         }
 
         return 'Search replacement is disabled by settings or the wp_fts_replace_frontend_search filter.';
@@ -12575,6 +12809,11 @@ JS;
         $reason = self::admin_post_search_bailout_reason($query);
         if ($reason !== '') {
             return $reason;
+        }
+
+        $takeover = self::search_takeover_status();
+        if (empty($takeover['ready'])) {
+            return 'Search replacement is unavailable until initial indexing and schema readiness checks complete.';
         }
 
         return 'Search replacement is disabled by settings or the wp_fts_replace_admin_post_search filter.';
@@ -14078,6 +14317,7 @@ JS;
                 self::$active_index_writer_token = null;
                 self::finalize_index_batch_summary($summary, $started);
                 self::update_index_health_state($summary);
+                self::maybe_complete_initial_index_readiness($summary);
             }
         }
 
@@ -16013,6 +16253,152 @@ WHERE d.is_deleted = 0"
         ];
     }
 
+    private static function mark_initial_index_pending(): void
+    {
+        $state = self::index_health_state();
+        $state['initial_index_status'] = self::INITIAL_INDEX_STATUS_PENDING;
+        $state['initial_index_started_at'] = self::current_gmt_datetime();
+        $state['initial_index_completed_at'] = '';
+
+        self::set_option(self::INDEX_HEALTH_OPTION, $state);
+    }
+
+    /**
+     * Promote the initial index only after a successful, complete corpus check.
+     *
+     * @param array<string,mixed>|null $summary
+     */
+    private static function maybe_complete_initial_index_readiness(?array $summary = null): void
+    {
+        try {
+            $state = self::index_health_state();
+            if (self::sanitize_initial_index_status($state['initial_index_status'] ?? '') === self::INITIAL_INDEX_STATUS_READY) {
+                return;
+            }
+
+            if ($summary !== null && !self::index_batch_fully_accepts_current_profile($summary)) {
+                return;
+            }
+
+            if (
+                self::schema_status()['status'] !== 'current'
+                || self::pending_queue_count() > 0
+                || !empty($state['stale_debt_active'])
+                || self::sanitize_failure_recovery_records($state['failure_history'] ?? []) !== []
+                || self::initial_index_has_unindexed_content() !== false
+                || !self::physical_index_schema_usable()
+            ) {
+                return;
+            }
+
+            $state['initial_index_status'] = self::INITIAL_INDEX_STATUS_READY;
+            $state['initial_index_started_at'] = self::sanitize_index_timestamp($state['initial_index_started_at'] ?? '') ?: self::current_gmt_datetime();
+            $state['initial_index_completed_at'] = self::current_gmt_datetime();
+            self::set_option(self::INDEX_HEALTH_OPTION, $state);
+        } catch (Throwable) {
+            // Readiness is fail-closed: a later successful batch may retry it.
+        }
+    }
+
+    private static function initial_index_has_unindexed_content(): ?bool
+    {
+        global $wpdb;
+
+        if (!isset($wpdb) || !is_object($wpdb) || !property_exists($wpdb, 'last_error')) {
+            return null;
+        }
+
+        $previous_suppression = null;
+        if (method_exists($wpdb, 'suppress_errors')) {
+            $previous_suppression = (bool) $wpdb->suppress_errors(true);
+        }
+
+        try {
+            $rows = self::select_eligible_unindexed_posts(1);
+            if (trim((string) $wpdb->last_error) !== '') {
+                return null;
+            }
+
+            return $rows !== [];
+        } catch (Throwable) {
+            return null;
+        } finally {
+            if ($previous_suppression !== null) {
+                $wpdb->suppress_errors($previous_suppression);
+            }
+        }
+    }
+
+    /**
+     * Verify all tables and columns required by search without reading rows.
+     */
+    private static function physical_index_schema_usable(): bool
+    {
+        global $wpdb;
+
+        if (!isset($wpdb) || !is_object($wpdb) || !method_exists($wpdb, 'query')) {
+            return false;
+        }
+
+        $prefix = (string) ($wpdb->prefix ?? '');
+        $tables = array_combine(self::FTS_TABLE_SUFFIXES, self::fts_table_names($prefix));
+        if (!is_array($tables)) {
+            return false;
+        }
+
+        $sql = "SELECT t.term, t.doc_freq,
+       p.term, p.doc_id, p.tf,
+       d.doc_id, d.lang, d.doc_len, d.content_hash, d.is_deleted,
+       dl.doc_id, dl.lang, dl.doc_len,
+       dm.doc_id, dm.post_id, dm.post_type, dm.post_status, dm.post_date_gmt,
+       dm.title, dm.excerpt, dm.search_text, dm.data,
+       m.lang, m.k, m.v
+FROM {$tables['fts_terms']} t
+LEFT JOIN {$tables['fts_postings']} p ON 1 = 0
+LEFT JOIN {$tables['fts_docs']} d ON 1 = 0
+LEFT JOIN {$tables['fts_doc_lengths']} dl ON 1 = 0
+LEFT JOIN {$tables['fts_docmeta']} dm ON 1 = 0
+LEFT JOIN {$tables['fts_meta']} m ON 1 = 0
+WHERE 1 = 0";
+
+        $previous_suppression = null;
+        if (method_exists($wpdb, 'suppress_errors')) {
+            $previous_suppression = (bool) $wpdb->suppress_errors(true);
+        }
+
+        try {
+            $result = $wpdb->query($sql);
+            $last_error = property_exists($wpdb, 'last_error') ? trim((string) $wpdb->last_error) : '';
+
+            return $result !== false && $last_error === '';
+        } catch (Throwable) {
+            return false;
+        } finally {
+            if ($previous_suppression !== null) {
+                $wpdb->suppress_errors($previous_suppression);
+            }
+        }
+    }
+
+    private static function search_takeover_cache_key(): string
+    {
+        global $wpdb;
+
+        $prefix = isset($wpdb) && is_object($wpdb) ? (string) ($wpdb->prefix ?? '') : '';
+        $site_id = function_exists('get_current_blog_id') ? max(0, (int) get_current_blog_id()) : 0;
+
+        return $site_id . ':' . $prefix;
+    }
+
+    private static function sanitize_initial_index_status(mixed $value): string
+    {
+        $status = is_scalar($value) ? strtolower(trim((string) $value)) : '';
+
+        return $status === self::INITIAL_INDEX_STATUS_READY
+            ? self::INITIAL_INDEX_STATUS_READY
+            : self::INITIAL_INDEX_STATUS_PENDING;
+    }
+
     /**
      * @return array<string,mixed>
      */
@@ -16054,6 +16440,9 @@ WHERE d.is_deleted = 0"
         $state['stale_debt_processed_count'] = max(0, (int) ($state['stale_debt_processed_count'] ?? 0));
         $state['stale_debt_remaining_count'] = max(0, (int) ($state['stale_debt_remaining_count'] ?? 0));
         $state['failure_history'] = self::sanitize_failure_recovery_records($state['failure_history'] ?? []);
+        $state['initial_index_status'] = self::sanitize_initial_index_status($state['initial_index_status'] ?? '');
+        $state['initial_index_started_at'] = self::sanitize_index_timestamp($state['initial_index_started_at'] ?? '');
+        $state['initial_index_completed_at'] = self::sanitize_index_timestamp($state['initial_index_completed_at'] ?? '');
 
         return $state;
     }
@@ -16094,6 +16483,9 @@ WHERE d.is_deleted = 0"
             'stale_debt_processed_count' => 0,
             'stale_debt_remaining_count' => 0,
             'failure_history' => [],
+            'initial_index_status' => self::INITIAL_INDEX_STATUS_PENDING,
+            'initial_index_started_at' => '',
+            'initial_index_completed_at' => '',
         ];
     }
 
@@ -16104,6 +16496,7 @@ WHERE d.is_deleted = 0"
         $current_profile_hash = self::sanitize_index_profile_hash($profile['hash'] ?? self::index_profile_hash($profile));
         $state['index_profile_hash'] = $current_profile_hash;
         $state['accepted_index_profile_hash'] = $current_profile_hash;
+        $state['initial_index_started_at'] = self::current_gmt_datetime();
 
         self::set_option(self::INDEX_HEALTH_OPTION, $state);
     }
@@ -16827,6 +17220,8 @@ WHERE d.is_deleted = 0"
 
         if ($name === self::ANALYZER_OPTIONS_OPTION) {
             self::reset_request_caches();
+        } elseif ($name === self::INDEX_HEALTH_OPTION || $name === self::SCHEMA_VERSION_OPTION) {
+            self::$search_takeover_status_cache = [];
         }
     }
 
