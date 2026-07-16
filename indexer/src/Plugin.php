@@ -8,6 +8,10 @@ declare(strict_types=1);
  * the narrow WordPress adapter that wires them to activation hooks, post events,
  * WP-Cron, options, visibility checks, and REST registration.
  */
+final class WP_FTS_Index_Writer_Ownership_Lost extends RuntimeException
+{
+}
+
 final class WP_FTS_Plugin
 {
     public const SCHEMA_VERSION = 3;
@@ -325,6 +329,11 @@ final class WP_FTS_Plugin
      * @var array<int,array<string,mixed>>
      */
     private static array $search_final_ownership_state = [];
+
+    /**
+     * Request-local capability for the lease currently fencing index writes.
+     */
+    private static ?string $active_index_writer_token = null;
 
     /**
      * @var array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>|null
@@ -991,8 +1000,11 @@ final class WP_FTS_Plugin
 
         $post = self::post_object($post_id, is_object($post) ? $post : null);
         if ($post !== null && !self::is_indexable_post($post)) {
-            self::tombstone_post($post_id);
-            self::remove_from_queue([$post_id]);
+            if (self::coordinate_post_tombstone($post_id, 'post-save')) {
+                self::remove_from_queue([$post_id]);
+            } else {
+                self::queue_post($post_id);
+            }
             return;
         }
 
@@ -1033,8 +1045,11 @@ final class WP_FTS_Plugin
         }
 
         if ($old_status !== $new_status) {
-            self::tombstone_post($post_id);
-            self::remove_from_queue([$post_id]);
+            if (self::coordinate_post_tombstone($post_id, 'post-status')) {
+                self::remove_from_queue([$post_id]);
+            } else {
+                self::queue_post($post_id);
+            }
             self::clear_failed_item_recovery_metadata([$post_id]);
         }
     }
@@ -1048,8 +1063,11 @@ final class WP_FTS_Plugin
             return;
         }
 
-        self::tombstone_post($post_id);
-        self::remove_from_queue([$post_id]);
+        if (self::coordinate_post_tombstone($post_id, 'post-delete')) {
+            self::remove_from_queue([$post_id]);
+        } else {
+            self::queue_post($post_id);
+        }
         self::clear_failed_item_recovery_metadata([$post_id]);
     }
 
@@ -1209,6 +1227,28 @@ final class WP_FTS_Plugin
      */
     public static function process_queue(int $batch_size = self::DEFAULT_BATCH_SIZE): int
     {
+        $locked = self::run_index_writer_with_lock(
+            'queue',
+            static fn(): int => self::process_queue_under_lock($batch_size),
+            [
+                'batch_size' => $batch_size,
+                'record_health' => false,
+                'record_skip' => false,
+            ]
+        );
+        if (empty($locked['acquired'])) {
+            self::schedule_queue_processor();
+            return 0;
+        }
+
+        return max(0, (int) ($locked['result'] ?? 0));
+    }
+
+    /**
+     * Process a queue snapshot while the caller owns the writer lease.
+     */
+    private static function process_queue_under_lock(int $batch_size): int
+    {
         $queue = self::index_queue(true);
         $claims = $queue->claim(max(1, $batch_size));
         if ($claims === []) {
@@ -1220,7 +1260,14 @@ final class WP_FTS_Plugin
 
         try {
             foreach ($claims as $index => $claim) {
+                self::heartbeat_index_writer();
                 $post_id = $claim['post_id'];
+                if (self::failure_recovery_post_blocked($post_id)) {
+                    $queue->release($claim);
+                    $next_claim = $index + 1;
+                    continue;
+                }
+
                 try {
                     $post = self::post_object($post_id);
                     if ($post !== null && self::is_indexable_post($post)) {
@@ -1233,7 +1280,11 @@ final class WP_FTS_Plugin
                     $queue->acknowledge($claim);
                     $processed++;
                 } catch (Throwable $e) {
+                    if ($e instanceof WP_FTS_Index_Writer_Ownership_Lost) {
+                        throw $e;
+                    }
                     $queue->fail($claim);
+                    $next_claim = $index + 1;
                     throw $e;
                 }
                 $next_claim = $index + 1;
@@ -1313,16 +1364,28 @@ final class WP_FTS_Plugin
 
         $result = null;
         $thrown = null;
+        self::$active_index_writer_token = $token;
         try {
+            self::heartbeat_index_writer();
             $result = $writer();
+            self::assert_index_writer_ownership();
             $summary['processed'] = self::index_writer_processed_count($result, $opts);
         } catch (Throwable $e) {
             $thrown = $e;
             self::remember_index_batch_exception_in_summary($summary, $e);
+            if ($e instanceof WP_FTS_Index_Writer_Ownership_Lost) {
+                self::remember_index_batch_stop($summary, 'ownership_lost');
+            }
         } finally {
-            self::release_index_lock($token);
-            self::finalize_index_batch_summary($summary, $started);
-            self::update_index_health_state($summary);
+            try {
+                self::release_index_lock($token);
+            } finally {
+                self::$active_index_writer_token = null;
+                self::finalize_index_batch_summary($summary, $started);
+                if (!array_key_exists('record_health', $opts) || (bool) $opts['record_health']) {
+                    self::update_index_health_state($summary);
+                }
+            }
         }
 
         if ($thrown !== null) {
@@ -2596,6 +2659,7 @@ final class WP_FTS_Plugin
      */
     public static function reset_index(): array
     {
+        self::assert_index_writer_ownership();
         self::maybe_upgrade_schema();
         $storage = self::storage(false);
         if (!$storage instanceof WP_FTS_Resettable_Storage) {
@@ -13494,11 +13558,13 @@ JS;
         }
 
         $thrown = null;
+        self::$active_index_writer_token = $token;
         try {
+            self::heartbeat_index_writer();
             $budget = self::index_resource_budget($mode, $opts);
             $analyzer = self::runtime_analyzer();
             $block_backoff = $mode === 'cron';
-            $failed_queue_ids = self::process_queue_for_index_batch($batch_size, $budget, $summary, $analyzer);
+            $failed_queue_ids = self::process_queue_for_index_batch($batch_size, $budget, $summary, $analyzer, $block_backoff);
 
             $remaining_capacity = self::remaining_index_batch_capacity($batch_size, $summary);
             $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
@@ -13534,10 +13600,18 @@ JS;
         } catch (Throwable $e) {
             $thrown = $e;
             self::remember_index_batch_exception_in_summary($summary, $e);
+            if ($e instanceof WP_FTS_Index_Writer_Ownership_Lost) {
+                self::remember_index_batch_stop($summary, 'ownership_lost');
+                $summary['has_more'] = true;
+            }
         } finally {
-            self::release_index_lock($token);
-            self::finalize_index_batch_summary($summary, $started);
-            self::update_index_health_state($summary);
+            try {
+                self::release_index_lock($token);
+            } finally {
+                self::$active_index_writer_token = null;
+                self::finalize_index_batch_summary($summary, $started);
+                self::update_index_health_state($summary);
+            }
         }
 
         if ($mode === 'cron' && !empty($summary['has_more'])) {
@@ -13700,8 +13774,13 @@ JS;
      * @param array<string,mixed> $summary
      * @return int[] Failed queue IDs recorded and intentionally skipped for the rest of this batch.
      */
-    private static function process_queue_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer): array
-    {
+    private static function process_queue_for_index_batch(
+        int $limit,
+        array $budget,
+        array &$summary,
+        WP_FTS_Analyzer $analyzer,
+        bool $block_backoff = true
+    ): array {
         if ($limit <= 0) {
             return [];
         }
@@ -13717,6 +13796,7 @@ JS;
 
         try {
             for ($index = 0, $count = count($claims); $index < $count; $index++) {
+                self::heartbeat_index_writer();
                 $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
                 if ($stop_reason !== '') {
                     self::remember_index_batch_stop($summary, $stop_reason);
@@ -13725,6 +13805,14 @@ JS;
 
                 $claim = $claims[$index];
                 $post_id = $claim['post_id'];
+                if (self::failure_recovery_post_blocked($post_id, null, $block_backoff)) {
+                    $queue->release($claim);
+                    $failed_ids[] = $post_id;
+                    $summary['failure_recovery_skipped'] = max(0, (int) ($summary['failure_recovery_skipped'] ?? 0)) + 1;
+                    $next_claim = $index + 1;
+                    continue;
+                }
+
                 $post = null;
                 try {
                     $post = self::post_object($post_id);
@@ -13740,6 +13828,9 @@ JS;
                     $summary['processed'] = (int) $summary['processed'] + 1;
                     $summary['queue_processed'] = (int) $summary['queue_processed'] + 1;
                 } catch (Throwable $e) {
+                    if ($e instanceof WP_FTS_Index_Writer_Ownership_Lost) {
+                        throw $e;
+                    }
                     if (max(0, (int) ($claim['attempts'] ?? 0)) + 1 >= self::FAILURE_RECOVERY_QUARANTINE_AFTER) {
                         $queue->acknowledge($claim);
                     } else {
@@ -13810,6 +13901,7 @@ JS;
         $summary['backfill_queued'] = (int) ($summary['backfill_queued'] ?? 0) + count($work);
         $processed_rows = 0;
         foreach ($work as $post) {
+            self::heartbeat_index_writer();
             $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
             if ($stop_reason !== '') {
                 self::remember_index_batch_stop($summary, $stop_reason);
@@ -13830,6 +13922,9 @@ JS;
                 $summary['processed'] = (int) $summary['processed'] + 1;
                 $summary['backfill_processed'] = (int) $summary['backfill_processed'] + 1;
             } catch (Throwable $e) {
+                if ($e instanceof WP_FTS_Index_Writer_Ownership_Lost) {
+                    throw $e;
+                }
                 self::remember_index_failure_in_summary($summary, $post_id, $post, $e);
             }
         }
@@ -13922,6 +14017,7 @@ JS;
         $last_cursor ??= $cursor;
 
         foreach ($work as $post) {
+            self::heartbeat_index_writer();
             $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
             if ($stop_reason !== '') {
                 self::remember_index_batch_stop($summary, $stop_reason);
@@ -13945,6 +14041,9 @@ JS;
                 $summary['processed'] = (int) $summary['processed'] + 1;
                 $summary['stale_processed'] = (int) $summary['stale_processed'] + 1;
             } catch (Throwable $e) {
+                if ($e instanceof WP_FTS_Index_Writer_Ownership_Lost) {
+                    throw $e;
+                }
                 self::remember_index_failure_in_summary($summary, $post_id, $post, $e);
                 self::remember_index_batch_stop($summary, 'stale_debt_failure');
                 break;
@@ -15132,7 +15231,10 @@ WHERE d.is_deleted = 0"
         if (self::lock_payload_active($existing, $now)) {
             return null;
         }
-        if ($existing !== null) {
+        if (is_array($existing) && !self::compare_and_delete_index_lock($existing)) {
+            return null;
+        }
+        if ($existing !== null && !is_array($existing)) {
             self::delete_option(self::INDEX_LOCK_OPTION);
         }
 
@@ -15142,7 +15244,9 @@ WHERE d.is_deleted = 0"
             'token' => $token,
             'mode' => $mode,
             'started_at' => $now,
+            'heartbeat_at' => $now,
             'expires_at' => $now + $ttl,
+            'renewals' => 0,
         ];
 
         if (function_exists('add_option')) {
@@ -15155,12 +15259,157 @@ WHERE d.is_deleted = 0"
         return is_array($stored) && ($stored['token'] ?? null) === $token ? $token : null;
     }
 
+    /**
+     * Renew the active writer capability before each long-running work unit.
+     *
+     * @throws WP_FTS_Index_Writer_Ownership_Lost When another writer replaced
+     *         the lease or its expiry passed before renewal.
+     */
+    public static function heartbeat_index_writer(bool $force = false): void
+    {
+        $token = self::$active_index_writer_token;
+        $current = self::assert_index_writer_ownership();
+        if ($token === null) {
+            throw new WP_FTS_Index_Writer_Ownership_Lost('FTS index writer ownership was lost before lease renewal.');
+        }
+
+        $now = time();
+        $ttl = self::configured_int_constant('WP_FTS_INDEX_LOCK_TTL', self::DEFAULT_INDEX_LOCK_TTL, 30, 3600);
+        $renew_before = max(5, min(60, intdiv($ttl, 3)));
+        if (!$force && (int) ($current['expires_at'] ?? 0) - $now > $renew_before) {
+            return;
+        }
+
+        $renewed = $current;
+        $renewed['heartbeat_at'] = $now;
+        $renewed['expires_at'] = $now + $ttl;
+        $renewed['renewals'] = max(0, (int) ($current['renewals'] ?? 0)) + 1;
+
+        if (!self::compare_and_swap_index_lock($current, $renewed)) {
+            throw new WP_FTS_Index_Writer_Ownership_Lost('FTS index writer ownership changed during lease renewal.');
+        }
+
+        self::assert_index_writer_ownership();
+    }
+
     private static function release_index_lock(string $token): void
     {
         $lock = self::get_option(self::INDEX_LOCK_OPTION, null);
         if (is_array($lock) && ($lock['token'] ?? null) === $token) {
-            self::delete_option(self::INDEX_LOCK_OPTION);
+            self::compare_and_delete_index_lock($lock);
         }
+    }
+
+    /**
+     * Fence every storage mutation and commit with the current lease token.
+     *
+     * @return array<string,mixed> The currently owned lease payload.
+     */
+    private static function assert_index_writer_ownership(): array
+    {
+        $token = self::$active_index_writer_token;
+        $lock = self::get_option(self::INDEX_LOCK_OPTION, null);
+        if (
+            $token === null
+            || !is_array($lock)
+            || !hash_equals($token, is_scalar($lock['token'] ?? null) ? (string) $lock['token'] : '')
+            || !self::lock_payload_active($lock, time())
+        ) {
+            throw new WP_FTS_Index_Writer_Ownership_Lost('FTS index writer ownership was lost; the stale writer aborted.');
+        }
+
+        return $lock;
+    }
+
+    /**
+     * Atomically replace the exact lease payload when the database option table
+     * is available. Test and non-WordPress adapters use a single-process
+     * checked option update.
+     *
+     * @param array<string,mixed> $expected
+     * @param array<string,mixed> $replacement
+     */
+    private static function compare_and_swap_index_lock(array $expected, array $replacement): bool
+    {
+        $database_result = self::compare_and_swap_index_lock_in_database($expected, $replacement, false);
+        if ($database_result !== null) {
+            return $database_result;
+        }
+
+        if (self::get_option(self::INDEX_LOCK_OPTION, null) != $expected) {
+            return false;
+        }
+        self::set_option(self::INDEX_LOCK_OPTION, $replacement);
+        $stored = self::get_option(self::INDEX_LOCK_OPTION, null);
+
+        return is_array($stored) && ($stored['token'] ?? null) === ($replacement['token'] ?? null);
+    }
+
+    /**
+     * Delete only the exact lease payload observed by the releasing/taking-over
+     * writer so an expired owner cannot delete its successor's lock.
+     *
+     * @param array<string,mixed> $expected
+     */
+    private static function compare_and_delete_index_lock(array $expected): bool
+    {
+        $database_result = self::compare_and_swap_index_lock_in_database($expected, [], true);
+        if ($database_result !== null) {
+            return $database_result;
+        }
+
+        if (self::get_option(self::INDEX_LOCK_OPTION, null) != $expected) {
+            return false;
+        }
+        self::delete_option(self::INDEX_LOCK_OPTION);
+
+        return self::get_option(self::INDEX_LOCK_OPTION, null) === null;
+    }
+
+    /**
+     * @param array<string,mixed> $expected
+     * @param array<string,mixed> $replacement
+     * @return bool|null Null when the WordPress option table is unavailable.
+     */
+    private static function compare_and_swap_index_lock_in_database(array $expected, array $replacement, bool $delete): ?bool
+    {
+        global $wpdb;
+
+        if (
+            !isset($wpdb)
+            || !is_object($wpdb)
+            || !isset($wpdb->options)
+            || !is_scalar($wpdb->options)
+            || !method_exists($wpdb, 'prepare')
+            || !method_exists($wpdb, 'query')
+            || !function_exists('maybe_serialize')
+        ) {
+            return null;
+        }
+
+        $table = (string) $wpdb->options;
+        $expected_value = maybe_serialize($expected);
+        $statement = $delete
+            ? $wpdb->prepare(
+                "DELETE FROM {$table} WHERE option_name = %s AND option_value = %s",
+                self::INDEX_LOCK_OPTION,
+                $expected_value
+            )
+            : $wpdb->prepare(
+                "UPDATE {$table} SET option_value = %s WHERE option_name = %s AND option_value = %s",
+                maybe_serialize($replacement),
+                self::INDEX_LOCK_OPTION,
+                $expected_value
+            );
+        $result = $wpdb->query($statement);
+        if ($result === false) {
+            throw new RuntimeException('Could not compare and update the FTS index writer lease.');
+        }
+        if (function_exists('wp_cache_delete')) {
+            wp_cache_delete(self::INDEX_LOCK_OPTION, 'options');
+        }
+
+        return (int) $result === 1;
     }
 
     private static function index_lock_active(): bool
@@ -15787,6 +16036,7 @@ WHERE d.is_deleted = 0"
      */
     private static function index_post(object $post, array $opts = [], ?WP_FTS_Analyzer $analyzer = null): void
     {
+        self::assert_index_writer_ownership();
         self::maybe_upgrade_schema();
         (new WP_FTS_Indexer(
             self::storage(false),
@@ -15796,10 +16046,40 @@ WHERE d.is_deleted = 0"
     }
 
     /**
+     * Tombstone lifecycle mutations immediately only when this request can own
+     * the writer lease. Contended hooks leave the id queued for the lease holder
+     * or a later batch instead of overlapping its statistics transaction.
+     */
+    private static function coordinate_post_tombstone(int $post_id, string $source): bool
+    {
+        if (self::$active_index_writer_token !== null) {
+            self::heartbeat_index_writer();
+            self::tombstone_post($post_id);
+            return true;
+        }
+
+        $locked = self::run_index_writer_with_lock(
+            $source,
+            static function () use ($post_id): bool {
+                self::tombstone_post($post_id);
+                return true;
+            },
+            [
+                'batch_size' => 1,
+                'record_health' => false,
+                'record_skip' => false,
+            ]
+        );
+
+        return !empty($locked['acquired']);
+    }
+
+    /**
      * Tombstone one post id if it exists in the index.
      */
     private static function tombstone_post(int $post_id): void
     {
+        self::assert_index_writer_ownership();
         self::maybe_upgrade_schema();
         (new WP_FTS_Indexer(self::storage(false), new WP_FTS_Analyzer()))->delete_document($post_id);
     }
@@ -15853,7 +16133,13 @@ WHERE d.is_deleted = 0"
             throw new RuntimeException('Pure PHP FTS requires the WordPress $wpdb global.');
         }
 
-        return new WP_FTS_Storage_Mysql($wpdb);
+        $mutation_guard = self::$active_index_writer_token !== null
+            ? static function (): void {
+                self::heartbeat_index_writer();
+            }
+            : null;
+
+        return new WP_FTS_Storage_Mysql($wpdb, null, $mutation_guard);
     }
 
     /**

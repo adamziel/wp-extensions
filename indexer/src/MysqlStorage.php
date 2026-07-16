@@ -29,6 +29,7 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_
     private string $metaTable;
     private string $queueTable;
     private ?bool $sqliteRuntime = null;
+    private ?Closure $mutationGuard;
 
     /**
      * Bind the backend to a WordPress database connection and table prefix.
@@ -36,8 +37,10 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_
      * @param object $wpdb WordPress `$wpdb`-compatible object.
      * @param string|null $prefix Optional table prefix; defaults to
      *        `$wpdb->prefix`.
+     * @param callable():void|null $mutationGuard Optional ownership check run
+     *        before index writes and transaction commits.
      */
-    public function __construct(object $wpdb, ?string $prefix = null)
+    public function __construct(object $wpdb, ?string $prefix = null, ?callable $mutationGuard = null)
     {
         $this->wpdb = $wpdb;
         $prefix = $prefix ?? (string) ($wpdb->prefix ?? '');
@@ -48,6 +51,7 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_
         $this->docMetaTable = $prefix . 'fts_docmeta';
         $this->metaTable = $prefix . 'fts_meta';
         $this->queueTable = $prefix . 'fts_queue';
+        $this->mutationGuard = $mutationGuard !== null ? Closure::fromCallable($mutationGuard) : null;
     }
 
     /**
@@ -574,6 +578,7 @@ LIMIT %d",
      */
     public function replace_doc_postings(int $doc_id, array $term_frequencies): void
     {
+        $this->guard_mutation();
         $termFrequencies = $this->normalize_term_frequencies($term_frequencies);
         $oldTerms = array_fill_keys($this->terms_for_doc($doc_id), true);
         $newTerms = array_fill_keys(array_keys($termFrequencies), true);
@@ -611,6 +616,7 @@ LIMIT %d",
      */
     public function put_term(string $term, int $df, string $postings): void
     {
+        $this->guard_mutation();
         $this->assert_term_key_fits($term);
 
         if ($df <= 0) {
@@ -633,6 +639,7 @@ LIMIT %d",
      */
     public function delete_term(string $term): void
     {
+        $this->guard_mutation();
         $this->query($this->wpdb->prepare(
             "DELETE FROM {$this->postingsTable} WHERE term = %s",
             $term
@@ -743,6 +750,7 @@ WHERE d.is_deleted = 0 AND dl.lang = %s AND dl.doc_id IN ({$placeholders})",
      */
     public function put_doc(int $doc_id, int|string $doc_len_or_primary_lang, string|array $hash_or_lang_lengths, ?string $hash = null): void
     {
+        $this->guard_mutation();
         [$primaryLang, $langLengths, $contentHash] = $this->normalize_doc_payload(
             $doc_len_or_primary_lang,
             $hash_or_lang_lengths,
@@ -789,6 +797,7 @@ ON DUPLICATE KEY UPDATE doc_len = VALUES(doc_len)",
      */
     public function put_doc_metadata(int $doc_id, array $metadata): void
     {
+        $this->guard_mutation();
         $metadata = WP_FTS_StorageCompat::normalize_doc_metadata($metadata);
         $data = json_encode($metadata, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
         $sql = $this->wpdb->prepare(
@@ -941,6 +950,7 @@ ORDER BY m.doc_id ASC',
      */
     public function delete_doc(int $doc_id): void
     {
+        $this->guard_mutation();
         $sql = $this->wpdb->prepare(
             "INSERT INTO {$this->docsTable} (doc_id, lang, doc_len, content_hash, is_deleted)
 VALUES (%d, %s, 0, NULL, 1)
@@ -987,6 +997,7 @@ ON DUPLICATE KEY UPDATE is_deleted = 1",
      */
     public function add_meta(int|string $lang_or_d_docs, int $d_docs_or_d_len, ?int $d_len = null): void
     {
+        $this->guard_mutation();
         [$lang, $dDocs, $lenDelta] = $this->normalize_meta_delta($lang_or_d_docs, $d_docs_or_d_len, $d_len);
         foreach (['doc_count' => $dDocs, 'len_sum' => $lenDelta] as $key => $delta) {
             $sql = $this->wpdb->prepare(
@@ -1034,6 +1045,7 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
      */
     public function begin_transaction(): void
     {
+        $this->guard_mutation();
         $this->query('START TRANSACTION', 'start FTS transaction');
     }
 
@@ -1042,6 +1054,7 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
      */
     public function commit(): void
     {
+        $this->guard_mutation();
         $this->query('COMMIT', 'commit FTS transaction');
     }
 
@@ -1092,52 +1105,64 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
      * Deleted ids are removed with row deletes from the postings table, term
      * document frequencies are decremented atomically, document/length
      * tombstones are purged, and metadata is rebuilt from active per-language
-     * length rows.
+     * length rows. One transaction publishes cleanup and rebuilt collection
+     * statistics together, or rolls the whole maintenance operation back.
      */
     public function optimize(): void
     {
-        $deletedIds = array_map('intval', $this->get_col(
-            "SELECT doc_id FROM {$this->docsTable} WHERE is_deleted = 1",
-            'list FTS tombstones'
-        ));
-        if ($deletedIds !== []) {
-            $placeholders = implode(',', array_fill(0, count($deletedIds), '%d'));
-            $termCounts = $this->posting_term_counts_for_docs($deletedIds);
-            $this->query($this->wpdb->prepare(
-                "DELETE FROM {$this->postingsTable} WHERE doc_id IN ({$placeholders})",
-                ...$deletedIds
-            ), 'purge FTS tombstone postings');
-            $deltas = [];
-            foreach ($termCounts as $term => $count) {
-                $deltas[$term] = -$count;
+        $this->begin_transaction();
+        try {
+            $deletedIds = array_map('intval', $this->get_col(
+                "SELECT doc_id FROM {$this->docsTable} WHERE is_deleted = 1",
+                'list FTS tombstones'
+            ));
+            $this->guard_mutation();
+            if ($deletedIds !== []) {
+                $placeholders = implode(',', array_fill(0, count($deletedIds), '%d'));
+                $termCounts = $this->posting_term_counts_for_docs($deletedIds);
+                $this->query($this->wpdb->prepare(
+                    "DELETE FROM {$this->postingsTable} WHERE doc_id IN ({$placeholders})",
+                    ...$deletedIds
+                ), 'purge FTS tombstone postings');
+                $deltas = [];
+                foreach ($termCounts as $term => $count) {
+                    $deltas[$term] = -$count;
+                }
+                $this->adjust_doc_freqs($deltas);
+                $this->guard_mutation();
+
+                $this->query($this->wpdb->prepare(
+                    "DELETE FROM {$this->docLengthsTable} WHERE doc_id IN ({$placeholders})",
+                    ...$deletedIds
+                ), 'purge FTS tombstone lengths');
+                $this->query($this->wpdb->prepare(
+                    "DELETE FROM {$this->docMetaTable} WHERE doc_id IN ({$placeholders})",
+                    ...$deletedIds
+                ), 'purge FTS tombstone metadata');
+                $this->query($this->wpdb->prepare(
+                    "DELETE FROM {$this->docsTable} WHERE doc_id IN ({$placeholders})",
+                    ...$deletedIds
+                ), 'purge FTS tombstone documents');
+                $this->guard_mutation();
             }
-            $this->adjust_doc_freqs($deltas);
 
-            $this->query($this->wpdb->prepare(
-                "DELETE FROM {$this->docLengthsTable} WHERE doc_id IN ({$placeholders})",
-                ...$deletedIds
-            ), 'purge FTS tombstone lengths');
-            $this->query($this->wpdb->prepare(
-                "DELETE FROM {$this->docMetaTable} WHERE doc_id IN ({$placeholders})",
-                ...$deletedIds
-            ), 'purge FTS tombstone metadata');
-            $this->query($this->wpdb->prepare(
-                "DELETE FROM {$this->docsTable} WHERE doc_id IN ({$placeholders})",
-                ...$deletedIds
-            ), 'purge FTS tombstone documents');
-        }
-
-        $this->query("DELETE FROM {$this->metaTable}", 'rebuild FTS metadata');
-        $rows = $this->get_results(
-            "SELECT dl.lang, COUNT(*) AS doc_count, COALESCE(SUM(dl.doc_len), 0) AS len_sum
+            $this->query("DELETE FROM {$this->metaTable}", 'rebuild FTS metadata');
+            $rows = $this->get_results(
+                "SELECT dl.lang, COUNT(*) AS doc_count, COALESCE(SUM(dl.doc_len), 0) AS len_sum
 FROM {$this->docLengthsTable} dl
 INNER JOIN {$this->docsTable} d ON d.doc_id = dl.doc_id
 WHERE d.is_deleted = 0 AND dl.doc_len > 0
 GROUP BY dl.lang",
-            'read FTS metadata rebuild rows'
-        );
-        foreach ($rows ?: [] as $row) {
-            $this->add_meta((string) $row->lang, (int) $row->doc_count, (int) $row->len_sum);
+                'read FTS metadata rebuild rows'
+            );
+            $this->guard_mutation();
+            foreach ($rows ?: [] as $row) {
+                $this->add_meta((string) $row->lang, (int) $row->doc_count, (int) $row->len_sum);
+            }
+            $this->commit();
+        } catch (Throwable $e) {
+            $this->rollback();
+            throw $e;
         }
     }
 
@@ -1703,6 +1728,16 @@ WHERE term IN ({$placeholders}) AND doc_freq = 0",
         }
 
         return true;
+    }
+
+    /**
+     * Refuse a write when the plugin writer no longer owns its lease.
+     */
+    private function guard_mutation(): void
+    {
+        if ($this->mutationGuard !== null) {
+            ($this->mutationGuard)();
+        }
     }
 
     /**

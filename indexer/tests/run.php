@@ -2040,6 +2040,9 @@ final class WP_FTS_Test_WPDB
     /** @var array<int,array{generation:int,available_at:int,attempts:int,claim_token:string,claimed_generation:int,claim_expires_at:int}> */
     public array $queue = [];
 
+    /** @var array<string,mixed>|null */
+    private ?array $transactionSnapshot = null;
+
     /** @var array<int,object> */
     public array $postRows = [];
 
@@ -2177,13 +2180,39 @@ final class WP_FTS_Test_WPDB
         }
         $this->last_error = '';
 
-        if (str_starts_with($sql, 'CREATE TABLE')) {
-            $parts = explode(' ', trim(strtok($sql, "\r\n") ?: ''));
-            $this->restore_schema_contract(trim((string) ($parts[2] ?? ''), '`'));
+        if ($sql === 'START TRANSACTION') {
+            $this->transactionSnapshot = [
+                'terms' => $this->terms,
+                'postings' => $this->postings,
+                'docs' => $this->docs,
+                'docLengths' => $this->docLengths,
+                'docMeta' => $this->docMeta,
+                'meta' => $this->meta,
+            ];
             return true;
         }
 
-        if (in_array($sql, ['START TRANSACTION', 'COMMIT', 'ROLLBACK'], true)) {
+        if ($sql === 'COMMIT') {
+            $this->transactionSnapshot = null;
+            return true;
+        }
+
+        if ($sql === 'ROLLBACK') {
+            if ($this->transactionSnapshot !== null) {
+                $this->terms = $this->transactionSnapshot['terms'];
+                $this->postings = $this->transactionSnapshot['postings'];
+                $this->docs = $this->transactionSnapshot['docs'];
+                $this->docLengths = $this->transactionSnapshot['docLengths'];
+                $this->docMeta = $this->transactionSnapshot['docMeta'];
+                $this->meta = $this->transactionSnapshot['meta'];
+            }
+            $this->transactionSnapshot = null;
+            return true;
+        }
+
+        if (str_starts_with($sql, 'CREATE TABLE')) {
+            $parts = explode(' ', trim(strtok($sql, "\r\n") ?: ''));
+            $this->restore_schema_contract(trim((string) ($parts[2] ?? ''), '`'));
             return true;
         }
 
@@ -10630,6 +10659,172 @@ test_case('shared indexing lock prevents overlapping manual and cron batches', f
     } finally {
         $wpdb = $oldWpdb;
     }
+});
+
+test_case('save status and delete hooks defer tombstones behind the writer lease', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    foreach ([801, 802, 803] as $postId) {
+        $fake->docs[$postId] = [
+            'lang' => 'en',
+            'doc_len' => 1,
+            'content_hash' => 'hook-lock-' . $postId,
+            'is_deleted' => 0,
+        ];
+    }
+    $activeLock = [
+        'token' => 'other-hook-writer',
+        'mode' => 'wp-cli-reindex',
+        'started_at' => time(),
+        'expires_at' => time() + 300,
+    ];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = $activeLock;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(801, (object) [
+            'ID' => 801,
+            'post_type' => 'post',
+            'post_status' => 'trash',
+            'post_password' => '',
+        ]);
+        WP_FTS_Plugin::handle_status_transition('trash', 'publish', (object) [
+            'ID' => 802,
+            'post_type' => 'post',
+            'post_status' => 'trash',
+            'post_password' => '',
+        ]);
+        WP_FTS_Plugin::handle_post_delete(803);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(0, $fake->docs[801]['is_deleted'], 'save hook should not tombstone while another writer owns the lease');
+    assert_same(0, $fake->docs[802]['is_deleted'], 'status hook should not tombstone while another writer owns the lease');
+    assert_same(0, $fake->docs[803]['is_deleted'], 'delete hook should not tombstone while another writer owns the lease');
+    assert_same([801, 802, 803], wp_fts_test_queue_ids($fake), 'contended lifecycle tombstones should remain queued for a coordinated writer');
+    assert_same($activeLock, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] ?? null, 'lifecycle hooks should leave the active writer capability untouched');
+    assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'deferred lifecycle tombstones should schedule the queue processor');
+});
+
+test_case('writer heartbeat renews the same ownership token', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $before = [];
+    $after = [];
+
+    try {
+        $locked = WP_FTS_Plugin::run_index_writer_with_lock(
+            'heartbeat-test',
+            static function () use (&$before, &$after): int {
+                $before = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] ?? [];
+                WP_FTS_Plugin::heartbeat_index_writer(true);
+                $after = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] ?? [];
+                return 0;
+            },
+            ['record_health' => false]
+        );
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(true, $locked['acquired'] ?? null, 'heartbeat test should acquire the writer lease');
+    assert_true(is_string($before['token'] ?? null) && ($before['token'] ?? '') !== '', 'acquired lease should carry a private ownership token');
+    assert_same($before['token'] ?? null, $after['token'] ?? null, 'heartbeat should renew rather than replace the writer token');
+    assert_same(((int) ($before['renewals'] ?? 0)) + 1, $after['renewals'] ?? null, 'heartbeat should advance the lease renewal sequence');
+    assert_true((int) ($after['expires_at'] ?? 0) >= (int) ($before['expires_at'] ?? 0), 'heartbeat should not shorten the writer lease');
+    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]), 'writer should release the renewed lease after completion');
+});
+
+test_case('batch aborts when its writer ownership token is replaced', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_seed_backfill_posts($fake, 3, 821);
+    $successor = [
+        'token' => 'successor-writer-token',
+        'mode' => 'cron',
+        'started_at' => time(),
+        'expires_at' => time() + 300,
+    ];
+    $lost = false;
+
+    try {
+        WP_FTS_Plugin::process_manual_index_batch([
+            'batch_size' => 3,
+            'budget_check' => static function (int $processed) use ($successor): bool {
+                if ($processed === 1) {
+                    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = $successor;
+                }
+                return false;
+            },
+        ]);
+    } catch (WP_FTS_Index_Writer_Ownership_Lost) {
+        $lost = true;
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_true($lost, 'batch should abort explicitly after losing its ownership token');
+    assert_same([821], array_keys($fake->docs), 'ownership loss should stop the batch before a second document mutation');
+    assert_same($successor, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] ?? null, 'stale writer release should not delete the successor lease');
+    $diagnostics = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['latest_batch_diagnostics'] ?? [];
+    assert_same('ownership_lost', $diagnostics['stop_reason'] ?? null, 'lease loss should remain visible in bounded batch diagnostics');
+    assert_true(!str_contains(json_encode($diagnostics, JSON_THROW_ON_ERROR), 'successor-writer-token'), 'lease-loss diagnostics should not expose ownership tokens');
+});
+
+test_case('writer ownership loss releases the unprocessed durable queue claim', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    foreach ([831, 832] as $postId) {
+        $GLOBALS['wp_fts_test_posts'][$postId] = wp_fts_test_backfill_post($postId, 'post', 'publish', 'Queued writer ' . $postId);
+    }
+    wp_fts_test_seed_queue($fake, [831, 832]);
+    $successor = [
+        'token' => 'successor-queue-writer-token',
+        'mode' => 'cron',
+        'started_at' => time(),
+        'expires_at' => time() + 300,
+    ];
+    $lost = false;
+
+    try {
+        WP_FTS_Plugin::process_manual_index_batch([
+            'batch_size' => 2,
+            'budget_check' => static function (int $processed) use ($successor): bool {
+                if ($processed === 1) {
+                    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = $successor;
+                }
+                return false;
+            },
+        ]);
+    } catch (WP_FTS_Index_Writer_Ownership_Lost) {
+        $lost = true;
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_true($lost, 'queued batch should abort after losing writer ownership');
+    assert_same([831], array_keys($fake->docs), 'ownership loss should stop before the second queued document mutation');
+    assert_same([832], wp_fts_test_queue_ids($fake), 'the unprocessed queued generation should remain pending');
+    assert_same('', $fake->queue[832]['claim_token'] ?? null, 'ownership loss should release the unprocessed durable claim');
+    assert_same($successor, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] ?? null, 'stale queue writer release should preserve the successor lease');
 });
 
 test_case('scheduled indexing cron reschedules after skipping a manual-held lock', function (): void {
