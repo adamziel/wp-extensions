@@ -116,6 +116,16 @@ for the returned page. Set
 `explain_result_matches` to `false` when a caller needs plan/scoring diagnostics
 but must defer document-term lookups.
 
+## Authoritative Candidate Filtering
+
+Callers with an external visibility model can pass a
+`candidate_doc_ids_filter` callable. It receives the complete active candidate
+ID list and must return the allowed subset. The searcher intersects that result
+with the original candidates before scoring, totals, and pagination; returned
+IDs cannot inject new documents. This option forces exact candidate discovery,
+even when fast top-K was requested, because applying authorization after an
+approximate window can produce false-empty or incomplete result pages.
+
 The initial split keeps the legacy `WP_FTS_*` global class names so existing
 plugin code and tests stay compatible. A future publishing pass can add
 namespaced wrappers without changing this first extraction.

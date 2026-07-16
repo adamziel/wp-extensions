@@ -67,7 +67,11 @@ final class WP_FTS_Searcher
      * a payload that exposes their incomplete-result risk, even when
      * `include_total` is omitted. Word-beginning prefix expansion can be
      * controlled with `prefix_matching`; phrase search requires a
-     * `search_extension` callback for storage-specific matching. `explain` or
+     * `search_extension` callback for storage-specific matching.
+     * `candidate_doc_ids_filter` accepts a callable that receives every exact
+     * candidate document id and returns the readable subset before scoring and
+     * pagination. Supplying it forces exact candidate discovery so visibility
+     * cannot be applied after an approximate result window. `explain` or
      * `debug` adds bounded diagnostics to pagination or candidate-capped
      * payloads. Query-plan explain rows include the user/query surface when the
      * analyzer exposes it, plus the analyzed storage term and key used for
@@ -117,12 +121,13 @@ final class WP_FTS_Searcher
         }
 
         $metadataFilter = $this->has_metadata_filters($opts) ? $this->metadata_filter_values($opts) : null;
-        $fastMode = $this->resolve_fast_mode($opts, $limit + $offset);
+        $candidateFilter = $this->candidate_doc_ids_filter($opts);
+        $fastMode = $this->resolve_fast_mode($opts, $limit + $offset, $candidateFilter !== null);
         $useBoundedTopK = !$recencyBoost['enabled']
             && $fastMode['candidate_cap'] === null
             && $this->can_use_bounded_top_k($opts, $offset);
         $scoreStats = $this->empty_score_stats();
-        $results = $this->score_query_groups($groups, $mode, $useBoundedTopK ? $limit : null, $metadataFilter, $fastMode['candidate_cap'], $scoreStats);
+        $results = $this->score_query_groups($groups, $mode, $useBoundedTopK ? $limit : null, $metadataFilter, $candidateFilter, $fastMode['candidate_cap'], $scoreStats);
         $recencyStats = $this->apply_recency_boost($results, $recencyBoost);
         if (!$useBoundedTopK) {
             usort($results, [self::class, 'compare_ranked_results']);
@@ -160,6 +165,8 @@ final class WP_FTS_Searcher
      *        not need totals or offsets.
      * @param array{post_types:string[],post_statuses:string[],date_after:?string,date_before:?string}|null $metadataFilter
      *        Optional exact metadata filter to apply before scoring.
+     * @param callable(int[]):array<int,mixed>|null $candidateFilter Authoritative
+     *        candidate visibility filter applied before ranking.
      * @param int|null $candidateCap Approximate opt-in cap on candidate ids to
      *        score. Null keeps default exact behavior.
      * @return array<int,array{doc_id:int,score:float,_rank:int}>
@@ -169,6 +176,7 @@ final class WP_FTS_Searcher
         string $mode,
         ?int $topLimit = null,
         ?array $metadataFilter = null,
+        ?callable $candidateFilter = null,
         ?int $candidateCap = null,
         ?array &$stats = null
     ): array
@@ -301,6 +309,27 @@ final class WP_FTS_Searcher
                 $metadataFilter['date_before']
             );
             $scoringDocIds = array_fill_keys($matchingDocIds, true);
+            if ($scoringDocIds === []) {
+                $stats['candidate_docs_scored'] = 0;
+                return [];
+            }
+            $stats['candidate_docs_scored'] = count($scoringDocIds);
+        }
+
+        if ($candidateFilter !== null) {
+            $filteredDocIds = $candidateFilter(array_keys($scoringDocIds));
+            if (!is_array($filteredDocIds)) {
+                throw new UnexpectedValueException('candidate_doc_ids_filter must return an array of document ids.');
+            }
+
+            $allowedDocIds = [];
+            foreach ($filteredDocIds as $docId) {
+                $docId = (int) $docId;
+                if (isset($scoringDocIds[$docId])) {
+                    $allowedDocIds[$docId] = true;
+                }
+            }
+            $scoringDocIds = $allowedDocIds;
             if ($scoringDocIds === []) {
                 $stats['candidate_docs_scored'] = 0;
                 return [];
@@ -840,8 +869,22 @@ final class WP_FTS_Searcher
      * `candidate_cap`/`max_candidates` alone are inert so callers cannot
      * accidentally degrade recall. `fast_top_k` may be boolean or an integer cap.
      */
-    private function resolve_fast_mode(array $opts, int $minimumCandidates): array
+    private function resolve_fast_mode(
+        array $opts,
+        int $minimumCandidates,
+        bool $hasCandidateFilter = false
+    ): array
     {
+        if ($hasCandidateFilter) {
+            return [
+                'mode' => 'exact',
+                'source' => 'candidate_filter',
+                'estimated_candidates' => null,
+                'threshold' => null,
+                'candidate_cap' => null,
+                'reason' => $this->fast_mode_reason('candidate_filter', null),
+            ];
+        }
         if ($this->explicit_exact_top_k_requested($opts)) {
             return [
                 'mode' => 'exact',
@@ -882,6 +925,9 @@ final class WP_FTS_Searcher
         if ($source === 'forced_exact') {
             return 'Exact scoring was explicitly requested, so candidate-capped retrieval was disabled.';
         }
+        if ($source === 'candidate_filter') {
+            return 'An authoritative candidate filter requires exact discovery before ranking, so candidate-capped retrieval was disabled.';
+        }
         if ($source === 'explicit_option') {
             return sprintf(
                 'Candidate-capped retrieval was explicitly requested with a cap of %d; recall, ranking, and totals may be incomplete.',
@@ -893,6 +939,23 @@ final class WP_FTS_Searcher
         }
 
         return 'Fast-mode decision used the default exact scoring path.';
+    }
+
+    /**
+     * Return the optional authoritative candidate filter.
+     *
+     * @return callable(int[]):array<int,mixed>|null
+     */
+    private function candidate_doc_ids_filter(array $opts): ?callable
+    {
+        if (!array_key_exists('candidate_doc_ids_filter', $opts) || $opts['candidate_doc_ids_filter'] === null) {
+            return null;
+        }
+        if (!is_callable($opts['candidate_doc_ids_filter'])) {
+            throw new InvalidArgumentException('candidate_doc_ids_filter must be callable.');
+        }
+
+        return $opts['candidate_doc_ids_filter'];
     }
 
     /**
