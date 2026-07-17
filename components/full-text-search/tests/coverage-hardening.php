@@ -125,6 +125,24 @@ wp_fts_component_hardening_check(
     'fallback HTML tokenizer should preserve text inside a literal angle-bracket sequence'
 );
 
+foreach ([
+    '<div><script>hiddenbefore </div> hiddenafter</script><p>visiblebody</p>',
+    '<article><style>.x{content:"</article>"} hiddenstyle</style><p>visiblebody</p>',
+] as $hiddenRawTextHtml) {
+    $hiddenRawTextTerms = wp_fts_component_hardening_terms(
+        $analyzer->analyze_content($hiddenRawTextHtml, ['lang' => 'en'])
+    );
+    wp_fts_component_hardening_check(
+        in_array('visiblebody', $hiddenRawTextTerms, true),
+        'fallback HTML tokenizer should preserve visible text after a hidden raw-text element'
+    );
+    wp_fts_component_hardening_check(
+        !in_array('hiddenafter', $hiddenRawTextTerms, true)
+            && !in_array('hiddenstyle', $hiddenRawTextTerms, true),
+        'fallback HTML tokenizer should not let a closer in hidden raw text unwind an outer ancestor'
+    );
+}
+
 $storage = new WP_FTS_Storage_InMemory();
 $indexer = new WP_FTS_Indexer($storage, $analyzer);
 $documents = [

@@ -900,6 +900,12 @@ final class WP_FTS_Analyzer
             'TRACK',
             'WBR',
         ], true);
+        $opaqueTags = array_fill_keys([
+            'NOSCRIPT',
+            'SCRIPT',
+            'STYLE',
+            'TEMPLATE',
+        ], true);
 
         foreach ($this->fallbackHtmlTokens($html) as $token) {
             $part = $token['raw'];
@@ -921,6 +927,11 @@ final class WP_FTS_Analyzer
                     for ($i = count($stack) - 1; $i >= 0; $i--) {
                         if ($stack[$i]['tag'] === $tag['name']) {
                             array_splice($stack, $i);
+                            break;
+                        }
+                        // Markup-looking text inside these elements cannot close
+                        // an ancestor outside their hidden parsing scope.
+                        if (isset($opaqueTags[$stack[$i]['tag']])) {
                             break;
                         }
                     }
