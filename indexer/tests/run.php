@@ -8733,6 +8733,17 @@ test_case('search takeover waits for a complete initial corpus and usable physic
         assert_same('physical_schema_unusable', $unusable['reason'] ?? null, 'physical schema failure should identify why takeover is unavailable');
         $unusableQuery = new WP_FTS_Test_Query(['s' => 'batchindexneedle', 'posts_per_page' => 10, 'post_type' => 'post']);
         assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $unusableQuery), 'physical index failure should leave WordPress search in control');
+
+        unset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]);
+        $scheduleCalls = count($GLOBALS['wp_fts_test_schedule_calls']);
+        $repaired = WP_FTS_Plugin::repair_schema();
+        $afterRepair = WP_FTS_Plugin::search_takeover_status();
+        assert_same('current', $repaired['status'] ?? null, 'schema repair should restore the saved schema contract');
+        assert_same(false, $afterRepair['ready'] ?? null, 'repairing an unusable ready schema should require corpus verification before takeover resumes');
+        assert_same('pending', $afterRepair['initial_index_status'] ?? null, 'schema repair should invalidate readiness recorded for the damaged index');
+        assert_same($scheduleCalls + 1, count($GLOBALS['wp_fts_test_schedule_calls']), 'schema repair should schedule the pending corpus verification');
+        $afterRepairQuery = new WP_FTS_Test_Query(['s' => 'batchindexneedle', 'posts_per_page' => 10, 'post_type' => 'post']);
+        assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $afterRepairQuery), 'schema repair should leave WordPress search in control until corpus verification completes');
     } finally {
         $GLOBALS['wp_fts_test_is_admin'] = false;
         unset($GLOBALS['pagenow']);

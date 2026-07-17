@@ -2694,7 +2694,19 @@ final class WP_FTS_Plugin
      */
     public static function repair_schema(): array
     {
+        $takeover = self::search_takeover_status();
+        $requires_initial_index_recheck = ($takeover['initial_index_status'] ?? '') === self::INITIAL_INDEX_STATUS_READY
+            && empty($takeover['ready']);
+        if ($requires_initial_index_recheck) {
+            // Recreated tables may be empty even though the pre-repair health
+            // record described the old index as complete.
+            self::mark_initial_index_pending();
+        }
+
         self::upgrade_schema();
+        if ($requires_initial_index_recheck) {
+            self::schedule_queue_processor();
+        }
 
         return self::schema_status();
     }
