@@ -2716,6 +2716,25 @@ final class WP_FTS_Test_WPDB
             return array_slice($rows, 0, $limit);
         }
 
+        if (str_starts_with($sql, 'SELECT ID, post_type, post_status, post_password FROM `wp_posts` WHERE ID IN (')) {
+            $requested = array_fill_keys(array_map('intval', $args), true);
+            $rows = [];
+            foreach ($GLOBALS['wp_fts_test_posts'] as $post_id => $post) {
+                if (!is_object($post) || !isset($requested[(int) $post_id])) {
+                    continue;
+                }
+                $rows[] = (object) [
+                    'ID' => (int) $post_id,
+                    'post_type' => isset($post->post_type) ? (string) $post->post_type : 'post',
+                    'post_status' => isset($post->post_status) ? (string) $post->post_status : 'draft',
+                    'post_password' => isset($post->post_password) ? (string) $post->post_password : '',
+                ];
+            }
+            usort($rows, static fn(object $left, object $right): int => (int) $left->ID <=> (int) $right->ID);
+
+            return $rows;
+        }
+
         if ($this->missPreparedTermLookups && $args !== [] && (
             str_starts_with($sql, 'SELECT term, doc_freq FROM wp_fts_terms')
             || str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')
@@ -12080,6 +12099,86 @@ test_case('REST search surface filters private results by capability', function 
     }
 });
 
+test_case('PHP and REST visibility filtering reaches public results below 250 hidden ranks', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), WP_FTS_Plugin::runtime_analyzer());
+        for ($offset = 0; $offset < 260; $offset++) {
+            $postId = 3000 + $offset;
+            $post = (object) [
+                'ID' => $postId,
+                'post_title' => 'Hidden visibility rank ' . $postId,
+                'post_content' => '',
+                'post_status' => 'private',
+                'post_type' => 'post',
+            ];
+            $GLOBALS['wp_fts_test_posts'][$postId] = $post;
+            $indexer->index_document_fields($postId, [[
+                'name' => 'content',
+                'text' => implode(' ', array_fill(0, 20, 'deepvisibilityneedle')),
+                'boost' => 1.0,
+            ]], [
+                'lang' => 'en',
+                'metadata' => [
+                    'post_id' => $postId,
+                    'post_type' => 'post',
+                    'post_status' => 'private',
+                    'title' => $post->post_title,
+                    'search_text' => 'deepvisibilityneedle',
+                ],
+            ]);
+        }
+
+        $publicId = 4000;
+        $public = (object) [
+            'ID' => $publicId,
+            'post_title' => 'Public result below the old refill window',
+            'post_content' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+        ];
+        $GLOBALS['wp_fts_test_posts'][$publicId] = $public;
+        $indexer->index_document_fields($publicId, [[
+            'name' => 'content',
+            'text' => 'deepvisibilityneedle',
+            'boost' => 1.0,
+        ]], [
+            'lang' => 'en',
+            'metadata' => [
+                'post_id' => $publicId,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'title' => $public->post_title,
+                'search_text' => 'deepvisibilityneedle',
+            ],
+        ]);
+
+        assert_same([$publicId], array_column(WP_FTS_Plugin::search('deepvisibilityneedle', ['limit' => 1, 'lang' => 'en']), 'doc_id'), 'PHP search should rank the readable corpus instead of stopping after 250 hidden rows');
+        assert_same([$publicId], array_column(WP_FTS_Plugin::rest_search(['q' => 'deepvisibilityneedle', 'limit' => 1, 'lang' => 'en'])['results'] ?? [], 'doc_id'), 'REST search should use the same authoritative pre-ranking visibility filter');
+
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $explained = WP_FTS_Plugin::search_with_explain('deepvisibilityneedle', ['limit' => 1, 'lang' => 'en']);
+        assert_same(1, $explained['explain']['scoring']['total'] ?? null, 'explain totals should count the same readable corpus used for ranking');
+        assert_same(1, $explained['explain']['scoring']['candidate_docs_scored'] ?? null, 'hidden candidates should be removed before scoring');
+        assert_same('candidate_filter', $explained['explain']['fast_mode']['source'] ?? null, 'visibility filtering should force exact discovery before any candidate cap');
+
+        $visibilityQueries = array_values(array_filter(
+            $fake->prepared,
+            static fn(array $statement): bool => str_starts_with($statement['sql'], 'SELECT ID, post_type, post_status, post_password FROM `wp_posts`')
+        ));
+        assert_same(9, count($visibilityQueries), 'three broad searches should use three bounded canonical-post queries each');
+        assert_true(max(array_map(static fn(array $statement): int => count($statement['args']), $visibilityQueries)) <= 100, 'authoritative visibility queries should cap each canonical post lookup at 100 ids');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('REST search explain is operator-gated and filtered to visible rows', function (): void {
     wp_fts_test_with_rest_explain_index(static function (): void {
         $public = WP_FTS_Plugin::rest_search(['q' => 'parityneedle', 'limit' => 10, 'explain' => 'yes']);
@@ -19382,6 +19481,68 @@ test_case('search default exact retrieval applies metadata filters before rankin
 
     assert_same(1, $payload['total'], 'metadata-filtered default retrieval should keep an exact total');
     assert_same(2001, $payload['results'][0]['doc_id'] ?? null, 'metadata-filtered exact search should keep the matching late candidate');
+});
+
+test_case('search applies authoritative candidate filtering before ranking and pagination', function (): void {
+    [$searcher] = single_term_search_fixture(2001, 2001);
+    $seenCandidates = [];
+
+    $payload = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+        'explain' => true,
+        'fast_top_k' => true,
+        'candidate_cap' => 100,
+        'candidate_doc_ids_filter' => static function (array $docIds) use (&$seenCandidates): array {
+            $seenCandidates = $docIds;
+
+            return [2001, 9999];
+        },
+    ]);
+
+    assert_same(2001, count($seenCandidates), 'authoritative filtering should receive every exact candidate before any approximate cap');
+    assert_same(1, $payload['total'] ?? null, 'result totals should come from the filtered candidate corpus');
+    assert_same([2001], array_column($payload['results'] ?? [], 'doc_id'), 'ranking should retain a readable candidate beyond the requested approximate window');
+    assert_same('candidate_filter', $payload['explain']['fast_mode']['source'] ?? null, 'candidate filtering should force exact candidate discovery');
+    assert_same('exact', $payload['explain']['scoring']['total_accuracy'] ?? null, 'candidate-filtered totals should be marked exact');
+    assert_same(1, $payload['explain']['scoring']['candidate_docs_scored'] ?? null, 'scoring diagnostics should reflect the filtered corpus');
+
+    $invalidThrown = false;
+    try {
+        $searcher->search('needle', ['candidate_doc_ids_filter' => 'not-callable']);
+    } catch (InvalidArgumentException) {
+        $invalidThrown = true;
+    }
+    assert_true($invalidThrown, 'invalid candidate filter options should fail explicitly rather than bypass filtering');
+
+    $invalidReturnThrown = false;
+    try {
+        $searcher->search('needle', [
+            'candidate_doc_ids_filter' => static fn(array $docIds): string => implode(',', $docIds),
+        ]);
+    } catch (UnexpectedValueException) {
+        $invalidReturnThrown = true;
+    }
+    assert_true($invalidReturnThrown, 'candidate filters must return an explicit document-id array');
+
+    $extensionCalled = false;
+    $extensionFilterThrown = false;
+    try {
+        $searcher->search('needle', [
+            'phrase' => true,
+            'candidate_doc_ids_filter' => static fn(array $docIds): array => [],
+            'search_extension' => static function () use (&$extensionCalled): array {
+                $extensionCalled = true;
+
+                return [['doc_id' => 99, 'score' => 1.0]];
+            },
+        ]);
+    } catch (InvalidArgumentException) {
+        $extensionFilterThrown = true;
+    }
+    assert_true($extensionFilterThrown, 'candidate filtering should fail closed when an extension owns candidate discovery and pagination');
+    assert_same(false, $extensionCalled, 'an incompatible extension must not return rows before candidate filtering is enforced');
 });
 
 test_case('search candidate cap is explicit approximate opt-in with mandatory result status', function (): void {

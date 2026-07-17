@@ -11107,6 +11107,7 @@ JS;
             'mode' => $mode,
             'limit' => $limit,
             'prefix_matching' => self::search_prefix_matching_value($opts, $settings),
+            'candidate_doc_ids_filter' => static fn(array $doc_ids): array => self::readable_search_candidate_ids($doc_ids),
         ] + self::searcher_prefix_threshold_options($settings, $opts) + self::searcher_recency_boost_options($settings);
         if (isset($opts['lang']) && is_scalar($opts['lang']) && trim((string) $opts['lang']) !== '') {
             $search_options['lang'] = (string) $opts['lang'];
@@ -11121,44 +11122,27 @@ JS;
         $visible = [];
         $explain = [];
         $explain_rows_by_doc = [];
-        $offset = 0;
-        $batch_limit = self::visibility_refill_batch_limit($limit);
-        while (count($visible) < $limit && $offset < self::VISIBILITY_REFILL_MAX_SCAN) {
-            $search_options['limit'] = min($batch_limit, self::VISIBILITY_REFILL_MAX_SCAN - $offset);
-            $search_options['offset'] = $offset;
-            $payload = $searcher->search($query, $search_options);
-            if ($include_explain) {
-                $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
-                if (is_array($payload['explain'] ?? null)) {
-                    $explain = $payload['explain'];
-                    foreach (self::search_explain_results_by_doc($payload['explain']['results'] ?? null) as $doc_id => $row) {
-                        $explain_rows_by_doc[$doc_id] = $row;
-                    }
-                }
-            } else {
-                $rows = $payload;
-            }
-            if ($rows === []) {
-                break;
-            }
-
-            foreach ($rows as $row) {
-                $doc_id = (int) $row['doc_id'];
-                if (self::can_read_post_result($doc_id)) {
-                    $visible[] = [
-                        'doc_id' => $doc_id,
-                        'score' => (float) $row['score'],
-                    ];
-                    if (count($visible) >= $limit) {
-                        break;
-                    }
+        $payload = $searcher->search($query, $search_options);
+        if ($include_explain) {
+            $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
+            if (is_array($payload['explain'] ?? null)) {
+                $explain = $payload['explain'];
+                foreach (self::search_explain_results_by_doc($payload['explain']['results'] ?? null) as $doc_id => $row) {
+                    $explain_rows_by_doc[$doc_id] = $row;
                 }
             }
+        } else {
+            $rows = $payload;
+        }
 
-            if (count($rows) < $search_options['limit']) {
-                break;
+        foreach ($rows as $row) {
+            $doc_id = (int) $row['doc_id'];
+            if (self::can_read_post_result($doc_id)) {
+                $visible[] = [
+                    'doc_id' => $doc_id,
+                    'score' => (float) $row['score'],
+                ];
             }
-            $offset += $search_options['limit'];
         }
 
         if (function_exists('apply_filters')) {
@@ -11174,6 +11158,122 @@ JS;
         }
 
         return $result;
+    }
+
+    /**
+     * Resolve WordPress visibility for every exact candidate before ranking.
+     *
+     * Canonical post fields are fetched in bounded SQL batches. The WordPress
+     * object cache is primed only when non-public rows need per-post capability
+     * checks, with a pure API fallback for non-wpdb adapters.
+     *
+     * @param int[] $doc_ids
+     * @return int[]
+     */
+    private static function readable_search_candidate_ids(array $doc_ids): array
+    {
+        $candidates = [];
+        foreach ($doc_ids as $doc_id) {
+            $doc_id = (int) $doc_id;
+            if ($doc_id > 0) {
+                $candidates[$doc_id] = true;
+            }
+        }
+        $candidate_ids = array_keys($candidates);
+        sort($candidate_ids, SORT_NUMERIC);
+
+        $post_rows = self::search_candidate_post_rows($candidate_ids);
+        if ($post_rows !== null) {
+            if (function_exists('_prime_post_caches') && (!function_exists('is_user_logged_in') || is_user_logged_in())) {
+                $capability_ids = [];
+                foreach ($post_rows as $post_id => $post) {
+                    if (
+                        (!isset($post->post_password) || (string) $post->post_password === '')
+                        && !self::is_public_search_result_post($post)
+                    ) {
+                        $capability_ids[] = $post_id;
+                    }
+                }
+                foreach (array_chunk($capability_ids, 100) as $batch) {
+                    _prime_post_caches($batch, false, false);
+                }
+            }
+
+            $readable = [];
+            foreach ($candidate_ids as $doc_id) {
+                if (isset($post_rows[$doc_id]) && self::can_read_post_object($doc_id, $post_rows[$doc_id])) {
+                    $readable[] = $doc_id;
+                }
+            }
+
+            return $readable;
+        }
+
+        if (function_exists('_prime_post_caches')) {
+            foreach (array_chunk($candidate_ids, 100) as $batch) {
+                _prime_post_caches($batch, false, false);
+            }
+        }
+
+        $readable = [];
+        foreach ($candidate_ids as $doc_id) {
+            if (self::can_read_post_result($doc_id)) {
+                $readable[] = $doc_id;
+            }
+        }
+
+        return $readable;
+    }
+
+    /**
+     * Read canonical visibility fields in bounded queries when wpdb is present.
+     *
+     * @param int[] $candidate_ids
+     * @return array<int,object>|null Null selects the WordPress API fallback.
+     */
+    private static function search_candidate_post_rows(array $candidate_ids): ?array
+    {
+        global $wpdb;
+
+        if (
+            !isset($wpdb)
+            || !is_object($wpdb)
+            || !isset($wpdb->posts)
+            || !is_scalar($wpdb->posts)
+            || !method_exists($wpdb, 'prepare')
+            || !method_exists($wpdb, 'get_results')
+        ) {
+            return null;
+        }
+
+        $table = (string) $wpdb->posts;
+        if (preg_match('/^[A-Za-z0-9_]+$/D', $table) !== 1) {
+            return null;
+        }
+
+        $candidate_set = array_fill_keys($candidate_ids, true);
+        $rows_by_id = [];
+        foreach (array_chunk($candidate_ids, 100) as $batch) {
+            $placeholders = implode(',', array_fill(0, count($batch), '%d'));
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT ID, post_type, post_status, post_password FROM `{$table}` WHERE ID IN ({$placeholders})",
+                ...$batch
+            ));
+            if (!is_array($rows) || (isset($wpdb->last_error) && (string) $wpdb->last_error !== '')) {
+                return null;
+            }
+            foreach ($rows as $row) {
+                if (!is_object($row)) {
+                    continue;
+                }
+                $post_id = isset($row->ID) ? (int) $row->ID : 0;
+                if ($post_id > 0 && isset($candidate_set[$post_id])) {
+                    $rows_by_id[$post_id] = $row;
+                }
+            }
+        }
+
+        return $rows_by_id;
     }
 
     /**
@@ -16270,6 +16370,10 @@ WHERE d.is_deleted = 0"
             return false;
         }
 
+        if (function_exists('is_user_logged_in') && !is_user_logged_in()) {
+            return false;
+        }
+
         return self::current_user_can_read_or_edit_post($post_id);
     }
 
@@ -16283,6 +16387,11 @@ WHERE d.is_deleted = 0"
             return false;
         }
 
+        return self::can_read_post_object($post_id, $post);
+    }
+
+    private static function can_read_post_object(int $post_id, object $post): bool
+    {
         if (isset($post->post_password) && (string) $post->post_password !== '') {
             return false;
         }
