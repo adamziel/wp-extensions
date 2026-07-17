@@ -1691,6 +1691,7 @@ final class WP_FTS_WPCLI_Command
         $count = 0;
 
         do {
+            WP_FTS_Plugin::heartbeat_index_writer();
             $currentBatchSize = $limit > 0 ? min($batchSize, $limit - $count) : $batchSize;
             if ($currentBatchSize <= 0) {
                 break;
@@ -1713,6 +1714,7 @@ LIMIT %d",
 
             $rows = $wpdb->get_results($sql);
             foreach ($rows ?: [] as $row) {
+                WP_FTS_Plugin::heartbeat_index_writer();
                 $last = (int) $row->ID;
                 $indexer->index_post($row, WP_FTS_Plugin::prepare_post_index_options($row, $options));
                 $count++;

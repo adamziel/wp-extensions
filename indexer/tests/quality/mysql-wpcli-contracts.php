@@ -539,6 +539,81 @@ namespace {
         ] as $needle) {
             assert_contains($needle, $queryLog, "optimize should issue {$needle}");
         }
+        $transactionStart = array_search('START TRANSACTION', $wpdb->queries, true);
+        $metadataRebuild = array_search('DELETE FROM wp_fts_meta', $wpdb->queries, true);
+        $transactionCommit = array_search('COMMIT', $wpdb->queries, true);
+        assert_true(is_int($transactionStart), 'optimize should start a transaction before destructive cleanup');
+        assert_true(is_int($metadataRebuild) && $metadataRebuild > $transactionStart, 'optimize should rebuild collection metadata inside the cleanup transaction');
+        assert_true(is_int($transactionCommit) && $transactionCommit > $metadataRebuild, 'optimize should expose cleanup and rebuilt statistics together at commit');
+    });
+
+    test_case('quality mysql optimize rolls back cleanup when metadata rebuild fails', function (): void {
+        $wpdb = new WP_FTS_Test_WPDB();
+        $storage = new WP_FTS_Storage_Mysql($wpdb);
+        $term = WP_FTS_TermNamespace::namespace_term('en', 'rollback');
+
+        $storage->put_doc(311, 'en', ['en' => 2], 'hash-311');
+        $storage->put_doc(312, 'en', ['en' => 3], 'hash-312');
+        $storage->put_term($term, 2, WP_FTS_PostingsCodec::encode([311 => 1, 312 => 2]));
+        $storage->add_meta('en', 2, 5);
+        $storage->delete_doc(311);
+        $before = [
+            'terms' => $wpdb->terms,
+            'postings' => $wpdb->postings,
+            'docs' => $wpdb->docs,
+            'doc_lengths' => $wpdb->docLengths,
+            'doc_meta' => $wpdb->docMeta,
+            'meta' => $wpdb->meta,
+        ];
+        $wpdb->failQueryPrefix = 'DELETE FROM wp_fts_meta';
+
+        $thrown = false;
+        try {
+            $storage->optimize();
+        } catch (RuntimeException $e) {
+            $thrown = str_contains($e->getMessage(), 'rebuild FTS metadata');
+        }
+
+        assert_true($thrown, 'optimize should surface a failed metadata rebuild');
+        assert_same($before['terms'], $wpdb->terms, 'failed optimize should restore term frequencies');
+        assert_same($before['postings'], $wpdb->postings, 'failed optimize should restore tombstoned postings');
+        assert_same($before['docs'], $wpdb->docs, 'failed optimize should restore tombstone documents');
+        assert_same($before['doc_lengths'], $wpdb->docLengths, 'failed optimize should restore document lengths');
+        assert_same($before['doc_meta'], $wpdb->docMeta, 'failed optimize should restore document metadata');
+        assert_same($before['meta'], $wpdb->meta, 'failed optimize should leave prior collection statistics visible');
+        assert_true(in_array('START TRANSACTION', $wpdb->queries, true), 'failed optimize should have started one cleanup transaction');
+        assert_true(in_array('ROLLBACK', $wpdb->queries, true), 'failed optimize should roll back the cleanup transaction');
+        assert_true(!in_array('COMMIT', array_slice($wpdb->queries, -2), true), 'failed optimize should not commit partial cleanup');
+    });
+
+    test_case('quality mysql mutation guard fences transaction commit after ownership loss', function (): void {
+        $wpdb = new WP_FTS_Test_WPDB();
+        $owned = true;
+        $storage = new WP_FTS_Storage_Mysql(
+            $wpdb,
+            null,
+            static function () use (&$owned): void {
+                if (!$owned) {
+                    throw new RuntimeException('writer ownership lost');
+                }
+            }
+        );
+
+        $storage->begin_transaction();
+        $storage->put_doc(321, 'en', ['en' => 1], 'hash-321');
+        $owned = false;
+        $lost = false;
+        try {
+            $storage->commit();
+        } catch (RuntimeException $e) {
+            $lost = $e->getMessage() === 'writer ownership lost';
+            $storage->rollback();
+        }
+
+        assert_true($lost, 'transaction commit should be fenced after writer ownership loss');
+        assert_true(!isset($wpdb->docs[321]), 'rolled-back fenced transaction should not publish document state');
+        assert_true(in_array('ROLLBACK', $wpdb->queries, true), 'fenced transaction should remain rollback-safe after the guard rejects commit');
+        assert_true(!in_array('COMMIT', $wpdb->queries, true), 'fenced transaction should never issue COMMIT after ownership loss');
     });
 
     test_case('quality language inputs canonicalize consistently across mysql and cli', function (): void {
