@@ -11006,6 +11006,62 @@ test_case('save status and delete hooks defer tombstones behind the writer lease
     assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'deferred lifecycle tombstones should schedule the queue processor');
 });
 
+test_case('successful lifecycle tombstones preserve queued generations for current-state reconciliation', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    foreach ([811, 812, 813] as $postId) {
+        $fake->docs[$postId] = [
+            'lang' => 'en',
+            'doc_len' => 1,
+            'content_hash' => 'hook-generation-' . $postId,
+            'is_deleted' => 0,
+        ];
+    }
+    $savedTrash = (object) [
+        'ID' => 811,
+        'post_type' => 'post',
+        'post_status' => 'trash',
+        'post_password' => '',
+    ];
+    $transitionedTrash = (object) [
+        'ID' => 812,
+        'post_type' => 'post',
+        'post_status' => 'trash',
+        'post_password' => '',
+    ];
+    $GLOBALS['wp_fts_test_posts'][811] = $savedTrash;
+    $GLOBALS['wp_fts_test_posts'][812] = $transitionedTrash;
+    wp_fts_test_seed_queue($fake, [811, 812, 813]);
+    (new WP_FTS_Index_Queue($fake))->enqueue(811);
+
+    try {
+        WP_FTS_Plugin::handle_post_save(811, $savedTrash);
+        WP_FTS_Plugin::handle_status_transition('trash', 'publish', $transitionedTrash);
+        WP_FTS_Plugin::handle_post_delete(813);
+
+        assert_same(1, $fake->docs[811]['is_deleted'] ?? null, 'save hook should tombstone while it owns the writer lease');
+        assert_same(1, $fake->docs[812]['is_deleted'] ?? null, 'status hook should tombstone while it owns the writer lease');
+        assert_same(1, $fake->docs[813]['is_deleted'] ?? null, 'delete hook should tombstone while it owns the writer lease');
+        assert_same([811, 812, 813], wp_fts_test_queue_ids($fake), 'successful tombstones should not discard durable generations that may represent newer saves');
+        assert_same(2, $fake->queue[811]['generation'] ?? null, 'successful tombstone should preserve the newest queued generation');
+
+        $processed = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 3]);
+        assert_same(3, $processed['queue_processed'] ?? null, 'later queue processing should reconcile every retained lifecycle generation');
+        assert_same([], wp_fts_test_queue_ids($fake), 'generation-aware acknowledgements should drain reconciled lifecycle work');
+        assert_same([1, 1, 1], array_map(
+            static fn(int $postId): int => (int) ($fake->docs[$postId]['is_deleted'] ?? 0),
+            [811, 812, 813]
+        ), 'idempotent lifecycle reconciliation should leave tombstoned documents deleted');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('writer heartbeat renews the same ownership token', function (): void {
     global $wpdb;
 

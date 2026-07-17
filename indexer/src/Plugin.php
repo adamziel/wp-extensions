@@ -1056,9 +1056,7 @@ final class WP_FTS_Plugin
 
         $post = self::post_object($post_id, is_object($post) ? $post : null);
         if ($post !== null && !self::is_indexable_post($post)) {
-            if (self::coordinate_post_tombstone($post_id, 'post-save')) {
-                self::remove_from_queue([$post_id]);
-            } else {
+            if (!self::coordinate_post_tombstone($post_id, 'post-save')) {
                 self::queue_post($post_id);
             }
             return;
@@ -1101,9 +1099,7 @@ final class WP_FTS_Plugin
         }
 
         if ($old_status !== $new_status) {
-            if (self::coordinate_post_tombstone($post_id, 'post-status')) {
-                self::remove_from_queue([$post_id]);
-            } else {
+            if (!self::coordinate_post_tombstone($post_id, 'post-status')) {
                 self::queue_post($post_id);
             }
             self::clear_failed_item_recovery_metadata([$post_id]);
@@ -1119,9 +1115,7 @@ final class WP_FTS_Plugin
             return;
         }
 
-        if (self::coordinate_post_tombstone($post_id, 'post-delete')) {
-            self::remove_from_queue([$post_id]);
-        } else {
+        if (!self::coordinate_post_tombstone($post_id, 'post-delete')) {
             self::queue_post($post_id);
         }
         self::clear_failed_item_recovery_metadata([$post_id]);
@@ -14191,27 +14185,6 @@ JS;
     }
 
     /**
-     * Remove ids that were indexed synchronously from the background queue.
-     *
-     * @param int[] $post_ids
-     */
-    private static function remove_from_queue(array $post_ids): void
-    {
-        $remove = [];
-        foreach ($post_ids as $post_id) {
-            $post_id = (int) $post_id;
-            if ($post_id > 0) {
-                $remove[$post_id] = true;
-            }
-        }
-        if ($remove === []) {
-            return;
-        }
-
-        self::index_queue(true)->remove(array_keys($remove));
-    }
-
-    /**
      * @return int[]
      */
     private static function pending_queue_count(): int
@@ -16924,6 +16897,10 @@ WHERE 1 = 0";
      * Tombstone lifecycle mutations immediately only when this request can own
      * the writer lease. Contended hooks leave the id queued for the lease holder
      * or a later batch instead of overlapping its statistics transaction.
+     * Successful tombstones deliberately leave existing queue generations in
+     * place: save hooks enqueue without the writer lease, so deleting the row
+     * afterward could erase a newer concurrent save. The queue processor can
+     * safely reconcile the current post state again.
      */
     private static function coordinate_post_tombstone(int $post_id, string $source): bool
     {
