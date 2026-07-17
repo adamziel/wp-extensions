@@ -811,22 +811,18 @@ final class WP_FTS_LanguagePipeline
         }
 
         if (is_object($component)) {
-            if (is_callable([$component, 'index_signature'])) {
-                try {
-                    $signature = $component->index_signature();
-                    if (is_scalar($signature) && trim((string) $signature) !== '') {
-                        return (string) $signature;
-                    }
-                } catch (Throwable) {
-                    // Fall through to the class-level descriptor.
-                }
+            $signature = $this->explicitObjectSignature($component);
+            if ($signature !== null) {
+                return $signature;
             }
-
-            return 'object:' . get_debug_type($component);
         }
 
         if (is_callable($component)) {
             return $this->callableSignature($component);
+        }
+
+        if (is_object($component)) {
+            return 'object:' . get_debug_type($component);
         }
 
         return $this->signatureValue($component);
@@ -835,7 +831,7 @@ final class WP_FTS_LanguagePipeline
     /**
      * Return a deterministic descriptor for a callback.
      */
-    private function callableSignature(callable $callback): string
+    private function callableSignature(callable $callback, bool $includeCapturedState = true): string
     {
         try {
             if (is_string($callback)) {
@@ -843,28 +839,56 @@ final class WP_FTS_LanguagePipeline
             }
 
             if (is_array($callback) && count($callback) === 2) {
-                $target = is_object($callback[0]) ? get_class($callback[0]) : (string) $callback[0];
+                $target = is_object($callback[0])
+                    ? ($this->explicitObjectSignature($callback[0]) ?? 'object:' . get_debug_type($callback[0]))
+                    : (string) $callback[0];
                 return 'method:' . $target . '::' . (string) $callback[1];
             }
 
             if ($callback instanceof Closure) {
                 $reflection = new ReflectionFunction($callback);
+                $capturedState = $includeCapturedState
+                    ? ':' . sha1($this->stableJson($this->signatureValue($reflection->getStaticVariables())))
+                    : '';
                 return sprintf(
-                    'closure:%s:%d-%d',
+                    'closure:%s:%d-%d%s',
                     $reflection->getFileName() ?: 'internal',
                     $reflection->getStartLine(),
-                    $reflection->getEndLine()
+                    $reflection->getEndLine(),
+                    $capturedState
                 );
             }
 
             if (is_object($callback)) {
-                return 'invokable:' . get_class($callback);
+                $target = $this->explicitObjectSignature($callback) ?? 'object:' . get_debug_type($callback);
+                return 'invokable:' . $target;
             }
         } catch (Throwable) {
             return 'callable:' . get_debug_type($callback);
         }
 
         return 'callable:' . get_debug_type($callback);
+    }
+
+    /**
+     * Return an object's explicit index signature when it provides one.
+     */
+    private function explicitObjectSignature(object $component): ?string
+    {
+        if (!is_callable([$component, 'index_signature'])) {
+            return null;
+        }
+
+        try {
+            $signature = $component->index_signature();
+            if (is_scalar($signature) && trim((string) $signature) !== '') {
+                return (string) $signature;
+            }
+        } catch (Throwable) {
+            // Fall through to the callable or class-level descriptor.
+        }
+
+        return null;
     }
 
     /**
@@ -877,11 +901,11 @@ final class WP_FTS_LanguagePipeline
         }
 
         if (is_callable($value)) {
-            return $this->callableSignature($value);
+            return $this->callableSignature($value, false);
         }
 
         if (is_object($value)) {
-            return 'object:' . get_debug_type($value);
+            return $this->componentSignature($value);
         }
 
         if (!is_array($value)) {
