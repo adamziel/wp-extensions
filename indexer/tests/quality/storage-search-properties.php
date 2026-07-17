@@ -697,7 +697,7 @@ test_case('quality legacy storage calls and version-one file migration remain co
     $storage->put_term(WP_FTS_TermNamespace::namespace_term('pl', 'legacy'), 1, WP_FTS_PostingsCodec::encode([44 => 3]));
     $storage->flush();
     $reloaded = new WP_FTS_Storage_File($path);
-    assert_same(storage_snapshot($storage), storage_snapshot($reloaded), 'v2 state should persist exactly after migration and new language records');
+    assert_same(storage_snapshot($storage), storage_snapshot($reloaded), 'revisioned state should persist exactly after migration and new language records');
 
     $reloaded->delete_doc(41);
     $reloaded->optimize();

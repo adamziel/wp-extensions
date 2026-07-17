@@ -7,7 +7,8 @@ WordPress.
 The component owns HTML text extraction, normalization, language detection,
 stemming and lemmatizer-pack loading, term generation, document indexing,
 BM25-style searching, snippets/highlighting helpers, storage interfaces, and
-the in-memory/file storage backends used by tests and non-WordPress callers.
+the in-memory backend plus a test/demo-only file backend for non-WordPress
+callers.
 
 It does not own WordPress hooks, plugin activation, wp-admin UI, WP-CLI commands,
 post extraction, `$wpdb`/MySQL storage, REST integration, or Playground
@@ -50,6 +51,49 @@ extracts visible text, escapes every source byte, and inserts only its own
 `<mark>` elements when highlighting is enabled. Original tags, attributes, and
 entity-decoded markup are never copied into the result, so callers can render
 the returned snippet without maintaining a second source-markup allowlist.
+
+## File Storage Scope
+
+`WP_FTS_Storage_File` is for tests, demos, and small local indexes. It is not a
+production or sizable-index backend: it keeps the full index in memory and
+rewrites the full JSON document at every outer commit. Use a database-backed
+storage implementation when index size, write throughput, or service
+availability matters.
+
+File storage serializes cooperating writers with a persistent `<index>.lock`
+sidecar. An outer transaction acquires that lock, reloads the latest revision,
+and holds the lock through commit or rollback. Commits compare the loaded file
+fingerprint before replacement, increment the payload revision, fully write,
+flush, and `fsync()` a same-directory temporary file, and then use a checked
+atomic rename. The lock is advisory: other code must not edit or replace the
+JSON file directly or remove and recreate the lock sidecar. File data is
+synchronized before rename, but guarantees after sudden power loss still depend
+on the host filesystem and storage stack.
+
+Wrap bulk indexing in one outer transaction. `WP_FTS_Indexer` transactions
+become nested savepoints, so the whole batch performs one JSON rewrite instead
+of one rewrite per document:
+
+```php
+$storage = new WP_FTS_Storage_File(__DIR__ . '/search-index.json');
+$indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+$storage->begin_transaction();
+try {
+    foreach ($documents as $id => $html) {
+        $indexer->index_document($id, $html, ['lang' => 'en']);
+    }
+    $storage->commit();
+} catch (Throwable $error) {
+    // A failed commit keeps its rollback snapshot and lock until rollback.
+    $storage->rollback();
+    throw $error;
+}
+```
+
+An instance exposes the snapshot it most recently loaded; read methods do not
+poll for commits made by other processes. Reopen the storage for a fresh read
+snapshot. A new write transaction always reloads under the lock.
 
 ## Search Explain Payloads
 
