@@ -12,7 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import"
+        "unimorph-source-import",
+        "indexed-runtime-lookups"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -23,35 +24,59 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "264cecb092c75e2e28b3ad0d6ee4951b7f872b5f176e26af37a501aac3095679",
+                "sha256": "23687df30598a93c52de90380ca9e47a847dce48490e5696c33bcbc176e315c1",
                 "rows": 100000,
                 "first_surface": "аак",
                 "last_surface": "кастетам",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0001.tsv.gz.lookup",
+                    "sha256": "b82181a425ebead5b1ca9d389f5e83794eadd5140356fa099ddf4edf846c1724",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "bd37e3181df10033dba44d0ee2690bc6bfc0deb9fb56b9700c415dc71ce2960a",
+                "sha256": "7bd71545f5347c7d34b01d0b6836ad40b7833286ea5a916c6905dc2760eef563",
                 "rows": 100001,
                 "first_surface": "кастетами",
                 "last_surface": "полумесяцах",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0002.tsv.gz.lookup",
+                    "sha256": "ccfab7748a7a2c91c7f910104f4672c4b05a418975d2df7135082bab1d54b93f",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0003.tsv.gz",
-                "sha256": "09d33f4b5a673af6673603f661f1511a597a93302a70fa5c02cdb753571c2a8e",
+                "sha256": "f907119d2d70e63842a253fbd95626cd438fcd6690a0f0c5f6bd85e476975ff3",
                 "rows": 100000,
                 "first_surface": "полумесяце",
                 "last_surface": "фиксировала",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0003.tsv.gz.lookup",
+                    "sha256": "15bb2da4376d749f947fbf6df23fa049d5dc6f287592232b3ca8a1c414e75b53",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0004.tsv.gz",
-                "sha256": "5bb68c0c9f8a1779da9318249456a3a844271d20d35c4466a712c201ee96fae4",
+                "sha256": "cc55974eafb24a3a7da0261c73c0d57aec79e32412430c79333b378376472fbd",
                 "rows": 18766,
                 "first_surface": "фиксировалась",
                 "last_surface": "ётуны",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0004.tsv.gz.lookup",
+                    "sha256": "5b6fe99cdd0840b022a1936f10cf5b78ba4ec92330970f13ccec472968fc5de3",
+                    "blocks": 10
+                }
             }
         ]
     },

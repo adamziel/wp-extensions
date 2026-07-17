@@ -44,7 +44,11 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     /**
      * @param array<string,mixed> $validation Result from WP_FTS_AnalyzerPackValidator::validate().
      */
-    private function __construct(private array $validation, bool $lazy)
+    private function __construct(
+        private array $validation,
+        bool $lazy,
+        private WP_FTS_AnalyzerPackValidator $validator
+    )
     {
         $this->lazy = $lazy;
         $this->packLanguage = self::base_language((string) $validation['manifest']['language']);
@@ -71,18 +75,20 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
             $validation = $validator->validate($manifestPath, true);
             self::assert_expected_language($validation, $expectedLanguage);
             if (($validation['rows_collected'] ?? true) === true) {
-                return new self($validation, false);
+                return new self($validation, false, $validator);
             }
         }
 
-        return new self($metadata, true);
+        return new self($metadata, true, $validator);
     }
 
     /**
      * Try to load a lemmatizer from the public analyzer option shape.
      *
-     * Invalid or missing packs return null so callers can fall back to the
-     * language's existing analyzer path without making indexing/search fatal.
+     * Missing or structurally invalid packs return null so callers can use the
+     * language's existing analyzer path. Runtime bytes are attested lazily;
+     * corruption discovered after construction fails closed instead of silently
+     * changing analyzer output under the pack's healthy index signature.
      */
     public static function from_pack_option(
         mixed $option,
@@ -202,7 +208,10 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         return $this->lastLookupStats;
     }
 
-    private static function manifest_path_from_option(mixed $option, ?string $defaultManifestPath): ?string
+    /**
+     * Resolve the supported public option shapes without loading pack content.
+     */
+    public static function manifest_path_from_option(mixed $option, ?string $defaultManifestPath = null): ?string
     {
         if ($option === false || $option === null) {
             return null;
@@ -300,19 +309,6 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
      */
     private function lookup_lazy_lemmas(string $term): array
     {
-        if (isset($this->lookupCache[$term])) {
-            $this->lastLookupStats = [
-                'term' => $term,
-                'candidate_files' => 0,
-                'files_opened' => 0,
-                'lines_read' => 0,
-                'bytes_loaded' => 0,
-                'modes' => ['memory-cache'],
-            ];
-            return $this->lookupCache[$term];
-        }
-
-        $lemmas = [];
         $files = $this->candidate_runtime_files($term);
         $this->lastLookupStats = [
             'term' => $term,
@@ -322,6 +318,21 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
             'bytes_loaded' => 0,
             'modes' => [],
         ];
+        foreach ($files as $file) {
+            try {
+                $this->validator->attest_runtime_file($file);
+            } catch (Throwable $e) {
+                $this->record_lookup_mode(isset($file['lookup']) ? 'block-index-failed' : 'runtime-attestation-failed');
+                throw new RuntimeException('Lemma pack candidate integrity verification failed.', 0, $e);
+            }
+        }
+
+        if (isset($this->lookupCache[$term])) {
+            $this->record_lookup_mode('memory-cache');
+            return $this->lookupCache[$term];
+        }
+
+        $lemmas = [];
         foreach ($files as $file) {
             foreach ($this->lookup_term_in_runtime_file($term, $file) as $lemma => $_) {
                 $lemmas[$lemma] = true;
@@ -362,7 +373,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     }
 
     /**
-     * @return array<int,array{path:string,rows:int,sha256:string,compression?:string,first_surface?:string,last_surface?:string}>
+     * @return array<int,array{path:string,rows:int,sha256:string,compression?:string,first_surface?:string,last_surface?:string,lookup?:array<string,mixed>}>
      */
     private function candidate_runtime_files(string $term): array
     {
@@ -380,19 +391,34 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     }
 
     /**
-     * @param array{path:string,rows:int,sha256:string,compression?:string,first_surface?:string,last_surface?:string} $file
+     * @param array{path:string,rows:int,sha256:string,compression?:string,first_surface?:string,last_surface?:string,lookup?:array<string,mixed>} $file
      * @return array<string,bool>
      */
     private function lookup_term_in_runtime_file(string $term, array $file): array
     {
+        if (isset($file['lookup']) && is_array($file['lookup'])) {
+            try {
+                $result = WP_FTS_LemmaPackLookupIndex::lookup($file['lookup'], $term);
+            } catch (Throwable $e) {
+                $this->record_lookup_mode('block-index-failed');
+                throw new RuntimeException('Indexed lemma pack lookup failed.', 0, $e);
+            }
+            $this->record_lookup_mode('block-index');
+            $this->lastLookupStats['files_opened']++;
+            $this->lastLookupStats['lines_read'] += $result['lines_read'];
+            $this->lastLookupStats['bytes_loaded'] += $result['decoded_bytes'];
+
+            return $result['lemmas'];
+        }
+
         $compression = isset($file['compression']) ? (string) $file['compression'] : null;
         if ($this->can_use_binary_runtime_lookup($file, $compression)) {
-            return $this->lookup_term_in_decoded_gzip_runtime_file($term, (string) $file['path']);
+            return $this->lookup_term_in_decoded_gzip_runtime_file($term, (string) $file['path'], (string) $file['sha256']);
         }
 
         $handle = $this->open_runtime_file((string) $file['path'], $compression);
         if (!is_resource($handle)) {
-            return [];
+            throw new RuntimeException('Could not open an attested lemma pack runtime shard.');
         }
 
         $lemmas = [];
@@ -436,11 +462,11 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
      *
      * @return array<string,bool>
      */
-    private function lookup_term_in_decoded_gzip_runtime_file(string $term, string $path): array
+    private function lookup_term_in_decoded_gzip_runtime_file(string $term, string $path, string $sha256): array
     {
-        $data = $this->decoded_runtime_file($path);
+        $data = $this->decoded_runtime_file($path, $sha256);
         if (!is_string($data) || $data === '') {
-            return [];
+            throw new RuntimeException('Could not decode an attested lemma pack runtime shard.');
         }
 
         $this->record_lookup_mode('gzip-binary-search');
@@ -612,24 +638,30 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         return is_int($size) && $size > 0 && $size <= self::MAX_BINARY_LOOKUP_COMPRESSED_BYTES;
     }
 
-    private function decoded_runtime_file(string $path): ?string
+    private function decoded_runtime_file(string $path, string $sha256): ?string
     {
-        if (isset(self::$decodedRuntimeFileCache[$path])) {
+        $cacheKey = $path . "\0" . $sha256;
+        if (isset(self::$decodedRuntimeFileCache[$cacheKey])) {
             $this->record_lookup_mode('decoded-file-cache');
-            return self::$decodedRuntimeFileCache[$path];
+            return self::$decodedRuntimeFileCache[$cacheKey];
         }
 
-        $compressed = file_get_contents($path);
+        $compressed = @file_get_contents($path);
         if (!is_string($compressed)) {
             return null;
         }
 
-        $decoded = gzdecode($compressed);
+        set_error_handler(static fn(): bool => true);
+        try {
+            $decoded = gzdecode($compressed);
+        } finally {
+            restore_error_handler();
+        }
         if (!is_string($decoded)) {
             return null;
         }
 
-        $this->cache_decoded_runtime_file($path, $decoded);
+        $this->cache_decoded_runtime_file($cacheKey, $decoded);
 
         return $decoded;
     }
@@ -698,7 +730,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
             if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
                 return null;
             }
-            $handle = gzopen($path, 'rb');
+            $handle = @gzopen($path, 'rb');
 
             return is_resource($handle) ? $handle : null;
         }
@@ -714,7 +746,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     private function read_runtime_line(mixed $handle, ?string $compression): string|false
     {
         if ($compression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
-            return gzgets($handle);
+            return @gzgets($handle);
         }
 
         return fgets($handle);

@@ -5565,10 +5565,14 @@ final class WP_FTS_Plugin
         }
 
         $previousProfile = self::current_index_profile();
-        self::save_bundled_runtime_lemma_pack_selection(
-            self::selected_bundled_runtime_lemma_pack_languages($manifests),
-            $manifests
-        );
+        try {
+            self::save_bundled_runtime_lemma_pack_selection(
+                self::selected_bundled_runtime_lemma_pack_languages($manifests),
+                $manifests
+            );
+        } catch (Throwable) {
+            return [['error', 'Analyzer pack verification failed. Settings were not changed.']];
+        }
         $currentProfile = self::current_index_profile();
         $reasons = self::index_profile_change_reasons($previousProfile, $currentProfile);
         if ($reasons !== []) {
@@ -8899,6 +8903,7 @@ final class WP_FTS_Plugin
         if ($language === '' || $manifestPath === '') {
             throw new InvalidArgumentException('Runtime lemma pack option requires a language and manifest path.');
         }
+        self::assert_runtime_lemma_pack_can_enable($language, $manifestPath);
 
         $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
         $options = is_array($stored) ? $stored : [];
@@ -8945,6 +8950,7 @@ final class WP_FTS_Plugin
             }
 
             if (isset($selected[$language])) {
+                self::assert_runtime_lemma_pack_can_enable($language, $manifestPath);
                 if (!isset($options['lemmatizer_packs_by_lang']) || !is_array($options['lemmatizer_packs_by_lang'])) {
                     $options['lemmatizer_packs_by_lang'] = [];
                 }
@@ -8963,6 +8969,23 @@ final class WP_FTS_Plugin
         self::set_option(self::ANALYZER_OPTIONS_OPTION, $options);
 
         return $options;
+    }
+
+    /**
+     * Fully stream and functionally validate a pack before persisting it as an
+     * enabled runtime analyzer. Failed verification leaves options untouched.
+     */
+    private static function assert_runtime_lemma_pack_can_enable(string $language, string $manifestPath): void
+    {
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath, false);
+        $actualLanguage = WP_FTS_TermNamespace::canonicalize_lang((string) $validation['manifest']['language']);
+        if (self::base_language($actualLanguage) !== self::base_language($language)) {
+            throw new RuntimeException('Analyzer pack language does not match the requested runtime language.');
+        }
+
+        // Construction exercises the exact metadata and lookup reader used by
+        // normal indexing/search after the full streamed verification above.
+        WP_FTS_LanguageLemmaPack::from_manifest_file($manifestPath, null, $language);
     }
 
     /**
@@ -9013,19 +9036,52 @@ final class WP_FTS_Plugin
                 continue;
             }
 
-            $pack = WP_FTS_LanguageLemmaPack::from_pack_option(
+            $manifestPath = WP_FTS_LanguageLemmaPack::manifest_path_from_option(
                 $option,
-                $language,
                 self::default_lemma_pack_manifest_for_language($language)
             );
-            if ($pack === null) {
+            if ($manifestPath === null) {
                 $statuses[] = [
                     'language' => $language,
                     'kind' => 'lemmatizer',
-                    'status' => 'ignored',
+                    'status' => 'not-active',
                     'pack_id' => '',
                     'fixture_only' => false,
-                    'reason' => 'Missing, invalid, or language-mismatched manifest.',
+                    'reason' => 'No runtime manifest could be resolved for this configured pack.',
+                ];
+                continue;
+            }
+            if (!is_file($manifestPath)) {
+                $statuses[] = [
+                    'language' => $language,
+                    'kind' => 'lemmatizer',
+                    'status' => 'not-active',
+                    'pack_id' => '',
+                    'fixture_only' => false,
+                    'reason' => 'Configured pack manifest is missing and is not active.',
+                ];
+                continue;
+            }
+
+            try {
+                $validation = (new WP_FTS_AnalyzerPackValidator())->validate_metadata($manifestPath, true);
+                $actualLanguage = WP_FTS_TermNamespace::canonicalize_lang((string) $validation['manifest']['language']);
+                if (self::base_language($actualLanguage) !== self::base_language($language)) {
+                    throw new RuntimeException('Analyzer pack language does not match requested language.');
+                }
+            } catch (Throwable $e) {
+                $message = strtolower($e->getMessage());
+                $notActive = str_contains($message, 'does not match requested language')
+                    || (str_contains($message, 'zlib') && str_contains($message, 'support'));
+                $statuses[] = [
+                    'language' => $language,
+                    'kind' => 'lemmatizer',
+                    'status' => $notActive ? 'not-active' : 'corrupt',
+                    'pack_id' => '',
+                    'fixture_only' => false,
+                    'reason' => $notActive
+                        ? 'Configured pack is language-mismatched or lacks its optional runtime dependency and is not active.'
+                        : 'Configured pack failed strict runtime integrity verification and is not active.',
                 ];
                 continue;
             }
@@ -9034,8 +9090,8 @@ final class WP_FTS_Plugin
                 'language' => $language,
                 'kind' => 'lemmatizer',
                 'status' => 'active',
-                'pack_id' => $pack->pack_id(),
-                'fixture_only' => $pack->is_fixture_only(),
+                'pack_id' => (string) $validation['manifest']['pack_id'],
+                'fixture_only' => (bool) $validation['manifest']['fixture_only'],
                 'reason' => '',
             ];
         }

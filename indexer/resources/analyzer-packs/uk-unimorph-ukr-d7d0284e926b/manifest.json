@@ -12,7 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import"
+        "unimorph-source-import",
+        "indexed-runtime-lookups"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -23,11 +24,17 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "13f1b2eef98a39471a470f6ac5eb6974b267a862e8cbf53b201d1b67f61b6add",
+                "sha256": "6922b9148736d1a3884d3d48573708de42cefac231667acad2ce464596df3da8",
                 "rows": 14229,
                 "first_surface": "абажур",
                 "last_surface": "ґудзиків",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0001.tsv.gz.lookup",
+                    "sha256": "5d9f1ed8130ba14b0b88d6996918d825f4909490966fe75df92332655b4a7e01",
+                    "blocks": 7
+                }
             }
         ]
     },

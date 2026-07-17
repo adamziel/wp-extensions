@@ -12,7 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import"
+        "unimorph-source-import",
+        "indexed-runtime-lookups"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -23,19 +24,31 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "e4bdde02860fc9a3abfc837a164e73da7152f524acae853959ee15ce7f71e223",
+                "sha256": "0bc63a7966e905c9ee146689faa8cdb00160c5bb234bd22be8f4bce31a996b97",
                 "rows": 100000,
                 "first_surface": "175er",
                 "last_surface": "nottaufe",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0001.tsv.gz.lookup",
+                    "sha256": "a5472b91a2c384728d5b5900ddcbc2761328fff3e7ef937c222de939807c2d89",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "9c7e0c56a9444639fc696dff081394959f5ca0b3b9b76ebdcc6f1a7783ec49df",
+                "sha256": "31233772efdc40688ce960b407e431313928d7f4c30db12759f4253fcb29cc4b",
                 "rows": 70700,
                 "first_surface": "nottaufen",
                 "last_surface": "étangs",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0002.tsv.gz.lookup",
+                    "sha256": "178da5faafda820149f019a2c7f39be262ddfa48130b1adcba3aaf55d70b0c85",
+                    "blocks": 35
+                }
             }
         ]
     },

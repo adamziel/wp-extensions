@@ -33,6 +33,7 @@ $wp_fts_component_files = [
     __DIR__ . '/PolishVerifiedStemmerData.php',
     __DIR__ . '/Stemmer.php',
     __DIR__ . '/AnalyzerPackValidator.php',
+    __DIR__ . '/LemmaPackLookupIndex.php',
     __DIR__ . '/LanguageLemmaPack.php',
     __DIR__ . '/PolishMorfologikLemmatizer.php',
     __DIR__ . '/ChineseJiebaSegmenter.php',

@@ -12,7 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import"
+        "unimorph-source-import",
+        "indexed-runtime-lookups"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -23,19 +24,31 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "716736664f75e8faf10e75bd5b380f705715d80d0dd8e710caf23d549b4654ab",
+                "sha256": "a9935623718a5e078320e556194757e01e9d8762296ed90bbf89c52b5ed2eacc",
                 "rows": 100000,
                 "first_surface": "abacharela",
                 "last_surface": "estourariamos",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0001.tsv.gz.lookup",
+                    "sha256": "0392ed62e1ce4e471ecf34a6775804c4522d064fbacbcc989ec9c0b0d650ff21",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "8faefe02f987cdf05407fb38102b91a8547dbc2fa0b7d1dd165965fe8428118c",
+                "sha256": "a1c5a5f7c1d088d806e0de577df320f518d5758487959df3474437c06c02a606",
                 "rows": 95342,
                 "first_surface": "estourarias",
                 "last_surface": "zurrou",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0002.tsv.gz.lookup",
+                    "sha256": "c139412f3c67388f3536166347e24d247a43ec51e567d41396b7c1805b39332f",
+                    "blocks": 47
+                }
             }
         ]
     },

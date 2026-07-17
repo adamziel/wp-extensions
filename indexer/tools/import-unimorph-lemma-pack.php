@@ -386,6 +386,7 @@ final class WP_FTS_UnimorphLemmaPackImporter
         ));
 
         $runtimeBytes = $this->runtime_bytes($packDir, $manifest);
+        $lookupStats = $this->runtime_lookup_stats($packDir, $manifest);
         $sourceLock = $this->build_source_lock(
             $manifest,
             $manifestSha,
@@ -395,7 +396,8 @@ final class WP_FTS_UnimorphLemmaPackImporter
             $attribution,
             $licenseEvidencePath,
             $licenseEvidenceSha,
-            $runtimeCompression
+            $runtimeCompression,
+            $lookupStats
         );
         $sourceLockPath = $packDir . DIRECTORY_SEPARATOR . 'SOURCE.lock.json';
         $this->write_json_file($sourceLockPath, $sourceLock);
@@ -607,6 +609,31 @@ final class WP_FTS_UnimorphLemmaPackImporter
         return $bytes;
     }
 
+    /**
+     * @return array{format:?string,files:int,bytes:int}
+     */
+    private function runtime_lookup_stats(string $packDir, array $manifest): array
+    {
+        $format = null;
+        $files = 0;
+        $bytes = 0;
+        foreach ($manifest['runtime']['files'] as $file) {
+            if (!is_array($file['lookup'] ?? null)) {
+                continue;
+            }
+            $path = $packDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, (string) $file['lookup']['path']);
+            $size = filesize($path);
+            if (!is_int($size)) {
+                throw new RuntimeException("Could not measure runtime lookup sidecar: {$path}");
+            }
+            $format ??= (string) $file['lookup']['format'];
+            $files++;
+            $bytes += $size;
+        }
+
+        return ['format' => $format, 'files' => $files, 'bytes' => $bytes];
+    }
+
     private function directory_bytes(string $directory): int
     {
         $bytes = 0;
@@ -626,6 +653,7 @@ final class WP_FTS_UnimorphLemmaPackImporter
 
     /**
      * @param array<string,mixed> $manifest
+     * @param array{format:?string,files:int,bytes:int} $lookupStats
      * @return array<string,mixed>
      */
     private function build_source_lock(
@@ -637,8 +665,25 @@ final class WP_FTS_UnimorphLemmaPackImporter
         string $attribution,
         string $licenseEvidencePath,
         string $licenseEvidenceSha,
-        ?string $runtimeCompression
+        ?string $runtimeCompression,
+        array $lookupStats
     ): array {
+        $runtime = [
+            'manifest_sha256' => $manifestSha,
+            'row_count' => $manifest['runtime']['total_rows'],
+            'file_count' => count($manifest['runtime']['files']),
+            'byte_count' => $runtimeBytes,
+            'digest_sha256' => $manifest['runtime']['total_sha256'],
+            'contains_third_party_data' => true,
+            'committed' => true,
+            'compression' => $runtimeCompression ?? 'none',
+        ];
+        if ($lookupStats['files'] > 0) {
+            $runtime['lookup_index_format'] = $lookupStats['format'];
+            $runtime['lookup_index_file_count'] = $lookupStats['files'];
+            $runtime['lookup_index_byte_count'] = $lookupStats['bytes'];
+        }
+
         return [
             'schema_version' => 'wp-fts-unimorph-lemma-pack-source-lock/v1',
             'pack' => [
@@ -674,16 +719,7 @@ final class WP_FTS_UnimorphLemmaPackImporter
                 'commit' => $manifest['provenance']['importer_commit'],
                 'command' => $manifest['provenance']['importer_command'],
             ],
-            'runtime' => [
-                'manifest_sha256' => $manifestSha,
-                'row_count' => $manifest['runtime']['total_rows'],
-                'file_count' => count($manifest['runtime']['files']),
-                'byte_count' => $runtimeBytes,
-                'digest_sha256' => $manifest['runtime']['total_sha256'],
-                'contains_third_party_data' => true,
-                'committed' => true,
-                'compression' => $runtimeCompression ?? 'none',
-            ],
+            'runtime' => $runtime,
             'behavior' => [
                 'oov_policy' => 'return_original_normalized_term',
                 'ambiguity_policy' => $manifest['runtime']['ambiguity_policy'],

@@ -864,6 +864,34 @@ function remove_directory_tree(string $directory): void
     rmdir($directory);
 }
 
+function copy_directory_tree(string $source, string $destination): void
+{
+    if (!is_dir($source)) {
+        throw new WP_FTS_TestFailure("Could not copy missing fixture directory: {$source}");
+    }
+    if (!mkdir($destination, 0777, true) && !is_dir($destination)) {
+        throw new WP_FTS_TestFailure("Could not create copied fixture directory: {$destination}");
+    }
+
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($source, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::SELF_FIRST
+    );
+    foreach ($iterator as $item) {
+        $relative = substr($item->getPathname(), strlen($source) + 1);
+        $target = $destination . DIRECTORY_SEPARATOR . $relative;
+        if ($item->isDir()) {
+            if (!is_dir($target) && !mkdir($target, 0777, true) && !is_dir($target)) {
+                throw new WP_FTS_TestFailure("Could not create copied fixture directory: {$target}");
+            }
+            continue;
+        }
+        if (!copy($item->getPathname(), $target)) {
+            throw new WP_FTS_TestFailure("Could not copy fixture file: {$target}");
+        }
+    }
+}
+
 function write_synthetic_full_analyzer_pack(
     string $directory,
     int $rows,
@@ -16161,6 +16189,277 @@ test_case('generic synthetic Bengali lemma pack validates and routes by language
     assert_same(null, WP_FTS_LanguageLemmaPack::from_pack_option($manifest, 'en'), 'language-mismatched pack options should be rejected safely');
 });
 
+test_case('runtime lemma pack loading rejects gzip and lookup sidecar tampering', function (): void {
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for analyzer pack tampering coverage',
+        'PHP zlib gzip support is unavailable, so compressed analyzer pack tampering is skipped.'
+    );
+
+    $source = dirname(__DIR__) . '/resources/analyzer-packs/te-unimorph-tel-551f60f5f434';
+    $runtimeTamper = temp_directory_path('runtime_pack_gzip_tamper');
+    $lookupTamper = temp_directory_path('runtime_pack_lookup_tamper');
+    try {
+        copy_directory_tree($source, $runtimeTamper);
+        copy_directory_tree($source, $lookupTamper);
+
+        $runtimeManifest = $runtimeTamper . '/manifest.json';
+        $loadedRuntimePack = WP_FTS_LanguageLemmaPack::from_manifest_file($runtimeManifest, null, 'te');
+        assert_true($loadedRuntimePack instanceof WP_FTS_LanguageLemmaPack, 'untampered copied gzip pack should load');
+        assert_same('అంటించు', $loadedRuntimePack->stem('అంటించాడు', 'te'), 'untampered copied gzip pack should resolve a cached lemma before tampering');
+        $runtimePath = $runtimeTamper . '/runtime/0001.tsv.gz';
+        $runtimeBytes = file_get_contents($runtimePath);
+        assert_true(is_string($runtimeBytes) && strlen($runtimeBytes) > 20, 'gzip tampering fixture should be readable');
+        $runtimeBytes[20] = chr(ord($runtimeBytes[20]) ^ 0xff);
+        file_put_contents($runtimePath, $runtimeBytes);
+        touch($runtimePath, time() + 5);
+
+        $warnings = [];
+        set_error_handler(static function (int $severity, string $message) use (&$warnings): bool {
+            $warnings[] = $message;
+            return true;
+        });
+        try {
+            $cachedLookupFailed = false;
+            try {
+                $loadedRuntimePack->stem('అంటించాడు', 'te');
+            } catch (RuntimeException) {
+                $cachedLookupFailed = true;
+            }
+            assert_true($cachedLookupFailed, 'cached terms should re-attest their candidate shard and fail closed after corruption');
+            $reloadedRuntimePack = WP_FTS_LanguageLemmaPack::from_pack_option($runtimeManifest, 'te');
+            assert_true($reloadedRuntimePack instanceof WP_FTS_LanguageLemmaPack, 'lazy construction should not hash every runtime shard');
+            $reloadedLookupFailed = false;
+            try {
+                $reloadedRuntimePack->stem('అంటించాడు', 'te');
+            } catch (RuntimeException) {
+                $reloadedLookupFailed = true;
+            }
+            assert_true($reloadedLookupFailed, 'a reloaded pack should fail closed when candidate attestation fails');
+        } finally {
+            restore_error_handler();
+        }
+        assert_same([], $warnings, 'digest rejection should not emit gzip decoder warnings');
+        assert_true(in_array('block-index-failed', $loadedRuntimePack->last_lookup_stats()['modes'], true), 'late runtime corruption should be visible in lookup diagnostics');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'lemmatizer_packs_by_lang' => ['te' => $runtimeManifest],
+        ];
+        $statuses = WP_FTS_Plugin::runtime_analyzer_pack_statuses();
+        $teluguStatus = null;
+        foreach ($statuses as $status) {
+            if (($status['language'] ?? null) === 'te' && ($status['kind'] ?? null) === 'lemmatizer') {
+                $teluguStatus = $status;
+                break;
+            }
+        }
+        assert_same('corrupt', $teluguStatus['status'] ?? null, 'configured digest-mismatched pack should be reported as corrupt rather than active');
+        assert_contains('not active', (string) ($teluguStatus['reason'] ?? ''), 'corrupt status should state that the pack is not active');
+        assert_true(!str_contains(json_encode($statuses, JSON_THROW_ON_ERROR), $runtimeTamper), 'corrupt status should not disclose filesystem paths');
+
+        $failedStorage = new WP_FTS_Storage_InMemory();
+        $failedIndexer = new WP_FTS_Indexer($failedStorage, new WP_FTS_Analyzer([
+            'default_lang' => 'te',
+            'lemma_packs_by_lang' => ['te' => $runtimeManifest],
+        ]));
+        $indexFailed = false;
+        try {
+            $failedIndexer->index_document_fields(14054, [['name' => 'content', 'text' => 'అంటించాడు']], ['lang' => 'te']);
+        } catch (RuntimeException) {
+            $indexFailed = true;
+        }
+        assert_true($indexFailed, 'candidate attestation failure should abort indexing instead of storing fallback terms under the healthy pack signature');
+        assert_same(null, $failedStorage->get_doc(14054), 'failed candidate attestation should leave no stale indexed document');
+
+        $lookupManifest = $lookupTamper . '/manifest.json';
+        $loadedLookupPack = WP_FTS_LanguageLemmaPack::from_manifest_file($lookupManifest, null, 'te');
+        $lookupPath = $lookupTamper . '/runtime/0001.tsv.gz.lookup';
+        $lookupBytes = file_get_contents($lookupPath);
+        assert_true(is_string($lookupBytes) && strlen($lookupBytes) > 20, 'lookup tampering fixture should be readable');
+        $lookupBytes[strlen($lookupBytes) - 10] = chr(ord($lookupBytes[strlen($lookupBytes) - 10]) ^ 0xff);
+        file_put_contents($lookupPath, $lookupBytes);
+        touch($lookupPath, time() + 5);
+        $lateLookupFailed = false;
+        try {
+            $loadedLookupPack->stem('అంటించాడు', 'te');
+        } catch (RuntimeException) {
+            $lateLookupFailed = true;
+        }
+        assert_true($lateLookupFailed, 'lookup content changed after construction should fail closed');
+        assert_true(in_array('block-index-failed', $loadedLookupPack->last_lookup_stats()['modes'], true), 'late lookup corruption should be visible in lookup diagnostics');
+        assert_same(null, WP_FTS_LanguageLemmaPack::from_pack_option($lookupManifest, 'te'), 'changed sidecar content should fail digest attestation before activation');
+    } finally {
+        remove_directory_tree($runtimeTamper);
+        remove_directory_tree($lookupTamper);
+        wp_fts_test_reset_wordpress_fakes();
+    }
+});
+
+test_case('compressed lemma pack remains an optional analyzer without zlib functions', function (): void {
+    $bootstrap = dirname(__DIR__, 2) . '/components/full-text-search/src/bootstrap.php';
+    $manifest = WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest();
+    $code = 'require ' . var_export($bootstrap, true) . ';'
+        . 'if (WP_FTS_AnalyzerPackValidator::gzip_available()) { fwrite(STDERR, "gzip still available"); exit(2); }'
+        . '$pack = WP_FTS_LanguageLemmaPack::from_pack_option(' . var_export($manifest, true) . ', "pl");'
+        . 'echo $pack === null ? "fallback" : "active";';
+    $result = test_run_subprocess([
+        PHP_BINARY,
+        '-n',
+        '-d',
+        'disable_functions=gzopen,gzgets,gzclose,gzdecode,gzencode,gzread,gzeof',
+        '-r',
+        $code,
+    ]);
+
+    assert_same(0, $result['exit'], 'missing optional zlib functions should not make analyzer construction fatal: ' . $result['stderr']);
+    assert_same('fallback', $result['stdout'], 'a compressed pack should fall back cleanly when optional zlib functions are unavailable');
+    assert_same('', $result['stderr'], 'optional zlib fallback should not emit PHP warnings');
+
+    $decodeOnlyResult = test_run_subprocess([
+        PHP_BINARY,
+        '-n',
+        '-d',
+        'disable_functions=gzdecode',
+        '-r',
+        'require ' . var_export($bootstrap, true) . ';'
+            . '$pack = WP_FTS_LanguageLemmaPack::from_pack_option(' . var_export($manifest, true) . ', "pl");'
+            . 'echo $pack === null ? "fallback" : "active";',
+    ]);
+    assert_same(0, $decodeOnlyResult['exit'], 'missing optional gzip decode support should not be fatal: ' . $decodeOnlyResult['stderr']);
+    assert_same('fallback', $decodeOnlyResult['stdout'], 'an indexed gzip pack should not report active without gzip decode support');
+    assert_same('', $decodeOnlyResult['stderr'], 'missing gzip decode support should not emit PHP warnings');
+});
+
+test_case('strict runtime lemma pack enable leaves options unchanged after integrity failure', function (): void {
+    $source = dirname(WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest());
+    $packDir = temp_directory_path('strict_pack_enable_tamper');
+    try {
+        copy_directory_tree($source, $packDir);
+        $runtimePath = $packDir . '/runtime.tsv';
+        file_put_contents($runtimePath, "zzztampered\ttamper\n", FILE_APPEND);
+        touch($runtimePath, time() + 5);
+        $manifestPath = $packDir . '/manifest.json';
+        $manifest = json_decode((string) file_get_contents($manifestPath), true, 512, JSON_THROW_ON_ERROR);
+        $manifest['runtime']['files'][0]['sha256'] = hash_file('sha256', $runtimePath);
+        file_put_contents(
+            $manifestPath,
+            json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) . "\n"
+        );
+
+        wp_fts_test_reset_wordpress_fakes();
+        $before = ['unrelated' => ['keep' => true]];
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = $before;
+        $thrown = false;
+        try {
+            WP_FTS_Plugin::set_runtime_lemma_pack_option('pl', $manifestPath);
+        } catch (RuntimeException $e) {
+            $thrown = str_contains($e->getMessage(), 'row count mismatch');
+        }
+
+        assert_true($thrown, 'enable should fully stream runtime content even when its file digest was updated');
+        assert_same($before, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? null, 'failed strict enable should not change analyzer options');
+    } finally {
+        remove_directory_tree($packDir);
+        wp_fts_test_reset_wordpress_fakes();
+    }
+});
+
+test_case('analyzer pack digest attestations are reused invalidated and bounded', function (): void {
+    $cache = new ReflectionProperty(WP_FTS_AnalyzerPackValidator::class, 'digestAttestations');
+    $order = new ReflectionProperty(WP_FTS_AnalyzerPackValidator::class, 'digestAttestationOrder');
+    $method = new ReflectionMethod(WP_FTS_AnalyzerPackValidator::class, 'attest_file_digest');
+    $limit = (new ReflectionClass(WP_FTS_AnalyzerPackValidator::class))->getConstant('MAX_DIGEST_ATTESTATIONS');
+    $cache->setValue(null, []);
+    $order->setValue(null, []);
+
+    $directory = temp_directory_path('pack_attestation_cache');
+    try {
+        mkdir($directory, 0777, true);
+        $validator = new WP_FTS_AnalyzerPackValidator();
+        $path = $directory . '/stable.tsv';
+        file_put_contents($path, "stable\trow\n");
+        touch($path, time() + 5);
+        $digest = hash_file('sha256', $path);
+        $method->invoke($validator, $path, $digest, 'digest mismatch');
+        $method->invoke($validator, $path, $digest, 'digest mismatch');
+        assert_same(0, count($cache->getValue()), 'current-second file generations should be rehashed instead of cached');
+
+        clearstatcache(true, $path);
+        $restoredMtime = filemtime($path);
+        assert_true(is_int($restoredMtime), 'hot attestation fixture mtime should be readable');
+        file_put_contents($path, "mutant\trow\n");
+        touch($path, $restoredMtime);
+        $sameStatReplacementFailed = false;
+        try {
+            $method->invoke($validator, $path, $digest, 'digest mismatch');
+        } catch (RuntimeException) {
+            $sameStatReplacementFailed = true;
+        }
+        assert_true($sameStatReplacementFailed, 'same-second same-size replacements with restored mtimes should not reuse a stale attestation');
+        assert_same(0, count($cache->getValue()), 'failed hot-generation attestation should not enter the success cache');
+
+        file_put_contents($path, "stable\trow\n");
+        $candidates = [];
+        for ($i = 0; $i < $limit + 5; $i++) {
+            $candidate = $directory . '/row-' . $i . '.tsv';
+            file_put_contents($candidate, "row{$i}\tlemma{$i}\n");
+            $candidates[$candidate] = hash_file('sha256', $candidate);
+        }
+        sleep(1);
+
+        $method->invoke($validator, $path, $digest, 'digest mismatch');
+        $method->invoke($validator, $path, $digest, 'digest mismatch');
+        assert_same(1, count($cache->getValue()), 'stable size mtime ctime and digest should reuse one attestation');
+
+        clearstatcache(true, $path);
+        $stableMtime = filemtime($path);
+        assert_true(is_int($stableMtime), 'stable attestation fixture mtime should be readable');
+        file_put_contents($path, "mutant\trow\n");
+        touch($path, $stableMtime);
+        $stableReplacementFailed = false;
+        try {
+            $method->invoke($validator, $path, $digest, 'digest mismatch');
+        } catch (RuntimeException) {
+            $stableReplacementFailed = true;
+        }
+        assert_true($stableReplacementFailed, 'a hot ctime should invalidate a stable cached attestation after an immediate replacement');
+        assert_same(1, count($cache->getValue()), 'failed replacement should not add a hot generation to the success cache');
+
+        foreach ($candidates as $candidate => $candidateDigest) {
+            $method->invoke($validator, $candidate, $candidateDigest, 'digest mismatch');
+        }
+        assert_same($limit, count($cache->getValue()), 'attestation cache should evict old entries at its fixed limit');
+        assert_same($limit, count($order->getValue()), 'attestation eviction order should stay bounded with the cache');
+    } finally {
+        $cache->setValue(null, []);
+        $order->setValue(null, []);
+        remove_directory_tree($directory);
+    }
+});
+
+test_case('lazy lemma pack construction attests only the candidate runtime shard before use', function (): void {
+    $cache = new ReflectionProperty(WP_FTS_AnalyzerPackValidator::class, 'digestAttestations');
+    $order = new ReflectionProperty(WP_FTS_AnalyzerPackValidator::class, 'digestAttestationOrder');
+    $cache->setValue(null, []);
+    $order->setValue(null, []);
+
+    try {
+        $manifest = dirname(__DIR__) . '/resources/analyzer-packs/te-unimorph-tel-551f60f5f434/manifest.json';
+        $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifest, null, 'te');
+        assert_same(0, count($cache->getValue()), 'construction should parse bounded metadata without hashing runtime payloads');
+
+        assert_same('అంటించు', $pack->stem('అంటించాడు', 'te'), 'candidate lookup should still resolve its indexed lemma');
+        assert_same(2, count($cache->getValue()), 'first lookup should attest only its runtime shard and lookup sidecar');
+
+        $pack->stem('అంటించాడు', 'te');
+        assert_same(2, count($cache->getValue()), 'cached lookup should not add repeated file attestations');
+    } finally {
+        $cache->setValue(null, []);
+        $order->setValue(null, []);
+    }
+});
+
 test_case('generic lemma packs by language beat baseline and fall back safely', function (): void {
     $manifest = WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest();
     $baseline = new WP_FTS_LanguagePipeline(['enable_stemming' => true]);
@@ -16519,7 +16818,7 @@ test_case('plugin runtime analyzer keeps generic Polish maps canonical within ea
     assert_same(false, $filterLemmaGeneric['lemmatizer_packs_by_lang']['pl'] ?? null, 'lemma_packs_by_lang Polish filter entry should remain canonical over lemmatizer_packs_by_lang and legacy aliases');
 });
 
-test_case('plugin runtime analyzer ignores invalid or language-mismatched generic packs safely', function (): void {
+test_case('plugin runtime analyzer reports missing or language-mismatched generic packs as not active', function (): void {
     $syntheticBnManifest = WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest();
     $polishManifest = WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest();
 
@@ -16540,9 +16839,9 @@ test_case('plugin runtime analyzer ignores invalid or language-mismatched generi
     foreach (WP_FTS_Plugin::runtime_analyzer_pack_statuses() as $status) {
         $statuses[$status['language']] = $status;
     }
-    assert_same('ignored', $statuses['bn']['status'] ?? null, 'language-mismatched pack should be reported as ignored');
-    assert_same('ignored', $statuses['pt']['status'] ?? null, 'missing pack should be reported as ignored');
-    assert_same('ignored', $statuses['ur']['status'] ?? null, 'wrong-language generic pack should be reported as ignored');
+    assert_same('not-active', $statuses['bn']['status'] ?? null, 'language-mismatched configured pack should be reported as not active');
+    assert_same('not-active', $statuses['pt']['status'] ?? null, 'missing configured pack should be reported as not active');
+    assert_same('not-active', $statuses['ur']['status'] ?? null, 'wrong-language configured pack should be reported as not active');
     assert_same('disabled', $statuses['de']['status'] ?? null, 'explicit false pack option should disable that language pack entry');
 });
 
@@ -16935,6 +17234,70 @@ test_case('imported generic lemma pack drives indexing search and snippets', fun
             'include_total' => true,
         ]);
         assert_same(0, $fallbackPayload['total'], 'missing generic pack should preserve the built-in fallback behavior');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+    }
+});
+
+test_case('compressed lemma pack importer emits a strict seekable lookup sidecar', function (): void {
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available() && function_exists('gzencode') && function_exists('gzdecode'),
+        'zlib should be available for compressed importer sidecar coverage',
+        'PHP zlib support is unavailable, so compressed importer sidecar coverage is skipped.'
+    );
+    require_once __DIR__ . '/../tools/import-lemma-tsv-pack.php';
+
+    $sourceDir = temp_directory_path('lemma_tsv_compressed_source');
+    $out = temp_directory_path('lemma_tsv_compressed_pack');
+    try {
+        mkdir($sourceDir, 0777, true);
+        $source = $sourceDir . '/qaa-normalized-lemma.tsv';
+        write_synthetic_qaa_lemma_tsv_source($source);
+        $args = synthetic_qaa_lemma_tsv_import_args($source, $out);
+        $args[] = '--runtime-compression=gzip';
+        $options = WP_FTS_LemmaTsvPackImporter::parse_cli_options($args);
+        (new WP_FTS_LemmaTsvPackImporter())->import($options);
+
+        $manifestPath = $out . '/manifest.json';
+        $manifest = json_decode((string) file_get_contents($manifestPath), true, 512, JSON_THROW_ON_ERROR);
+        foreach ($manifest['runtime']['files'] ?? [] as $runtimeFile) {
+            assert_same(WP_FTS_LemmaPackLookupIndex::FORMAT, $runtimeFile['lookup']['format'] ?? null, 'compressed importer should declare the seekable lookup format');
+            $lookupPath = $out . '/' . (string) ($runtimeFile['lookup']['path'] ?? '');
+            $runtimePath = $out . '/' . (string) ($runtimeFile['path'] ?? '');
+            assert_true(is_file($lookupPath), 'compressed importer should publish each declared lookup sidecar');
+            assert_same(hash_file('sha256', $lookupPath), $runtimeFile['lookup']['sha256'] ?? null, 'compressed importer should attest each sidecar digest');
+
+            $prefix = file_get_contents($lookupPath, false, null, 0, 12);
+            $headerLength = is_string($prefix) && strlen($prefix) === 12
+                ? unpack('Nlength', substr($prefix, 8, 4))
+                : false;
+            assert_same(
+                filesize($lookupPath),
+                12 + (int) (is_array($headerLength) ? ($headerLength['length'] ?? 0) : 0),
+                'lookup sidecar should contain only bounded offset metadata, not a duplicate runtime payload'
+            );
+
+            $rebuilt = WP_FTS_LemmaPackLookupIndex::build(
+                $runtimePath,
+                WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+                (string) $runtimeFile['sha256'],
+                $lookupPath
+            );
+            assert_same($runtimeFile['sha256'], $rebuilt['runtime_sha256'], 'indexed runtime gzip members should rebuild deterministically');
+            assert_same($runtimeFile['lookup']['sha256'], $rebuilt['sha256'], 'lookup offset metadata should rebuild deterministically');
+        }
+
+        (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath, false);
+        $pack = WP_FTS_LanguageLemmaPack::from_manifest_file(
+            $manifestPath,
+            new WP_FTS_AnalyzerPackValidator(1),
+            'qaa'
+        );
+        assert_same('qaalemma', $pack->stem('qaaforma', 'qaa'), 'lazy imported pack should resolve through its sidecar');
+        $stats = $pack->last_lookup_stats();
+        assert_true(in_array('block-index', $stats['modes'], true), 'lazy compressed imported pack should use the sidecar instead of a gzip scan');
+        assert_true(!in_array('stream-scan', $stats['modes'], true), 'lazy compressed imported pack should not scan the gzip shard');
     } finally {
         remove_directory_tree($out);
         remove_directory_tree($sourceDir);
@@ -17570,8 +17933,23 @@ test_case('bundled UniMorph top-language packs validate and drive lemma-backed s
 
         $sourceLock = json_decode((string) file_get_contents(dirname($manifest) . '/SOURCE.lock.json'), true, 512, JSON_THROW_ON_ERROR);
         assert_same('wp-fts-unimorph-lemma-pack-source-lock/v1', $sourceLock['schema_version'] ?? null, "{$language} source lock should use the UniMorph schema");
+        assert_same($validation['manifest_sha256'], $sourceLock['runtime']['manifest_sha256'] ?? null, "{$language} source lock should attest the published indexed manifest");
         assert_same($validation['manifest']['runtime']['total_rows'], $sourceLock['runtime']['row_count'] ?? null, "{$language} source lock should mirror runtime row count");
         assert_same($validation['manifest']['runtime']['total_sha256'], $sourceLock['runtime']['digest_sha256'] ?? null, "{$language} source lock should mirror runtime digest");
+        $runtimeBytes = 0;
+        $lookupBytes = 0;
+        $lookupFiles = 0;
+        foreach ($validation['runtime_files'] as $runtimeFile) {
+            $runtimeBytes += (int) filesize($runtimeFile['path']);
+            if (isset($runtimeFile['lookup'])) {
+                $lookupBytes += (int) filesize($runtimeFile['lookup']['path']);
+                $lookupFiles++;
+            }
+        }
+        assert_same($runtimeBytes, $sourceLock['runtime']['byte_count'] ?? null, "{$language} source lock should mirror indexed gzip bytes");
+        assert_same(WP_FTS_LemmaPackLookupIndex::FORMAT, $sourceLock['runtime']['lookup_index_format'] ?? null, "{$language} source lock should identify the offset-index format");
+        assert_same($lookupFiles, $sourceLock['runtime']['lookup_index_file_count'] ?? null, "{$language} source lock should count every lookup sidecar");
+        assert_same($lookupBytes, $sourceLock['runtime']['lookup_index_byte_count'] ?? null, "{$language} source lock should mirror lookup-sidecar bytes");
 
         $case = bundled_unimorph_runtime_probe_case($validation);
         $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifest, null, $language);
@@ -17961,6 +18339,21 @@ test_case('polish compressed full playground pack validates and lazy-loads full-
     assert_same('4ca60c36adeaa46ad93a499075707c5ac8782928496e23642401e4ddfc84e27f', $validation['manifest']['runtime']['total_sha256'], 'compressed full pack should keep the normalized uncompressed runtime digest');
     assert_same(48, count($validation['runtime_files']), 'compressed full pack should keep the 48 generated runtime shards');
     assert_same(WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP, $validation['runtime_files']['runtime/0001.tsv.gz']['compression'] ?? null, 'compressed runtime metadata should identify gzip shards');
+    $sourceLock = json_decode((string) file_get_contents(dirname($manifest) . '/SOURCE.lock.json'), true, 512, JSON_THROW_ON_ERROR);
+    $compressedBytes = 0;
+    $largestCompressedShard = 0;
+    $lookupBytes = 0;
+    foreach ($validation['runtime_files'] as $runtimeFile) {
+        $size = (int) filesize($runtimeFile['path']);
+        $compressedBytes += $size;
+        $largestCompressedShard = max($largestCompressedShard, $size);
+        $lookupBytes += (int) filesize($runtimeFile['lookup']['path']);
+    }
+    assert_same($validation['manifest_sha256'], $sourceLock['runtime']['manifest_sha256'] ?? null, 'Polish source lock should attest the published indexed manifest');
+    assert_same($compressedBytes, $sourceLock['runtime']['compressed_byte_count'] ?? null, 'Polish source lock should mirror indexed gzip bytes');
+    assert_same($largestCompressedShard, $sourceLock['runtime']['largest_compressed_shard_byte_count'] ?? null, 'Polish source lock should mirror the largest indexed gzip shard');
+    assert_same(48, $sourceLock['runtime']['lookup_index_file_count'] ?? null, 'Polish source lock should count every lookup sidecar');
+    assert_same($lookupBytes, $sourceLock['runtime']['lookup_index_byte_count'] ?? null, 'Polish source lock should mirror lookup-sidecar bytes');
 
     $lemmatizer = WP_FTS_PolishMorfologikLemmatizer::from_manifest_file($manifest);
     assert_same('pl-polimorf-20180722-full', $lemmatizer->pack_id(), 'lazy full lemmatizer should expose the compressed pack identity');
@@ -17988,11 +18381,39 @@ test_case('polish compressed full playground pack validates and lazy-loads full-
         assert_same($surface, $stats['term'], "{$surface} lookup stats should record the normalized term");
         assert_same(1, $stats['candidate_files'], "{$surface} lookup should narrow to one runtime shard by manifest range");
         assert_same(1, $stats['files_opened'], "{$surface} lookup should open only the narrowed runtime shard");
-        assert_true(in_array('gzip-binary-search', $stats['modes'], true), "{$surface} lookup should use gzip binary search");
+        assert_true(in_array('block-index', $stats['modes'], true), "{$surface} lookup should use the durable block index");
         assert_true(!in_array('stream-scan', $stats['modes'], true), "{$surface} lookup should not stream-scan the full shard");
-        assert_true($stats['lines_read'] <= 64, "{$surface} lookup should inspect a bounded number of runtime rows");
-        assert_true($stats['bytes_loaded'] > 0 && $stats['bytes_loaded'] <= 3000000, "{$surface} lookup should load one bounded decoded shard");
+        assert_true(!in_array('gzip-binary-search', $stats['modes'], true), "{$surface} lookup should not inflate a whole gzip shard");
+        assert_true($stats['lines_read'] <= WP_FTS_LemmaPackLookupIndex::DEFAULT_BLOCK_ROWS + 8, "{$surface} lookup should inspect at most one bounded sidecar block");
+        assert_true($stats['bytes_loaded'] > 0 && $stats['bytes_loaded'] <= 131072, "{$surface} lookup should inflate one small sidecar block");
     }
+});
+
+test_case('polish compressed full pack cold lookups avoid cumulative full-shard decompression', function (): void {
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for compressed full pack index coverage',
+        'PHP zlib gzip support is unavailable, so compressed full pack index coverage is skipped.'
+    );
+
+    $manifest = WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest();
+    $validation = (new WP_FTS_AnalyzerPackValidator())->validate_metadata($manifest, false);
+    $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifest, null, 'pl');
+    $bytesLoaded = 0;
+    $lookups = 0;
+    foreach ($validation['runtime_files'] as $runtimeFile) {
+        $surface = (string) ($runtimeFile['first_surface'] ?? '');
+        assert_true($surface !== '', 'indexed runtime shard should expose a first-surface probe');
+        $pack->analyze($surface, 'pl');
+        $stats = $pack->last_lookup_stats();
+        assert_true(in_array('block-index', $stats['modes'], true), 'cold shard probe should use the durable block sidecar');
+        assert_true(!in_array('gzip-binary-search', $stats['modes'], true), 'cold shard probe should not materialize a decoded gzip shard');
+        $bytesLoaded += $stats['bytes_loaded'];
+        $lookups++;
+    }
+
+    assert_same(48, $lookups, 'cold lookup coverage should probe every full Polish runtime shard');
+    assert_true($bytesLoaded > 0 && $bytesLoaded < 8 * 1024 * 1024, 'all cold shard probes should inflate bounded blocks instead of roughly 117 MB of runtime rows');
 });
 
 test_case('polish compressed full pack exposes ambiguous lemma analyses without changing stem compatibility', function (): void {

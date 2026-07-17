@@ -173,6 +173,11 @@ php indexer/tools/collect-release-evidence.php \
   --previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA
 ```
 
+Direct-install readiness fully streams every shipped analyzer pack, verifies
+runtime and lookup-sidecar digests, compares sidecar rows with their source
+shards, and executes a real pack lookup. A changed or unreadable dictionary or
+sidecar blocks the release instead of passing a package-layout check.
+
 Use the public-submission target only for WordPress.org/SVN or other public
 marketplace submission review:
 

@@ -12,7 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import"
+        "unimorph-source-import",
+        "indexed-runtime-lookups"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -23,67 +24,115 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "82495a916db84cf827a1b8721ecfd579eac189d5a6a2f755b393f21c24cd61e9",
+                "sha256": "dcb3fc930dd3e5f4cae246cc312eccc351f3c8d9d96fee99aa130dd41c155860",
                 "rows": 100000,
                 "first_surface": "aaleniana",
                 "last_surface": "autoricenme",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0001.tsv.gz.lookup",
+                    "sha256": "2859defe02e8a488065c79c815c44080be1c971d60893b9cb6fcce3cac0c0f44",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "4f4608890933fed61c3c06f646dd295b553d4fa138dfa8d2cdc6f8db49c5d906",
+                "sha256": "01f546cfc4186f14da5f64e4c1ea23b16c31b4f720f6fd437b62648e9bacb465",
                 "rows": 100000,
                 "first_surface": "autoricennos",
                 "last_surface": "corporizandote",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0002.tsv.gz.lookup",
+                    "sha256": "c4cbf59bc7bbf777d0e364a58a6f18f4a2a20673dbbcd5c2db55eec581f62001",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0003.tsv.gz",
-                "sha256": "e3765c884972b62a7d9da4dc633e33d0ff65cc8f910f7b0d75c1023ece2ce00c",
+                "sha256": "1d51c85a7ec9e698c60fcc8f124596286e585205cf80245be7494493a450421c",
                 "rows": 100000,
                 "first_surface": "corporizanos",
                 "last_surface": "dobleteadas",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0003.tsv.gz.lookup",
+                    "sha256": "18e6545673dee582114338710ba51049bdb491b6740de877dd90bb2b6dd078e4",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0004.tsv.gz",
-                "sha256": "39a1e9b2a7c3f56fef352320e004cbed27a9027509803e8b4401b5f596714068",
+                "sha256": "fb250948cff695b541cf02c54a13c4defddfe235ca461b9e1f6b501e314de662",
                 "rows": 100000,
                 "first_surface": "dobleteado",
                 "last_surface": "favelizalas",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0004.tsv.gz.lookup",
+                    "sha256": "fa6017386a404c43196d7193825124e50145e3604682ffea4e14deae6cec1e5f",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0005.tsv.gz",
-                "sha256": "e0054f97bf869eb63e8866de8c46ad41309183689f24c598a0ea0d3a0be7482c",
+                "sha256": "56960a3352a84989def369993edeb6046bfcc6cf1f51da7a868eda119fb9a33c",
                 "rows": 100000,
                 "first_surface": "favelizale",
                 "last_surface": "malgastenme",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0005.tsv.gz.lookup",
+                    "sha256": "0cffae547565d486466e6e30d1a6f3eb517f46be79cbe7333eb6734743880692",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0006.tsv.gz",
-                "sha256": "4126a27dcaae058b61d53a5c5e0eb91da344df16d4526228a01f7ce54f8bed24",
+                "sha256": "0580094a6d43305c881f07c5699e48467138f34862dcb238cc6f1f6cb2d32a38",
                 "rows": 100000,
                 "first_surface": "malgastennos",
                 "last_surface": "principaliceis",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0006.tsv.gz.lookup",
+                    "sha256": "90ec87e783729125d3e62ad61da89057e8650bde80402792c074a5d27cefce26",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0007.tsv.gz",
-                "sha256": "742423d6f6f68c9d0447762a743c0487fda8a4bbe8649368df0b1f930c2e1d32",
+                "sha256": "576d533ed7ff1f77a36def1c8b8b68a8eda41d9726593de3268f5c5cadf2e29f",
                 "rows": 100000,
                 "first_surface": "principalicela",
                 "last_surface": "segmentaba",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0007.tsv.gz.lookup",
+                    "sha256": "ff2281732b179724d11d6a12e3aa81037a6c4976a9bdfb755221cd7ce7855114",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0008.tsv.gz",
-                "sha256": "198e2f8c6884abe4b01b4193a4ce04f9f2ac8b889f8139c0451371fea6e79598",
+                "sha256": "2f94b68a56f365077b714b2d8942abd217ae9edb5b1a65cdd675c8f3f4c7a449",
                 "rows": 94521,
                 "first_surface": "segmentabais",
                 "last_surface": "zwitterionicos",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0008.tsv.gz.lookup",
+                    "sha256": "b72ba06f7fa146cef6211f1874fb0f93fb41d3179458a5d009c2fccef74eeb6c",
+                    "blocks": 47
+                }
             }
         ]
     },

@@ -558,6 +558,14 @@ final class WP_FTS_LemmaTsvPackImporter
                     if (isset($file['compression'])) {
                         $entry['compression'] = $file['compression'];
                     }
+                    if (isset($file['lookup']) && is_array($file['lookup'])) {
+                        $entry['lookup'] = [
+                            'format' => $file['lookup']['format'],
+                            'path' => 'runtime/' . basename((string) $file['lookup']['path']),
+                            'sha256' => $file['lookup']['sha256'],
+                            'blocks' => $file['lookup']['blocks'],
+                        ];
+                    }
 
                     return $entry;
                 },
@@ -645,7 +653,7 @@ final class WP_FTS_LemmaTsvPackImporter
 
     /**
      * @param array{path:string,handle:resource,compression:?string,rows:int,first_surface:?string,last_surface:?string} $shard
-     * @return array{path:string,sha256:string,rows:int,first_surface:string,last_surface:string,compression?:string}
+     * @return array{path:string,sha256:string,rows:int,first_surface:string,last_surface:string,compression?:string,lookup?:array<string,mixed>}
      */
     private function close_shard(array $shard): array
     {
@@ -673,6 +681,17 @@ final class WP_FTS_LemmaTsvPackImporter
         if ($shard['compression'] !== null) {
             $file['compression'] = $shard['compression'];
         }
+        if ($shard['compression'] === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+            $lookupPath = $shard['path'] . '.lookup';
+            $lookup = WP_FTS_LemmaPackLookupIndex::build(
+                $shard['path'],
+                $shard['compression'],
+                $sha,
+                $lookupPath
+            );
+            $file['sha256'] = $lookup['runtime_sha256'];
+            $file['lookup'] = ['path' => $lookupPath] + $lookup;
+        }
 
         return $file;
     }
@@ -695,6 +714,7 @@ final class WP_FTS_LemmaTsvPackImporter
         }
         if ($data['runtime_compression'] === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
             $capabilities[] = 'compressed-runtime-files';
+            $capabilities[] = 'indexed-runtime-lookups';
         }
         $license = [
             'spdx_id' => $data['license'],

@@ -12,7 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import"
+        "unimorph-source-import",
+        "indexed-runtime-lookups"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -23,27 +24,45 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "dfd77a9c8185c3a2b01b7f817be3c756da681f86bfed4d30d2c480289d6b1c0f",
+                "sha256": "81ad46da6db851648c5d799c4466fd0d91681dc661e06c8264dd2aeebc7aaade",
                 "rows": 100000,
                 "first_surface": "a",
                 "last_surface": "elliras",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0001.tsv.gz.lookup",
+                    "sha256": "fd09d7824328a852d141b8b44c9c71a5d7172ae71556d8d208915c1ea2129445",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "743fae4d0347ce7d936d5f9ab1d021582a5c80b04caca1a0efc6d4b54e64b4d9",
+                "sha256": "17422b1db99e652cc2d9748dc326af0dc95253f5205fc4fba2a303285aa25ac4",
                 "rows": 100000,
                 "first_surface": "ellire",
                 "last_surface": "rancirions",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0002.tsv.gz.lookup",
+                    "sha256": "03dd0fa825990c2cddd8b6b32ad3533767516517abfde31b876b896e64a65aa0",
+                    "blocks": 49
+                }
             },
             {
                 "path": "runtime/0003.tsv.gz",
-                "sha256": "0c279308849bbd9ccdb9d048e3f099b315c3b7feff86279522029010761338de",
+                "sha256": "05dd171d2472cfbd248c9ac7b9b7c74de7f698172d87418f55edef37e2352536",
                 "rows": 59061,
                 "first_surface": "rancirons",
                 "last_surface": "zyeutons",
-                "compression": "gzip"
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v1",
+                    "path": "runtime/0003.tsv.gz.lookup",
+                    "sha256": "33a735f97b8cc5125e8d7fe17bf59afec1111f15636f8410d1273b0de71fa444",
+                    "blocks": 29
+                }
             }
         ]
     },
