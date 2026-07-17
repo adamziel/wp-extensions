@@ -229,6 +229,13 @@ KEY ready (available_at,claim_expires_at,post_id)
                     ['columns' => ['lang', 'k'], 'unique' => true],
                 ],
             ],
+            $this->queueTable => [
+                'columns' => ['post_id', 'generation', 'available_at', 'attempts', 'claim_token', 'claimed_generation', 'claim_expires_at'],
+                'indexes' => [
+                    ['columns' => ['post_id'], 'unique' => true],
+                    ['columns' => ['available_at', 'claim_expires_at', 'post_id'], 'unique' => false],
+                ],
+            ],
         ];
     }
 
