@@ -18,7 +18,12 @@ composer test
 ```
 
 The harness discovers `tests/quality/*.php` automatically and enforces the
-default minimum check count.
+default minimum check count. Operator-owned Snowball, Cranfield, and full
+PoliMorf corpora are separate lanes: the normal harness runs their hermetic
+contracts, but reads those corpora only when their documented environment
+variables are set. The required extension-enabled CI matrix also sets
+`WP_FTS_FAIL_ON_PENDING=1`, so a newly deferred test cannot pass the gate
+silently.
 
 ## No-Extension Smoke Test
 
@@ -28,7 +33,10 @@ Run the PHP harness with PHP extensions disabled:
 php -n tests/run.php
 ```
 
-This verifies the fallback paths used when optional extensions are missing.
+This verifies the fallback paths used when shared optional extensions are
+missing. Some PHP builds compile zlib or other capabilities into the binary, so
+the deterministic gzip-unavailable contract also uses the generator's existing
+capability seam instead of assuming `php -n` removed a compiled-in extension.
 
 ## Provider Compatibility Evidence
 
@@ -393,8 +401,9 @@ relevance fixture or the optional external Python/library reference.
 ## Cranfield Relevance Quality Gate
 
 The main harness includes source-shaped Cranfield parser and metric tests using
-project-owned synthetic fixtures. The full Cranfield relevance-quality gate is
-explicitly pending unless an operator supplies a local corpus path:
+project-owned synthetic fixtures. It treats the missing-corpus response as a
+passing hermetic contract rather than a pending test. The separate full
+Cranfield relevance-quality command requires an operator-supplied local corpus:
 
 ```sh
 php tests/cranfield-relevance-gate.php
@@ -407,9 +416,9 @@ directory, the accepted classic names are `cran.all.1400` or `cran.all`,
 `cran.qry`, and `qrels.text`, `cranqrel`, `qrels.txt`, or `cran.qrel`.
 It does not download data and this repository does not bundle the full
 Cranfield corpus until redistribution license and provenance are reviewed.
-Without local data the command exits with pending/NO-GO status `2`, and the
-main harness reports the full-data check as `[PEND]` rather than silently
-passing it.
+Without local data the standalone command exits with pending/NO-GO status `2`.
+The main harness verifies that explicit response but does not claim the full
+external corpus ran.
 
 Build a reusable native relevance suite JSON from local source files when a CI
 or review lane wants to separate import from scoring:
@@ -603,6 +612,14 @@ download acknowledgement, non-empty output refusal, generated pack validation,
 lemmatizer lookup from the generated pack, and the no-runtime-network-access
 boundary.
 
+The product-search check against a full generated PoliMorf pack is registered
+only when its external manifest is supplied:
+
+```sh
+WP_FTS_FULL_POLIMORF_MANIFEST=/path/to/full-pack/manifest.json \
+  php tests/quality/rigorous-fts-search-behavior.php
+```
+
 Build the synthetic fixture pack from the command line into a disposable
 external directory:
 
@@ -678,13 +695,21 @@ The Snowball harness compares supported stemmers against a local checkout of the
 official Snowball data.
 
 ```sh
-SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data php tests/snowball-compliance.php
+SNOWBALL_DATA_DIR=/path/to/snowball-data php tests/snowball-compliance.php
+SNOWBALL_DATA_DIR=/path/to/snowball-data php tests/quality/external-reference-suite.php
 ```
+
+There is no machine-specific default. The compliance command exits with status
+`2` for an unset or unreadable `SNOWBALL_DATA_DIR`; the normal harness still
+runs the hermetic reference checks without pretending the official data was
+present.
+The focused external-reference command adds sampled official-row and
+unsupported-language boundary checks to its local BM25 and analyzer references.
 
 Composer also exposes:
 
 ```sh
-SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data composer test:snowball
+SNOWBALL_DATA_DIR=/path/to/snowball-data composer test:snowball
 ```
 
 The harness reports unsupported Snowball languages as skipped. Skips are
@@ -699,12 +724,19 @@ dependencies from `composer.lock`, Arabic, English, Spanish, French, Hindi,
 Portuguese, Indonesian, Catalan, and Dutch Porter should pass, for
 `9 pass, 28 skip, 0 fail`.
 
-The bundled Arabic, Hindi, Portuguese, and Indonesian ports also have direct
-full-fixture validators:
+The bundled Arabic, Spanish, French, Hindi, Portuguese, and Indonesian ports
+also have direct full-fixture validators. Point all of them at the same
+operator-provided checkout:
 
 ```sh
+SNOWBALL_DATA_DIR=/path/to/snowball-data
+export SNOWBALL_DATA_DIR
 php tests/arabic-snowball-fixtures.php
 php -n tests/arabic-snowball-fixtures.php
+php tests/spanish-snowball-fixtures.php
+php -n tests/spanish-snowball-fixtures.php
+php tests/french-snowball-fixtures.php
+php -n tests/french-snowball-fixtures.php
 php tests/hindi-snowball-fixtures.php
 php -n tests/hindi-snowball-fixtures.php
 php tests/portuguese-snowball-fixtures.php

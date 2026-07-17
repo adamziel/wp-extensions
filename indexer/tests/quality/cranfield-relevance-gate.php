@@ -90,13 +90,13 @@ test_case('quality Cranfield mini gate compares native search with local BM25 re
     assert_true((float) $result['metrics']['deltas']['ndcg_at_10'] <= 0.000001, 'synthetic Cranfield native/reference nDCG delta should stay exact');
 });
 
-test_case('quality full Cranfield relevance gate is pending without operator data', function (): void {
+test_case('quality full Cranfield relevance lane requires operator data or passes a configured corpus', function (): void {
     $dir = getenv('WP_FTS_CRANFIELD_DIR');
     if (!is_string($dir) || trim($dir) === '') {
         $result = WP_FTS_Cranfield_Relevance_Gate::run(null);
         assert_same('pending', $result['status'], 'full Cranfield gate should report pending when no local corpus path is configured');
         assert_contains('WP_FTS_CRANFIELD_DIR', WP_FTS_Cranfield_Relevance_Gate::format_text($result), 'pending full Cranfield report should name the required env var');
-        mark_pending((string) $result['reason']);
+        return;
     }
 
     $result = WP_FTS_Cranfield_Relevance_Gate::run($dir);

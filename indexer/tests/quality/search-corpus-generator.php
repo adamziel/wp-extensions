@@ -271,23 +271,21 @@ test_case('large search corpus generator document length distribution matches co
     }
 });
 
-test_case('large search corpus generator falls back to plain JSONL without zlib', function (): void {
-    $out = temp_directory_path('large_corpus_php_n');
+test_case('large search corpus generator falls back to plain JSONL when gzip support is unavailable', function (): void {
+    $out = temp_directory_path('large_corpus_no_gzip');
     try {
-        $result = test_run_subprocess([
-            PHP_BINARY,
-            '-n',
-            dirname(__DIR__, 2) . '/tools/generate-large-search-corpus.php',
-            '--output=' . $out,
-            '--seed=no-zlib',
-            '--languages=en',
-            '--english-docs=1',
-            '--per-language-docs=0',
-            '--compression=auto',
-        ], dirname(__DIR__, 2));
+        $manifest = (new WP_FTS_LargeSearchCorpusGenerator([
+            'clock' => static fn(): float => 123.0,
+            'gzip_available' => false,
+        ]))->generate([
+            'output' => $out,
+            'seed' => 'no-gzip',
+            'languages' => ['en'],
+            'english_docs' => 1,
+            'per_language_docs' => 0,
+            'compression' => 'auto',
+        ]);
 
-        assert_same(0, $result['exit'], 'CLI generator exits successfully under php -n');
-        $manifest = wp_fts_lscg_manifest($out);
         assert_same('plain', $manifest['output_format']['compression'], 'auto compression falls back to plain without zlib');
         assert_true(is_file($out . '/search-corpus-en.jsonl'), 'plain fallback writes .jsonl shard');
         $record = wp_fts_lscg_first_jsonl_record($out . '/search-corpus-en.jsonl', false);

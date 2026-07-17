@@ -31,8 +31,11 @@ function wp_fts_arabic_fixture_true(bool $condition, string $message): void
 
 try {
     $dataDir = getenv('SNOWBALL_DATA_DIR');
-    $dataDir = $dataDir === false || trim($dataDir) === '' ? '/home/claude/.cache/snowball-data' : $dataDir;
-    $dataDir = rtrim($dataDir, DIRECTORY_SEPARATOR);
+    if (!is_string($dataDir) || trim($dataDir) === '') {
+        fwrite(STDERR, "Set SNOWBALL_DATA_DIR to a local checkout of the official Snowball test data.\n");
+        exit(2);
+    }
+    $dataDir = rtrim(trim($dataDir), DIRECTORY_SEPARATOR);
     $arabicDir = $dataDir . DIRECTORY_SEPARATOR . 'arabic';
     $vocPath = wp_fts_snowball_fixture_file($arabicDir, 'voc.txt');
     $outputPath = wp_fts_snowball_fixture_file($arabicDir, 'output.txt');

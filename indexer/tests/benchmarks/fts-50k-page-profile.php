@@ -935,12 +935,16 @@ class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadata
 
     public function put_term(string $term, int $df, string $postings): void
     {
-        $this->timed('put_term', fn(): null => $this->inner->put_term($term, $df, $postings));
+        $this->timed('put_term', function () use ($term, $df, $postings) {
+            $this->inner->put_term($term, $df, $postings);
+        });
     }
 
     public function delete_term(string $term): void
     {
-        $this->timed('delete_term', fn(): null => $this->inner->delete_term($term));
+        $this->timed('delete_term', function () use ($term) {
+            $this->inner->delete_term($term);
+        });
     }
 
     public function get_doc_lengths(array $doc_ids, ?string $lang = null): array
@@ -955,17 +959,23 @@ class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadata
 
     public function put_doc(int $doc_id, string|int $primary_lang, array|string $lang_lengths, ?string $hash = null): void
     {
-        $this->timed('put_doc', fn(): null => $this->inner->put_doc($doc_id, $primary_lang, $lang_lengths, $hash));
+        $this->timed('put_doc', function () use ($doc_id, $primary_lang, $lang_lengths, $hash) {
+            $this->inner->put_doc($doc_id, $primary_lang, $lang_lengths, $hash);
+        });
     }
 
     public function delete_doc(int $doc_id): void
     {
-        $this->timed('delete_doc', fn(): null => $this->inner->delete_doc($doc_id));
+        $this->timed('delete_doc', function () use ($doc_id) {
+            $this->inner->delete_doc($doc_id);
+        });
     }
 
     public function put_doc_metadata(int $doc_id, array $metadata): void
     {
-        $this->timed('put_doc_metadata', fn(): null => $this->inner->put_doc_metadata($doc_id, $metadata));
+        $this->timed('put_doc_metadata', function () use ($doc_id, $metadata) {
+            $this->inner->put_doc_metadata($doc_id, $metadata);
+        });
     }
 
     public function get_doc_metadata(array $doc_ids): array
@@ -1000,7 +1010,9 @@ class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadata
 
     public function add_meta(string|int $lang, int $d_docs, ?int $d_len = null): void
     {
-        $this->timed('add_meta', fn(): null => $this->inner->add_meta($lang, $d_docs, $d_len));
+        $this->timed('add_meta', function () use ($lang, $d_docs, $d_len) {
+            $this->inner->add_meta($lang, $d_docs, $d_len);
+        });
     }
 
     public function all_terms(): array
@@ -1015,27 +1027,37 @@ class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadata
 
     public function begin_transaction(): void
     {
-        $this->timed('begin_transaction', fn(): null => $this->inner->begin_transaction());
+        $this->timed('begin_transaction', function () {
+            $this->inner->begin_transaction();
+        });
     }
 
     public function commit(): void
     {
-        $this->timed('commit', fn(): null => $this->inner->commit());
+        $this->timed('commit', function () {
+            $this->inner->commit();
+        });
     }
 
     public function rollback(): void
     {
-        $this->timed('rollback', fn(): null => $this->inner->rollback());
+        $this->timed('rollback', function () {
+            $this->inner->rollback();
+        });
     }
 
     public function flush(): void
     {
-        $this->timed('flush', fn(): null => $this->inner->flush());
+        $this->timed('flush', function () {
+            $this->inner->flush();
+        });
     }
 
     public function optimize(): void
     {
-        $this->timed('optimize', fn(): null => $this->inner->optimize());
+        $this->timed('optimize', function () {
+            $this->inner->optimize();
+        });
     }
 
     public function reset(): void
@@ -1089,7 +1111,9 @@ final class WP_FTS_Profiled_Row_Postings_Storage extends WP_FTS_Profiled_Storage
     {
         $this->timed(
             'replace_doc_postings',
-            fn(): null => $this->row_storage()->replace_doc_postings($doc_id, $term_frequencies)
+            function () use ($doc_id, $term_frequencies) {
+                $this->row_storage()->replace_doc_postings($doc_id, $term_frequencies);
+            }
         );
     }
 

@@ -97,7 +97,15 @@ function wp_fts_language_label(string $dataset, array $metadata): string
 }
 
 $dataDir = getenv('SNOWBALL_DATA_DIR');
-$dataDir = $dataDir === false || trim($dataDir) === '' ? '/home/claude/.cache/snowball-data' : $dataDir;
+if (!is_string($dataDir) || trim($dataDir) === '') {
+    fwrite(STDERR, "Set SNOWBALL_DATA_DIR to a local checkout of the official Snowball test data.\n");
+    exit(2);
+}
+$dataDir = realpath(trim($dataDir));
+if (!is_string($dataDir) || !is_dir($dataDir)) {
+    fwrite(STDERR, "SNOWBALL_DATA_DIR does not point to a readable directory.\n");
+    exit(2);
+}
 $dataDir = rtrim($dataDir, DIRECTORY_SEPARATOR);
 
 $stemmer = new WP_FTS_SnowballStemmer();

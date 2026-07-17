@@ -983,10 +983,6 @@ function wp_fts_release_readiness_contract_version_mismatch(): void
 
 function wp_fts_release_readiness_contract_default_direct_cli_output_is_deterministic(): void
 {
-    if (!class_exists('ZipArchive')) {
-        wp_fts_release_readiness_contract_pending('ZipArchive is unavailable; default direct-install CLI ZIP build is covered in the normal PHP lane.');
-    }
-
     $root = dirname(__DIR__, 2);
     $monorepoRoot = dirname($root);
     $command = [PHP_BINARY, 'indexer/tools/check-release-readiness.php', '--target=direct-install'];
@@ -1003,10 +999,6 @@ function wp_fts_release_readiness_contract_default_direct_cli_output_is_determin
 
 function wp_fts_release_readiness_contract_concurrent_default_direct_cli_output_is_deterministic(): void
 {
-    if (!class_exists('ZipArchive')) {
-        wp_fts_release_readiness_contract_pending('ZipArchive is unavailable; concurrent default direct-install CLI ZIP build is covered in the normal PHP lane.');
-    }
-
     $root = dirname(__DIR__, 2);
     $monorepoRoot = dirname($root);
     $command = [PHP_BINARY, 'indexer/tools/check-release-readiness.php', '--target=direct-install'];
@@ -1058,7 +1050,7 @@ function wp_fts_release_readiness_contract_deterministic_output_and_docs(): void
  */
 function wp_fts_release_readiness_contract_cases(): array
 {
-    return [
+    $cases = [
         [
             'name' => 'quality release readiness accepts a staged direct-install package',
             'fn' => static function (): void {
@@ -1119,25 +1111,33 @@ function wp_fts_release_readiness_contract_cases(): array
                 wp_fts_release_readiness_contract_version_mismatch();
             },
         ],
-        [
+    ];
+
+    // These cases build ZIP artifacts in this process. The normal PHP lanes
+    // provide ZipArchive; php -n intentionally exercises the remaining cases.
+    if (class_exists('ZipArchive')) {
+        $cases[] = [
             'name' => 'quality release readiness default direct-install CLI output is deterministic',
             'fn' => static function (): void {
                 wp_fts_release_readiness_contract_default_direct_cli_output_is_deterministic();
             },
-        ],
-        [
+        ];
+        $cases[] = [
             'name' => 'quality release readiness concurrent default direct-install CLI output is deterministic',
             'fn' => static function (): void {
                 wp_fts_release_readiness_contract_concurrent_default_direct_cli_output_is_deterministic();
             },
-        ],
-        [
-            'name' => 'quality release readiness output and docs are deterministic',
-            'fn' => static function (): void {
-                wp_fts_release_readiness_contract_deterministic_output_and_docs();
-            },
-        ],
+        ];
+    }
+
+    $cases[] = [
+        'name' => 'quality release readiness output and docs are deterministic',
+        'fn' => static function (): void {
+            wp_fts_release_readiness_contract_deterministic_output_and_docs();
+        },
     ];
+
+    return $cases;
 }
 
 function wp_fts_release_readiness_contract_run_standalone(): void
