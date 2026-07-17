@@ -125,6 +125,9 @@ with the original candidates before scoring, totals, and pagination; returned
 IDs cannot inject new documents. This option forces exact candidate discovery,
 even when fast top-K was requested, because applying authorization after an
 approximate window can produce false-empty or incomplete result pages.
+Storage-specific `search_extension` callbacks own candidate discovery, ranking,
+and pagination, so they cannot be combined with this option; extensions must
+apply their own authorization model instead.
 
 The initial split keeps the legacy `WP_FTS_*` global class names so existing
 plugin code and tests stay compatible. A future publishing pass can add

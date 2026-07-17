@@ -88,7 +88,8 @@ final class WP_FTS_Searcher
      */
     public function search(string $query, array $opts = []): array
     {
-        $extensionResults = $this->extension_results($query, $opts);
+        $candidateFilter = $this->candidate_doc_ids_filter($opts);
+        $extensionResults = $this->extension_results($query, $opts, $candidateFilter !== null);
         if ($extensionResults !== null) {
             return $extensionResults;
         }
@@ -121,7 +122,6 @@ final class WP_FTS_Searcher
         }
 
         $metadataFilter = $this->has_metadata_filters($opts) ? $this->metadata_filter_values($opts) : null;
-        $candidateFilter = $this->candidate_doc_ids_filter($opts);
         $fastMode = $this->resolve_fast_mode($opts, $limit + $offset, $candidateFilter !== null);
         $useBoundedTopK = !$recencyBoost['enabled']
             && $fastMode['candidate_cap'] === null
@@ -1699,7 +1699,7 @@ final class WP_FTS_Searcher
      *
      * @return array<string,mixed>|array<int,array<string,mixed>>|null
      */
-    private function extension_results(string $query, array $opts): ?array
+    private function extension_results(string $query, array $opts, bool $hasCandidateFilter): ?array
     {
         $phraseRequested = !empty($opts['phrase']);
         $prefixRequested = !empty($opts['prefix']);
@@ -1708,6 +1708,9 @@ final class WP_FTS_Searcher
         }
 
         if (isset($opts['search_extension']) && is_callable($opts['search_extension'])) {
+            if ($hasCandidateFilter) {
+                throw new InvalidArgumentException('candidate_doc_ids_filter cannot be combined with search_extension because the extension owns candidate discovery, ranking, and pagination.');
+            }
             $results = ($opts['search_extension'])($query, $opts, $this->storage, $this->analyzer);
             return is_array($results) ? $results : [];
         }

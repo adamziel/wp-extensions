@@ -19525,6 +19525,24 @@ test_case('search applies authoritative candidate filtering before ranking and p
         $invalidReturnThrown = true;
     }
     assert_true($invalidReturnThrown, 'candidate filters must return an explicit document-id array');
+
+    $extensionCalled = false;
+    $extensionFilterThrown = false;
+    try {
+        $searcher->search('needle', [
+            'phrase' => true,
+            'candidate_doc_ids_filter' => static fn(array $docIds): array => [],
+            'search_extension' => static function () use (&$extensionCalled): array {
+                $extensionCalled = true;
+
+                return [['doc_id' => 99, 'score' => 1.0]];
+            },
+        ]);
+    } catch (InvalidArgumentException) {
+        $extensionFilterThrown = true;
+    }
+    assert_true($extensionFilterThrown, 'candidate filtering should fail closed when an extension owns candidate discovery and pagination');
+    assert_same(false, $extensionCalled, 'an incompatible extension must not return rows before candidate filtering is enforced');
 });
 
 test_case('search candidate cap is explicit approximate opt-in with mandatory result status', function (): void {
