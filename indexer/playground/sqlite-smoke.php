@@ -361,12 +361,17 @@ function wp_fts_playground_run_setup_smoke(): void
     $germanId = wp_fts_playground_index_post($indexer, '', '<p>Führung und Straße</p>');
     $overrideId = wp_fts_playground_index_post($indexer, '', '<p>Wrocław explicit override</p>', ['lang' => 'en']);
     $fallbackId = wp_fts_playground_index_post($indexer, '', '<p>alpha beta shared</p>');
+    $binaryTermId = wp_fts_playground_index_post($indexer, '', '<p>sqliteprefixqzxv</p>', ['lang' => 'en']);
 
     wp_fts_playground_assert_search($searcher, 'Wrocław', ['limit' => 10], [$polishId], 'untagged Polish query should meet detected Polish document partition');
     wp_fts_playground_assert_search($searcher, 'kot', ['lang' => 'pl', 'limit' => 10], [$polishId], 'Polish stemming should match kotami with an explicit Polish query');
     wp_fts_playground_assert_search($searcher, 'Führung', ['limit' => 10], [$germanId], 'untagged German query should meet detected German document partition');
     wp_fts_playground_assert_search($searcher, 'Wrocław', ['lang' => 'en', 'limit' => 10], [$overrideId], 'explicit English override should stay in English partition');
     wp_fts_playground_assert_search($searcher, 'alpha', ['limit' => 10], [$fallbackId], 'no-evidence content and query should stay on conservative fallback partition');
+    wp_fts_playground_assert_search($searcher, 'sqliteprefixqzxv', ['lang' => 'en', 'prefix_matching' => false, 'limit' => 10], [$binaryTermId], 'SQLite exact binary term lookup should return the indexed document');
+    wp_fts_playground_assert_search($searcher, 'sqliteprefixqz', ['lang' => 'en', 'prefix_matching' => true, 'limit' => 10], [$binaryTermId], 'SQLite binary prefix lookup should return the indexed document');
+    wp_fts_playground_assert_search($searcher, 'sqliteabsentqzxv', ['lang' => 'en', 'prefix_matching' => false, 'limit' => 10], [], 'SQLite absent binary term lookup should stay empty');
+    wp_fts_playground_assert_search($searcher, 'sqliteprefixqzxv sqliteabsentqzxv', ['lang' => 'en', 'mode' => 'OR', 'prefix_matching' => false, 'limit' => 10], [$binaryTermId], 'SQLite mixed exact lookup should return the existing term without scanning for the absent term');
 
     $rest = wp_fts_playground_rest_smoke($indexer);
     $cliFixtureIds = wp_fts_playground_prepare_wpcli_fixture_posts();
@@ -379,6 +384,7 @@ function wp_fts_playground_run_setup_smoke(): void
             'german_detected' => $germanId,
             'explicit_override' => $overrideId,
             'fallback' => $fallbackId,
+            'binary_term' => $binaryTermId,
         ],
         'rest' => $rest,
         'wpcli_fixture_posts' => $cliFixtureIds,
@@ -388,6 +394,10 @@ function wp_fts_playground_run_setup_smoke(): void
             'german_detection' => 'Führung',
             'explicit_override' => 'Wrocław in en',
             'fallback' => 'alpha',
+            'sqlite_binary_exact' => 'sqliteprefixqzxv',
+            'sqlite_binary_prefix' => 'sqliteprefixqz -> sqliteprefixqzxv',
+            'sqlite_binary_absent' => 'sqliteabsentqzxv',
+            'sqlite_binary_mixed' => 'sqliteprefixqzxv OR sqliteabsentqzxv',
             'rest_q' => 'restsurfacealpha',
             'rest_query' => 'restsurfacebeta',
             'rest_invalid_mode' => 'xor',
