@@ -4,10 +4,9 @@ declare(strict_types=1);
 /**
  * Streaming readers for Snowball fixture files.
  *
- * The Arabic Snowball data is only available in compressed form in this
- * workspace, and `php -n` does not load zlib. For gzip files, prefer PHP's zlib
- * stream when available; otherwise stream through a local `gzip -dc` process
- * without invoking a shell.
+ * Some official Snowball data is available only in compressed form. For gzip
+ * files, prefer PHP's zlib stream when available; otherwise stream through a
+ * local `gzip -dc` process without invoking a shell.
  */
 final class WP_FTS_SnowballFixtureLineReader
 {

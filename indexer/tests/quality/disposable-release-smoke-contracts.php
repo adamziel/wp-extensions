@@ -333,14 +333,18 @@ test_case('quality disposable release smoke builds bounded WP-CLI command sequen
 
         wp_fts_disposable_smoke_contract_same('passed', $result['status'], 'fake disposable smoke command sequence should pass');
         wp_fts_disposable_smoke_contract_true($commands !== [], 'fake WP-CLI should record commands');
+        $canonicalWpRoot = realpath($wpRoot);
+        wp_fts_disposable_smoke_contract_true(is_string($canonicalWpRoot), 'disposable WordPress root should resolve before command assertions');
         foreach ($commands as $command) {
             wp_fts_disposable_smoke_contract_same('custom-wp', $command[0], 'WP_FTS_WP_CLI should override the wp binary');
-            wp_fts_disposable_smoke_contract_true(in_array('--path=' . $wpRoot, $command, true), 'each WP-CLI command should include --path');
+            wp_fts_disposable_smoke_contract_true(in_array('--path=' . $canonicalWpRoot, $command, true), 'each WP-CLI command should include the canonical --path');
         }
 
         $install = wp_fts_disposable_smoke_contract_find_command($commands, 'plugin', 'install');
         wp_fts_disposable_smoke_contract_true(is_array($install), 'smoke should install the release ZIP');
-        wp_fts_disposable_smoke_contract_true(in_array($zip, $install, true), 'plugin install should use the explicit release ZIP');
+        $canonicalZip = realpath($zip);
+        wp_fts_disposable_smoke_contract_true(is_string($canonicalZip), 'explicit release ZIP should resolve before command assertions');
+        wp_fts_disposable_smoke_contract_true(in_array($canonicalZip, $install, true), 'plugin install should use the canonical explicit release ZIP');
         wp_fts_disposable_smoke_contract_true(in_array('--force', $install, true), 'plugin install should be explicit about replacing the disposable plugin copy');
         wp_fts_disposable_smoke_contract_true(in_array('--activate', $install, true), 'plugin install should activate the release package');
 

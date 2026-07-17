@@ -163,6 +163,21 @@ if (getenv('WP_FTS_HARNESS_GATE_CHILD') !== '1') {
         assert_contains('[FAIL] minimum check count configuration', $output, 'invalid minimum check config should report a configuration failure');
         assert_contains('WP_FTS_MIN_CHECKS must be a non-negative integer', $output, 'invalid minimum check config should include validation guidance');
     });
+
+    test_case('quality harness strict CI gate rejects pending tests', function (): void {
+        $result = test_run_harness_with_environment([
+            'WP_FTS_HARNESS_GATE_CHILD' => '1',
+            'WP_FTS_HARNESS_GATE_CHILD_PENDING' => '1',
+            'WP_FTS_FAIL_ON_PENDING' => '1',
+            'WP_FTS_MIN_CHECKS' => '0',
+            'WP_FTS_TEST_FILTER' => '',
+        ]);
+
+        $output = $result['stdout'] . $result['stderr'];
+        assert_true($result['exit'] !== 0, 'strict pending gate child process should exit non-zero');
+        assert_contains('[FAIL] pending tests', $output, 'strict pending gate should report a gate failure');
+        assert_contains('pending=1', $output, 'strict pending gate summary should retain the pending count');
+    });
 }
 
 if ($wp_fts_harness_metrics_direct) {

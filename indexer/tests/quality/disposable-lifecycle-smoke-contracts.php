@@ -492,9 +492,11 @@ test_case('quality disposable lifecycle smoke builds bounded lifecycle WP-CLI co
 
         wp_fts_lifecycle_contract_same('passed', $result['status'], 'fake disposable lifecycle command sequence should pass');
         wp_fts_lifecycle_contract_true($commands !== [], 'fake WP-CLI should record commands');
+        $canonicalWpRoot = realpath($wpRoot);
+        wp_fts_lifecycle_contract_true(is_string($canonicalWpRoot), 'disposable WordPress root should resolve before command assertions');
         foreach ($commands as $command) {
             wp_fts_lifecycle_contract_same('custom-wp', $command[0], 'WP_FTS_WP_CLI should override the wp binary');
-            wp_fts_lifecycle_contract_true(in_array('--path=' . $wpRoot, $command, true), 'each WP-CLI command should include --path');
+            wp_fts_lifecycle_contract_true(in_array('--path=' . $canonicalWpRoot, $command, true), 'each WP-CLI command should include the canonical --path');
         }
 
         foreach ([['plugin', 'activate'], ['fts', 'status'], ['fts', 'repair'], ['fts', 'process_batch'], ['plugin', 'deactivate'], ['plugin', 'uninstall']] as [$first, $second]) {

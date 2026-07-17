@@ -238,6 +238,10 @@ function wp_fts_run_registered_tests_and_exit(): void
         $gateFailures++;
         fwrite(STDERR, "[FAIL] minimum check count\nExecuted {$checkCount} checks/scenarios; required {$minimumChecks}. Set WP_FTS_MIN_CHECKS to override the default quality gate. Final integration target is >= " . WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS . ".\n");
     }
+    if ($pending > 0 && getenv('WP_FTS_FAIL_ON_PENDING') === '1') {
+        $gateFailures++;
+        fwrite(STDERR, "[FAIL] pending tests\n{$pending} test(s) were pending while WP_FTS_FAIL_ON_PENDING=1.\n");
+    }
 
     $totalFailures = $failures + $gateFailures;
     $summary = "{$passed}/{$count} named tests passed; failures={$totalFailures}; pending={$pending}; checks/scenarios={$checkCount}; minimum checks={$minimumChecks}; final target>=" . WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS . "; duration={$duration}s\n";
@@ -252,6 +256,9 @@ function wp_fts_run_registered_tests_and_exit(): void
 
 if (getenv('WP_FTS_HARNESS_GATE_CHILD') === '1') {
     test_case('quality harness gate child sentinel', function (): void {
+        if (getenv('WP_FTS_HARNESS_GATE_CHILD_PENDING') === '1') {
+            mark_pending('Harness gate child pending sentinel.');
+        }
         assert_true(true, 'harness gate child should execute the shared runner');
     });
     wp_fts_run_registered_tests_and_exit();

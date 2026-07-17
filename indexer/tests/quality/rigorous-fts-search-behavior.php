@@ -167,7 +167,7 @@ function qrs_full_polimorf_manifest_from_env(): string
 {
     $raw = getenv('WP_FTS_FULL_POLIMORF_MANIFEST');
     if (!is_string($raw) || trim($raw) === '') {
-        mark_pending('Set WP_FTS_FULL_POLIMORF_MANIFEST to a generated full external Polish PoliMorf manifest to run this heavy behavior path.');
+        throw new RuntimeException('Set WP_FTS_FULL_POLIMORF_MANIFEST to a generated full external Polish PoliMorf manifest to run this heavy behavior path.');
     }
 
     $path = trim($raw);
@@ -495,47 +495,51 @@ function qrs_small_search_cases(): array
     return $cases;
 }
 
-test_case('quality rigorous FTS full external PoliMorf manifest drives product search when configured', function (): void {
-    $manifest = qrs_full_polimorf_manifest_from_env();
-    $summary = qrs_manifest_summary($manifest);
-    assert_contains('polimorf', strtolower($summary['pack_id']), 'full external manifest should identify a PoliMorf pack');
-    assert_same(false, $summary['fixture_only'], 'full external manifest should not be marked fixture-only');
-    assert_true($summary['files'] > 1, 'full external manifest should expose multiple runtime shards');
+$wp_fts_full_polimorf_manifest = getenv('WP_FTS_FULL_POLIMORF_MANIFEST');
+if (is_string($wp_fts_full_polimorf_manifest) && trim($wp_fts_full_polimorf_manifest) !== '') {
+    test_case('quality rigorous FTS full external PoliMorf manifest drives product search when configured', function (): void {
+        $manifest = qrs_full_polimorf_manifest_from_env();
+        $summary = qrs_manifest_summary($manifest);
+        assert_contains('polimorf', strtolower($summary['pack_id']), 'full external manifest should identify a PoliMorf pack');
+        assert_same(false, $summary['fixture_only'], 'full external manifest should not be marked fixture-only');
+        assert_true($summary['files'] > 1, 'full external manifest should expose multiple runtime shards');
 
-    $fixture = qrs_fixture_with_manifests(['pl' => $manifest]);
-    $indexer = $fixture['indexer'];
-    $searcher = $fixture['searcher'];
-    $analyzer = $fixture['analyzer'];
-    $cases = [
-        ['query' => 'zamek', 'surface' => 'zamkami', 'bait' => 'zamęt zamach zamiana zamaszysty'],
-        ['query' => 'stajnia', 'surface' => 'stajniach', 'bait' => 'stacja stado stawiania stojak'],
-        ['query' => 'chrząstka', 'surface' => 'chrząstkami', 'bait' => 'chrząszcz chrząkać chrzest chrzan'],
-        ['query' => 'drogi', 'surface' => 'drogami', 'bait' => 'drugi drugiego drobina drut'],
-        ['query' => 'książka', 'surface' => 'książkami', 'bait' => 'księga księgarnia księgowy kształt'],
-    ];
+        $fixture = qrs_fixture_with_manifests(['pl' => $manifest]);
+        $indexer = $fixture['indexer'];
+        $searcher = $fixture['searcher'];
+        $analyzer = $fixture['analyzer'];
+        $cases = [
+            ['query' => 'zamek', 'surface' => 'zamkami', 'bait' => 'zamęt zamach zamiana zamaszysty'],
+            ['query' => 'stajnia', 'surface' => 'stajniach', 'bait' => 'stacja stado stawiania stojak'],
+            ['query' => 'chrząstka', 'surface' => 'chrząstkami', 'bait' => 'chrząszcz chrząkać chrzest chrzan'],
+            ['query' => 'drogi', 'surface' => 'drogami', 'bait' => 'drugi drugiego drobina drut'],
+            ['query' => 'książka', 'surface' => 'książkami', 'bait' => 'księga księgarnia księgowy kształt'],
+        ];
 
-    $docId = 9100;
-    foreach ($cases as $case) {
-        $docId++;
-        $targetId = $docId;
-        $baitId = $docId + 100;
-        qrs_assert_query_surface_overlap($analyzer, $case['query'], $case['surface'], 'pl', "full PoliMorf should map {$case['surface']} to {$case['query']}");
-        qrs_assert_query_surface_disjoint($analyzer, $case['query'], $case['bait'], 'pl', "full PoliMorf should keep bait text separate from {$case['query']}");
+        $docId = 9100;
+        foreach ($cases as $case) {
+            $docId++;
+            $targetId = $docId;
+            $baitId = $docId + 100;
+            qrs_assert_query_surface_overlap($analyzer, $case['query'], $case['surface'], 'pl', "full PoliMorf should map {$case['surface']} to {$case['query']}");
+            qrs_assert_query_surface_disjoint($analyzer, $case['query'], $case['bait'], 'pl', "full PoliMorf should keep bait text separate from {$case['query']}");
 
-        $targetHtml = '<article lang="pl"><p>Pełny PoliMorf ' . htmlspecialchars($case['surface'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' target-' . $targetId . '</p></article>';
-        $baitHtml = '<article lang="pl"><p>' . htmlspecialchars($case['bait'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' bait-' . $baitId . '</p></article>';
-        assert_true($indexer->index_document($targetId, $targetHtml, [
-            'lang' => 'pl',
-            'metadata' => qrs_metadata($targetId, 'post', 'publish', '2026-06-10 00:00:00', 'Full PoliMorf target', $targetHtml, ['language' => 'pl']),
-        ]), "full PoliMorf target {$targetId} should index");
-        assert_true($indexer->index_document($baitId, $baitHtml, [
-            'lang' => 'pl',
-            'metadata' => qrs_metadata($baitId, 'post', 'publish', '2026-06-11 00:00:00', 'Full PoliMorf bait', $baitHtml, ['language' => 'pl']),
-        ]), "full PoliMorf bait {$baitId} should index");
+            $targetHtml = '<article lang="pl"><p>Pełny PoliMorf ' . htmlspecialchars($case['surface'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' target-' . $targetId . '</p></article>';
+            $baitHtml = '<article lang="pl"><p>' . htmlspecialchars($case['bait'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' bait-' . $baitId . '</p></article>';
+            assert_true($indexer->index_document($targetId, $targetHtml, [
+                'lang' => 'pl',
+                'metadata' => qrs_metadata($targetId, 'post', 'publish', '2026-06-10 00:00:00', 'Full PoliMorf target', $targetHtml, ['language' => 'pl']),
+            ]), "full PoliMorf target {$targetId} should index");
+            assert_true($indexer->index_document($baitId, $baitHtml, [
+                'lang' => 'pl',
+                'metadata' => qrs_metadata($baitId, 'post', 'publish', '2026-06-11 00:00:00', 'Full PoliMorf bait', $baitHtml, ['language' => 'pl']),
+            ]), "full PoliMorf bait {$baitId} should index");
 
-        assert_same([$targetId], qrs_ids($searcher->search($case['query'], ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10])), "full PoliMorf query {$case['query']} should retrieve only the valid morphology target");
-    }
-});
+            assert_same([$targetId], qrs_ids($searcher->search($case['query'], ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10])), "full PoliMorf query {$case['query']} should retrieve only the valid morphology target");
+        }
+    });
+}
+unset($wp_fts_full_polimorf_manifest);
 
 test_case('quality rigorous FTS small corpus exercises pack-backed variants, partitions, filters, totals, and boolean modes', function (): void {
     qrs_require_gzip_packs_available('rigorous small corpus pack-backed search');

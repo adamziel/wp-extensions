@@ -132,12 +132,14 @@ function wp_fts_external_reference_assert_contains(string $needle, string $hayst
     assert_contains($needle, $haystack, $message);
 }
 
-function wp_fts_external_reference_data_dir(): string
+function wp_fts_external_reference_data_dir(): ?string
 {
     $dataDir = getenv('SNOWBALL_DATA_DIR');
-    $dataDir = $dataDir === false || trim($dataDir) === '' ? '/home/claude/.cache/snowball-data' : $dataDir;
+    if (!is_string($dataDir) || trim($dataDir) === '') {
+        return null;
+    }
 
-    return rtrim($dataDir, DIRECTORY_SEPARATOR);
+    return rtrim(trim($dataDir), DIRECTORY_SEPARATOR);
 }
 
 /**
@@ -532,44 +534,48 @@ function wp_fts_external_reference_run_process(array $command, string $cwd): arr
     ];
 }
 
-test_case('quality external Snowball fixtures cover advertised supported datasets', function (): void {
-    $dataDir = wp_fts_external_reference_data_dir();
-    $stemmer = new WP_FTS_SnowballStemmer();
+$wp_fts_external_reference_data_dir = wp_fts_external_reference_data_dir();
+if ($wp_fts_external_reference_data_dir !== null) {
+    test_case('quality external Snowball fixtures cover advertised supported datasets', function () use ($wp_fts_external_reference_data_dir): void {
+        $dataDir = $wp_fts_external_reference_data_dir;
+        $stemmer = new WP_FTS_SnowballStemmer();
+        wp_fts_external_reference_assert_true(is_dir($dataDir), 'SNOWBALL_DATA_DIR should point to an existing official Snowball data checkout');
 
-    foreach (wp_fts_external_reference_supported_snowball_rows() as $dataset => $metadata) {
-        $code = $metadata['code'];
-        $datasetDir = $dataDir . DIRECTORY_SEPARATOR . $dataset;
-        $vocPath = wp_fts_snowball_fixture_file($datasetDir, 'voc.txt');
-        $outputPath = wp_fts_snowball_fixture_file($datasetDir, 'output.txt');
+        foreach (wp_fts_external_reference_supported_snowball_rows() as $dataset => $metadata) {
+            $code = $metadata['code'];
+            $datasetDir = $dataDir . DIRECTORY_SEPARATOR . $dataset;
+            $vocPath = wp_fts_snowball_fixture_file($datasetDir, 'voc.txt');
+            $outputPath = wp_fts_snowball_fixture_file($datasetDir, 'output.txt');
 
-        wp_fts_external_reference_assert_true($vocPath !== null, "{$dataset} voc.txt or voc.txt.gz should exist");
-        wp_fts_external_reference_assert_true($outputPath !== null, "{$dataset} output.txt or output.txt.gz should exist");
-        wp_fts_external_reference_assert_true($stemmer->supports_language($code), "{$dataset} language {$code} should be advertised as supported");
+            wp_fts_external_reference_assert_true($vocPath !== null, "{$dataset} voc.txt or voc.txt.gz should exist");
+            wp_fts_external_reference_assert_true($outputPath !== null, "{$dataset} output.txt or output.txt.gz should exist");
+            wp_fts_external_reference_assert_true($stemmer->supports_language($code), "{$dataset} language {$code} should be advertised as supported");
 
-        $lineNumbers = array_map(static fn(array $row): int => (int) $row['line'], $metadata['rows']);
-        $fixtureRows = wp_fts_snowball_fixture_read_rows($vocPath, $outputPath, $lineNumbers);
+            $lineNumbers = array_map(static fn(array $row): int => (int) $row['line'], $metadata['rows']);
+            $fixtureRows = wp_fts_snowball_fixture_read_rows($vocPath, $outputPath, $lineNumbers);
 
-        foreach ($metadata['rows'] as $row) {
-            $fixtureRow = $fixtureRows[(int) $row['line']] ?? null;
-            wp_fts_external_reference_assert_same($row['input'], $fixtureRow['input'] ?? null, "{$dataset} official input row {$row['line']}");
-            wp_fts_external_reference_assert_same($row['output'], $fixtureRow['output'] ?? null, "{$dataset} official output row {$row['line']}");
-            wp_fts_external_reference_assert_true($row['input'] !== '', "{$dataset} row {$row['line']} input should be non-empty");
-            wp_fts_external_reference_assert_true($row['output'] !== '', "{$dataset} row {$row['line']} output should be non-empty");
+            foreach ($metadata['rows'] as $row) {
+                $fixtureRow = $fixtureRows[(int) $row['line']] ?? null;
+                wp_fts_external_reference_assert_same($row['input'], $fixtureRow['input'] ?? null, "{$dataset} official input row {$row['line']}");
+                wp_fts_external_reference_assert_same($row['output'], $fixtureRow['output'] ?? null, "{$dataset} official output row {$row['line']}");
+                wp_fts_external_reference_assert_true($row['input'] !== '', "{$dataset} row {$row['line']} input should be non-empty");
+                wp_fts_external_reference_assert_true($row['output'] !== '', "{$dataset} row {$row['line']} output should be non-empty");
 
-            if ($stemmer->is_language_available($code)) {
-                wp_fts_external_reference_assert_same(
-                    $row['output'],
-                    $stemmer->stem($row['input'], $code),
-                    "{$dataset} runtime stem should match official row {$row['line']}"
-                );
+                if ($stemmer->is_language_available($code)) {
+                    wp_fts_external_reference_assert_same(
+                        $row['output'],
+                        $stemmer->stem($row['input'], $code),
+                        "{$dataset} runtime stem should match official row {$row['line']}"
+                    );
+                }
+            }
+
+            if (!$stemmer->is_language_available($code)) {
+                wp_fts_external_reference_skip("{$dataset} runtime stem comparison", 'The verified runtime for this language is not installed in this worktree.');
             }
         }
-
-        if (!$stemmer->is_language_available($code)) {
-            wp_fts_external_reference_skip("{$dataset} runtime stem comparison", 'The verified runtime for this language is not installed in this worktree.');
-        }
-    }
-});
+    });
+}
 
 test_case('quality external Snowball advertised language allowlist stays exact', function (): void {
     $stemmer = new WP_FTS_SnowballStemmer();
@@ -584,6 +590,17 @@ test_case('quality external Snowball advertised language allowlist stays exact',
         'nl' => true,
         'pt' => true,
     ];
+    $fixtureCodes = array_map(
+        static fn(array $metadata): string => $metadata['code'],
+        wp_fts_external_reference_supported_snowball_rows()
+    );
+    sort($fixtureCodes, SORT_STRING);
+    $advertisedCodes = array_keys($advertised);
+    sort($advertisedCodes, SORT_STRING);
+    wp_fts_external_reference_assert_same($advertisedCodes, $fixtureCodes, 'official fixture samples should cover every advertised Snowball language');
+    foreach (wp_fts_external_reference_supported_snowball_rows() as $dataset => $metadata) {
+        wp_fts_external_reference_assert_true($metadata['rows'] !== [], "{$dataset} should retain at least one official fixture sample");
+    }
 
     foreach (wp_fts_external_reference_snowball_language_codes() as $code) {
         wp_fts_external_reference_assert_same(
@@ -605,40 +622,43 @@ test_case('quality external Snowball advertised language allowlist stays exact',
     wp_fts_external_reference_assert_true(!$stemmer->supports_language('it-IT'), 'Unsupported locale tags should remain no-ops');
 });
 
-test_case('quality external unsupported Snowball boundaries stay documented no-ops', function (): void {
-    $dataDir = wp_fts_external_reference_data_dir();
-    $stemmer = new WP_FTS_SnowballStemmer();
+if ($wp_fts_external_reference_data_dir !== null) {
+    test_case('quality external unsupported Snowball boundaries stay documented no-ops', function () use ($wp_fts_external_reference_data_dir): void {
+        $dataDir = $wp_fts_external_reference_data_dir;
+        $stemmer = new WP_FTS_SnowballStemmer();
 
-    foreach (wp_fts_external_reference_unsupported_boundaries() as $dataset => $boundary) {
-        $vocPath = $dataDir . DIRECTORY_SEPARATOR . $dataset . DIRECTORY_SEPARATOR . 'voc.txt';
-        $outputPath = $dataDir . DIRECTORY_SEPARATOR . $dataset . DIRECTORY_SEPARATOR . 'output.txt';
-        $inputs = wp_fts_external_reference_read_lines($vocPath);
-        $expected = wp_fts_external_reference_read_lines($outputPath);
-        $index = $boundary['line'] - 1;
+        foreach (wp_fts_external_reference_unsupported_boundaries() as $dataset => $boundary) {
+            $vocPath = $dataDir . DIRECTORY_SEPARATOR . $dataset . DIRECTORY_SEPARATOR . 'voc.txt';
+            $outputPath = $dataDir . DIRECTORY_SEPARATOR . $dataset . DIRECTORY_SEPARATOR . 'output.txt';
+            $inputs = wp_fts_external_reference_read_lines($vocPath);
+            $expected = wp_fts_external_reference_read_lines($outputPath);
+            $index = $boundary['line'] - 1;
 
-        wp_fts_external_reference_assert_true($boundary['reason'] !== '', "{$dataset} unsupported boundary should carry a documented reason");
-        wp_fts_external_reference_assert_same($boundary['input'], $inputs[$index] ?? null, "{$dataset} boundary input fixture row");
-        wp_fts_external_reference_assert_same($boundary['output'], $expected[$index] ?? null, "{$dataset} boundary output fixture row");
-        wp_fts_external_reference_assert_true($boundary['input'] !== $boundary['output'], "{$dataset} boundary fixture should prove stemming would change the token");
-        wp_fts_external_reference_assert_true(!$stemmer->supports_language($boundary['code']), "{$dataset} should not be advertised as supported for {$boundary['code']}");
-        wp_fts_external_reference_assert_same(
-            $boundary['input'],
-            $stemmer->stem($boundary['input'], $boundary['code']),
-            "{$dataset} unsupported language should not silently apply fixture output"
-        );
-    }
+            wp_fts_external_reference_assert_true($boundary['reason'] !== '', "{$dataset} unsupported boundary should carry a documented reason");
+            wp_fts_external_reference_assert_same($boundary['input'], $inputs[$index] ?? null, "{$dataset} boundary input fixture row");
+            wp_fts_external_reference_assert_same($boundary['output'], $expected[$index] ?? null, "{$dataset} boundary output fixture row");
+            wp_fts_external_reference_assert_true($boundary['input'] !== $boundary['output'], "{$dataset} boundary fixture should prove stemming would change the token");
+            wp_fts_external_reference_assert_true(!$stemmer->supports_language($boundary['code']), "{$dataset} should not be advertised as supported for {$boundary['code']}");
+            wp_fts_external_reference_assert_same(
+                $boundary['input'],
+                $stemmer->stem($boundary['input'], $boundary['code']),
+                "{$dataset} unsupported language should not silently apply fixture output"
+            );
+        }
 
-    $officialDutch = wp_fts_external_reference_read_lines($dataDir . DIRECTORY_SEPARATOR . 'dutch' . DIRECTORY_SEPARATOR . 'output.txt');
-    $porterDutch = wp_fts_external_reference_read_lines($dataDir . DIRECTORY_SEPARATOR . 'dutch_porter' . DIRECTORY_SEPARATOR . 'output.txt');
-    $variantReason = 'Current nl support is documented as Dutch Porter, not the newer official Dutch dataset.';
-    foreach ([10 => ['aalmoezen', 'aalmoes', 'aalmoez'], 25 => ['aanbelde', 'aanbel', 'aanbeld'], 100 => ['aangaan', 'aangaan', 'aangan']] as $line => $row) {
-        [$input, $official, $porter] = $row;
-        wp_fts_external_reference_assert_true($variantReason !== '', "Dutch official-vs-Porter line {$line} should have a documented boundary reason");
-        wp_fts_external_reference_assert_same($official, $officialDutch[$line - 1] ?? null, "Dutch official output row {$line}");
-        wp_fts_external_reference_assert_same($porter, $porterDutch[$line - 1] ?? null, "Dutch Porter output row {$line}");
-        wp_fts_external_reference_assert_true($official !== $porter, "Dutch official and Porter outputs should differ for {$input}");
-    }
-});
+        $officialDutch = wp_fts_external_reference_read_lines($dataDir . DIRECTORY_SEPARATOR . 'dutch' . DIRECTORY_SEPARATOR . 'output.txt');
+        $porterDutch = wp_fts_external_reference_read_lines($dataDir . DIRECTORY_SEPARATOR . 'dutch_porter' . DIRECTORY_SEPARATOR . 'output.txt');
+        $variantReason = 'Current nl support is documented as Dutch Porter, not the newer official Dutch dataset.';
+        foreach ([10 => ['aalmoezen', 'aalmoes', 'aalmoez'], 25 => ['aanbelde', 'aanbel', 'aanbeld'], 100 => ['aangaan', 'aangaan', 'aangan']] as $line => $row) {
+            [$input, $official, $porter] = $row;
+            wp_fts_external_reference_assert_true($variantReason !== '', "Dutch official-vs-Porter line {$line} should have a documented boundary reason");
+            wp_fts_external_reference_assert_same($official, $officialDutch[$line - 1] ?? null, "Dutch official output row {$line}");
+            wp_fts_external_reference_assert_same($porter, $porterDutch[$line - 1] ?? null, "Dutch Porter output row {$line}");
+            wp_fts_external_reference_assert_true($official !== $porter, "Dutch official and Porter outputs should differ for {$input}");
+        }
+    });
+}
+unset($wp_fts_external_reference_data_dir);
 
 test_case('quality external BM25 formula matches manually encoded Lucene-style examples', function (): void {
     // Constants are locally encoded from the Lucene-style IDF formula used by

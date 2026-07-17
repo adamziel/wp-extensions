@@ -29,8 +29,8 @@ English is verified against
 local official `spanish/voc.txt` and `spanish/output.txt` fixtures with 28,378
 line pairs; French is verified against the local official `french/voc.txt` and
 `french/output.txt` fixtures with 21,653 line pairs; Hindi is verified against
-the local official `/home/claude/.cache/snowball-data/hindi/voc.txt` and
-`/home/claude/.cache/snowball-data/hindi/output.txt` fixtures with 65,118 line
+the local official `$SNOWBALL_DATA_DIR/hindi/voc.txt` and
+`$SNOWBALL_DATA_DIR/hindi/output.txt` fixtures with 65,118 line
 pairs; Portuguese is verified against the local official `portuguese/voc.txt`
 and `portuguese/output.txt` fixtures with 32,016 line pairs; Indonesian is
 verified against the local official `indonesian/voc.txt` and
@@ -53,20 +53,21 @@ Snowball compliance.
 Run it with:
 
 ```sh
-SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data php tests/snowball-compliance.php
+SNOWBALL_DATA_DIR=/path/to/snowball-data php tests/snowball-compliance.php
 ```
 
 The `SNOWBALL_DATA_DIR` environment variable should point at a local checkout of
-the official Snowball test data. For a fresh checkout:
+the official Snowball test data. The harness has no machine-specific fallback;
+an unset or unreadable path exits with status `2`. For a fresh checkout:
 
 ```sh
-git clone https://github.com/snowballstem/snowball-data /home/claude/.cache/snowball-data
+git clone https://github.com/snowballstem/snowball-data /path/to/snowball-data
 ```
 
 For convenience, Composer also exposes:
 
 ```sh
-SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data composer test:snowball
+SNOWBALL_DATA_DIR=/path/to/snowball-data composer test:snowball
 ```
 
 Expected counts with the current official dataset inventory are:
