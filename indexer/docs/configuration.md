@@ -91,8 +91,9 @@ ranking:
 | Rendered-only content | `1.0` | Block-rendered output not already present in saved content. |
 
 The settings accept whole numbers from `1` through `100`, matching the integer
-weighted frequencies stored in postings. Fractional values are rounded and
-values below `1` are clamped to `1`; exclude a field with the
+weighted frequencies stored in postings. Fractional values are rounded,
+positive values below `1` are clamped to `1`, and zero or negative values fall
+back to that field's default. Exclude a field with the
 `wp_fts_post_index_fields` filter rather than a zero weight. These weights are
 written into the index, not applied as live query-time overrides. After changing
 them, reindex content to make the new ranking weights fully apply to existing
