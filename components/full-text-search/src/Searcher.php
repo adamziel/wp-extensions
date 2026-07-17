@@ -57,6 +57,8 @@ final class WP_FTS_Searcher
      * `include_total` returns a payload with `total`, `limit`, `offset`, and
      * `results`; `include_metadata` adds WordPress result fields; and
      * `include_snippets` builds bounded snippets from stored extracted text.
+     * Snippets are safe HTML containing escaped text and internally generated
+     * `<mark>` elements only; source markup is never returned.
      * `post_type`, `post_status`, `date_after`, and `date_before` filter only
      * when the storage backend exposes document metadata. Search is exact by
      * default. `fast_top_k` or `approximate_top_k` explicitly opts into a
@@ -2255,18 +2257,19 @@ final class WP_FTS_Searcher
                 $snippetLength = max(40, (int) ($opts['snippet_length'] ?? 180));
                 $highlight = !empty($opts['highlight']);
                 $searchHtml = (string) ($meta['search_html'] ?? '');
-                if ($highlight && $searchHtml !== '' && (str_contains($searchHtml, '<') || str_contains($searchHtml, '&'))) {
-                    $htmlSnippet = $this->html_snippet(
+                if ($highlight && $searchHtml !== '') {
+                    $sidecarSnippet = $this->snippet(
                         $searchHtml,
                         $query,
                         $snippetLength,
+                        true,
                         $opts,
                         $snippetQueryGroups,
                         $queryLang,
                         $resultLang
                     );
-                    if ($htmlSnippet !== null) {
-                        $row['snippet'] = $htmlSnippet;
+                    if (str_contains($sidecarSnippet, '<mark>')) {
+                        $row['snippet'] = $sidecarSnippet;
                         continue;
                     }
                 }
@@ -2383,6 +2386,10 @@ final class WP_FTS_Searcher
      * preview, for example highlighting only the actual post content or only the
      * title instead of the aggregate indexed metadata.
      *
+     * The return value is safe HTML made only from escaped visible text and
+     * internally generated `<mark>` elements. Caller-supplied tags and
+     * attributes are never preserved.
+     *
      * @param array<string,mixed> $opts
      */
     public function snippet_for_text(string $text, string $query, array $opts = []): string
@@ -2414,13 +2421,6 @@ final class WP_FTS_Searcher
      */
     private function snippet(string $text, string $query, int $length, bool $highlight, array $opts = [], array $queryGroups = [], string $queryLang = '', string $resultLang = ''): string
     {
-        if ($highlight && str_contains($text, '<')) {
-            $htmlSnippet = $this->html_snippet($text, $query, $length, $opts, $queryGroups, $queryLang, $resultLang);
-            if ($htmlSnippet !== null) {
-                return $htmlSnippet;
-            }
-        }
-
         $text = WP_FTS_Html_Text_Stream::visible_text($text);
         if ($text === '') {
             return '';
@@ -2463,7 +2463,7 @@ final class WP_FTS_Searcher
         }
 
         if (!$highlight || $terms === []) {
-            return $snippet;
+            return $this->escape_snippet_text($snippet);
         }
 
         return $this->highlight_snippet_terms(
@@ -2479,146 +2479,11 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * Highlight analyzed visible words in an HTML snippet source.
-     *
-     * The source is scanned as HTML tokens. Matching is done on decoded visible
-     * words, while the returned snippet is the original HTML with <mark> tags
-     * inserted at source offsets expanded over inline wrappers.
-     *
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
+     * Escape caller-controlled snippet text for an HTML rendering surface.
      */
-    private function html_snippet(string $html, string $query, int $length, array $opts, array $queryGroups, string $queryLang, string $resultLang): ?string
+    private function escape_snippet_text(string $text): string
     {
-        $words = WP_FTS_Html_Text_Stream::visible_words($html);
-        if ($words === []) {
-            return null;
-        }
-
-        $literalTerms = array_fill_keys($this->snippet_terms($query), true);
-        $queryKeys = $this->snippet_query_keys($queryGroups);
-        if ($literalTerms === [] && $queryKeys === []) {
-            return null;
-        }
-
-        $analysisCache = [];
-        $matches = [];
-        foreach ($words as $word) {
-            $surface = (string) $word['text'];
-            $matchesLiteral = isset($literalTerms[strtolower($surface)]);
-            $matchesAnalyzer = $queryKeys !== []
-                && $this->snippet_token_matches_query($surface, $queryKeys, $opts, $queryGroups, $queryLang, $resultLang, $analysisCache);
-            if (!$matchesLiteral && !$matchesAnalyzer) {
-                continue;
-            }
-
-            $range = WP_FTS_Html_Text_Stream::expand_inline_range(
-                $html,
-                (int) $word['source_start'],
-                (int) $word['source_end']
-            );
-            $matches[] = [
-                'range' => ['start' => $range['start'], 'end' => $range['end']],
-                'visible_start' => (int) $word['visible_start'],
-                'visible_end' => (int) $word['visible_end'],
-            ];
-        }
-
-        if ($matches === []) {
-            return null;
-        }
-
-        $selected = $matches[0];
-        $length = max(1, $length);
-        $windowStart = max(0, $selected['visible_start'] - intdiv($length, 3));
-        $windowEnd = max($selected['visible_end'], $windowStart + $length);
-        $window = WP_FTS_Html_Text_Stream::visible_source_window($html, $windowStart, $windowEnd);
-        if ($window === null) {
-            return null;
-        }
-
-        $sourceStart = min((int) $window['source_start'], (int) $selected['range']['start']);
-        $sourceEnd = max((int) $window['source_end'], (int) $selected['range']['end']);
-        foreach ($matches as $match) {
-            if ($match['visible_end'] <= $window['visible_start'] || $match['visible_start'] >= $window['visible_end']) {
-                continue;
-            }
-
-            $sourceStart = min($sourceStart, (int) $match['range']['start']);
-            $sourceEnd = max($sourceEnd, (int) $match['range']['end']);
-        }
-        $sourceStart = max(0, min(strlen($html), $sourceStart));
-        $sourceEnd = max($sourceStart, min(strlen($html), $sourceEnd));
-        if ($sourceEnd <= $sourceStart) {
-            return null;
-        }
-        $sourceRange = WP_FTS_Html_Text_Stream::expand_inline_range($html, $sourceStart, $sourceEnd);
-        $sourceStart = $sourceRange['start'];
-        $sourceEnd = $sourceRange['end'];
-
-        $fragment = substr($html, $sourceStart, $sourceEnd - $sourceStart);
-        if (strlen($fragment) > $this->max_html_snippet_source_bytes($length)) {
-            return null;
-        }
-
-        $markRanges = [];
-        foreach ($matches as $match) {
-            $range = $match['range'];
-            if ($range['start'] < $sourceStart || $range['end'] > $sourceEnd) {
-                continue;
-            }
-
-            $markRanges[] = [
-                'start' => $range['start'] - $sourceStart,
-                'end' => $range['end'] - $sourceStart,
-            ];
-        }
-
-        if ($markRanges === []) {
-            return null;
-        }
-
-        $fragment = WP_FTS_Html_Text_Stream::mark_ranges($fragment, $this->merge_snippet_mark_ranges($markRanges));
-        if ($window['visible_start'] > 0) {
-            $fragment = '...' . ltrim($fragment);
-        }
-        if ($window['visible_end'] < $window['total_visible']) {
-            $fragment = rtrim($fragment) . '...';
-        }
-
-        return $fragment;
-    }
-
-    private function max_html_snippet_source_bytes(int $length): int
-    {
-        $length = max(1, $length);
-
-        return max($length + 96, $length * 3);
-    }
-
-    /**
-     * @param array<int,array{start:int,end:int}> $ranges
-     * @return array<int,array{start:int,end:int}>
-     */
-    private function merge_snippet_mark_ranges(array $ranges): array
-    {
-        usort($ranges, static fn(array $a, array $b): int => $a['start'] <=> $b['start']);
-
-        $merged = [];
-        foreach ($ranges as $range) {
-            if ($range['end'] <= $range['start']) {
-                continue;
-            }
-
-            $lastIndex = count($merged) - 1;
-            if ($lastIndex >= 0 && $range['start'] <= $merged[$lastIndex]['end']) {
-                $merged[$lastIndex]['end'] = max($merged[$lastIndex]['end'], $range['end']);
-                continue;
-            }
-
-            $merged[] = $range;
-        }
-
-        return $merged;
+        return htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
     }
 
     /**
@@ -2735,7 +2600,7 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * Wrap matching surface tokens without reprocessing already inserted tags.
+     * Escape snippet text and wrap matching surface tokens with generated marks.
      *
      * @param array<string,bool> $literalTerms
      * @param array<string,bool> $queryKeys
@@ -2746,7 +2611,7 @@ final class WP_FTS_Searcher
     {
         $matched = preg_match_all('/[\p{L}\p{N}_-]+/u', $snippet, $matches, PREG_OFFSET_CAPTURE);
         if ($matched === false || $matched === 0) {
-            return $snippet;
+            return $this->escape_snippet_text($snippet);
         }
 
         $highlighted = '';
@@ -2759,12 +2624,13 @@ final class WP_FTS_Searcher
             $matchesAnalyzer = $queryKeys !== []
                 && $this->snippet_token_matches_query($token, $queryKeys, $opts, $queryGroups, $queryLang, $resultLang, $analysisCache);
 
-            $highlighted .= substr($snippet, $cursor, $offset - $cursor);
-            $highlighted .= ($matchesLiteral || $matchesAnalyzer) ? '<mark>' . $token . '</mark>' : $token;
+            $highlighted .= $this->escape_snippet_text(substr($snippet, $cursor, $offset - $cursor));
+            $escapedToken = $this->escape_snippet_text($token);
+            $highlighted .= ($matchesLiteral || $matchesAnalyzer) ? '<mark>' . $escapedToken . '</mark>' : $escapedToken;
             $cursor = $offset + $length;
         }
 
-        return $highlighted . substr($snippet, $cursor);
+        return $highlighted . $this->escape_snippet_text(substr($snippet, $cursor));
     }
 
     /**

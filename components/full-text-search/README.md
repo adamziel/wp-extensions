@@ -43,6 +43,14 @@ may omit stronger documents beyond the cap. It always returns a payload with
 `include_total` is omitted. Incompleteness here means matching documents may be
 omitted before normal limit/offset pagination.
 
+## Snippet Output
+
+`include_snippets` and `snippet_for_text()` return safe HTML. The component
+extracts visible text, escapes every source byte, and inserts only its own
+`<mark>` elements when highlighting is enabled. Original tags, attributes, and
+entity-decoded markup are never copied into the result, so callers can render
+the returned snippet without maintaining a second source-markup allowlist.
+
 ## Search Explain Payloads
 
 `WP_FTS_Searcher::search()` keeps the legacy list return shape by default.

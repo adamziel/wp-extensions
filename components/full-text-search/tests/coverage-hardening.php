@@ -395,4 +395,32 @@ $snippet = $searcher->snippet_for_text(
 wp_fts_component_hardening_check(str_contains($snippet, '<mark>'), 'HTML snippet should mark visible matches');
 wp_fts_component_hardening_check(!str_contains($snippet, 'hidden'), 'HTML snippet should not expose hidden script text');
 
+$hostileSnippet = $searcher->snippet_for_text(
+    '<p><strong onclick="alert(1)">portable</strong> text <img src=x onerror=alert(1)></p>',
+    'portable',
+    ['lang' => 'en', 'highlight' => true, 'snippet_length' => 80]
+);
+wp_fts_component_hardening_check(
+    str_contains($hostileSnippet, '<mark>portable</mark>'),
+    'snippet should generate a mark around matching visible text'
+);
+wp_fts_component_hardening_check(
+    !str_contains($hostileSnippet, '<strong')
+        && !str_contains($hostileSnippet, '<img')
+        && !str_contains($hostileSnippet, 'onclick')
+        && !str_contains($hostileSnippet, 'onerror'),
+    'snippet should not preserve source tags or attributes'
+);
+
+$entitySnippet = $searcher->snippet_for_text(
+    '<p>portable &lt;img src=x onerror=alert(1)&gt; tail</p>',
+    'portable',
+    ['lang' => 'en', 'highlight' => true, 'snippet_length' => 100]
+);
+$entitySnippetWithoutMarks = str_replace(['<mark>', '</mark>'], '', $entitySnippet);
+wp_fts_component_hardening_check(
+    !str_contains($entitySnippetWithoutMarks, '<') && str_contains($entitySnippet, '&lt;img'),
+    'snippet should escape entity-decoded markup before returning HTML'
+);
+
 return $wp_fts_component_hardening_checks;

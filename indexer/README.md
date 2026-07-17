@@ -339,14 +339,13 @@ n-grams. The plugin does not currently ship Thai dictionary segmentation.
 
 Snippets come from bounded metadata extracted during indexing, not from live
 post rendering at search time. When indexed fields provide HTML, a bounded HTML
-source is stored alongside plain text so inline markup can be preserved in
-highlighted snippets.
+source is stored alongside plain text for fallback extraction and diagnostics.
 
 When highlighting is enabled, the highlighter compares snippet tokens through
-the same analyzer path used for the query. The HTML path scans text nodes and
-source offsets rather than applying regex replacements, so a result can
-highlight the matched document surface form while preserving nested inline tags,
-including when the query form and document form differ through stemming or
+the same analyzer path used for the query. The result contains escaped visible
+text plus internally generated `<mark>` elements only, so source tags and
+attributes cannot become executable output. It can still highlight the matched
+document surface when the query and document forms differ through stemming or
 lemmatizer equivalence.
 
 ## Common Commands

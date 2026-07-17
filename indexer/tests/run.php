@@ -12998,9 +12998,9 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
                 $GLOBALS['post'] = $oldGlobalPost;
             }
         }
-        assert_contains('<mark>kier<em>ujemy</em></mark>', $snippet, 'front-end snippet should mark the morphology-backed Polish document form split by safe inline HTML');
-        assert_contains('<mark>kier<em>ujemy</em></mark>', $renderedSnippet, 'rendered front-end excerpts should expose the morphology-backed highlighted snippet');
-        assert_contains('<mark>kier<em>ujemy</em></mark>', $renderedContent, 'rendered front-end content previews should expose the morphology-backed highlighted snippet');
+        assert_contains('<mark>kierujemy</mark>', $snippet, 'front-end snippet should mark the joined morphology-backed Polish document form');
+        assert_contains('<mark>kierujemy</mark>', $renderedSnippet, 'rendered front-end excerpts should expose the morphology-backed highlighted snippet');
+        assert_contains('<mark>kierujemy</mark>', $renderedContent, 'rendered front-end content previews should expose the morphology-backed highlighted snippet');
         assert_contains('<p>', $renderedContent, 'rendered front-end content previews should keep block-level paragraph markup for theme layout constraints');
         assert_true(!str_contains($renderedSnippet, '<mark>kierować</mark>'), 'rendered front-end excerpts should not mark only the literal query form when the document surface differs');
         assert_true(!str_contains($renderedContent, '<mark>kierować</mark>'), 'rendered front-end content previews should not mark only the literal query form when the document surface differs');
@@ -13030,7 +13030,7 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
                 $GLOBALS['post'] = $oldGlobalPost;
             }
         }
-        assert_contains('<mark>kier<em>ujemy</em></mark>', $unaccentedContent, 'unaccented front-end Polish queries should still highlight the matched document surface form');
+        assert_contains('<mark>kierujemy</mark>', $unaccentedContent, 'unaccented front-end Polish queries should still highlight the matched document surface form');
 
         $post->post_content = '<!-- wp:paragraph -->' . "\n"
             . '<p>W książkach i zamkach i w sta<strong>jn<em>ia</em></strong>ch wyszukujemy wpisy oraz kierujemy katalog.</p>' . "\n"
@@ -13065,8 +13065,8 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
             }
         }
 
-        assert_contains('<mark>sta<strong>jn<em>ia</em></strong>ch</mark>', $formattedSnippet, 'front-end snippets should mark the full Polish document form across nested inline formatting');
-        assert_contains('<mark>sta<strong>jn<em>ia</em></strong>ch</mark>', $formattedContent, 'front-end content previews should mark the full Polish document form across nested inline formatting');
+        assert_contains('<mark>stajniach</mark>', $formattedSnippet, 'front-end snippets should mark the joined Polish document form');
+        assert_contains('<mark>stajniach</mark>', $formattedContent, 'front-end content previews should mark the joined Polish document form');
         assert_true(!str_contains($formattedContent, '<mark>Stajnia</mark>'), 'front-end content previews should not fall back to highlighting only the literal query form');
     } finally {
         $wpdb = $oldWpdb;
@@ -13187,9 +13187,9 @@ test_case('front-end search reuses sanitized searcher snippets for content previ
         }
 
         assert_contains('<mark>', $renderedExcerpt, 'reused front-end excerpts should preserve highlighted content');
-        assert_contains('reusecontent<em>needle</em>', $renderedExcerpt, 'reused front-end excerpts should preserve split inline content');
+        assert_contains('reusecontentneedle', $renderedExcerpt, 'reused front-end excerpts should preserve joined visible content');
         assert_contains('<mark>', $renderedContent, 'reused front-end content previews should preserve highlighted content');
-        assert_contains('reusecontent<em>needle</em>', $renderedContent, 'reused front-end content previews should preserve split inline content');
+        assert_contains('reusecontentneedle', $renderedContent, 'reused front-end content previews should preserve joined visible content');
         assert_contains('<mark>reusecontentneedle</mark>', $renderedTitle, 'title highlighting should still run separately');
         assert_true(!str_contains($renderedExcerpt, 'onclick'), 'reused snippets should still be sanitized before storage');
         assert_true(!str_contains($renderedContent, 'Metadata excerpt'), 'reused content previews should not fall back to aggregate excerpt metadata');
@@ -13540,7 +13540,7 @@ test_case('front-end search highlights core post blocks from block query context
     }
 });
 
-test_case('front-end search snippets preserve split inline HTML safely', function (): void {
+test_case('front-end search snippets join split inline text without returning source tags', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -13575,7 +13575,8 @@ test_case('front-end search snippets preserve split inline HTML safely', functio
         }
 
         assert_same([811], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'front-end split-inline search should return the matching post');
-        assert_contains('<mark>W<em>ęgorz</em></mark>', $snippet, 'front-end snippets should preserve valid inline markup inside highlighted split tokens');
+        assert_contains('<mark>Węgorz</mark>', $snippet, 'front-end snippets should highlight the joined split token');
+        assert_true(!str_contains($snippet, '<em>'), 'front-end snippets should not return source inline markup');
         assert_true(!str_contains($snippet, '<script>'), 'front-end snippets should not expose unsafe script markup');
 
     } finally {
@@ -13817,9 +13818,9 @@ test_case('processor extraction coalesces nested inline Polish fragments before 
     assert_same(1, $payload['total'] ?? 0, 'chrząstka should find the processor-indexed post through the full Polish pack');
     assert_same(1068, (int) ($payload['results'][0]['doc_id'] ?? 0), 'chrząstka should return the processor-indexed post');
     assert_contains(
-        '<mark>chr<strong><em>ząs</em>tki</strong></mark>',
+        '<mark>chrząstki</mark>',
         (string) ($payload['results'][0]['snippet'] ?? ''),
-        'search highlighting should preserve the formatted chrząstki surface'
+        'search highlighting should preserve the joined chrząstki surface without source tags'
     );
 });
 
@@ -16146,7 +16147,7 @@ test_case('polish full pack ambiguous candidates index search and highlight as a
         }
     }
     assert_true(is_array($formattedResult), 'chrząstka result set should include the formatted chrząstek document');
-    assert_contains('<mark>chrzą<strong>st</strong>ek</mark>', (string) ($formattedResult['snippet'] ?? ''), 'snippet highlighting should mark the full formatted chrząstek surface');
+    assert_contains('<mark>chrząstek</mark>', (string) ($formattedResult['snippet'] ?? ''), 'snippet highlighting should mark the joined chrząstek surface');
 
     $singleCandidateStorage = new WP_FTS_Storage_InMemory();
     $singleCandidateStorage->put_doc(970, 'pl', ['pl' => 2], 'manual-pack-alternative');
@@ -18473,7 +18474,7 @@ test_case('metadata-filtered search preserves document id zero', function (): vo
     assert_same('Zero Needle', $filtered['results'][0]['title'] ?? null, 'zero-id filtered result should still be metadata-enriched');
 });
 
-test_case('search snippets highlight analyzed Unicode words across inline HTML without marking hidden text', function (): void {
+test_case('search snippets emit escaped visible text and generated marks only', function (): void {
     $analyzer = new WP_FTS_Analyzer(['auto_detect_language' => false]);
     $storage = new WP_FTS_Storage_InMemory();
     $html = '<p><strong>Word</strong>Press Szk<em>l<i><b>ar</b></i></em>nia ' .
@@ -18499,10 +18500,10 @@ test_case('search snippets highlight analyzed Unicode words across inline HTML w
 
     $searcher = new WP_FTS_Searcher($storage, $analyzer);
     foreach ([
-        'WordPress' => '<mark><strong>Word</strong>Press</mark>',
-        'Szklarnia' => '<mark>Szk<em>l<i><b>ar</b></i></em>nia</mark>',
-        'Węgorz' => '<mark>W<em>ęgorz</em></mark>',
-        'Wegorz' => '<mark>W&#281;<em>gorz</em></mark>',
+        'WordPress' => '<mark>WordPress</mark>',
+        'Szklarnia' => '<mark>Szklarnia</mark>',
+        'Węgorz' => '<mark>Węgorz</mark>',
+        'Wegorz' => '<mark>Węgorz</mark>',
     ] as $query => $expectedMark) {
         $payload = $searcher->search($query, [
             'lang' => 'pl',
@@ -18515,10 +18516,11 @@ test_case('search snippets highlight analyzed Unicode words across inline HTML w
 
         assert_same(1, $payload['total'], "HTML-aware snippet query should match {$query}");
         $snippet = (string) ($payload['results'][0]['snippet'] ?? '');
-        assert_contains($expectedMark, $snippet, "HTML-aware snippet should preserve inline markup for {$query}");
-        assert_true(!str_contains($snippet, '<script><mark>'), "HTML-aware snippet should not mark script text for {$query}");
-        assert_true(!str_contains($snippet, '<style><mark>'), "HTML-aware snippet should not mark style text for {$query}");
-        assert_true(!str_contains($snippet, '<!-- <mark>'), "HTML-aware snippet should not mark comment text for {$query}");
+        assert_contains($expectedMark, $snippet, "safe snippet should highlight joined visible text for {$query}");
+        assert_true(!str_contains($snippet, '<strong') && !str_contains($snippet, '<em'), "safe snippet should not preserve source inline markup for {$query}");
+        assert_true(!str_contains($snippet, '<script'), "safe snippet should not return script markup for {$query}");
+        assert_true(!str_contains($snippet, '<style'), "safe snippet should not return style markup for {$query}");
+        assert_true(!str_contains($snippet, '<!--'), "safe snippet should not return comment markup for {$query}");
     }
 });
 
@@ -18555,13 +18557,14 @@ test_case('highlighted HTML snippets are compacted around split inline matches',
 
     assert_same(1, $payload['total'], 'compact HTML snippet query should match the indexed split inline word');
     $snippet = (string) ($payload['results'][0]['snippet'] ?? '');
-    assert_contains('<mark><strong>Word</strong>Press</mark>', $snippet, 'compact HTML snippet should preserve the marked split inline word');
+    assert_contains('<mark>WordPress</mark>', $snippet, 'compact snippet should preserve the joined split inline word');
+    assert_true(!str_contains($snippet, '<strong'), 'compact snippet should not return source inline markup');
     assert_true(!str_contains($snippet, 'far-prefix-filler far-prefix-filler'), 'compact HTML snippet should omit far prefix filler');
     assert_true(!str_contains($snippet, 'far-suffix-filler far-suffix-filler'), 'compact HTML snippet should omit far suffix filler');
     assert_true(strlen($snippet) <= 180, 'compact HTML snippet should stay within a small practical HTML fragment size');
 });
 
-test_case('snippet metadata stores compact HTML sidecar without losing text fallback', function (): void {
+test_case('snippet metadata stores a compact fallback sidecar without exposing it', function (): void {
     $analyzer = new WP_FTS_Analyzer(['auto_detect_language' => false]);
     $storage = new WP_FTS_Storage_InMemory();
     $plainPrefix = str_repeat('<p>plain filler commonterm context block</p>', 180);
@@ -18588,7 +18591,7 @@ test_case('snippet metadata stores compact HTML sidecar without losing text fall
     $searchHtml = (string) ($metadata['search_html'] ?? '');
     assert_true(strlen($html) > 8000, 'fixture should contain long HTML content');
     assert_true(strlen($searchHtml) < 120, 'stored HTML sidecar should avoid copying long plain HTML content');
-    assert_contains('<strong>Word</strong>Press', $searchHtml, 'stored HTML sidecar should retain split inline markup needed for highlighting');
+    assert_contains('<strong>Word</strong>Press', $searchHtml, 'stored HTML sidecar should retain split inline text for fallback extraction');
     assert_true(!str_contains($searchHtml, 'PlainTailNeedle'), 'stored HTML sidecar should leave plain terms to search_text fallback');
 
     $searcher = new WP_FTS_Searcher($storage, $analyzer);
@@ -18610,7 +18613,8 @@ test_case('snippet metadata stores compact HTML sidecar without losing text fall
     ]);
 
     assert_same(1, $splitPayload['total'], 'split inline query should still match after metadata compaction');
-    assert_contains('<mark><strong>Word</strong>Press</mark>', (string) ($splitPayload['results'][0]['snippet'] ?? ''), 'split inline query should still preserve original HTML markup');
+    assert_contains('<mark>WordPress</mark>', (string) ($splitPayload['results'][0]['snippet'] ?? ''), 'split inline query should return joined safe highlighted text');
+    assert_true(!str_contains((string) ($splitPayload['results'][0]['snippet'] ?? ''), '<strong'), 'split inline query should not expose sidecar markup');
     assert_same(1, $textPayload['total'], 'plain tail query should still match after metadata compaction');
     assert_contains('<mark>PlainTailNeedle</mark>', (string) ($textPayload['results'][0]['snippet'] ?? ''), 'plain tail query should fall back to stored search_text snippets');
 });

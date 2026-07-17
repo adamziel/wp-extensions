@@ -522,7 +522,7 @@ final class WP_FTS_Indexer
     }
 
     /**
-     * Build a bounded HTML source for snippets from weighted fields.
+     * Build a bounded HTML source for fallback extraction and diagnostics.
      *
      * @param array<int,array{name:string,text:string,html?:string,boost:float}> $fields
      */
@@ -607,11 +607,10 @@ final class WP_FTS_Indexer
     }
 
     /**
-     * Keep only HTML fragments needed to preserve rich snippet highlights.
+     * Keep only HTML fragments needed for fallback extraction and diagnostics.
      *
-     * Plain snippet text already lives in `search_text`; this sidecar exists for
-     * inline markup/entity cases where plain text cannot reconstruct a safe mark
-     * range around the original edited HTML.
+     * Plain snippet text already lives in `search_text`. This sidecar preserves
+     * bounded field evidence without exposing source markup in returned snippets.
      *
      * @return string[]
      */
