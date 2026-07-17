@@ -504,6 +504,7 @@ ON DUPLICATE KEY UPDATE doc_len = VALUES(doc_len)",
      *
      * @param array<string,mixed> $metadata
      * @throws JsonException If metadata cannot be JSON encoded.
+     * @throws RuntimeException If the database rejects the metadata write.
      */
     public function put_doc_metadata(int $doc_id, array $metadata): void
     {
@@ -523,7 +524,7 @@ ON DUPLICATE KEY UPDATE post_id = VALUES(post_id), post_type = VALUES(post_type)
             (string) $metadata['search_text'],
             $data
         );
-        $this->wpdb->query($sql);
+        $this->query($sql, 'write FTS document metadata');
     }
 
     /**
@@ -550,7 +551,7 @@ ORDER BY m.doc_id ASC",
         );
 
         $metadata = [];
-        foreach ($this->wpdb->get_results($sql) ?: [] as $row) {
+        foreach ($this->get_results($sql, 'read FTS document metadata') as $row) {
             $decoded = [];
             if (isset($row->data) && is_string($row->data) && trim($row->data) !== '') {
                 try {
