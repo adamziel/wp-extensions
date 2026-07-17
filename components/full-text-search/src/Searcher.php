@@ -45,6 +45,7 @@ final class WP_FTS_Searcher
     private const DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS = 30.0;
     private const MIN_RECENCY_BOOST_HALF_LIFE_DAYS = 1.0;
     private const MAX_RECENCY_BOOST_HALF_LIFE_DAYS = 3650.0;
+    private const SNIPPET_TOKEN_PATTERN = '/[\p{L}\p{M}\p{N}_-]+/u';
     /** @var callable|null */
     private $activeRequestBudgetGuard = null;
     /** @var array<string,mixed> */
@@ -2928,7 +2929,7 @@ final class WP_FTS_Searcher
      */
     private function first_analyzed_snippet_match_position(string $text, array $queryKeys, array $opts, array $queryGroups, string $queryLang, string $resultLang, array &$analysisCache): ?int
     {
-        $matched = preg_match_all('/[\p{L}\p{N}_-]+/u', $text, $matches, PREG_OFFSET_CAPTURE);
+        $matched = preg_match_all(self::SNIPPET_TOKEN_PATTERN, $text, $matches, PREG_OFFSET_CAPTURE);
         if ($matched === false || $matched === 0) {
             return null;
         }
@@ -2953,7 +2954,7 @@ final class WP_FTS_Searcher
      */
     private function highlight_snippet_terms(string $snippet, array $literalTerms, array $queryKeys, array $opts, array $queryGroups, string $queryLang, string $resultLang, array &$analysisCache): string
     {
-        $matched = preg_match_all('/[\p{L}\p{N}_-]+/u', $snippet, $matches, PREG_OFFSET_CAPTURE);
+        $matched = preg_match_all(self::SNIPPET_TOKEN_PATTERN, $snippet, $matches, PREG_OFFSET_CAPTURE);
         if ($matched === false || $matched === 0) {
             return $this->escape_snippet_text($snippet);
         }
@@ -3060,7 +3061,7 @@ final class WP_FTS_Searcher
      */
     private function snippet_terms(string $query): array
     {
-        preg_match_all('/[\p{L}\p{N}_-]+/u', $query, $matches);
+        preg_match_all(self::SNIPPET_TOKEN_PATTERN, $query, $matches);
         $terms = [];
         foreach ($matches[0] ?? [] as $term) {
             $term = trim((string) $term);

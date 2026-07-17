@@ -522,14 +522,25 @@ $unicodeAnalyzer = new WP_FTS_Analyzer([
     'fold_diacritics' => false,
 ]);
 $unicodeStorage = new WP_FTS_Storage_InMemory();
+$unicodePrefix = str_repeat('canonical prefix words ', 20);
 (new WP_FTS_Indexer($unicodeStorage, $unicodeAnalyzer))->index_document(
     702,
-    "<p>cafe\u{0301} \u{24de}\u{24d5}\u{24d5}\u{24d8}\u{24d2}\u{24d4}</p>",
+    "<p>{$unicodePrefix}cafe\u{0301} \u{24de}\u{24d5}\u{24d5}\u{24d8}\u{24d2}\u{24d4}</p>",
     ['lang' => 'fr']
 );
 $unicodeSearcher = new WP_FTS_Searcher($unicodeStorage, $unicodeAnalyzer);
 wp_fts_component_hardening_same([702], array_column($unicodeSearcher->search("caf\u{00e9}", ['lang' => 'fr']), 'doc_id'), 'canonical query form should retrieve decomposed document text');
 wp_fts_component_hardening_same([702], array_column($unicodeSearcher->search('office', ['lang' => 'fr']), 'doc_id'), 'ASCII query should retrieve compatibility-symbol document text');
+$canonicalSnippetResults = $unicodeSearcher->search("caf\u{00e9}", [
+    'lang' => 'fr',
+    'include_snippets' => true,
+    'highlight' => true,
+    'snippet_length' => 40,
+]);
+wp_fts_component_hardening_check(
+    str_contains((string) ($canonicalSnippetResults[0]['snippet'] ?? ''), "<mark>cafe\u{0301}</mark>"),
+    'canonical-equivalent snippets should center and mark the original decomposed surface'
+);
 
 $detectedUnicodeAnalyzer = new WP_FTS_Analyzer(['default_lang' => 'fr']);
 $detectedUnicodeStorage = new WP_FTS_Storage_InMemory();
