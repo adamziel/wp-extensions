@@ -12681,6 +12681,7 @@ JS;
             'post_type' => $post_types,
             'post_status' => $post_statuses,
             'explain' => $trace_id > 0,
+            'reuse_ranked_results' => true,
         ] + self::searcher_prefix_threshold_options($settings) + self::searcher_recency_boost_options($settings);
         $fallback_languages = [];
         if ($settings['language_fallback']) {
@@ -12726,6 +12727,9 @@ JS;
             $payload = $searcher->search($search_query, $search_options);
             self::debug_add_timing($trace_id, 'storage/search', $search_started);
             self::debug_set_search_explain($trace_id, $payload['explain'] ?? null);
+            if (!empty($payload['explain']['scoring']['ranked_results_reused'])) {
+                self::debug_add_count($trace_id, 'ranking_reuses');
+            }
             $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
             self::debug_add_count($trace_id, 'search_batches');
             self::debug_add_count($trace_id, 'candidate_rows', count($rows));

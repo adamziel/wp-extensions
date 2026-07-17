@@ -180,6 +180,40 @@ $pageTwo = $searcher->search('common', ['lang' => 'en', 'limit' => 1, 'offset' =
 wp_fts_component_hardening_same(3, $pageOne['total'], 'include_total should count all matching common docs');
 wp_fts_component_hardening_check(($pageOne['results'][0]['doc_id'] ?? 0) !== ($pageTwo['results'][0]['doc_id'] ?? 0), 'pagination should advance between pages');
 
+$cachedPageOne = $searcher->search('common', [
+    'lang' => 'en',
+    'limit' => 1,
+    'include_total' => true,
+    'exact' => true,
+    'explain' => true,
+    'reuse_ranked_results' => true,
+]);
+$cachedPageTwo = $searcher->search('common', [
+    'lang' => 'en',
+    'limit' => 1,
+    'offset' => 1,
+    'include_total' => true,
+    'exact' => true,
+    'explain' => true,
+    'reuse_ranked_results' => true,
+]);
+wp_fts_component_hardening_same(false, $cachedPageOne['explain']['scoring']['ranked_results_reused'] ?? null, 'first reusable page should compute its ranking');
+wp_fts_component_hardening_same(true, $cachedPageTwo['explain']['scoring']['ranked_results_reused'] ?? null, 'next reusable page should reuse the full ranking');
+wp_fts_component_hardening_same($cachedPageOne['total'], $cachedPageTwo['total'], 'reused pagination should preserve the full total');
+wp_fts_component_hardening_check(
+    ($cachedPageOne['results'][0]['doc_id'] ?? 0) !== ($cachedPageTwo['results'][0]['doc_id'] ?? 0),
+    'reused pagination should still advance the result window'
+);
+$differentCachedQuery = $searcher->search('alpha', [
+    'lang' => 'en',
+    'limit' => 1,
+    'include_total' => true,
+    'exact' => true,
+    'explain' => true,
+    'reuse_ranked_results' => true,
+]);
+wp_fts_component_hardening_same(false, $differentCachedQuery['explain']['scoring']['ranked_results_reused'] ?? null, 'different query should invalidate the reusable ranking');
+
 $filtered = $searcher->search('common', [
     'lang' => 'en',
     'limit' => 10,

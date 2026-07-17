@@ -27,6 +27,13 @@ final class WP_FTS_Searcher
     private const MAX_RECENCY_BOOST_HALF_LIFE_DAYS = 3650.0;
 
     /**
+     * Last full ranking retained for explicit same-request pagination reuse.
+     *
+     * @var array{key:string,results:array<int,array{doc_id:int,score:float,_rank:int}>,score_stats:array<string,int>,recency_stats:array<string,mixed>}|null
+     */
+    private ?array $rankedResultCache = null;
+
+    /**
      * @param WP_FTS_Storage $storage Storage backend containing postings and
      *        per-language metadata.
      * @param object $analyzer Analyzer object exposing query analysis methods.
@@ -76,7 +83,12 @@ final class WP_FTS_Searcher
      * payloads. Query-plan explain rows include the user/query surface when the
      * analyzer exposes it, plus the analyzed storage term and key used for
      * scoring. `explain_result_matches` can disable the per-result document term
-     * lookup when a caller must defer that work.
+     * lookup when a caller must defer that work. `reuse_ranked_results` retains
+     * one full ranking on this searcher instance so subsequent pagination calls
+     * with the same scoring inputs only slice and enrich another page. Callers
+     * must not mutate storage between those calls. Reuse is disabled when an
+     * authoritative candidate filter is present because its mutable visibility
+     * behavior cannot be represented in the ranking fingerprint.
      *
      * @param array<string,mixed> $opts
      * @return array<int,array<string,mixed>>|array{total:int,total_is_exact:bool,retrieval_mode:string,results_may_be_incomplete:bool,candidate_cap:?int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
@@ -126,11 +138,38 @@ final class WP_FTS_Searcher
         $useBoundedTopK = !$recencyBoost['enabled']
             && $fastMode['candidate_cap'] === null
             && $this->can_use_bounded_top_k($opts, $offset);
-        $scoreStats = $this->empty_score_stats();
-        $results = $this->score_query_groups($groups, $mode, $useBoundedTopK ? $limit : null, $metadataFilter, $candidateFilter, $fastMode['candidate_cap'], $scoreStats);
-        $recencyStats = $this->apply_recency_boost($results, $recencyBoost);
-        if (!$useBoundedTopK) {
-            usort($results, [self::class, 'compare_ranked_results']);
+        $cacheKey = !$useBoundedTopK
+            && $candidateFilter === null
+            && $this->truthy_option($opts['reuse_ranked_results'] ?? false)
+            ? $this->ranked_result_cache_key(
+                $groups,
+                $mode,
+                $metadataFilter,
+                $fastMode['candidate_cap'],
+                $recencyBoost,
+                $opts['now_gmt'] ?? ($opts['recency_now'] ?? null)
+            )
+            : null;
+        if ($cacheKey !== null && ($this->rankedResultCache['key'] ?? null) === $cacheKey) {
+            $results = $this->rankedResultCache['results'];
+            $scoreStats = $this->rankedResultCache['score_stats'];
+            $scoreStats['ranked_results_reused'] = 1;
+            $recencyStats = $this->rankedResultCache['recency_stats'];
+        } else {
+            $scoreStats = $this->empty_score_stats();
+            $results = $this->score_query_groups($groups, $mode, $useBoundedTopK ? $limit : null, $metadataFilter, $candidateFilter, $fastMode['candidate_cap'], $scoreStats);
+            $recencyStats = $this->apply_recency_boost($results, $recencyBoost);
+            if (!$useBoundedTopK) {
+                usort($results, [self::class, 'compare_ranked_results']);
+            }
+            if ($cacheKey !== null) {
+                $this->rankedResultCache = [
+                    'key' => $cacheKey,
+                    'results' => $results,
+                    'score_stats' => $scoreStats,
+                    'recency_stats' => $recencyStats,
+                ];
+            }
         }
 
         $total = count($results);
@@ -151,6 +190,28 @@ final class WP_FTS_Searcher
             : null;
 
         return $this->format_response($page, $total, $opts, $responseLang, $explain, $fastMode['candidate_cap']);
+    }
+
+    /**
+     * Fingerprint only inputs that can change ranking or candidate membership.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $groups
+     * @param array{post_types:string[],post_statuses:string[],date_after:?string,date_before:?string}|null $metadataFilter
+     * @param array{enabled:bool,strength:float,half_life_days:float,now_timestamp:int,now_gmt:string} $recencyBoost
+     * @param mixed $requestedNow Caller-provided stable recency clock, if any.
+     */
+    private function ranked_result_cache_key(array $groups, string $mode, ?array $metadataFilter, ?int $candidateCap, array $recencyBoost, mixed $requestedNow): string
+    {
+        unset($recencyBoost['now_timestamp'], $recencyBoost['now_gmt']);
+
+        return hash('sha256', serialize([
+            'groups' => $groups,
+            'mode' => $mode,
+            'metadata_filter' => $metadataFilter,
+            'candidate_cap' => $candidateCap,
+            'recency_boost' => $recencyBoost,
+            'requested_now' => is_scalar($requestedNow) ? (string) $requestedNow : null,
+        ]));
     }
 
     /**
@@ -447,7 +508,7 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * @return array{query_terms:int,posting_terms_fetched:int,candidate_rows_fetched:int,candidate_rows_considered:int,candidate_docs_considered:int,candidate_docs_scored:int,scoring_terms:int,scored_results:int}
+     * @return array{query_terms:int,posting_terms_fetched:int,candidate_rows_fetched:int,candidate_rows_considered:int,candidate_docs_considered:int,candidate_docs_scored:int,scoring_terms:int,scored_results:int,ranked_results_reused:int}
      */
     private function empty_score_stats(): array
     {
@@ -460,6 +521,7 @@ final class WP_FTS_Searcher
             'candidate_docs_scored' => 0,
             'scoring_terms' => 0,
             'scored_results' => 0,
+            'ranked_results_reused' => 0,
         ];
     }
 
@@ -1822,6 +1884,7 @@ final class WP_FTS_Searcher
                 'candidate_docs_considered' => max(0, (int) ($scoreStats['candidate_docs_considered'] ?? 0)),
                 'candidate_docs_scored' => max(0, (int) ($scoreStats['candidate_docs_scored'] ?? 0)),
                 'scoring_terms' => max(0, (int) ($scoreStats['scoring_terms'] ?? 0)),
+                'ranked_results_reused' => !empty($scoreStats['ranked_results_reused']),
                 'total' => max(0, $total),
                 'total_accuracy' => $exactTotal ? 'exact' : 'approximate',
             ],
