@@ -11123,37 +11123,40 @@ test_case('enabled diagnostics record frontend search timings counts language se
     }
 });
 
-test_case('frontend replacement bailout without storage timing reports unavailable budget status', function (): void {
+test_case('frontend empty-scope bailout without storage timing reports unavailable budget status', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
     $wpdb = new WP_FTS_Test_WPDB();
     wp_fts_test_reset_wordpress_fakes();
+    $oldPostTypes = array_map(static fn(object $postType): object => clone $postType, $GLOBALS['wp_fts_test_post_types']);
+    $GLOBALS['wp_fts_test_post_types']['post']->exclude_from_search = true;
+    $GLOBALS['wp_fts_test_post_types']['page']->exclude_from_search = true;
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
 
     try {
         $query = new WP_FTS_Test_Query([
-            's' => 'unsupportedbudgetneedle',
+            's' => 'emptyscopebudgetneedle',
             'posts_per_page' => 10,
-            'post_type' => 'book',
+            'post_type' => 'any',
         ]);
 
         WP_FTS_Plugin::prepare_frontend_search_query($query);
         $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
 
-        assert_same(true, $query->get('wp_fts_search_candidate'), 'unsupported requested post type should still reach the real replacement path after frontend eligibility marking');
-        assert_same([], $posts, 'unsupported requested post type replacement path should return an empty FTS result set after bailout');
+        assert_same(true, $query->get('wp_fts_search_candidate'), 'an empty complete WordPress search scope should still reach the replacement path');
+        assert_same([], $posts, 'an empty complete WordPress search scope should return an empty FTS result set after bailout');
 
         $traces = WP_FTS_Plugin::debug_traces();
-        assert_same(1, count($traces), 'unsupported requested post type should record one real replacement trace');
+        assert_same(1, count($traces), 'an empty complete WordPress search scope should record one real replacement trace');
         $trace = $traces[0];
-        assert_same('frontend search', $trace['context'] ?? null, 'unsupported post type bailout should keep the frontend trace context');
-        assert_same('bailed', $trace['status'] ?? null, 'unsupported post type replacement path should finish as a bailout');
-        assert_contains('no searchable post types or statuses', (string) ($trace['bailout_reason'] ?? ''), 'unsupported post type bailout should explain that no searchable scope remained');
+        assert_same('frontend search', $trace['context'] ?? null, 'empty-scope bailout should keep the frontend trace context');
+        assert_same('bailed', $trace['status'] ?? null, 'empty-scope replacement should finish as a bailout');
+        assert_contains('no searchable post types or statuses', (string) ($trace['bailout_reason'] ?? ''), 'empty-scope bailout should explain that no searchable scope remained');
 
         $timings = is_array($trace['timings_ms'] ?? null) ? $trace['timings_ms'] : [];
-        assert_true(array_key_exists('total', $timings), 'unsupported post type bailout may keep a total elapsed timing');
-        assert_true(!array_key_exists('storage/search', $timings), 'unsupported post type bailout should not report storage/search timing when storage search never ran');
+        assert_true(array_key_exists('total', $timings), 'empty-scope bailout may keep a total elapsed timing');
+        assert_true(!array_key_exists('storage/search', $timings), 'empty-scope bailout should not report storage/search timing when storage search never ran');
 
         $budget = is_array($trace['performance_budget'] ?? null) ? $trace['performance_budget'] : [];
         assert_same('unavailable', $budget['status'] ?? null, 'total-only replacement bailout should not be classified as within budget');
@@ -11163,6 +11166,7 @@ test_case('frontend replacement bailout without storage timing reports unavailab
         assert_float_near(50.0, (float) ($budget['storage_search_budget_ms'] ?? -1), 'total-only bailout budget summary should retain the configured storage/search budget');
         assert_contains('storage/search', (string) ($budget['explanation'] ?? ''), 'unavailable budget explanation should identify the missing enabled search phase timing');
     } finally {
+        $GLOBALS['wp_fts_test_post_types'] = $oldPostTypes;
         $wpdb = $oldWpdb;
     }
 });
@@ -12344,6 +12348,7 @@ test_case('admin Posts list search is replaced with FTS-ranked WP_Post results',
             'post_status' => 'publish',
         ]);
         WP_FTS_Plugin::prepare_admin_post_search_query($query);
+        $query->set('fields', 'all');
         $posts = WP_FTS_Plugin::replace_admin_post_search_posts(null, $query);
 
         assert_same(true, $query->get('wp_fts_admin_post_search_candidate'), 'pre_get_posts should mark eligible admin Posts list searches');
@@ -12690,6 +12695,12 @@ test_case('admin Posts list search replacement avoids REST cron secondary sandbo
         'custom status sorted column' => ['post_status' => 'draft', 'perm' => 'readable', 'orderby' => 'title'],
         'custom status order direction' => ['post_status' => 'pending', 'perm' => 'readable', 'orderby' => 'modified', 'order' => 'DESC'],
         'permission scope' => ['perm' => 'editable'],
+        'id result shape' => ['fields' => 'ids'],
+        'parent result shape' => ['fields' => 'id=>parent'],
+        'unbounded result set' => ['posts_per_page' => -1],
+        'no paging' => ['nopaging' => true],
+        'suppressed totals' => ['no_found_rows' => true],
+        'ascending relevance' => ['order' => 'ASC'],
         'suppressed filters' => ['suppress_filters' => true],
     ];
 
@@ -12744,6 +12755,15 @@ test_case('front-end search replacement declines constrained WP_Query searches',
             'exact post id' => ['p' => 751],
             'exact page id' => ['page_id' => 751],
             'exact post name' => ['name' => 'constrained-front-end-result'],
+            'id result shape' => ['fields' => 'ids'],
+            'parent result shape' => ['fields' => 'id=>parent'],
+            'custom ordering' => ['orderby' => 'title'],
+            'ascending relevance' => ['order' => 'ASC'],
+            'unbounded result set' => ['posts_per_page' => -1],
+            'no paging' => ['nopaging' => true],
+            'suppressed totals' => ['no_found_rows' => true],
+            'unindexed post type' => ['post_type' => 'book'],
+            'partially indexed post types' => ['post_type' => ['post', 'secret']],
         ];
 
         foreach ($constrainedVars as $label => $vars) {
@@ -12756,7 +12776,36 @@ test_case('front-end search replacement declines constrained WP_Query searches',
             assert_same(null, $query->get('wp_fts_search_candidate', null), "constrained {$label} search should not be marked for FTS replacement");
             assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), "constrained {$label} search should continue through normal WordPress search");
         }
+
+        $defaultShape = new WP_FTS_Test_Query([
+            's' => 'constraintneedle',
+            'posts_per_page' => 10,
+            'fields' => '',
+            'orderby' => 'relevance',
+            'order' => 'DESC',
+            'nopaging' => false,
+            'no_found_rows' => false,
+        ]);
+        WP_FTS_Plugin::prepare_frontend_search_query($defaultShape);
+        assert_same(true, $defaultShape->get('wp_fts_search_candidate'), 'normal object relevance queries should remain eligible for FTS replacement');
+        $defaultShape->set('fields', 'all');
+        $defaultPosts = WP_FTS_Plugin::replace_frontend_search_posts(null, $defaultShape);
+        assert_same([751], array_map(static fn(object $post): int => (int) $post->ID, $defaultPosts), 'core-normalized object queries should remain eligible at posts_pre_query');
+
+        $GLOBALS['wp_fts_test_post_types']['internal-search'] = (object) [
+            'public' => false,
+            'exclude_from_search' => false,
+        ];
+        $broaderAnyScope = new WP_FTS_Test_Query([
+            's' => 'constraintneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'any',
+        ]);
+        WP_FTS_Plugin::prepare_frontend_search_query($broaderAnyScope);
+        assert_same(null, $broaderAnyScope->get('wp_fts_search_candidate', null), 'post_type=any should stay with WordPress when its core scope contains an unindexed non-public type');
+        assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $broaderAnyScope), 'FTS should not narrow the complete core post_type=any scope');
     } finally {
+        unset($GLOBALS['wp_fts_test_post_types']['internal-search']);
         $wpdb = $oldWpdb;
     }
 });
