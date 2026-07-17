@@ -2012,6 +2012,7 @@ final class WP_FTS_Test_WPDB
     public bool $missPreparedTermLookups = false;
     public bool $recordReadQueries = false;
     public bool $queueTableExists = true;
+    public int $num_queries = 0;
 
     /** @var array<int,string|array{0:string,1:float,2:string}> */
     public array $queries = [];
@@ -2789,6 +2790,52 @@ final class WP_FTS_Test_WPDB
             return $rows;
         }
 
+        if (str_starts_with($sql, 'SELECT term, doc_id, tf FROM (') && str_contains($sql, 'AS budgeted_postings')) {
+            $rowLimit = max(0, (int) array_pop($args));
+            $rows = [];
+            for ($index = 0; $index + 1 < count($args); $index += 2) {
+                $term = (string) $args[$index];
+                $termLimit = max(0, (int) $args[$index + 1]);
+                $postings = $this->postings[$term] ?? [];
+                ksort($postings, SORT_NUMERIC);
+                foreach (array_slice($postings, 0, $termLimit, true) as $docId => $tf) {
+                    $rows[] = (object) ['term' => $term, 'doc_id' => (int) $docId, 'tf' => (int) $tf];
+                }
+            }
+            usort($rows, static function (object $a, object $b): int {
+                $term = strcmp((string) $a->term, (string) $b->term);
+                return $term !== 0 ? $term : ((int) $a->doc_id <=> (int) $b->doc_id);
+            });
+
+            return array_slice($rows, 0, $rowLimit);
+        }
+
+        if (
+            str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')
+            && str_contains($sql, 'WHERE term IN')
+            && str_contains($sql, 'LIMIT %d')
+        ) {
+            $rowLimit = max(0, (int) array_pop($args));
+            $terms = $this->binary_term_literals($sql);
+            if ($terms === []) {
+                $terms = $args;
+            }
+            $rows = [];
+            foreach ($terms as $term) {
+                $term = (string) $term;
+                $postings = $this->postings[$term] ?? [];
+                ksort($postings, SORT_NUMERIC);
+                foreach ($postings as $docId => $tf) {
+                    $rows[] = (object) ['term' => $term, 'doc_id' => (int) $docId, 'tf' => (int) $tf];
+                    if (count($rows) >= $rowLimit) {
+                        break 2;
+                    }
+                }
+            }
+
+            return $rows;
+        }
+
         if (
             str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')
             && str_contains($sql, 'WHERE term =')
@@ -3181,6 +3228,7 @@ final class WP_FTS_Test_WPDB
 
     private function record_read_query(string $sql): void
     {
+        $this->num_queries++;
         if (!$this->recordReadQueries) {
             return;
         }
@@ -3750,6 +3798,9 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_deactivation_hooks'] = [];
     $GLOBALS['wp_fts_test_uninstall_hooks'] = [];
     $GLOBALS['wp_fts_test_options'] = [];
+    $GLOBALS['wp_fts_test_transients'] = [];
+    $GLOBALS['wp_fts_test_set_transient_failure'] = false;
+    $GLOBALS['wp_fts_test_current_user_id'] = 0;
     $GLOBALS['wp_fts_test_added_options'] = [];
     $GLOBALS['wp_fts_test_updated_options'] = [];
     $GLOBALS['wp_fts_test_scheduled'] = [];
@@ -3798,6 +3849,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
         'secret' => (object) ['public' => false, 'exclude_from_search' => true],
     ];
     $GLOBALS['wp_fts_test_caps'] = [];
+    unset($_SERVER['REMOTE_ADDR']);
     $GLOBALS['wp_fts_test_locale'] = '';
     $GLOBALS['wp_fts_test_bloginfo'] = ['language' => ''];
     $GLOBALS['wp_fts_test_revisions'] = [];
@@ -4001,6 +4053,35 @@ if (!function_exists('get_option')) {
         return array_key_exists($name, $store)
             ? $store[$name]
             : $default;
+    }
+}
+
+if (!function_exists('get_transient')) {
+    function get_transient(string $transient): mixed
+    {
+        $row = $GLOBALS['wp_fts_test_transients'][$transient] ?? null;
+        if (!is_array($row) || (int) ($row['expires'] ?? 0) < time()) {
+            unset($GLOBALS['wp_fts_test_transients'][$transient]);
+            return false;
+        }
+
+        return $row['value'] ?? false;
+    }
+}
+
+if (!function_exists('set_transient')) {
+    function set_transient(string $transient, mixed $value, int $expiration = 0): bool
+    {
+        if (!empty($GLOBALS['wp_fts_test_set_transient_failure'])) {
+            return false;
+        }
+
+        $GLOBALS['wp_fts_test_transients'][$transient] = [
+            'value' => $value,
+            'expires' => time() + max(1, $expiration),
+        ];
+
+        return true;
     }
 }
 
@@ -4553,6 +4634,13 @@ if (!function_exists('current_user_can')) {
         $post_id = isset($args[0]) ? (int) $args[0] : 0;
 
         return (bool) ($GLOBALS['wp_fts_test_caps'][$capability][$post_id] ?? false);
+    }
+}
+
+if (!function_exists('get_current_user_id')) {
+    function get_current_user_id(): int
+    {
+        return max(0, (int) ($GLOBALS['wp_fts_test_current_user_id'] ?? 0));
     }
 }
 
@@ -5287,6 +5375,8 @@ test_case('admin menu registration exposes Settings Full-Text Search page and op
     assert_same(true, WP_FTS_Plugin::default_settings()['prefix_matching'], 'default settings should enable word-beginning prefix matching');
     assert_same(4, WP_FTS_Plugin::default_settings()['prefix_min_length'], 'default prefix minimum length should preserve existing searcher behavior');
     assert_same(64, WP_FTS_Plugin::default_settings()['prefix_max_terms'], 'default prefix expansion cap should preserve existing searcher behavior');
+    assert_same(false, WP_FTS_Plugin::default_settings()['rest_api_enabled'], 'public REST search should require an explicit opt-in');
+    assert_same(false, WP_FTS_Plugin::default_settings()['rest_prefix_matching'], 'public REST prefix expansion should be disabled independently by default');
     assert_same('prefer_fts', WP_FTS_Plugin::default_settings()['search_provider_compatibility'], 'default search provider compatibility should prefer FTS precedence');
 });
 
@@ -5296,11 +5386,15 @@ test_case('settings sanitization maps replacement checkboxes and legacy scope to
         'replace_admin_post_search' => '0',
         'auto_index' => '0',
         'prefix_matching' => '0',
+        'rest_api_enabled' => '1',
+        'rest_prefix_matching' => '0',
     ]);
     assert_same(true, $checkboxes['replace_frontend_search'], 'frontend replacement checkbox should enable the public-site replacement boolean');
     assert_same(false, $checkboxes['replace_admin_post_search'], 'admin replacement checkbox should disable the wp-admin replacement boolean');
     assert_same(false, $checkboxes['auto_index'], 'auto-index checkbox should disable automatic indexing when unchecked');
     assert_same(false, $checkboxes['prefix_matching'], 'prefix matching checkbox should disable word-beginning matching when unchecked');
+    assert_same(true, $checkboxes['rest_api_enabled'], 'REST endpoint checkbox should enable explicit public registration');
+    assert_same(false, $checkboxes['rest_prefix_matching'], 'REST prefix checkbox should remain independent from normal prefix matching');
     assert_same('prefer_fts', $checkboxes['search_provider_compatibility'], 'missing provider compatibility setting should sanitize to the default precedence mode');
 
     $respectProvider = WP_FTS_Plugin::sanitize_settings([
@@ -5655,7 +5749,7 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION]), 'authorized first sandbox render should not write the legacy demo post option');
     assert_same([], $fake->terms, 'authorized first sandbox render should not build FTS terms for generated content');
     assert_true(!str_contains($html, 'Legacy sandbox demo posts detected'), 'clean sandbox render should not show the cleanup affordance');
-    foreach (['What gets indexed', 'When the index updates', 'Where full-text search replaces WordPress search', 'Customer-facing search behavior', 'Ranking weights', 'Language handling'] as $groupLabel) {
+    foreach (['What gets indexed', 'When the index updates', 'Where full-text search replaces WordPress search', 'Customer-facing search behavior', 'Public REST search', 'Ranking weights', 'Language handling'] as $groupLabel) {
         assert_contains($groupLabel, $settingsHtml, "settings tab should group controls by {$groupLabel}");
     }
     assert_contains('Content types in the index', $settingsHtml, 'settings tab should render post-type configuration');
@@ -5687,6 +5781,10 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_contains('type="hidden" name="wp_fts_settings[prefix_matching]" value="0"', $settingsHtml, 'prefix matching checkbox should post an unchecked value');
     assert_contains('type="checkbox" name="wp_fts_settings[prefix_matching]" value="1" checked="checked"', $settingsHtml, 'prefix matching should be checked by default');
     assert_contains('Exact and lemmatizer matches still rank first', $settingsHtml, 'prefix matching copy should explain rank precedence');
+    assert_contains('Register the public wp-fts/v1/search endpoint', $settingsHtml, 'settings should expose an explicit REST registration opt-in');
+    assert_contains('type="checkbox" name="wp_fts_settings[rest_api_enabled]" value="1"', $settingsHtml, 'public REST endpoint should render unchecked by default');
+    assert_true(!str_contains($settingsHtml, 'name="wp_fts_settings[rest_api_enabled]" value="1" checked="checked"'), 'public REST endpoint must not be enabled by default');
+    assert_contains('Allow bounded word-beginning expansion on the REST endpoint', $settingsHtml, 'settings should expose an independent REST prefix opt-in');
     assert_contains('Shortest word beginning', $settingsHtml, 'settings should expose prefix minimum length near word beginnings');
     assert_contains('name="wp_fts_settings[prefix_min_length]" value="4"', $settingsHtml, 'settings should render the default prefix minimum length');
     assert_contains('Shorter values make word-beginning matches broader', $settingsHtml, 'prefix minimum length copy should explain broader matching');
@@ -11978,6 +12076,10 @@ function wp_fts_test_with_rest_explain_index(callable $callback): void
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['rest_api_enabled' => true]
+    );
 
     $public = (object) [
         'ID' => 231,
@@ -12060,6 +12162,15 @@ test_case('REST search surface filters private results by capability', function 
 
     try {
         WP_FTS_Plugin::register_rest_routes();
+        assert_same([], $GLOBALS['wp_fts_test_rest_routes'], 'REST search route should be absent before explicit opt-in');
+        $disabled = WP_FTS_Plugin::rest_search(['q' => 'shared']);
+        assert_true($disabled instanceof WP_Error, 'direct REST callback dispatch should also reject requests before opt-in');
+        assert_same(404, $disabled->get_error_data()['status'] ?? null, 'disabled direct REST dispatch should use a non-disclosing HTTP 404');
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+            WP_FTS_Plugin::default_settings(),
+            ['rest_api_enabled' => true]
+        );
+        WP_FTS_Plugin::register_rest_routes();
         $route = $GLOBALS['wp_fts_test_rest_routes'][0] ?? null;
         assert_same(WP_FTS_Plugin::REST_NAMESPACE, $route['namespace'] ?? null, 'REST registration should use the plugin namespace');
         assert_same(WP_FTS_Plugin::REST_SEARCH_ROUTE, $route['route'] ?? null, 'REST registration should expose the search route');
@@ -12080,6 +12191,7 @@ test_case('REST search surface filters private results by capability', function 
         assert_same([201], array_column($unauthorizedExplain['results'], 'doc_id'), 'unauthorized REST explain should not leak private rows');
 
         $GLOBALS['wp_fts_test_caps']['read_post'][202] = true;
+        $GLOBALS['wp_fts_test_current_user_id'] = 7;
         $ids = array_column(WP_FTS_Plugin::search('shared', ['limit' => 10]), 'doc_id');
         sort($ids, SORT_NUMERIC);
         assert_same([201, 202], $ids, 'search should include private indexed posts when the visitor can read them');
@@ -12099,13 +12211,17 @@ test_case('REST search surface filters private results by capability', function 
     }
 });
 
-test_case('PHP and REST visibility filtering reaches public results below 250 hidden ranks', function (): void {
+test_case('PHP visibility stays exact while REST visibility remains bounded and approximate', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['rest_api_enabled' => true]
+    );
 
     try {
         $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), WP_FTS_Plugin::runtime_analyzer());
@@ -12160,7 +12276,23 @@ test_case('PHP and REST visibility filtering reaches public results below 250 hi
         ]);
 
         assert_same([$publicId], array_column(WP_FTS_Plugin::search('deepvisibilityneedle', ['limit' => 1, 'lang' => 'en']), 'doc_id'), 'PHP search should rank the readable corpus instead of stopping after 250 hidden rows');
-        assert_same([$publicId], array_column(WP_FTS_Plugin::rest_search(['q' => 'deepvisibilityneedle', 'limit' => 1, 'lang' => 'en'])['results'] ?? [], 'doc_id'), 'REST search should use the same authoritative pre-ranking visibility filter');
+        assert_same(
+            [$publicId],
+            array_column(WP_FTS_Plugin::search('deepvisibilityneedle', [
+                'limit' => 1,
+                'lang' => 'en',
+                'fast_top_k' => 'false',
+                'request_budget_guard' => static fn(): bool => true,
+            ]), 'doc_id'),
+            'false-like fast options should keep authoritative exact PHP visibility even when a request guard is present'
+        );
+        $restResponse = WP_FTS_Plugin::rest_search(['q' => 'deepvisibilityneedle', 'limit' => 1, 'lang' => 'en']);
+        assert_true(
+            is_array($restResponse),
+            'bounded REST search should return a response rather than exhaust its budget: '
+                . ($restResponse instanceof WP_Error ? $restResponse->get_error_code() . ' ' . json_encode($restResponse->get_error_data()) : get_debug_type($restResponse))
+        );
+        assert_same([], $restResponse['results'] ?? null, 'bounded approximate REST search may omit a low-ranked public result outside its visibility refill window');
 
         $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
         $explained = WP_FTS_Plugin::search_with_explain('deepvisibilityneedle', ['limit' => 1, 'lang' => 'en']);
@@ -12168,11 +12300,27 @@ test_case('PHP and REST visibility filtering reaches public results below 250 hi
         assert_same(1, $explained['explain']['scoring']['candidate_docs_scored'] ?? null, 'hidden candidates should be removed before scoring');
         assert_same('candidate_filter', $explained['explain']['fast_mode']['source'] ?? null, 'visibility filtering should force exact discovery before any candidate cap');
 
+        $restExplained = WP_FTS_Plugin::rest_search([
+            'q' => 'deepvisibilityneedle',
+            'limit' => 1,
+            'lang' => 'en',
+            'explain' => '1',
+        ]);
+        assert_true(
+            is_array($restExplained),
+            'operator REST explain should stay within its fixed work budget: '
+                . ($restExplained instanceof WP_Error ? $restExplained->get_error_code() . ' ' . json_encode($restExplained->get_error_data()) : get_debug_type($restExplained))
+        );
+        assert_same([], $restExplained['results'] ?? null, 'operator REST explain should preserve the bounded visibility result set');
+        assert_same('explicit_option', $restExplained['explain']['fast_mode']['source'] ?? null, 'REST explain should identify its explicit approximate retrieval');
+        assert_same(500, $restExplained['explain']['fast_mode']['candidate_cap'] ?? null, 'REST explain should expose the fixed candidate cap');
+        assert_same('approximate', $restExplained['explain']['scoring']['total_accuracy'] ?? null, 'REST explain should label capped totals as approximate');
+
         $visibilityQueries = array_values(array_filter(
             $fake->prepared,
             static fn(array $statement): bool => str_starts_with($statement['sql'], 'SELECT ID, post_type, post_status, post_password FROM `wp_posts`')
         ));
-        assert_same(9, count($visibilityQueries), 'three broad searches should use three bounded canonical-post queries each');
+        assert_same(12, count($visibilityQueries), 'three exact PHP searches plus one bounded REST explain authorization pass should use three canonical-post queries each');
         assert_true(max(array_map(static fn(array $statement): int => count($statement['args']), $visibilityQueries)) <= 100, 'authoritative visibility queries should cap each canonical post lookup at 100 ids');
     } finally {
         $wpdb = $oldWpdb;
@@ -12235,6 +12383,12 @@ test_case('PHP search_with_explain is operator-gated and mirrors REST explain vi
 });
 
 test_case('REST search returns explicit 400 errors for missing query and invalid mode', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['rest_api_enabled' => true]
+    );
+
     $missing = WP_FTS_Plugin::rest_search(['q' => ' ', 'query' => '']);
     assert_true($missing instanceof WP_Error, 'missing REST query should return a WP_Error');
     assert_same('wp_fts_missing_query', $missing->get_error_code(), 'missing REST query error should use a stable code');
@@ -12244,6 +12398,173 @@ test_case('REST search returns explicit 400 errors for missing query and invalid
     assert_true($invalidMode instanceof WP_Error, 'invalid REST mode should return a WP_Error');
     assert_same('wp_fts_invalid_mode', $invalidMode->get_error_code(), 'invalid REST mode error should use a stable code');
     assert_same(400, $invalidMode->get_error_data()['status'] ?? null, 'invalid REST mode error should carry HTTP 400 status');
+});
+
+test_case('REST search keeps prefix opt-in independent and caches anonymous responses', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['rest_api_enabled' => true, 'rest_prefix_matching' => false]
+    );
+    $post = (object) [
+        'ID' => 401,
+        'post_title' => 'REST prefix host',
+        'post_content' => '<p>qzxprefixsignal</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-07-01 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][401] = $post;
+
+    try {
+        (new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), WP_FTS_Plugin::runtime_analyzer()))->index_post($post, ['lang' => 'en']);
+
+        $forcedByClient = WP_FTS_Plugin::rest_search([
+            'q' => 'qzxpref',
+            'lang' => 'en',
+            'prefix_matching' => '1',
+        ]);
+        assert_same([], $forcedByClient['results'] ?? null, 'an anonymous request must not turn on REST prefix matching by itself');
+
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION]['rest_prefix_matching'] = true;
+        $enabled = WP_FTS_Plugin::rest_search(['q' => 'qzxpref', 'lang' => 'en']);
+        assert_same([401], array_column($enabled['results'] ?? [], 'doc_id'), 'operator REST prefix opt-in should enable the bounded public prefix path');
+
+        $first = WP_FTS_Plugin::rest_search(['q' => 'qzxprefixsignal', 'lang' => 'en']);
+        $queriesAfterFirst = $fake->num_queries;
+        $second = WP_FTS_Plugin::rest_search(['q' => 'qzxprefixsignal', 'lang' => 'en']);
+        assert_same($first, $second, 'a repeated anonymous request should return the cached response shape');
+        assert_same($queriesAfterFirst, $fake->num_queries, 'a fresh REST cache hit should not repeat FTS SQL reads');
+
+        $post->post_status = 'private';
+        $hiddenAfterCache = WP_FTS_Plugin::rest_search(['q' => 'qzxprefixsignal', 'lang' => 'en']);
+        assert_same([], $hiddenAfterCache['results'] ?? null, 'cache hits must recheck current post visibility before returning rows');
+
+        $post->post_status = 'publish';
+        $allowFilteredResults = false;
+        $GLOBALS['wp_fts_test_filters']['wp_fts_search_results'] = static function (array $rows) use (&$allowFilteredResults): array {
+            return $allowFilteredResults ? $rows : [];
+        };
+        $filteredOut = WP_FTS_Plugin::rest_search(['q' => 'qzxprefixsignal', 'lang' => 'en']);
+        assert_same([], $filteredOut['results'] ?? null, 'a result filter must bypass an existing anonymous response cache entry');
+        $allowFilteredResults = true;
+        $filteredIn = WP_FTS_Plugin::rest_search(['q' => 'qzxprefixsignal', 'lang' => 'en']);
+        assert_same([401], array_column($filteredIn['results'] ?? [], 'doc_id'), 'request-dependent result filters must run again instead of caching their output');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('REST search rejects abusive complexity rate and SQL budget exhaustion', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['rest_api_enabled' => true]
+    );
+
+    try {
+        $tooComplex = WP_FTS_Plugin::rest_search([
+            'q' => implode(' ', array_map(static fn(int $index): string => 'budgetterm' . $index, range(1, 13))),
+            'lang' => 'en',
+        ]);
+        assert_true($tooComplex instanceof WP_Error, 'an oversized analyzed REST query should return a bounded client error');
+        assert_same('wp_fts_query_too_complex', $tooComplex->get_error_code(), 'REST complexity rejection should use a stable error code');
+        assert_same(400, $tooComplex->get_error_data()['status'] ?? null, 'REST complexity rejection should carry HTTP 400 status');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+            WP_FTS_Plugin::default_settings(),
+            ['rest_api_enabled' => true]
+        );
+        $_SERVER['REMOTE_ADDR'] = '192.0.2.44';
+        $rateConstant = (new ReflectionClass(WP_FTS_Plugin::class))->getReflectionConstant('REST_RATE_LIMIT');
+        assert_true($rateConstant !== false, 'the anonymous REST rate budget should be reflectable for focused coverage');
+        $maxRequests = $rateConstant !== false ? (int) $rateConstant->getValue() : 60;
+        $insideWindow = null;
+        for ($request = 0; $request < $maxRequests; $request++) {
+            $insideWindow = WP_FTS_Plugin::rest_search(['q' => '']);
+        }
+        assert_same('wp_fts_missing_query', $insideWindow instanceof WP_Error ? $insideWindow->get_error_code() : null, 'requests inside the anonymous rate window should reach normal validation');
+        $limited = WP_FTS_Plugin::rest_search(['q' => '']);
+        assert_true($limited instanceof WP_Error, 'the first request beyond the anonymous rate budget should return an error');
+        assert_same('wp_fts_rest_rate_limited', $limited->get_error_code(), 'REST rate limiting should use a stable error code');
+        assert_same(429, $limited->get_error_data()['status'] ?? null, 'REST rate limiting should carry HTTP 429 status');
+
+        $GLOBALS['wp_fts_test_current_user_id'] = 7;
+        $untrustedUser = WP_FTS_Plugin::rest_search(['q' => '']);
+        assert_same('wp_fts_rest_rate_limited', $untrustedUser instanceof WP_Error ? $untrustedUser->get_error_code() : null, 'authentication alone must not bypass the public REST rate limit');
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $operator = WP_FTS_Plugin::rest_search(['q' => '']);
+        assert_same('wp_fts_missing_query', $operator instanceof WP_Error ? $operator->get_error_code() : null, 'trusted operators should remain able to run bounded diagnostics after the public rate window fills');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+            WP_FTS_Plugin::default_settings(),
+            ['rest_api_enabled' => true]
+        );
+        $_SERVER['REMOTE_ADDR'] = '192.0.2.45';
+        $windowConstant = (new ReflectionClass(WP_FTS_Plugin::class))->getReflectionConstant('REST_RATE_WINDOW');
+        assert_true($windowConstant !== false, 'the REST rate window should be reflectable for lock contention coverage');
+        $rateWindow = $windowConstant !== false ? (int) $windowConstant->getValue() : 60;
+        $bucket = intdiv(time(), $rateWindow);
+        $lockHash = substr(hash('sha256', $_SERVER['REMOTE_ADDR'] . '|' . $bucket), 0, 32);
+        $lockKey = 'wp_fts_rl_' . $lockHash;
+        add_option($lockKey, microtime(true) + 2, '', false);
+        $contended = WP_FTS_Plugin::rest_search(['q' => '']);
+        assert_same('wp_fts_rest_rate_limited', $contended instanceof WP_Error ? $contended->get_error_code() : null, 'a concurrent request from the same client must fail closed instead of racing the transient counter');
+        delete_option($lockKey);
+        $afterLockRelease = WP_FTS_Plugin::rest_search(['q' => '']);
+        assert_same('wp_fts_missing_query', $afterLockRelease instanceof WP_Error ? $afterLockRelease->get_error_code() : null, 'a request should resume normal validation after the rate-counter lock is released');
+
+        $GLOBALS['wp_fts_test_set_transient_failure'] = true;
+        $failedCounterWrite = WP_FTS_Plugin::rest_search(['q' => '']);
+        assert_same('wp_fts_rest_rate_limit_unavailable', $failedCounterWrite instanceof WP_Error ? $failedCounterWrite->get_error_code() : null, 'a failed rate-counter write must fail closed instead of admitting an uncounted request');
+        assert_same(503, $failedCounterWrite instanceof WP_Error ? ($failedCounterWrite->get_error_data()['status'] ?? null) : null, 'a failed rate-counter write should carry HTTP 503 status');
+        $GLOBALS['wp_fts_test_set_transient_failure'] = false;
+
+        wp_fts_test_reset_wordpress_fakes();
+        $fake = new WP_FTS_Test_WPDB();
+        $wpdb = $fake;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+            WP_FTS_Plugin::default_settings(),
+            ['rest_api_enabled' => true]
+        );
+        $post = (object) [
+            'ID' => 402,
+            'post_title' => 'Circuit breaker host',
+            'post_content' => '<p>circuitbudgetsignal</p>',
+            'post_excerpt' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-07-01 00:00:00',
+        ];
+        $GLOBALS['wp_fts_test_posts'][402] = $post;
+        (new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), WP_FTS_Plugin::runtime_analyzer()))->index_post($post, ['lang' => 'en']);
+        $constant = (new ReflectionClass(WP_FTS_Plugin::class))->getReflectionConstant('REST_MAX_SQL_QUERIES');
+        assert_true($constant !== false, 'the REST SQL circuit-breaker budget should be reflectable for focused coverage');
+        $maxQueries = $constant !== false ? (int) $constant->getValue() : 32;
+        $GLOBALS['wp_fts_test_get_post_callbacks'][402] = static function () use ($fake, $maxQueries): void {
+            $fake->num_queries += $maxQueries;
+        };
+        $stopped = WP_FTS_Plugin::rest_search(['q' => 'circuitbudgetsignal', 'lang' => 'en']);
+        assert_true($stopped instanceof WP_Error, 'the REST circuit breaker should convert SQL budget exhaustion into a bounded error');
+        assert_same('wp_fts_search_budget_exceeded', $stopped->get_error_code(), 'REST circuit-breaker rejection should use a stable error code');
+        assert_same(503, $stopped->get_error_data()['status'] ?? null, 'REST circuit-breaker rejection should carry HTTP 503 status');
+        assert_same('SQL queries', $stopped->get_error_data()['budget'] ?? null, 'REST circuit-breaker errors should identify the exhausted budget without query details');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
 });
 
 test_case('search refills requested limit after filtering hidden stale rows', function (): void {
@@ -19550,6 +19871,57 @@ test_case('search applies authoritative candidate filtering before ranking and p
     assert_same(false, $extensionCalled, 'an incompatible extension must not return rows before candidate filtering is enforced');
 });
 
+test_case('ranked-result reuse cannot bypass candidate filters or request budgets', function (): void {
+    [$searcher] = single_term_search_fixture(3, 3);
+    $base = [
+        'lang' => 'en',
+        'limit' => 3,
+        'include_total' => true,
+        'explain' => true,
+        'reuse_ranked_results' => true,
+    ];
+
+    $firstFiltered = $searcher->search('needle', $base + [
+        'candidate_doc_ids_filter' => static fn(array $docIds): array => [1],
+    ]);
+    $secondFiltered = $searcher->search('needle', $base + [
+        'candidate_doc_ids_filter' => static fn(array $docIds): array => [3],
+    ]);
+
+    assert_same([1], array_column($firstFiltered['results'] ?? [], 'doc_id'), 'the first authoritative filter should define its ranked corpus');
+    assert_same([3], array_column($secondFiltered['results'] ?? [], 'doc_id'), 'a later authoritative filter must not receive a cached ranking from a different visibility context');
+    assert_same(false, $firstFiltered['explain']['scoring']['ranked_results_reused'] ?? null, 'candidate-filtered rankings should not populate the reusable cache');
+    assert_same(false, $secondFiltered['explain']['scoring']['ranked_results_reused'] ?? null, 'candidate-filtered rankings should not consume the reusable cache');
+
+    $warm = $searcher->search('needle', $base);
+    assert_same(false, $warm['explain']['scoring']['ranked_results_reused'] ?? null, 'the unfiltered search should compute and retain its first reusable ranking');
+
+    $explainLimited = $searcher->search('needle', $base + [
+        'explain_doc_ids_filter' => static fn(array $docIds): array => [1],
+    ]);
+    assert_same(3, $explainLimited['total'] ?? null, 'an explain-only document filter must not change ranking totals');
+    assert_same(3, count($explainLimited['results'] ?? []), 'an explain-only document filter must not change the returned ranked page');
+    assert_same([1], array_column($explainLimited['explain']['results'] ?? [], 'doc_id'), 'an explain-only document filter should restrict document-level diagnostic reads');
+
+    $guardCalls = 0;
+    $guarded = $searcher->search('needle', $base + [
+        'request_budget_guard' => static function () use (&$guardCalls): bool {
+            $guardCalls++;
+            return true;
+        },
+    ]);
+    assert_same(false, $guarded['explain']['scoring']['ranked_results_reused'] ?? null, 'a guarded request should execute bounded work instead of bypassing it through the ranking cache');
+    assert_true($guardCalls > 0, 'a guarded request should invoke its circuit breaker while recomputing the ranking');
+
+    $rowBudgetExceeded = false;
+    try {
+        $searcher->search('needle', $base + ['max_candidate_rows' => 2]);
+    } catch (WP_FTS_Search_Budget_Exceeded $error) {
+        $rowBudgetExceeded = $error->budget() === 'candidate rows';
+    }
+    assert_true($rowBudgetExceeded, 'a tighter posting-row budget must invalidate a reusable ranking and fail exact search rather than bypassing the new budget');
+});
+
 test_case('search candidate cap is explicit approximate opt-in with mandatory result status', function (): void {
     $storage = new WP_FTS_Storage_InMemory();
     $analyzer = new WP_FTS_Analyzer([
@@ -20176,6 +20548,60 @@ test_case('AND mode keeps original query groups while allowing prefix alternativ
     ]), 'doc_id'), 'AND mode should require every original query word even when each word has prefix alternatives');
 });
 
+test_case('search request budgets cap analyzed terms prefix additions candidate rows and runtime work', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    foreach (['actoralpha', 'actorbeta', 'actorgamma', 'actordelta'] as $index => $term) {
+        $indexer->index_document($index + 1, $term . ' commonbudget', ['lang' => 'en']);
+    }
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    $termBudget = null;
+    try {
+        $searcher->search('alpha beta gamma', ['lang' => 'en', 'max_query_terms' => 2]);
+    } catch (WP_FTS_Search_Budget_Exceeded $e) {
+        $termBudget = $e->budget();
+    }
+    assert_same('analyzed terms', $termBudget, 'one global analyzed-term budget should reject an oversized query plan');
+
+    $prefix = $searcher->search('actor', [
+        'lang' => 'en',
+        'prefix_matching' => true,
+        'max_prefix_expansions' => 2,
+        'include_total' => true,
+        'explain' => true,
+    ]);
+    assert_same(2, $prefix['explain']['query_plan']['prefix_added_terms'] ?? null, 'prefix alternatives should share one request-wide expansion cap');
+    assert_same(2, $prefix['total'] ?? null, 'the prefix expansion cap should bound matching expanded terms rather than apply once per candidate');
+
+    $candidateBudget = null;
+    try {
+        $searcher->search('commonbudget', ['lang' => 'en', 'max_candidate_rows' => 3]);
+    } catch (WP_FTS_Search_Budget_Exceeded $e) {
+        $candidateBudget = $e->budget();
+    }
+    assert_same('candidate rows', $candidateBudget, 'exact scoring should stop when its global posting-row budget is exceeded');
+
+    $guardCalls = 0;
+    $guardBudget = null;
+    try {
+        $searcher->search('commonbudget', [
+            'lang' => 'en',
+            'request_budget_guard' => static function () use (&$guardCalls): bool {
+                $guardCalls++;
+                return $guardCalls < 2;
+            },
+        ]);
+    } catch (WP_FTS_Search_Budget_Exceeded $e) {
+        $guardBudget = $e->budget();
+    }
+    assert_same('request circuit breaker', $guardBudget, 'a request owner should be able to stop work between bounded search phases');
+});
+
 test_case('storage prefix lookups are capped', function (): void {
     $storage = new WP_FTS_Storage_InMemory();
     $prefix = WP_FTS_TermNamespace::namespace_term('pl', 'aktor');
@@ -20222,6 +20648,37 @@ test_case('mysql prefix lookup uses a bounded term range query', function (): vo
     assert_true(!str_contains(strtolower($prefixSelect['sql']), ' like '), 'MySQL prefix lookup must not use LIKE scans');
     assert_same($prefix, $prefixSelect['args'][0] ?? null, 'MySQL prefix lookup should bind the lower prefix bound');
     assert_same(2, $prefixSelect['args'][2] ?? null, 'MySQL prefix lookup should bind the requested cap');
+});
+
+test_case('mysql capped postings batch expanded terms into one globally bounded query', function (): void {
+    $wpdb = new WP_FTS_Test_WPDB();
+    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $first = WP_FTS_TermNamespace::namespace_term('en', 'batchalpha');
+    $second = WP_FTS_TermNamespace::namespace_term('en', 'batchbeta');
+    $storage->put_term($first, 3, WP_FTS_PostingsCodec::encode([1 => 3, 2 => 2, 3 => 1]));
+    $storage->put_term($second, 3, WP_FTS_PostingsCodec::encode([4 => 3, 5 => 2, 6 => 1]));
+    $wpdb->prepared = [];
+
+    $postings = $storage->get_capped_postings([$first, $second], 2);
+    assert_same([1 => 3, 2 => 2], $postings[$first] ?? [], 'batched capped reads should retain the deterministic first-term prefix');
+    assert_same([4 => 3, 5 => 2], $postings[$second] ?? [], 'batched capped reads should retain the deterministic second-term prefix');
+    $batchQueries = array_values(array_filter(
+        $wpdb->prepared,
+        static fn(array $prepared): bool => str_contains($prepared['sql'], 'AS budgeted_postings')
+    ));
+    assert_same(1, count($batchQueries), 'all requested capped terms should share one prepared SQL query');
+    assert_contains('UNION ALL', $batchQueries[0]['sql'] ?? '', 'the MySQL batch should keep a bounded indexed range for each requested term');
+    assert_contains('LIMIT %d', $batchQueries[0]['sql'] ?? '', 'the batched query should impose both term and global SQL row caps');
+    assert_same(4, $batchQueries[0]['args'][4] ?? null, 'the final bound parameter should cap rows across the entire postings batch');
+
+    $wpdb->prepared = [];
+    $globallyBounded = $storage->get_budgeted_postings([$first, $second], 2, 3);
+    assert_true(array_sum(array_map('count', $globallyBounded)) <= 3, 'the explicit global posting budget should cap total decoded rows');
+    assert_same([$first, $second], array_keys($globallyBounded), 'an approximate global budget should reserve a bounded slice for every requested term when possible');
+    assert_same(1, count(array_filter(
+        $wpdb->prepared,
+        static fn(array $prepared): bool => str_contains($prepared['sql'], 'AS budgeted_postings')
+    )), 'an explicit global posting budget should still issue one SQL query');
 });
 
 test_case('phrase search still requires explicit extension point', function (): void {

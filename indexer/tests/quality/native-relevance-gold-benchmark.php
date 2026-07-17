@@ -124,6 +124,11 @@ test_case('quality native relevance REST fixture runs through WordPress search s
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['rest_api_enabled' => true]
+    );
+    $GLOBALS['wp_fts_test_current_user_id'] = 9;
 
     try {
         $suite = WP_FTS_Relevance_Benchmark::load_suite(WP_FTS_Relevance_Benchmark::default_suite_path());

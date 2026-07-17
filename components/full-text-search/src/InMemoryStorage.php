@@ -7,7 +7,7 @@ declare(strict_types=1);
  * State lives in PHP arrays, supports rollback logs, and mirrors the
  * language-aware storage contract without any persistence layer.
  */
-final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_Document_Terms_Storage, WP_FTS_Prefix_Term_Storage, WP_FTS_Resettable_Storage
+final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_Budgeted_Postings_Storage, WP_FTS_Document_Terms_Storage, WP_FTS_Prefix_Term_Storage, WP_FTS_Resettable_Storage
 {
     /** @var array<string,array{df:int,postings:string}> Encoded row cache for blob-shaped compatibility reads. */
     private array $terms = [];
@@ -178,6 +178,40 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
             $result[$term] = $postings;
         }
         ksort($result, SORT_STRING);
+
+        return $result;
+    }
+
+    /**
+     * Fetch a deterministic globally bounded postings slice.
+     *
+     * @param string[] $terms Stored term keys.
+     * @return array<string,array<int,int>>
+     */
+    public function get_budgeted_postings(array $terms, ?int $candidate_cap, int $row_cap): array
+    {
+        $remaining = max(1, $row_cap);
+        $result = [];
+        $terms = array_values(array_unique(array_map('strval', $terms)));
+        sort($terms, SORT_STRING);
+        $candidate_cap = $candidate_cap !== null
+            ? min(max(1, $candidate_cap), max(1, intdiv($remaining, max(1, count($terms)))))
+            : null;
+
+        foreach ($terms as $term) {
+            if ($remaining <= 0) {
+                break;
+            }
+
+            $postings = $candidate_cap === null
+                ? $this->sorted_postings_for_term($term)
+                : $this->capped_postings_for_term($term, $candidate_cap);
+            $postings = array_slice($postings, 0, $remaining, true);
+            if ($postings !== []) {
+                $result[$term] = $postings;
+                $remaining -= count($postings);
+            }
+        }
 
         return $result;
     }

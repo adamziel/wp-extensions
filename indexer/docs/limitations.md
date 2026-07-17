@@ -7,15 +7,16 @@ caveats operators need to account for.
 
 - The plugin exposes WP-CLI commands when `WP_CLI` is active.
 - It registers activation, deactivation, uninstall, post-save, status
-  transition, trash/delete, WP-Cron queue, REST search, and front-end search
-  replacement hooks when WordPress hook APIs are available. In multisite, it
-  also registers new-site schema provisioning and site-deletion table discovery
-  hooks.
+  transition, trash/delete, WP-Cron queue, optional REST search, and front-end
+  search replacement hooks when WordPress hook APIs are available. In multisite,
+  it also registers new-site schema provisioning and site-deletion table
+  discovery hooks.
 - Front-end main-query search replacement is enabled by default and can be
   disabled with the `wp_fts_replace_frontend_search` filter.
 - Settings > Full-Text Search controls indexed post types, automatic indexing,
   front-end and wp-admin Posts search replacement, result output defaults, and
-  language fallback. Analyzer pack paths and custom field indexing remain
+  language fallback, plus the public REST opt-in. Analyzer pack paths and custom
+  field indexing remain
   option/filter configuration, and operational state such as schema version and
   pending queue state is managed internally.
 - Runtime saves are processed through a bounded database-backed queue. Saves
@@ -56,10 +57,24 @@ admin or debug-enabled request, but they are not persistent conflict logs,
 historical telemetry, or proof that every provider interaction has been
 observed.
 
-The public REST search helper remains intentionally minimal. Visitors and
-callers without `manage_options` receive only visible `results`, even if they
-pass `explain=1`; structured explain diagnostics are operator-only and are
-filtered to the visible rows returned in that response.
+The public REST search helper is absent by default and must be enabled by an
+operator. It always uses approximate, globally bounded search, so broad queries
+can omit matching or more relevant documents. Visitors and callers without
+`manage_options` receive only visible `results`, even if they pass `explain=1`;
+structured explain diagnostics are operator-only and are filtered to the
+visible rows returned in that response.
+
+Its transient-backed non-operator rate limit serializes increments with an
+atomic WordPress option lock, but it is still an application guard rather than
+a strict distributed traffic-control system: separate nodes need a shared
+WordPress database and transient backend. The elapsed-time and SQL-query
+circuits are checked between bounded operations and cannot interrupt a database
+statement already executing. Anonymous cached rankings can be stale for 30
+seconds, although current post visibility is rechecked on every cache hit;
+attaching a `wp_fts_search_results` filter bypasses that shared response cache.
+The SQLite compatibility fallback can still read beyond the returned row budget
+inside one statement; that separate storage-path limitation is not made safe by
+the elapsed-time check.
 
 ## Content Scope
 

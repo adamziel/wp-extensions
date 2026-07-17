@@ -195,6 +195,25 @@ interface WP_FTS_Capped_Postings_Storage extends WP_FTS_Storage
 }
 
 /**
+ * Optional storage extension for one globally bounded postings read.
+ *
+ * Search request budgets use this instead of materializing every requested
+ * posting list and trimming it afterward. Implementations may return fewer
+ * rows because budgeted search is explicitly approximate once a per-term cap
+ * is supplied.
+ */
+interface WP_FTS_Budgeted_Postings_Storage extends WP_FTS_Storage
+{
+    /**
+     * @param string[] $terms Stored term keys.
+     * @param int|null $candidate_cap Optional maximum rows retained per term.
+     * @param int $row_cap Maximum posting rows returned across all terms.
+     * @return array<string,array<int,int>> term => doc_id => weighted tf
+     */
+    public function get_budgeted_postings(array $terms, ?int $candidate_cap, int $row_cap): array;
+}
+
+/**
  * Optional storage extension for backends that can read document terms directly.
  *
  * Blob-backed stores can derive this through `all_terms()` plus decoded

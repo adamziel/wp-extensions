@@ -921,8 +921,9 @@ namespace {
         assert_same('Zamek Published', $formats[0]['items'][0]['title'], 'search rows should include stored title metadata');
         assert_contains('Zamek published', $formats[0]['items'][0]['snippet'], 'search rows should include snippets when requested');
 
-        $postingSelect = wp_fts_quality_last_prepared_like($fake, 'SELECT term, doc_id, tf FROM wp_fts_postings');
-        assert_same([$plTerm], $postingSelect['args'], 'search should prepare a language-namespaced postings lookup');
+        $postingSelect = wp_fts_quality_last_prepared_like($fake, 'SELECT term, doc_id, tf FROM (');
+        assert_same($plTerm, $postingSelect['args'][0] ?? null, 'search should prepare a language-namespaced bounded postings lookup');
+        assert_true((int) ($postingSelect['args'][2] ?? 0) > 0, 'search should bind a positive global postings row cap');
         $lengthSelect = wp_fts_quality_last_prepared_like($fake, 'SELECT dl.doc_id, dl.doc_len FROM wp_fts_doc_lengths');
         assert_same('pl-PL', $lengthSelect['args'][0], 'search language alias should canonicalize before doc-length lookup');
 

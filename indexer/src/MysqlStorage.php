@@ -10,7 +10,7 @@ declare(strict_types=1);
  * flag, and per-language lengths live in a separate table so BM25 can score
  * inside one language partition without mixing collection statistics.
  */
-final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Document_Terms_Storage, WP_FTS_Prefix_Term_Storage, WP_FTS_Resettable_Storage
+final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_Budgeted_Postings_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Document_Terms_Storage, WP_FTS_Prefix_Term_Storage, WP_FTS_Resettable_Storage
 {
     /**
      * The largest statement repeats each maximum-length term key once for a
@@ -487,8 +487,8 @@ ORDER BY term ASC, doc_id ASC";
      * Fetch a deterministic document-id prefix for each requested term.
      *
      * This powers explicit approximate retrieval without materializing broad
-     * posting lists. One bounded query per term keeps SQL portable across MySQL
-     * variants and the SQLite-backed Playground runtime.
+     * posting lists. Requested terms share one bounded read instead of issuing
+     * one SQL query for every analyzed or prefix-expanded term.
      *
      * @param string[] $terms Stored term keys.
      * @return array<string,array<int,int>> term => doc_id => weighted tf
@@ -501,20 +501,64 @@ ORDER BY term ASC, doc_id ASC";
         }
 
         $candidate_cap = max(1, (int) $candidate_cap);
-        $postingsByTerm = [];
-        foreach ($terms as $term) {
-            $termValue = $this->term_query_values([$term]);
-            $queryArgs = [...$termValue['args'], $candidate_cap];
-            $rows = $this->get_results($this->wpdb->prepare(
+        $term_count = count($terms);
+        $row_cap = $candidate_cap > intdiv(PHP_INT_MAX, max(1, $term_count))
+            ? PHP_INT_MAX
+            : $candidate_cap * $term_count;
+
+        return $this->get_budgeted_postings($terms, $candidate_cap, $row_cap);
+    }
+
+    /**
+     * Fetch requested postings in one query with per-term and global row caps.
+     *
+     * MySQL can use one limited range per term inside a UNION. The SQLite-backed
+     * Playground path uses one portable IN query and keeps its existing fallback
+     * for environments whose database adapter cannot bind binary term keys.
+     *
+     * @param string[] $terms Stored term keys.
+     * @return array<string,array<int,int>> term => doc_id => weighted tf
+     */
+    public function get_budgeted_postings(array $terms, ?int $candidate_cap, int $row_cap): array
+    {
+        $terms = $this->normalize_terms($terms);
+        if ($terms === []) {
+            return [];
+        }
+
+        $row_cap = max(1, $row_cap);
+        $per_term_cap = $candidate_cap !== null
+            ? min(max(1, $candidate_cap), max(1, intdiv($row_cap, count($terms))))
+            : $row_cap;
+        if ($this->is_sqlite_runtime()) {
+            $termValues = $this->term_query_values($terms);
+            $termSql = implode(',', $termValues['values']);
+            $statement = $this->wpdb->prepare(
                 "SELECT term, doc_id, tf FROM {$this->postingsTable}
-WHERE term = {$termValue['values'][0]}
-ORDER BY doc_id ASC
+WHERE term IN ({$termSql})
+ORDER BY term ASC, doc_id ASC
 LIMIT %d",
-                ...$queryArgs
-            ), 'read capped FTS row postings');
-            foreach ($this->postings_from_rows($rows ?: [], [$term]) as $rowTerm => $postings) {
-                $postingsByTerm[$rowTerm] = array_slice($postings, 0, $candidate_cap, true);
+                ...[...$termValues['args'], $row_cap]
+            );
+        } else {
+            $parts = [];
+            $args = [];
+            foreach ($terms as $term) {
+                $parts[] = "(SELECT term, doc_id, tf FROM {$this->postingsTable} WHERE term = %s ORDER BY doc_id ASC LIMIT %d)";
+                $args[] = $term;
+                $args[] = $per_term_cap;
             }
+            $args[] = $row_cap;
+            $statement = $this->wpdb->prepare(
+                "SELECT term, doc_id, tf FROM (\n" . implode("\nUNION ALL\n", $parts) . "\n) AS budgeted_postings\nORDER BY term ASC, doc_id ASC\nLIMIT %d",
+                ...$args
+            );
+        }
+
+        $rows = $this->get_results($statement, 'read budgeted FTS row postings');
+        $postingsByTerm = $this->postings_from_rows($rows, $terms);
+        foreach ($postingsByTerm as $term => $postings) {
+            $postingsByTerm[$term] = array_slice($postings, 0, $per_term_cap, true);
         }
 
         ksort($postingsByTerm, SORT_STRING);

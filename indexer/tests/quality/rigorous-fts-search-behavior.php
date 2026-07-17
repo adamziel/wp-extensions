@@ -1066,13 +1066,17 @@ test_case('quality rigorous FTS medium corpus verifies ranking, partition isolat
     assert_true(!str_contains($snippet, 'hiddenmediumsecret') && !str_contains($snippet, '<script'), 'medium snippets should not expose hidden distractors');
 });
 
-test_case('quality rigorous FTS plugin boundary sanitizes REST and admin search request shaping', function (): void {
+test_case('quality rigorous FTS plugin boundary requires REST opt-in and sanitizes admin search request shaping', function (): void {
+    if (function_exists('wp_fts_test_reset_wordpress_fakes')) {
+        wp_fts_test_reset_wordpress_fakes();
+    }
+
     $missing = WP_FTS_Plugin::rest_search(['q' => '', 'query' => " \t "]);
-    assert_same('wp_fts_missing_query', qrs_rest_error_code($missing), 'REST search should reject empty q/query aliases before storage access');
-    assert_same(400, qrs_rest_error_status($missing), 'REST missing query should return a 400 status');
+    assert_same('wp_fts_rest_search_disabled', qrs_rest_error_code($missing), 'REST search should reject direct dispatch before an operator opts in');
+    assert_same(404, qrs_rest_error_status($missing), 'disabled REST search should return a non-disclosing 404 status');
 
     $invalidMode = WP_FTS_Plugin::rest_search(['q' => '<b>atlas</b>', 'mode' => 'XOR']);
-    assert_same('wp_fts_invalid_mode', qrs_rest_error_code($invalidMode), 'REST search should reject invalid boolean modes');
+    assert_same('wp_fts_rest_search_disabled', qrs_rest_error_code($invalidMode), 'the opt-in boundary should run before REST query parsing');
 
     $settings = WP_FTS_Plugin::sanitize_settings([
         'index_post_types' => ['post', 'page', '<script>', 'attachment'],
