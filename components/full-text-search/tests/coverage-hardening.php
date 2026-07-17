@@ -500,63 +500,76 @@ wp_fts_component_hardening_same(
 );
 
 $unicodeNormalizer = new WP_FTS_Normalizer(['fold_diacritics' => false]);
-wp_fts_component_hardening_same(
-    $unicodeNormalizer->normalize_token("caf\u{00e9}", 'fr'),
-    $unicodeNormalizer->normalize_token("cafe\u{0301}", 'fr'),
-    'NFKC should make composed and decomposed canonical forms identical'
-);
-wp_fts_component_hardening_same(
-    'office',
-    $unicodeNormalizer->normalize_token("\u{ff2f}\u{ff26}\u{ff26}\u{ff29}\u{ff23}\u{ff25}", 'en'),
-    'NFKC should fold full-width Latin compatibility forms'
-);
-wp_fts_component_hardening_same(
-    'office',
-    $unicodeNormalizer->normalize_unicode("\u{24de}\u{24d5}\u{24d5}\u{24d8}\u{24d2}\u{24d4}"),
-    'whole-text NFKC should normalize compatibility symbols before tokenization'
-);
-$unicodeAnalyzer = new WP_FTS_Analyzer([
-    'auto_detect_language' => false,
-    'default_lang' => 'fr',
-    'enable_stemming' => false,
-    'fold_diacritics' => false,
-]);
-$unicodeStorage = new WP_FTS_Storage_InMemory();
-$unicodePrefix = str_repeat('canonical prefix words ', 20);
-(new WP_FTS_Indexer($unicodeStorage, $unicodeAnalyzer))->index_document(
-    702,
-    "<p>{$unicodePrefix}cafe\u{0301} \u{24de}\u{24d5}\u{24d5}\u{24d8}\u{24d2}\u{24d4}</p>",
-    ['lang' => 'fr']
-);
-$unicodeSearcher = new WP_FTS_Searcher($unicodeStorage, $unicodeAnalyzer);
-wp_fts_component_hardening_same([702], array_column($unicodeSearcher->search("caf\u{00e9}", ['lang' => 'fr']), 'doc_id'), 'canonical query form should retrieve decomposed document text');
-wp_fts_component_hardening_same([702], array_column($unicodeSearcher->search('office', ['lang' => 'fr']), 'doc_id'), 'ASCII query should retrieve compatibility-symbol document text');
-$canonicalSnippetResults = $unicodeSearcher->search("caf\u{00e9}", [
-    'lang' => 'fr',
-    'include_snippets' => true,
-    'highlight' => true,
-    'snippet_length' => 40,
-]);
-wp_fts_component_hardening_check(
-    str_contains((string) ($canonicalSnippetResults[0]['snippet'] ?? ''), "<mark>cafe\u{0301}</mark>"),
-    'canonical-equivalent snippets should center and mark the original decomposed surface'
-);
-
-$detectedUnicodeAnalyzer = new WP_FTS_Analyzer(['default_lang' => 'fr']);
-$detectedUnicodeStorage = new WP_FTS_Storage_InMemory();
-(new WP_FTS_Indexer($detectedUnicodeStorage, $detectedUnicodeAnalyzer))->index_document(
-    704,
-    '<p>ⓢⓔⓐⓡⓒⓗ ⓣⓗⓔ ⓐⓝⓓ</p>',
-    ['default_lang' => 'fr']
-);
-wp_fts_component_hardening_same(
-    [704],
-    array_column((new WP_FTS_Searcher($detectedUnicodeStorage, $detectedUnicodeAnalyzer))->search('search the and', [
-        'mode' => 'AND',
+if (class_exists('Normalizer')) {
+    wp_fts_component_hardening_same(
+        $unicodeNormalizer->normalize_token("caf\u{00e9}", 'fr'),
+        $unicodeNormalizer->normalize_token("cafe\u{0301}", 'fr'),
+        'NFKC should make composed and decomposed canonical forms identical'
+    );
+    wp_fts_component_hardening_same(
+        'office',
+        $unicodeNormalizer->normalize_token("\u{ff2f}\u{ff26}\u{ff26}\u{ff29}\u{ff23}\u{ff25}", 'en'),
+        'NFKC should fold full-width Latin compatibility forms'
+    );
+    wp_fts_component_hardening_same(
+        'office',
+        $unicodeNormalizer->normalize_unicode("\u{24de}\u{24d5}\u{24d5}\u{24d8}\u{24d2}\u{24d4}"),
+        'whole-text NFKC should normalize compatibility symbols before tokenization'
+    );
+    $unicodeAnalyzer = new WP_FTS_Analyzer([
+        'auto_detect_language' => false,
         'default_lang' => 'fr',
-    ]), 'doc_id'),
-    'language detection should route compatibility-equivalent document and query text together'
-);
+        'enable_stemming' => false,
+        'fold_diacritics' => false,
+    ]);
+    $unicodeStorage = new WP_FTS_Storage_InMemory();
+    $unicodePrefix = str_repeat('canonical prefix words ', 20);
+    (new WP_FTS_Indexer($unicodeStorage, $unicodeAnalyzer))->index_document(
+        702,
+        "<p>{$unicodePrefix}cafe\u{0301} \u{24de}\u{24d5}\u{24d5}\u{24d8}\u{24d2}\u{24d4}</p>",
+        ['lang' => 'fr']
+    );
+    $unicodeSearcher = new WP_FTS_Searcher($unicodeStorage, $unicodeAnalyzer);
+    wp_fts_component_hardening_same([702], array_column($unicodeSearcher->search("caf\u{00e9}", ['lang' => 'fr']), 'doc_id'), 'canonical query form should retrieve decomposed document text');
+    wp_fts_component_hardening_same([702], array_column($unicodeSearcher->search('office', ['lang' => 'fr']), 'doc_id'), 'ASCII query should retrieve compatibility-symbol document text');
+    $canonicalSnippetResults = $unicodeSearcher->search("caf\u{00e9}", [
+        'lang' => 'fr',
+        'include_snippets' => true,
+        'highlight' => true,
+        'snippet_length' => 40,
+    ]);
+    wp_fts_component_hardening_check(
+        str_contains((string) ($canonicalSnippetResults[0]['snippet'] ?? ''), "<mark>cafe\u{0301}</mark>"),
+        'canonical-equivalent snippets should center and mark the original decomposed surface'
+    );
+
+    $detectedUnicodeAnalyzer = new WP_FTS_Analyzer(['default_lang' => 'fr']);
+    $detectedUnicodeStorage = new WP_FTS_Storage_InMemory();
+    (new WP_FTS_Indexer($detectedUnicodeStorage, $detectedUnicodeAnalyzer))->index_document(
+        704,
+        '<p>ⓢⓔⓐⓡⓒⓗ ⓣⓗⓔ ⓐⓝⓓ</p>',
+        ['default_lang' => 'fr']
+    );
+    wp_fts_component_hardening_same(
+        [704],
+        array_column((new WP_FTS_Searcher($detectedUnicodeStorage, $detectedUnicodeAnalyzer))->search('search the and', [
+            'mode' => 'AND',
+            'default_lang' => 'fr',
+        ]), 'doc_id'),
+        'language detection should route compatibility-equivalent document and query text together'
+    );
+} else {
+    wp_fts_component_hardening_same(
+        "cafe\u{0301}",
+        $unicodeNormalizer->normalize_unicode("cafe\u{0301}"),
+        'raw source fallback should preserve valid Unicode when no normalization backend is installed'
+    );
+    wp_fts_component_hardening_same(
+        'wp-fts-unicode-normalizer:none',
+        $unicodeNormalizer->index_signature(),
+        'raw source fallback should fingerprint the missing normalization backend'
+    );
+}
 
 $unicodeSnippet = $searcher->snippet_for_text(
     str_repeat("\u{1f642}", 60) . ' needle ' . str_repeat("\u{754c}", 60),
