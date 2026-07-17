@@ -531,13 +531,14 @@ ORDER BY term ASC, doc_id ASC";
             ? min(max(1, $candidate_cap), max(1, intdiv($row_cap, count($terms))))
             : $row_cap;
         if ($this->is_sqlite_runtime()) {
-            $placeholders = implode(',', array_fill(0, count($terms), '%s'));
+            $termValues = $this->term_query_values($terms);
+            $termSql = implode(',', $termValues['values']);
             $statement = $this->wpdb->prepare(
                 "SELECT term, doc_id, tf FROM {$this->postingsTable}
-WHERE term IN ({$placeholders})
+WHERE term IN ({$termSql})
 ORDER BY term ASC, doc_id ASC
 LIMIT %d",
-                ...array_merge($terms, [$row_cap])
+                ...[...$termValues['args'], $row_cap]
             );
         } else {
             $parts = [];
@@ -558,24 +559,6 @@ LIMIT %d",
         $postingsByTerm = $this->postings_from_rows($rows, $terms);
         foreach ($postingsByTerm as $term => $postings) {
             $postingsByTerm[$term] = array_slice($postings, 0, $per_term_cap, true);
-        }
-
-        if ($postingsByTerm === [] && $this->is_sqlite_runtime()) {
-            $fallbackRows = $this->get_results(
-                "SELECT term, doc_id, tf FROM {$this->postingsTable} ORDER BY term ASC, doc_id ASC",
-                'read capped FTS SQLite fallback row postings'
-            );
-            $remaining = $row_cap;
-            foreach ($this->postings_from_rows($fallbackRows, $terms) as $term => $postings) {
-                $postings = array_slice($postings, 0, min($per_term_cap, $remaining), true);
-                if ($postings !== []) {
-                    $postingsByTerm[$term] = $postings;
-                    $remaining -= count($postings);
-                }
-                if ($remaining <= 0) {
-                    break;
-                }
-            }
         }
 
         ksort($postingsByTerm, SORT_STRING);

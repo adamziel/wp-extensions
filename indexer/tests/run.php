@@ -2816,8 +2816,12 @@ final class WP_FTS_Test_WPDB
             && str_contains($sql, 'LIMIT %d')
         ) {
             $rowLimit = max(0, (int) array_pop($args));
+            $terms = $this->binary_term_literals($sql);
+            if ($terms === []) {
+                $terms = $args;
+            }
             $rows = [];
-            foreach ($args as $term) {
+            foreach ($terms as $term) {
                 $term = (string) $term;
                 $postings = $this->postings[$term] ?? [];
                 ksort($postings, SORT_NUMERIC);
