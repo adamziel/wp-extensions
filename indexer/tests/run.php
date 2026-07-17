@@ -3795,6 +3795,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_uninstall_hooks'] = [];
     $GLOBALS['wp_fts_test_options'] = [];
     $GLOBALS['wp_fts_test_transients'] = [];
+    $GLOBALS['wp_fts_test_set_transient_failure'] = false;
     $GLOBALS['wp_fts_test_current_user_id'] = 0;
     $GLOBALS['wp_fts_test_added_options'] = [];
     $GLOBALS['wp_fts_test_updated_options'] = [];
@@ -4067,6 +4068,10 @@ if (!function_exists('get_transient')) {
 if (!function_exists('set_transient')) {
     function set_transient(string $transient, mixed $value, int $expiration = 0): bool
     {
+        if (!empty($GLOBALS['wp_fts_test_set_transient_failure'])) {
+            return false;
+        }
+
         $GLOBALS['wp_fts_test_transients'][$transient] = [
             'value' => $value,
             'expires' => time() + max(1, $expiration),
@@ -12481,6 +12486,12 @@ test_case('REST search rejects abusive complexity rate and SQL budget exhaustion
         delete_option($lockKey);
         $afterLockRelease = WP_FTS_Plugin::rest_search(['q' => '']);
         assert_same('wp_fts_missing_query', $afterLockRelease instanceof WP_Error ? $afterLockRelease->get_error_code() : null, 'a request should resume normal validation after the rate-counter lock is released');
+
+        $GLOBALS['wp_fts_test_set_transient_failure'] = true;
+        $failedCounterWrite = WP_FTS_Plugin::rest_search(['q' => '']);
+        assert_same('wp_fts_rest_rate_limit_unavailable', $failedCounterWrite instanceof WP_Error ? $failedCounterWrite->get_error_code() : null, 'a failed rate-counter write must fail closed instead of admitting an uncounted request');
+        assert_same(503, $failedCounterWrite instanceof WP_Error ? ($failedCounterWrite->get_error_data()['status'] ?? null) : null, 'a failed rate-counter write should carry HTTP 503 status');
+        $GLOBALS['wp_fts_test_set_transient_failure'] = false;
 
         wp_fts_test_reset_wordpress_fakes();
         $fake = new WP_FTS_Test_WPDB();

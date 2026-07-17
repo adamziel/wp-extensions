@@ -11184,7 +11184,14 @@ JS;
                 );
             }
 
-            set_transient($key, $count + 1, self::REST_RATE_WINDOW + 5);
+            if (!set_transient($key, $count + 1, self::REST_RATE_WINDOW + 5)) {
+                return self::rest_error(
+                    'wp_fts_rest_rate_limit_unavailable',
+                    'REST search rate limiting is temporarily unavailable. Retry shortly.',
+                    503,
+                    ['retry_after' => 1]
+                );
+            }
         } finally {
             delete_option($lockKey);
         }
