@@ -2011,6 +2011,7 @@ final class WP_FTS_Test_WPDB
     public ?object $dbh = null;
     public bool $missPreparedTermLookups = false;
     public bool $recordReadQueries = false;
+    public bool $queueTableExists = true;
 
     /** @var array<int,string|array{0:string,1:float,2:string}> */
     public array $queries = [];
@@ -2036,6 +2037,9 @@ final class WP_FTS_Test_WPDB
     /** @var array<string,array<string,int>> */
     public array $meta = [];
 
+    /** @var array<int,array{generation:int,available_at:int,attempts:int,claim_token:string,claimed_generation:int,claim_expires_at:int}> */
+    public array $queue = [];
+
     /** @var array<int,object> */
     public array $postRows = [];
 
@@ -2047,6 +2051,7 @@ final class WP_FTS_Test_WPDB
         'wp_fts_doc_lengths' => ['doc_id', 'lang', 'doc_len'],
         'wp_fts_docmeta' => ['doc_id', 'post_id', 'post_type', 'post_status', 'post_date_gmt', 'title', 'excerpt', 'search_text', 'data'],
         'wp_fts_meta' => ['lang', 'k', 'v'],
+        'wp_fts_queue' => ['post_id', 'generation', 'available_at', 'attempts', 'claim_token', 'claimed_generation', 'claim_expires_at'],
     ];
 
     /** @var array<string,array<string,string[]>> */
@@ -2057,6 +2062,7 @@ final class WP_FTS_Test_WPDB
         'wp_fts_doc_lengths' => ['PRIMARY' => ['doc_id', 'lang'], 'lang' => ['lang']],
         'wp_fts_docmeta' => ['PRIMARY' => ['doc_id'], 'post_id' => ['post_id'], 'post_type_status_date' => ['post_type', 'post_status', 'post_date_gmt']],
         'wp_fts_meta' => ['PRIMARY' => ['lang', 'k']],
+        'wp_fts_queue' => ['PRIMARY' => ['post_id'], 'ready' => ['available_at', 'claim_expires_at', 'post_id']],
     ];
 
     public function prepare(string $sql, mixed ...$args): WP_FTS_Test_Prepared_SQL
@@ -2064,6 +2070,11 @@ final class WP_FTS_Test_WPDB
         $this->prepared[] = ['sql' => $sql, 'args' => $args];
 
         return new WP_FTS_Test_Prepared_SQL($sql, $args);
+    }
+
+    public function esc_like(string $text): string
+    {
+        return addcslashes($text, '_%\\');
     }
 
     public function get_blog_prefix(int $blog_id = 0): string
@@ -2075,6 +2086,13 @@ final class WP_FTS_Test_WPDB
     {
         [$sql, $args] = $this->statement_parts($statement);
         $this->record_read_query($sql);
+        if ($sql === 'SHOW TABLES LIKE %s') {
+            return $this->queueTableExists ? $this->prefix . 'fts_queue' : null;
+        }
+        if ($sql === 'SELECT COUNT(*) FROM wp_fts_queue') {
+            return count($this->queue);
+        }
+
         if (str_starts_with($sql, 'SELECT COUNT(DISTINCT p.ID)')) {
             $offset = 0;
             $publicStatus = str_contains($sql, 'p.post_status = %s') ? (string) ($args[$offset++] ?? '') : '';
@@ -2147,6 +2165,159 @@ final class WP_FTS_Test_WPDB
 
         if (in_array($sql, ['START TRANSACTION', 'COMMIT', 'ROLLBACK'], true)) {
             return true;
+        }
+
+        if (str_starts_with($sql, 'INSERT INTO wp_fts_queue')) {
+            $postId = (int) ($args[0] ?? 0);
+            $now = max(0, (int) ($args[1] ?? 0));
+            if (isset($this->queue[$postId])) {
+                $this->queue[$postId]['available_at'] = $now;
+                if (str_contains($sql, 'generation = generation + 1')) {
+                    $this->queue[$postId]['generation']++;
+                    $this->queue[$postId]['attempts'] = 0;
+                }
+            } else {
+                $this->queue[$postId] = [
+                    'generation' => 1,
+                    'available_at' => $now,
+                    'attempts' => 0,
+                    'claim_token' => '',
+                    'claimed_generation' => 0,
+                    'claim_expires_at' => 0,
+                ];
+            }
+            ksort($this->queue, SORT_NUMERIC);
+            return 1;
+        }
+
+        if (str_starts_with($sql, "UPDATE wp_fts_queue\nSET claim_token = %s")) {
+            $token = (string) ($args[0] ?? '');
+            $expiresAt = max(0, (int) ($args[1] ?? 0));
+            $postId = (int) ($args[2] ?? 0);
+            $generation = (int) ($args[3] ?? 0);
+            $availableAt = (int) ($args[4] ?? 0);
+            $expiredAt = (int) ($args[5] ?? 0);
+            $row = $this->queue[$postId] ?? null;
+            if (
+                $row === null
+                || $row['generation'] !== $generation
+                || $row['available_at'] > $availableAt
+                || ($row['claim_token'] !== '' && $row['claim_expires_at'] > $expiredAt)
+            ) {
+                return 0;
+            }
+
+            $this->queue[$postId]['claim_token'] = $token;
+            $this->queue[$postId]['claimed_generation'] = $generation;
+            $this->queue[$postId]['claim_expires_at'] = $expiresAt;
+            return 1;
+        }
+
+        if (str_starts_with($sql, "DELETE FROM wp_fts_queue\nWHERE post_id = %d")) {
+            $postId = (int) ($args[0] ?? 0);
+            $token = (string) ($args[1] ?? '');
+            $claimedGeneration = (int) ($args[2] ?? 0);
+            $generation = (int) ($args[3] ?? 0);
+            $row = $this->queue[$postId] ?? null;
+            if (
+                $row === null
+                || $row['claim_token'] !== $token
+                || $row['claimed_generation'] !== $claimedGeneration
+                || $row['generation'] !== $generation
+            ) {
+                return 0;
+            }
+
+            unset($this->queue[$postId]);
+            return 1;
+        }
+
+        if (str_starts_with($sql, "UPDATE wp_fts_queue\nSET attempts = %d")) {
+            $attempts = max(0, (int) ($args[0] ?? 0));
+            $availableAt = max(0, (int) ($args[1] ?? 0));
+            $postId = (int) ($args[2] ?? 0);
+            $token = (string) ($args[3] ?? '');
+            $claimedGeneration = (int) ($args[4] ?? 0);
+            $generation = (int) ($args[5] ?? 0);
+            $row = $this->queue[$postId] ?? null;
+            if (
+                $row === null
+                || $row['claim_token'] !== $token
+                || $row['claimed_generation'] !== $claimedGeneration
+                || $row['generation'] !== $generation
+            ) {
+                return 0;
+            }
+
+            $this->queue[$postId]['attempts'] = $attempts;
+            $this->queue[$postId]['available_at'] = $availableAt;
+            $this->queue[$postId]['claim_token'] = '';
+            $this->queue[$postId]['claimed_generation'] = 0;
+            $this->queue[$postId]['claim_expires_at'] = 0;
+            return 1;
+        }
+
+        if (str_starts_with($sql, "UPDATE wp_fts_queue\nSET attempts = 0")) {
+            $availableAt = max(0, (int) ($args[0] ?? 0));
+            $postId = (int) ($args[1] ?? 0);
+            $token = (string) ($args[2] ?? '');
+            $claimedGeneration = (int) ($args[3] ?? 0);
+            $olderGeneration = (int) ($args[4] ?? 0);
+            $row = $this->queue[$postId] ?? null;
+            if (
+                $row === null
+                || $row['claim_token'] !== $token
+                || $row['claimed_generation'] !== $claimedGeneration
+                || $row['generation'] <= $olderGeneration
+            ) {
+                return 0;
+            }
+
+            $this->queue[$postId]['attempts'] = 0;
+            $this->queue[$postId]['available_at'] = $availableAt;
+            $this->queue[$postId]['claim_token'] = '';
+            $this->queue[$postId]['claimed_generation'] = 0;
+            $this->queue[$postId]['claim_expires_at'] = 0;
+            return 1;
+        }
+
+        if (str_starts_with($sql, "UPDATE wp_fts_queue\nSET available_at = %d")) {
+            $availableAt = max(0, (int) ($args[0] ?? 0));
+            $postId = (int) ($args[1] ?? 0);
+            $token = (string) ($args[2] ?? '');
+            $claimedGeneration = (int) ($args[3] ?? 0);
+            $row = $this->queue[$postId] ?? null;
+            if (
+                $row === null
+                || $row['claim_token'] !== $token
+                || $row['claimed_generation'] !== $claimedGeneration
+            ) {
+                return 0;
+            }
+
+            $this->queue[$postId]['available_at'] = $availableAt;
+            $this->queue[$postId]['claim_token'] = '';
+            $this->queue[$postId]['claimed_generation'] = 0;
+            $this->queue[$postId]['claim_expires_at'] = 0;
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'DELETE FROM wp_fts_queue WHERE post_id IN')) {
+            $deleted = 0;
+            foreach ($args as $postId) {
+                $postId = (int) $postId;
+                if (isset($this->queue[$postId])) {
+                    unset($this->queue[$postId]);
+                    $deleted++;
+                }
+            }
+            return $deleted;
+        }
+
+        if ($sql === 'DELETE FROM wp_fts_queue') {
+            $count = count($this->queue);
+            $this->queue = [];
+            return $count;
         }
 
         if (str_starts_with($sql, 'INSERT INTO wp_fts_terms')) {
@@ -2466,8 +2637,34 @@ final class WP_FTS_Test_WPDB
                     ];
                 }
             }
-
             return $rows;
+        }
+
+        if (str_starts_with($sql, 'SELECT post_id, generation, attempts')) {
+            $availableAt = (int) ($args[0] ?? 0);
+            $expiredAt = (int) ($args[1] ?? 0);
+            $limit = max(0, (int) ($args[2] ?? 0));
+            $rows = [];
+            foreach ($this->queue as $postId => $row) {
+                if (
+                    $row['available_at'] > $availableAt
+                    || ($row['claim_token'] !== '' && $row['claim_expires_at'] > $expiredAt)
+                ) {
+                    continue;
+                }
+                $rows[] = (object) [
+                    'post_id' => $postId,
+                    'generation' => $row['generation'],
+                    'attempts' => $row['attempts'],
+                    'available_at' => $row['available_at'],
+                ];
+            }
+            usort($rows, static function (object $left, object $right): int {
+                return ((int) $left->available_at <=> (int) $right->available_at)
+                    ?: ((int) $left->post_id <=> (int) $right->post_id);
+            });
+
+            return array_slice($rows, 0, $limit);
         }
 
         if ($this->missPreparedTermLookups && $args !== [] && (
@@ -2854,7 +3051,7 @@ final class WP_FTS_Test_WPDB
 
     private function restore_schema_contract(string $table): void
     {
-        foreach (['fts_terms', 'fts_postings', 'fts_docs', 'fts_doc_lengths', 'fts_docmeta', 'fts_meta'] as $suffix) {
+        foreach (['fts_terms', 'fts_postings', 'fts_docs', 'fts_doc_lengths', 'fts_docmeta', 'fts_meta', 'fts_queue'] as $suffix) {
             if (!str_ends_with($table, $suffix)) {
                 continue;
             }
@@ -2866,6 +3063,7 @@ final class WP_FTS_Test_WPDB
                 'fts_doc_lengths' => [['doc_id', 'lang', 'doc_len'], ['PRIMARY' => ['doc_id', 'lang'], 'lang' => ['lang']]],
                 'fts_docmeta' => [['doc_id', 'post_id', 'post_type', 'post_status', 'post_date_gmt', 'title', 'excerpt', 'search_text', 'data'], ['PRIMARY' => ['doc_id'], 'post_id' => ['post_id'], 'post_type_status_date' => ['post_type', 'post_status', 'post_date_gmt']]],
                 'fts_meta' => [['lang', 'k', 'v'], ['PRIMARY' => ['lang', 'k']]],
+                'fts_queue' => [['post_id', 'generation', 'available_at', 'attempts', 'claim_token', 'claimed_generation', 'claim_expires_at'], ['PRIMARY' => ['post_id'], 'ready' => ['available_at', 'claim_expires_at', 'post_id']]],
             };
             $this->schemaColumns[$table] = $columns;
             $this->schemaIndexes[$table] = $indexes;
@@ -2938,6 +3136,33 @@ final class WP_FTS_Test_WPDB
 
         return $values;
     }
+}
+
+/**
+ * Replace the fake durable queue with the requested post ids.
+ *
+ * @param int[] $post_ids
+ */
+function wp_fts_test_seed_queue(WP_FTS_Test_WPDB $wpdb, array $post_ids, ?int $now = null): void
+{
+    $queue = new WP_FTS_Index_Queue($wpdb);
+    $queue->clear();
+    $queue->import($post_ids, $now);
+    unset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION]);
+    $wpdb->queries = [];
+    $wpdb->prepared = [];
+    $wpdb->last_error = '';
+}
+
+/**
+ * @return int[]
+ */
+function wp_fts_test_queue_ids(WP_FTS_Test_WPDB $wpdb): array
+{
+    $ids = array_keys($wpdb->queue);
+    sort($ids, SORT_NUMERIC);
+
+    return $ids;
 }
 
 final class WP_FTS_Test_SQLite_Driver
@@ -4617,7 +4842,7 @@ function wp_fts_test_seed_reset_index_state(WP_FTS_Test_WPDB $wpdb): array
         'enable_stemming' => true,
         'runtime_lemma_packs' => [],
     ];
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [911, 913];
+    wp_fts_test_seed_queue($wpdb, [911, 913]);
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
         'last_batch_processed' => 5,
         'last_batch_queue_processed' => 2,
@@ -4664,6 +4889,7 @@ function wp_fts_test_seed_reset_index_state(WP_FTS_Test_WPDB $wpdb): array
         'docMeta' => $wpdb->docMeta,
         'meta' => $wpdb->meta,
         'postRows' => $wpdb->postRows,
+        'queue' => wp_fts_test_queue_ids($wpdb),
         'options' => $GLOBALS['wp_fts_test_options'],
     ];
 }
@@ -4705,7 +4931,8 @@ function wp_fts_test_index_saved_post(int $post_id, object $post, mixed ...$unus
     WP_FTS_Plugin::handle_post_save($post_id, $post, ...$unused);
     WP_FTS_Plugin::process_queue(1);
 
-    if (($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? []) === []) {
+    global $wpdb;
+    if ($wpdb instanceof WP_FTS_Test_WPDB && wp_fts_test_queue_ids($wpdb) === []) {
         unset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]);
     }
 }
@@ -4783,6 +5010,7 @@ PHP;
         'admin_init',
         'admin_menu',
         'before_delete_post',
+        'init',
         'loop_end',
         'loop_start',
         'pre_get_posts',
@@ -5062,7 +5290,7 @@ test_case('authorized settings save marks field boost stale debt without indexin
     try {
         wp_fts_test_reset_wordpress_fakes();
         $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [901, 902];
+        wp_fts_test_seed_queue($fake, [901, 902]);
         $_POST = [
             'option_page' => WP_FTS_Plugin::SETTINGS_OPTION,
             'action' => 'update',
@@ -5088,7 +5316,7 @@ test_case('authorized settings save marks field boost stale debt without indexin
     assert_true(is_string($health['accepted_index_profile_hash'] ?? null) && preg_match('/^[a-f0-9]{40}$/', $health['accepted_index_profile_hash']) === 1, 'field boost save should persist the previously accepted profile hash');
     assert_true(($health['index_profile_hash'] ?? '') !== ($health['accepted_index_profile_hash'] ?? ''), 'changed field boosts should move the current profile away from the accepted profile');
     assert_true(is_string($health['stale_debt_created_at'] ?? null) && $health['stale_debt_created_at'] !== '', 'field boost save should timestamp debt creation');
-    assert_same([901, 902], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'settings save should not drain the indexing queue');
+    assert_same([901, 902], wp_fts_test_queue_ids($fake), 'settings save should not drain the indexing queue');
     assert_same([], $fake->docs, 'settings save should not index documents');
     assert_same([], $fake->terms, 'settings save should not write FTS terms');
 });
@@ -5884,11 +6112,11 @@ test_case('health schema repair POST repairs schema without indexing or creating
     assert_contains('Schema tables repaired. Current schema version: ' . WP_FTS_Plugin::SCHEMA_VERSION . '.', $html, 'valid repair should report success and current schema version');
     assert_contains('<th scope="row">Schema status</th><td>Current</td>', $html, 'health dashboard should show current schema status after repair');
     assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'valid repair should persist current schema version');
-    assert_same(6, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'valid repair should call the schema creation/repair path');
+    assert_same(7, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'valid repair should call the schema creation/repair path');
     assert_same([], $fake->docs, 'valid repair should not index existing content');
     assert_same([], $fake->terms, 'valid repair should not write FTS terms');
     assert_same([], $GLOBALS['wp_fts_test_posts'], 'valid repair should not create demo posts');
-    assert_same([751], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'valid repair should not drain the indexing queue');
+    assert_same([751], wp_fts_test_queue_ids($fake), 'valid repair should migrate and preserve queued indexing work');
     assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]), 'valid repair should not record a manual indexing batch');
 });
 
@@ -6762,7 +6990,7 @@ test_case('admin analyzer pack save enables selected bundled runtime packs witho
     try {
         wp_fts_test_reset_wordpress_fakes();
         $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [451, 452];
+        wp_fts_test_seed_queue($fake, [451, 452]);
         $_GET = [];
         $_POST = [
             'wp_fts_analyzer_packs_action' => 'save_bundled_runtime_packs',
@@ -6792,7 +7020,7 @@ test_case('admin analyzer pack save enables selected bundled runtime packs witho
         assert_true(is_string($health['accepted_index_profile_hash'] ?? null) && preg_match('/^[a-f0-9]{40}$/', $health['accepted_index_profile_hash']) === 1, 'saving bundled analyzer packs should persist an accepted profile hash');
         $runtimeOptions = WP_FTS_Plugin::runtime_analyzer_options();
         assert_true(array_key_exists('pl', $runtimeOptions['lemmatizer_packs_by_lang'] ?? []), 'saving bundled non-Polish packs should preserve the Polish runtime default');
-        assert_same([451, 452], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'saving bundled analyzer packs should not drain the indexing queue');
+        assert_same([451, 452], wp_fts_test_queue_ids($fake), 'saving bundled analyzer packs should not drain the indexing queue');
         assert_same([], $GLOBALS['wp_fts_test_posts'], 'saving bundled analyzer packs should not create posts');
         assert_same([], $fake->terms, 'saving bundled analyzer packs should not write FTS terms');
     } finally {
@@ -7971,16 +8199,16 @@ test_case('activation repairs schema stores version and surfaces database failur
     try {
         WP_FTS_Plugin::activate();
         assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'activation should store schema version option');
-        assert_same(6, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'activation should create or repair all FTS tables');
+        assert_same(7, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'activation should create or repair all FTS tables');
         assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'activation should schedule the queue processor');
         assert_same([], $fake->docs, 'activation should not immediately backfill existing content');
         assert_same([], $fake->terms, 'activation should not write FTS terms for existing content');
 
         WP_FTS_Plugin::maybe_upgrade_schema();
-        assert_same(6, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'current schema version should avoid redundant runtime repair');
+        assert_same(7, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'current schema version should avoid redundant runtime repair');
 
         WP_FTS_Plugin::upgrade_schema();
-        assert_same(12, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'explicit repair routine should be idempotent and rerunnable');
+        assert_same(14, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'explicit repair routine should be idempotent and rerunnable');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -8081,7 +8309,7 @@ test_case('runtime schema verification is cached per database prefix for one req
             static fn(mixed $query): bool => is_array($query) && str_starts_with((string) ($query[0] ?? ''), 'SHOW ')
         ));
 
-        assert_same(12, $firstInspectionCount, 'first schema guard should inspect six tables and their indexes');
+        assert_same(14, $firstInspectionCount, 'first schema guard should inspect seven tables and their indexes');
         assert_same($firstInspectionCount, $secondInspectionCount, 'repeated writes in one request should reuse the verified database-prefix contract');
 
         $fake->prefix = 'wp_2_';
@@ -8092,7 +8320,7 @@ test_case('runtime schema verification is cached per database prefix for one req
     }
 });
 
-test_case('schema migration verifies physical success before advancing version two', function (): void {
+test_case('schema migration verifies physical success before advancing the current version', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -8103,7 +8331,7 @@ test_case('schema migration verifies physical success before advancing version t
 
     try {
         WP_FTS_Plugin::upgrade_schema();
-        assert_same(2, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'ordered migration should advance a valid version-one install to version two');
+        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'ordered migrations should advance a valid version-one install to the current version');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -8124,7 +8352,7 @@ test_case('schema migration verifies physical success before advancing version t
     }
 
     assert_true($thrown, 'a failed physical migration should surface an error');
-    assert_same(1, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'a failed physical migration must not persist version two');
+    assert_same(1, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'a failed physical migration must not persist the current version');
 });
 
 test_case('schema migration refuses to overwrite a newer installed version', function (): void {
@@ -8194,13 +8422,14 @@ test_case('multisite new-site provisioning switches creates schema schedules and
     assert_same([37], $GLOBALS['wp_fts_test_switch_log'], 'new-site provisioning should switch to the requested site id');
     assert_same([1], $GLOBALS['wp_fts_test_restore_log'], 'new-site provisioning should restore the previous site context');
     assert_same(1, get_current_blog_id(), 'new-site provisioning should leave the previous blog active');
-    assert_same(6, count($createQueries), 'new-site provisioning should create or repair exactly six FTS tables');
+    assert_same(7, count($createQueries), 'new-site provisioning should create or repair exactly seven FTS tables');
     assert_contains('CREATE TABLE wp_37_fts_terms', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for terms');
     assert_contains('CREATE TABLE wp_37_fts_postings', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for postings');
     assert_contains('CREATE TABLE wp_37_fts_docs', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for docs');
     assert_contains('CREATE TABLE wp_37_fts_doc_lengths', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for doc lengths');
     assert_contains('CREATE TABLE wp_37_fts_docmeta', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for document metadata');
     assert_contains('CREATE TABLE wp_37_fts_meta', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for collection metadata');
+    assert_contains('CREATE TABLE wp_37_fts_queue', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for queued work');
     assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'new-site provisioning should schedule bounded queue work');
     assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'new-site provisioning should store schema version in the switched site context');
     assert_same([], $fake->docs, 'new-site provisioning should not index or backfill content');
@@ -8307,7 +8536,8 @@ test_case('multisite site deletion table discovery appends per-site FTS tables a
         'wp_7_fts_doc_lengths',
         'wp_7_fts_docmeta',
         'wp_7_fts_meta',
-    ], $tables, 'site deletion table filter should preserve existing tables, append the six target-prefix FTS tables, and de-dupe');
+        'wp_7_fts_queue',
+    ], $tables, 'site deletion table filter should preserve existing tables, append the seven target-prefix FTS tables, and de-dupe');
     assert_same([
         'wp_8_posts',
         'wp_8_fts_terms',
@@ -8316,6 +8546,7 @@ test_case('multisite site deletion table discovery appends per-site FTS tables a
         'wp_8_fts_doc_lengths',
         'wp_8_fts_docmeta',
         'wp_8_fts_meta',
+        'wp_8_fts_queue',
     ], $objectTables, 'site deletion table filter should accept WP_Site-like objects with id');
     assert_same(['wp_posts'], WP_FTS_Plugin::filter_site_deletion_tables(['wp_posts', 'wp_posts'], 0), 'site deletion table filter should de-dupe and fail safe when site id is invalid');
     assert_true(!str_contains(implode("\n", $fake->queries), 'DROP TABLE'), 'site deletion table discovery should not execute destructive SQL');
@@ -8507,7 +8738,7 @@ test_case('operator status ranking tuning remains read only', function (): void 
         'is_deleted' => 0,
     ];
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [722];
+    wp_fts_test_seed_queue($fake, [722]);
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
         'stale_debt_active' => true,
         'stale_debt_reasons' => ['field_boosts_changed'],
@@ -8540,7 +8771,7 @@ test_case('operator status ranking tuning remains read only', function (): void 
     assert_same($docsBefore, $fake->docs, 'ranking tuning status should not index or mutate documents');
     assert_same([], $fake->terms, 'ranking tuning status should not write FTS terms');
     assert_same([], $fake->queries, 'ranking tuning status should not run schema repair or storage writes');
-    assert_same([722], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'ranking tuning status should not drain queued content');
+    assert_same([722], wp_fts_test_queue_ids($fake), 'ranking tuning status should not drain queued content');
 });
 
 test_case('wp-cli status reports lifecycle state without mutating index data', function (): void {
@@ -8578,7 +8809,7 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
         'search',
         'raw-provider-payload-must-not-render',
     ];
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [702];
+    wp_fts_test_seed_queue($fake, [702]);
     $scheduledAt = $now + 120;
     $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK] = [
         'timestamp' => $scheduledAt,
@@ -8793,7 +9024,7 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_same($postRowsBeforeStatus, $fake->postRows, 'status should not mutate source post rows');
     assert_same($docsBeforeStatus, $fake->docs, 'status should not mutate index document rows');
     assert_same([], $fake->queries, 'status should not run schema repair or storage writes');
-    assert_same([702], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'status should leave queue state unchanged');
+    assert_same([702], wp_fts_test_queue_ids($fake), 'status should leave queue state unchanged');
     assert_same('do-not-expose', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'status should leave lock state unchanged');
     assert_same(1, count($fake->docs), 'status should not index additional content');
 });
@@ -8986,7 +9217,7 @@ test_case('status and health report missing queue processor schedule with pendin
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [702];
+    wp_fts_test_seed_queue($fake, [702]);
     $optionsBefore = $GLOBALS['wp_fts_test_options'];
     $docsBefore = $fake->docs;
 
@@ -9041,7 +9272,7 @@ test_case('health queue schedule POST requires capability and nonce before sched
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [791];
+    wp_fts_test_seed_queue($fake, [791]);
     $validPost = [
         'wp_fts_health_action' => 'schedule_queue',
         'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
@@ -9084,7 +9315,7 @@ test_case('health queue schedule POST schedules missing pending work without ind
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [792];
+    wp_fts_test_seed_queue($fake, [792]);
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
         'token' => 'queue-schedule-token-must-not-render',
         'mode' => 'cron',
@@ -9118,7 +9349,7 @@ test_case('health queue schedule POST schedules missing pending work without ind
     assert_same(WP_FTS_Plugin::CRON_HOOK, $GLOBALS['wp_fts_test_schedule_calls'][0]['hook'] ?? null, 'valid schedule action should schedule the queue processor hook');
     assert_true(($GLOBALS['wp_fts_test_schedule_calls'][0]['timestamp'] ?? 0) >= time(), 'valid schedule action should schedule a future event');
     assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'valid schedule action should leave a scheduled queue processor event');
-    assert_same([792], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'schedule action should not drain the indexing queue');
+    assert_same([792], wp_fts_test_queue_ids($fake), 'schedule action should not drain the indexing queue');
     assert_same([], $fake->docs, 'schedule action should not index content');
     assert_same([], $fake->terms, 'schedule action should not write FTS terms');
     assert_same(0, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schedule action should not repair schema');
@@ -9140,7 +9371,7 @@ test_case('health queue schedule POST does not duplicate an already scheduled ev
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [793];
+    wp_fts_test_seed_queue($fake, [793]);
     $scheduledAt = time() + 300;
     $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK] = [
         'timestamp' => $scheduledAt,
@@ -9207,7 +9438,7 @@ test_case('wp-cli schedule-queue json schedules once for missing pending work', 
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [794];
+    wp_fts_test_seed_queue($fake, [794]);
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
         'token' => 'cli-schedule-token-must-not-render',
         'mode' => 'cron',
@@ -9259,7 +9490,7 @@ test_case('wp-cli schedule-queue is a no-op for already scheduled and not needed
     try {
         wp_fts_test_reset_wordpress_fakes();
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [795];
+        wp_fts_test_seed_queue($fake, [795]);
         $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK] = [
             'timestamp' => time() + 300,
             'hook' => WP_FTS_Plugin::CRON_HOOK,
@@ -9275,6 +9506,7 @@ test_case('wp-cli schedule-queue is a no-op for already scheduled and not needed
 
         wp_fts_test_reset_wordpress_fakes();
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+        wp_fts_test_seed_queue($fake, []);
         $notNeededRaw = wp_fts_test_capture_cli(static function () use ($command): void {
             $command->schedule_queue([], ['format' => 'json']);
         });
@@ -9446,7 +9678,7 @@ test_case('wp-cli repair runs schema upgrade without indexing content', function
     assert_same('current', $payload['schema_status'] ?? null, 'repair should report current schema status after upgrade');
     assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $payload['schema_version'] ?? null, 'repair should report stored schema version after upgrade');
     assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'repair should persist schema version');
-    assert_same(6, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'repair should call the schema creation/repair path');
+    assert_same(7, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'repair should call the schema creation/repair path');
     assert_same([], $fake->docs, 'repair should not index existing content');
     assert_same([], $fake->terms, 'repair should not write FTS terms');
 });
@@ -9550,7 +9782,7 @@ test_case('wp-cli direct writers skip safely when the shared indexing lock is ac
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [901];
+    wp_fts_test_seed_queue($fake, [901]);
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
         'token' => 'active-writer-token',
         'mode' => 'cron',
@@ -9595,7 +9827,7 @@ test_case('wp-cli direct writers skip safely when the shared indexing lock is ac
     assert_true(!isset($fake->docs[901]), 'locked reindex should not write the queued source post');
     assert_same(0, $fake->docs[902]['is_deleted'] ?? null, 'locked delete should not tombstone an indexed document');
     assert_true(isset($fake->docs[903]), 'locked optimize should not compact tombstoned documents');
-    assert_same([901], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'locked direct writers should not drain queued work');
+    assert_same([901], wp_fts_test_queue_ids($fake), 'locked direct writers should not drain queued work');
     assert_same('active-writer-token', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'locked direct writers should leave the active lock untouched');
     assert_same(true, $health['last_skipped_locked'] ?? null, 'locked direct writer health should record a lock skip');
     assert_same(0, $health['last_batch_processed'] ?? null, 'locked direct writer health should record no processed writes');
@@ -9636,6 +9868,7 @@ test_case('wp-cli reset-index requires explicit confirmation before mutating sta
     assert_same($snapshot['docLengths'], $fake->docLengths, 'reset-index without --yes should not clear doc lengths');
     assert_same($snapshot['docMeta'], $fake->docMeta, 'reset-index without --yes should not clear doc metadata');
     assert_same($snapshot['meta'], $fake->meta, 'reset-index without --yes should not clear collection metadata');
+    assert_same($snapshot['queue'], wp_fts_test_queue_ids($fake), 'reset-index without --yes should not clear queued work');
     assert_same($snapshot['options'], $GLOBALS['wp_fts_test_options'], 'reset-index without --yes should not mutate plugin options');
     assert_contains('Confirmation required', WP_CLI::$warningMessages[0] ?? '', 'reset-index without --yes should warn operators');
 });
@@ -9676,7 +9909,8 @@ test_case('wp-cli reset-index skips under active writer lock without clearing st
     assert_same($snapshot['docLengths'], $fake->docLengths, 'locked reset-index should not clear doc lengths');
     assert_same($snapshot['docMeta'], $fake->docMeta, 'locked reset-index should not clear doc metadata');
     assert_same($snapshot['meta'], $fake->meta, 'locked reset-index should not clear collection metadata');
-    assert_same($snapshot['options'], $GLOBALS['wp_fts_test_options'], 'locked reset-index should leave queue, stale debt, failure state, and lock untouched');
+    assert_same($snapshot['queue'], wp_fts_test_queue_ids($fake), 'locked reset-index should leave queued work untouched');
+    assert_same($snapshot['options'], $GLOBALS['wp_fts_test_options'], 'locked reset-index should leave stale debt, failure state, and lock untouched');
     assert_contains('Skipped FTS reset-index: another index writer is already running.', WP_CLI::$warningMessages[0] ?? '', 'locked reset-index should warn operators about the active writer lock');
     assert_true(!str_contains(json_encode($payload, JSON_THROW_ON_ERROR), 'reset-index-active-token'), 'locked reset-index JSON should not expose lock token');
 });
@@ -9733,7 +9967,7 @@ test_case('wp-cli reset-index clears FTS data and operational state while preser
     assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'confirmed reset-index should preserve schema option');
     assert_same($settingsBefore, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] ?? null, 'confirmed reset-index should preserve plugin settings');
     assert_same($analyzerBefore, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? null, 'confirmed reset-index should preserve analyzer options');
-    assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'confirmed reset-index should clear the pending queue option');
+    assert_same([], wp_fts_test_queue_ids($fake), 'confirmed reset-index should clear the durable pending queue');
 
     foreach ($fake->queries as $query) {
         $sql = is_array($query) ? (string) ($query[0] ?? '') : (string) $query;
@@ -9772,7 +10006,7 @@ test_case('wp-cli process-batch runs one bounded manual batch with queue and bac
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $GLOBALS['wp_fts_test_posts'][81] = wp_fts_test_backfill_post(81, 'post', 'publish', 'CLI Queued Post');
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [81];
+    wp_fts_test_seed_queue($fake, [81]);
     wp_fts_test_seed_backfill_posts($fake, 4, 101);
 
     try {
@@ -9883,7 +10117,7 @@ test_case('manual queue batch records one failed post and continues without retr
     foreach ([81 => 'Queue Good Before', 82 => 'Queue Bad', 83 => 'Queue Good After'] as $postId => $title) {
         $GLOBALS['wp_fts_test_posts'][$postId] = wp_fts_test_backfill_post($postId, 'post', 'publish', $title);
     }
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [81, 82, 83];
+    wp_fts_test_seed_queue($fake, [81, 82, 83]);
     $fake->failDocWriteErrors[82] = "simulated failure for INSERT INTO wp_fts_docs\n#0 stack SELECT * FROM wp_users";
 
     try {
@@ -9902,7 +10136,7 @@ test_case('manual queue batch records one failed post and continues without retr
     assert_true(!str_contains((string) $result['last_error'], 'INSERT INTO wp_fts_docs'), 'queue failure summary should not expose raw SQL');
     assert_true(!str_contains((string) $result['last_error'], '#0'), 'queue failure summary should not expose stack traces');
     assert_same(1, $fake->failedDocWriteAttempts[82] ?? 0, 'failed queued post should be attempted once in the batch');
-    assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'failed queued post should be removed from the immediate queue after being recorded');
+    assert_same([82], wp_fts_test_queue_ids($fake), 'failed queued post should remain durably queued for retry backoff');
     assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]), 'queue failure batch should release the index lock');
     assert_true(isset($fake->docs[81]), 'queue failure batch should index the item before the failure');
     assert_true(!isset($fake->docs[82]), 'queue failure batch should not mark the failed post indexed');
@@ -9972,7 +10206,7 @@ test_case('failed item recovery history is bounded sanitized and durable across 
         for ($i = 0; $i < 25; $i++) {
             $postId = 1000 + $i;
             $GLOBALS['wp_fts_test_posts'][$postId] = wp_fts_test_backfill_post($postId, 'post', 'publish', 'Recovery <b>Failure</b> ' . $i);
-            $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [$postId];
+            wp_fts_test_seed_queue($fake, [$postId]);
             $fake->failDocWriteErrors[$postId] = "history failure {$i} SELECT * FROM wp_users WHERE user_pass = 'secret'\n#0 trace token=must-not-render";
 
             WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1, 'source' => 'history-test']);
@@ -9983,7 +10217,7 @@ test_case('failed item recovery history is bounded sanitized and durable across 
 
         $goodPost = wp_fts_test_backfill_post(2000, 'post', 'publish', 'Recovery Clean Batch');
         $GLOBALS['wp_fts_test_posts'][2000] = $goodPost;
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [2000];
+        wp_fts_test_seed_queue($fake, [2000]);
         WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1, 'source' => 'history-clean']);
         $afterClean = WP_FTS_Plugin::failure_recovery_status(25);
     } finally {
@@ -10025,7 +10259,7 @@ test_case('repeated failed items quarantine and do not starve unrelated automati
     $fake->failDocWriteErrors[2101] = "repeated failure INSERT INTO wp_fts_docs VALUES secret=must-not-render\n#0 stack";
 
     try {
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [2101];
+        wp_fts_test_seed_queue($fake, [2101]);
         WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
         WP_FTS_Plugin::retry_failed_item_recovery(2101, 1);
         WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
@@ -10061,7 +10295,7 @@ test_case('wp-cli failed item recovery controls emit stable json and only mutate
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $GLOBALS['wp_fts_test_posts'][3101] = wp_fts_test_backfill_post(3101, 'post', 'publish', 'CLI Failed Recovery');
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [3101];
+    wp_fts_test_seed_queue($fake, [3101]);
     $fake->failDocWriteErrors[3101] = "cli failure DELETE FROM wp_users token=must-not-render\n#0 stack";
 
     try {
@@ -10080,7 +10314,7 @@ test_case('wp-cli failed item recovery controls emit stable json and only mutate
         $retry = wp_fts_test_decode_cli_json_object($retryRaw);
         $docsAfterRetry = $fake->docs;
         $attemptsAfterRetry = $fake->failedDocWriteAttempts[3101] ?? 0;
-        $queueAfterRetry = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [];
+        $queueAfterRetry = wp_fts_test_queue_ids($fake);
 
         $clearRaw = wp_fts_test_capture_cli(static function () use ($command): void {
             $command->clear_failed_item([3101], ['format' => 'json']);
@@ -10110,7 +10344,7 @@ test_case('wp-cli failed item recovery controls emit stable json and only mutate
     assert_same('cleared', $clear['status'] ?? null, 'clear JSON should report cleared status');
     assert_same(1, $clear['matched_count'] ?? null, 'clear JSON should report the selected record');
     assert_same(0, $afterClear['total_count'] ?? null, 'clear should remove failed-item recovery metadata');
-    assert_same([3101], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'clear should not remove existing queued retry state');
+    assert_same([3101], wp_fts_test_queue_ids($fake), 'clear should not remove existing queued retry state');
     assert_same([], $fake->docs, 'clear should not delete or create indexed rows');
 });
 
@@ -10219,14 +10453,14 @@ test_case('scheduled indexing cron reschedules when queued work fills the batch 
     for ($post_id = 1; $post_id <= 20; $post_id++) {
         $GLOBALS['wp_fts_test_posts'][$post_id] = wp_fts_test_backfill_post($post_id);
     }
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = range(1, 20);
+    wp_fts_test_seed_queue($fake, range(1, 20));
 
     try {
         $result = WP_FTS_Plugin::process_scheduled_indexing();
         assert_same(20, $result['processed'], 'cron should spend the default batch on queued work first');
         assert_same(20, $result['queue_processed'], 'cron should drain the queued work that filled the batch');
         assert_same(0, $result['backfill_processed'], 'cron should not exceed the batch size by backfilling in the same run');
-        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'queue should be drained after the batch');
+        assert_same([], wp_fts_test_queue_ids($fake), 'queue should be drained after the batch');
         assert_same(20, count($fake->docs), 'queued indexing should consume the full batch before backfill');
         assert_true(!isset($fake->docs[21]), 'remaining backfill should be left for a follow-up run');
         assert_true((bool) $result['has_more'], 'cron should detect remaining backfill after a queue-filled batch');
@@ -10350,7 +10584,7 @@ test_case('latest indexing diagnostics remain bounded after repeated batches', f
         for ($i = 0; $i < 12; $i++) {
             $postId = 901 + $i;
             $GLOBALS['wp_fts_test_posts'][$postId] = wp_fts_test_backfill_post($postId, 'post', 'publish', 'Bounded Diagnostic ' . $i);
-            $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [$postId];
+            wp_fts_test_seed_queue($fake, [$postId]);
             $fake->failDocWriteErrors[$postId] = 'diagnostic failure ' . $i . ' ' . str_repeat('overflow ', 80) . "SELECT * FROM wp_users\n#0 trace";
 
             $result = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
@@ -10469,7 +10703,7 @@ test_case('queued work has priority over stale debt and preserves bounded proces
         foreach ([601, 602] as $postId) {
             $GLOBALS['wp_fts_test_posts'][$postId] = wp_fts_test_backfill_post($postId, 'post', 'publish', 'Queued Priority ' . $postId);
         }
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [601, 602];
+        wp_fts_test_seed_queue($fake, [601, 602]);
         wp_fts_test_mark_field_boost_stale_debt();
 
         $result = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 3]);
@@ -10481,7 +10715,7 @@ test_case('queued work has priority over stale debt and preserves bounded proces
     assert_same(3, $result['processed'], 'batch should stop at the requested size');
     assert_same(2, $result['queue_processed'], 'queued posts should consume priority capacity first');
     assert_same(1, $result['stale_processed'], 'stale debt should use only the remaining capacity');
-    assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'queued work should be drained before stale rows');
+    assert_same([], wp_fts_test_queue_ids($fake), 'queued work should be drained before stale rows');
     assert_true(isset($fake->docs[601], $fake->docs[602]), 'queued posts should be indexed in the same bounded batch');
     assert_true(($fake->docs[501]['content_hash'] ?? '') !== 'old-profile-501', 'only one stale row should be rewritten after queued work');
     assert_same('old-profile-502', $fake->docs[502]['content_hash'] ?? null, 'remaining stale rows should wait for later batches');
@@ -10649,7 +10883,7 @@ test_case('single-site deactivation and uninstall keep index data while clearing
             assert_true(!isset($GLOBALS['wp_fts_test_options'][$option_name]), "single-site uninstall should delete {$option_name}");
         }
         assert_same('keep-site-1', $GLOBALS['wp_fts_test_options']['wp_fts_non_operational_marker'] ?? null, 'single-site uninstall should leave unrelated options alone');
-        assert_same([], $fake->queries, 'single-site uninstall should not run schema repair or custom-table SQL');
+        assert_same(['DELETE FROM wp_fts_queue'], $fake->queries, 'single-site uninstall should clear only durable queued work from custom tables');
         assert_same([], $GLOBALS['wp_fts_test_posts'], 'single-site uninstall should not create demo or content posts');
         assert_same([], $GLOBALS['wp_fts_test_trashed_posts'], 'single-site uninstall should not delete or trash content posts');
         assert_true(!str_contains(implode("\n", $fake->queries), 'DROP TABLE'), 'uninstall should not drop custom tables under the documented deferred cleanup policy');
@@ -10753,7 +10987,14 @@ test_case('multisite uninstall clears operational options per site restores cont
         }
         assert_same($docsBefore, $fake->docs, 'multisite uninstall should not index or delete stored docs');
         assert_same($termsBefore, $fake->terms, 'multisite uninstall should not drop or truncate term data');
-        assert_same([], $fake->queries, 'multisite uninstall should not run schema repair or custom-table SQL');
+        assert_same([
+            'DELETE FROM wp_2_fts_queue',
+            'DELETE FROM wp_3_fts_queue',
+            'DELETE FROM wp_4_fts_queue',
+            'DELETE FROM wp_2_fts_queue',
+            'DELETE FROM wp_3_fts_queue',
+            'DELETE FROM wp_4_fts_queue',
+        ], $fake->queries, 'multisite uninstall should clear each site durable queue without repairing or dropping tables');
         assert_same([], $GLOBALS['wp_fts_test_posts'], 'multisite uninstall should not create demo or content posts');
         assert_same([], $GLOBALS['wp_fts_test_trashed_posts'], 'multisite uninstall should not delete or trash content posts');
         assert_true(!str_contains(implode("\n", $fake->queries), 'DROP TABLE'), 'multisite uninstall should not drop custom tables');
@@ -10788,7 +11029,7 @@ test_case('multisite uninstall falls back to current-site cleanup when site enum
             assert_true(!isset($GLOBALS['wp_fts_test_site_options'][7][$option_name]), "empty multisite enumeration fallback should delete {$option_name}");
         }
         assert_same('keep-site-7', $GLOBALS['wp_fts_test_site_options'][7]['wp_fts_non_operational_marker'] ?? null, 'empty multisite enumeration fallback should leave unrelated options alone');
-        assert_same([], $fake->queries, 'empty multisite enumeration fallback should not run schema repair or custom-table SQL');
+        assert_same(['DELETE FROM wp_fts_queue'], $fake->queries, 'empty multisite enumeration fallback should clear current-site durable queued work');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -10819,7 +11060,7 @@ test_case('runtime post hooks queue eligible saves and status transitions then p
 
     try {
         WP_FTS_Plugin::handle_post_save(101, $post, true);
-        assert_same([101], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'eligible save hooks should enqueue the post');
+        assert_same([101], wp_fts_test_queue_ids($fake), 'eligible save hooks should enqueue the post');
         assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'eligible save hooks should schedule the bounded processor');
         assert_same(1, count($GLOBALS['wp_fts_test_schedule_calls']), 'eligible save hooks should call the scheduler once for new queued work');
         assert_same([], $fake->docs, 'eligible save hooks should not write FTS docs inline');
@@ -10828,7 +11069,7 @@ test_case('runtime post hooks queue eligible saves and status transitions then p
         assert_same([], WP_FTS_Plugin::search('alpha', ['limit' => 10]), 'queued saves should not become searchable before a processor run');
 
         WP_FTS_Plugin::handle_post_save(101, $post, true);
-        assert_same([101], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'duplicate eligible saves should dedupe queue entries');
+        assert_same([101], wp_fts_test_queue_ids($fake), 'duplicate eligible saves should coalesce into one queue row');
         assert_same(1, count($GLOBALS['wp_fts_test_schedule_calls']), 'duplicate eligible saves should not schedule duplicate queue processor events');
 
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
@@ -10839,7 +11080,7 @@ test_case('runtime post hooks queue eligible saves and status transitions then p
         ];
         $locked = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
         assert_same(true, $locked['skipped_locked'], 'manual processor should skip when a writer lock is active');
-        assert_same([101], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'locked processors should preserve queued save work');
+        assert_same([101], wp_fts_test_queue_ids($fake), 'locked processors should preserve queued save work');
         assert_same([], $fake->docs, 'locked processors should not write queued docs');
         unset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]);
 
@@ -10847,7 +11088,7 @@ test_case('runtime post hooks queue eligible saves and status transitions then p
         assert_same(1, $processed['processed'], 'manual processor should index one queued save');
         assert_same(1, $processed['queue_processed'], 'manual processor should report queued save work separately');
         assert_same(0, $processed['backfill_processed'], 'manual processor should not spend capacity on backfill while queued save work fills the batch');
-        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'processed queued saves should leave the queue empty');
+        assert_same([], wp_fts_test_queue_ids($fake), 'processed queued saves should leave the queue empty');
         assert_true(isset($fake->docs[101]) && $fake->docs[101]['is_deleted'] === 0, 'processor should write an active document for queued saves');
         assert_true($fake->terms !== [], 'processor should write term postings for queued saves');
         assert_same([101], array_column(WP_FTS_Plugin::search('alpha', ['limit' => 10]), 'doc_id'), 'search helper should expose the indexed public post');
@@ -10881,7 +11122,7 @@ test_case('runtime post hooks queue eligible saves and status transitions then p
         ];
         $GLOBALS['wp_fts_test_posts'][103] = $statusPost;
         WP_FTS_Plugin::handle_status_transition('publish', 'draft', $statusPost);
-        assert_same([103], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'eligible status transitions should enqueue instead of indexing inline');
+        assert_same([103], wp_fts_test_queue_ids($fake), 'eligible status transitions should enqueue instead of indexing inline');
         assert_true(!isset($fake->docs[103]), 'eligible status transitions should not write docs inline');
         $cron = WP_FTS_Plugin::process_scheduled_indexing();
         assert_same(1, $cron['queue_processed'], 'cron processor should consume queued status-transition work before backfill');
@@ -10890,12 +11131,12 @@ test_case('runtime post hooks queue eligible saves and status transitions then p
         $post->post_status = 'trash';
         WP_FTS_Plugin::handle_status_transition('trash', 'publish', $post);
         assert_true($fake->docs[101]['is_deleted'] === 1, 'leaving searchable status should tombstone the indexed document');
-        assert_true(!in_array(101, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], true), 'leaving searchable status should remove stale queued entries for the post');
+        assert_true(!in_array(101, wp_fts_test_queue_ids($fake), true), 'leaving searchable status should remove stale queued entries for the post');
         assert_same([], WP_FTS_Plugin::search('alpha', ['limit' => 10]), 'tombstoned documents should not be returned');
 
         $GLOBALS['wp_fts_test_revisions'][102] = true;
         WP_FTS_Plugin::handle_post_save(102, (object) ['ID' => 102, 'post_status' => 'publish', 'post_type' => 'post'], true);
-        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'revision saves should not enqueue indexing work');
+        assert_same([], wp_fts_test_queue_ids($fake), 'revision saves should not enqueue indexing work');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -11034,11 +11275,11 @@ test_case('disabled auto-index blocks status transition indexing but still tombs
 
     try {
         WP_FTS_Plugin::handle_post_save(111, $post, true);
-        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'disabled auto-index should not queue eligible saves');
+        assert_same([], wp_fts_test_queue_ids($fake), 'disabled auto-index should not queue eligible saves');
         assert_true(!isset($fake->docs[111]), 'disabled auto-index should not index eligible saves inline');
 
         WP_FTS_Plugin::handle_status_transition('publish', 'draft', $post);
-        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'disabled auto-index should not queue eligible status transitions');
+        assert_same([], wp_fts_test_queue_ids($fake), 'disabled auto-index should not queue eligible status transitions');
         assert_true(!isset($fake->docs[111]), 'disabled auto-index should not index when a post transitions into a searchable status');
         assert_same([], WP_FTS_Plugin::search('manualtransitionneedle', ['limit' => 10]), 'blocked transition indexing should leave FTS results empty');
 
@@ -11071,15 +11312,17 @@ test_case('queue processing preserves posts queued during an active batch', func
         'post_type' => 'post',
     ];
     $GLOBALS['wp_fts_test_posts'][301] = $post;
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [301, 302];
-    $GLOBALS['wp_fts_test_get_post_callbacks'][301] = static function (): void {
+    wp_fts_test_seed_queue($fake, [301, 302]);
+    $GLOBALS['wp_fts_test_get_post_callbacks'][301] = static function () use ($fake): void {
         unset($GLOBALS['wp_fts_test_get_post_callbacks'][301]);
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [301, 302, 303];
+        $queue = new WP_FTS_Index_Queue($fake);
+        $queue->enqueue(301);
+        $queue->enqueue(303);
     };
 
     try {
         assert_same(1, WP_FTS_Plugin::process_queue(1), 'queue processor should process only the claimed batch');
-        assert_same([302, 303], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'queue processor should preserve ids added after its initial snapshot');
+        assert_same([301, 302, 303], wp_fts_test_queue_ids($fake), 'queue processor should preserve same-post and new-post saves added after its claim');
         assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'remaining concurrent queue work should schedule another processor run');
     } finally {
         $wpdb = $oldWpdb;
@@ -11121,7 +11364,7 @@ test_case('password-protected published posts are not queued indexed or exposed'
         assert_same([312], array_column(WP_FTS_Plugin::search('shared', ['limit' => 10]), 'doc_id'), 'public search should hide password-protected posts even when stale indexed rows exist');
 
         wp_fts_test_index_saved_post(311, $passworded, true);
-        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'password-protected publish saves should not enqueue indexing work');
+        assert_same([], wp_fts_test_queue_ids($fake), 'password-protected publish saves should not enqueue indexing work');
         assert_true(($fake->docs[311]['is_deleted'] ?? 0) === 1, 'password-protected publish saves should tombstone stale indexed rows');
     } finally {
         $wpdb = $oldWpdb;
@@ -19225,7 +19468,7 @@ test_case('mysql storage emits language-aware binary schema and stores per-langu
     $storage = new WP_FTS_Storage_Mysql($wpdb);
     $storage->create_tables();
 
-    assert_same(6, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create six tables');
+    assert_same(7, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create seven tables');
     $schemaSql = implode("\n", $wpdb->queries);
     assert_contains('term varbinary(255) NOT NULL', $schemaSql, 'terms table should use exact binary term keys');
     assert_contains('CREATE TABLE wp_fts_postings', $schemaSql, 'schema should include row postings table');
@@ -19467,7 +19710,7 @@ function wp_fts_test_prepare_cli_diagnose_operator_context(WP_FTS_Test_WPDB $fak
             'replace_admin_post_search' => true,
         ]
     );
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [3];
+    wp_fts_test_seed_queue($fake, [3]);
     $GLOBALS['wp_fts_test_options']['active_plugins'] = [
         'searchwp/index.php',
         'private-search-provider/secret-basename.php',

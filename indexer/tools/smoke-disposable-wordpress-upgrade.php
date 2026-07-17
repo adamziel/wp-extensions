@@ -31,6 +31,7 @@ final class WP_FTS_DisposableUpgradeSmokeRunner
         'fts_doc_lengths',
         'fts_docmeta',
         'fts_meta',
+        'fts_queue',
     ];
     private const OPERATIONAL_OPTIONS = [
         'wp_fts_schema_version',
@@ -207,7 +208,7 @@ final class WP_FTS_DisposableUpgradeSmokeRunner
             );
             $afterPreviousActivation = $this->inspect_site('after_previous_activation', $baseCommand, $createdPostIds, $report);
             $this->assert_schema_current($statusAfterPreviousActivation, 'status after previous activation');
-            $this->assert_all_tables_exist($afterPreviousActivation, 'previous activation should create all FTS tables');
+            $this->assert_all_tables_exist($afterPreviousActivation, 'previous activation should create its FTS tables', false);
             $this->assert_tracked_post_unchanged($beforePreviousActivation, $afterPreviousActivation, $guardPostId, 'previous activation should not mutate existing guard content');
             $this->assert_post_count_delta($beforePreviousActivation, $afterPreviousActivation, 0, 'previous activation should not create content');
 
@@ -658,10 +659,13 @@ final class WP_FTS_DisposableUpgradeSmokeRunner
     /**
      * @param array<string,mixed> $inspection
      */
-    private function assert_all_tables_exist(array $inspection, string $message): void
+    private function assert_all_tables_exist(array $inspection, string $message, bool $requireQueue = true): void
     {
         $tables = is_array($inspection['fts_tables'] ?? null) ? $inspection['fts_tables'] : [];
         foreach (self::FTS_TABLE_SUFFIXES as $suffix) {
+            if ($suffix === 'fts_queue' && !$requireQueue) {
+                continue;
+            }
             if (empty($tables[$suffix]['exists'])) {
                 throw new RuntimeException($message . " Missing table suffix: {$suffix}.");
             }

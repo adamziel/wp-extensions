@@ -238,10 +238,12 @@ function wp_fts_upgrade_contract_inspection_payload(string $phase, bool $isMulti
         'fts_doc_lengths',
         'fts_docmeta',
         'fts_meta',
+        'fts_queue',
     ] as $suffix) {
+        $legacyQueuePhase = $suffix === 'fts_queue' && in_array($phase, ['after_previous_activation', 'before_current_upgrade'], true);
         $tables[$suffix] = [
             'name' => $prefix . $suffix,
-            'exists' => $phase !== 'before_previous_activation',
+            'exists' => $phase !== 'before_previous_activation' && !$legacyQueuePhase,
         ];
         $counts[$suffix] = in_array($phase, ['before_current_upgrade', 'after_current_upgrade', 'after_repeated_repair'], true) ? 1 : 0;
     }

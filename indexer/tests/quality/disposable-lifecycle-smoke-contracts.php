@@ -220,6 +220,7 @@ function wp_fts_lifecycle_contract_inspection_payload(string $phase): array
         'fts_doc_lengths' => 0,
         'fts_docmeta' => 0,
         'fts_meta' => 0,
+        'fts_queue' => 0,
     ];
     $indexedCounts = [
         'fts_terms' => 3,
@@ -228,10 +229,14 @@ function wp_fts_lifecycle_contract_inspection_payload(string $phase): array
         'fts_doc_lengths' => 1,
         'fts_docmeta' => 1,
         'fts_meta' => 1,
+        'fts_queue' => 0,
     ];
     $counts = in_array($phase, ['after_indexing', 'before_deactivation', 'after_deactivation', 'after_uninstall'], true)
         ? $indexedCounts
         : $zeroCounts;
+    if (in_array($phase, ['before_deactivation', 'after_deactivation'], true)) {
+        $counts['fts_queue'] = 1;
+    }
     $optionExists = $phase !== 'after_uninstall';
     $queueCount = in_array($phase, ['before_deactivation', 'after_deactivation'], true) ? 1 : 0;
 
