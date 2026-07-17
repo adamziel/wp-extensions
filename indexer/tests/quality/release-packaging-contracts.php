@@ -406,9 +406,14 @@ if (function_exists('test_case')) {
     test_case('quality public install paths use a digest-pinned release artifact', function (): void {
         wp_fts_release_packaging_contract_public_install_run();
     });
-    test_case('quality release artifact bootstraps outside the monorepo', function (): void {
-        wp_fts_release_packaging_contract_standalone_bootstrap_run();
-    });
+    // This case builds and extracts a ZIP in-process. The normal PHP and
+    // release-artifact lanes provide ZipArchive; php -n covers the remaining
+    // packaging contracts without weakening the strict pending-test gate.
+    if (class_exists('ZipArchive')) {
+        test_case('quality release artifact bootstraps outside the monorepo', function (): void {
+            wp_fts_release_packaging_contract_standalone_bootstrap_run();
+        });
+    }
 } elseif (PHP_SAPI === 'cli' && realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === __FILE__) {
     wp_fts_release_packaging_contract_run();
     wp_fts_release_packaging_contract_prune_run();
