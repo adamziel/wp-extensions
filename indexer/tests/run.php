@@ -8790,6 +8790,32 @@ test_case('failed initial indexing and legacy readiness migration stay fail clos
     }
 });
 
+test_case('runtime schema repair returns saved readiness to pending', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_mark_search_takeover_ready();
+    assert_same(true, WP_FTS_Plugin::search_takeover_status()['ready'] ?? null, 'the pre-repair readiness cache should describe the intact schema');
+    unset($fake->schemaColumns['wp_fts_docmeta'], $fake->schemaIndexes['wp_fts_docmeta']);
+
+    try {
+        assert_same('damaged', WP_FTS_Plugin::schema_status()['status'] ?? null, 'a missing table should make a previously ready schema damaged');
+
+        WP_FTS_Plugin::maybe_upgrade_schema();
+        $status = WP_FTS_Plugin::search_takeover_status();
+
+        assert_same('current', $status['schema_status'] ?? null, 'runtime schema repair should restore the physical table contract');
+        assert_same(false, $status['ready'] ?? null, 'runtime schema repair should not trust readiness recorded for the damaged index');
+        assert_same('pending', $status['initial_index_status'] ?? null, 'runtime schema repair should require corpus verification before takeover resumes');
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'runtime schema repair should schedule the pending corpus verification');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('multisite new-site provisioning is a no-op without a resolvable site id or switch APIs', function (): void {
     global $wpdb;
 

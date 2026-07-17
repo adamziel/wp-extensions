@@ -899,6 +899,18 @@ final class WP_FTS_Plugin
      */
     public static function upgrade_schema(): void
     {
+        // Schema repair is a mutation boundary, so readiness cached before
+        // physical damage was discovered cannot authorize the rebuilt index.
+        self::$search_takeover_status_cache = [];
+        $takeover = self::search_takeover_status();
+        $requires_initial_index_recheck = ($takeover['initial_index_status'] ?? '') === self::INITIAL_INDEX_STATUS_READY
+            && empty($takeover['ready']);
+        if ($requires_initial_index_recheck) {
+            // Recreated tables may be empty even though the pre-repair health
+            // record described the old index as complete.
+            self::mark_initial_index_pending();
+        }
+
         $storage = self::mysql_storage();
         $stored_version = self::schema_version_from_option(self::get_option(self::SCHEMA_VERSION_OPTION, null));
         if ($stored_version > self::SCHEMA_VERSION) {
@@ -920,6 +932,9 @@ final class WP_FTS_Plugin
 
         self::migrate_legacy_queue_option(self::index_queue(false));
         self::set_option(self::SCHEMA_VERSION_OPTION, self::SCHEMA_VERSION);
+        if ($requires_initial_index_recheck) {
+            self::schedule_queue_processor();
+        }
     }
 
     private static function run_schema_migration(WP_FTS_Storage_Mysql $storage, int $version): bool
@@ -2694,19 +2709,7 @@ final class WP_FTS_Plugin
      */
     public static function repair_schema(): array
     {
-        $takeover = self::search_takeover_status();
-        $requires_initial_index_recheck = ($takeover['initial_index_status'] ?? '') === self::INITIAL_INDEX_STATUS_READY
-            && empty($takeover['ready']);
-        if ($requires_initial_index_recheck) {
-            // Recreated tables may be empty even though the pre-repair health
-            // record described the old index as complete.
-            self::mark_initial_index_pending();
-        }
-
         self::upgrade_schema();
-        if ($requires_initial_index_recheck) {
-            self::schedule_queue_processor();
-        }
 
         return self::schema_status();
     }
