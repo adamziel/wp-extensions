@@ -11289,12 +11289,9 @@ test_case('taxonomy and selected metadata mutations coalesce dependent post rein
         WP_FTS_Plugin::handle_post_meta_change(501, 201, 'subtitle', 'CurrentMetadataSignal');
         WP_FTS_Plugin::handle_term_relationship_change(201, 70, 'category');
 
-        assert_same([201, 202], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'dependency invalidation should coalesce duplicate term and metadata events by post id');
-        $queueWrites = array_values(array_filter(
-            $GLOBALS['wp_fts_test_updated_options'],
-            static fn(array $update): bool => ($update['name'] ?? null) === WP_FTS_Plugin::QUEUE_OPTION
-        ));
-        assert_same(1, count($queueWrites), 'one term mutation should merge all affected posts into the queue with one option write');
+        assert_same([201, 202], wp_fts_test_queue_ids($fake), 'dependency invalidation should coalesce duplicate term and metadata events by post id');
+        assert_same(3, $fake->queue[201]['generation'] ?? null, 'each repeated dependency event should advance the host generation');
+        assert_same(1, $fake->queue[202]['generation'] ?? null, 'one dependency event should create one host generation');
         assert_same(1, count($GLOBALS['wp_fts_test_schedule_calls']), 'coalesced dependency events should schedule one pending worker');
 
         $summary = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
@@ -11307,30 +11304,30 @@ test_case('taxonomy and selected metadata mutations coalesce dependent post rein
 
         $posts[201]->custom_fields = ['subtitle' => 'LatestMetadataSignal'];
         WP_FTS_Plugin::handle_post_meta_change(502, 201, 'subtitle', 'LatestMetadataSignal');
-        assert_same([201], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'one configured metadata mutation should enqueue its host post');
+        assert_same([201], wp_fts_test_queue_ids($fake), 'one configured metadata mutation should enqueue its host post');
         WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
         assert_same([], WP_FTS_Plugin::search('CurrentMetadataSignal', ['limit' => 10]), 'configured metadata invalidation should remove the previous value');
         assert_same([201], array_column(WP_FTS_Plugin::search('LatestMetadataSignal', ['limit' => 10]), 'doc_id'), 'configured metadata invalidation should index the replacement value');
 
         WP_FTS_Plugin::handle_term_relationship_change(202, 71, 'category');
-        assert_same([202], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'one relationship mutation should enqueue its host post');
+        assert_same([202], wp_fts_test_queue_ids($fake), 'one relationship mutation should enqueue its host post');
         WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
         WP_FTS_Plugin::handle_taxonomy_term_delete(7, 70, 'category', (object) ['name' => 'FormerTaxonomySignal'], [201, 202]);
-        assert_same([201, 202], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'term deletion should enqueue every former host supplied by WordPress');
+        assert_same([201, 202], wp_fts_test_queue_ids($fake), 'term deletion should enqueue every former host supplied by WordPress');
         WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
 
         WP_FTS_Plugin::handle_post_meta_change(503, 201, 'unselected_key', 'IgnoredMetadataSignal');
-        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'unselected metadata changes should not enqueue the post');
+        assert_same([], wp_fts_test_queue_ids($fake), 'unselected metadata changes should not enqueue the post');
         $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER] = static function (array $options): array {
             $options['custom_fields'] = ['runtime_selected_key'];
             return $options;
         };
         WP_FTS_Plugin::handle_post_meta_change(504, 201, 'runtime_selected_key', 'RuntimeSelectedSignal');
-        assert_same([201], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'runtime plugin index options should use the same metadata selection during invalidation');
+        assert_same([201], wp_fts_test_queue_ids($fake), 'runtime plugin index options should use the same metadata selection during invalidation');
         WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
         unset($GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER]);
         WP_FTS_Plugin::handle_post_meta_change(505, 201, WP_FTS_Plugin::LANGUAGE_META_KEY, 'pl');
-        assert_same([201], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'direct language metadata changes should also invalidate the indexed post');
+        assert_same([201], wp_fts_test_queue_ids($fake), 'direct language metadata changes should also invalidate the indexed post');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -11370,7 +11367,7 @@ test_case('filter-selected metadata deletion invalidates its previously indexed 
 
         $post->custom_fields = [];
         WP_FTS_Plugin::handle_post_meta_change(506, 203, 'conditional_subtitle');
-        assert_same([203], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'post-mutation filter state should not hide a deleted indexed dependency');
+        assert_same([203], wp_fts_test_queue_ids($fake), 'post-mutation filter state should not hide a deleted indexed dependency');
 
         WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
         assert_same([], WP_FTS_Plugin::search('FormerConditionalSignal', ['limit' => 10]), 'processing the deletion should remove the former filtered metadata value');
@@ -11383,7 +11380,8 @@ test_case('explicit content dependency invalidation bypasses disabled automatic 
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
-    $wpdb = new WP_FTS_Test_WPDB();
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $post = (object) [
         'ID' => 211,
@@ -11402,10 +11400,11 @@ test_case('explicit content dependency invalidation bypasses disabled automatic 
 
     try {
         WP_FTS_Plugin::handle_term_relationship_change(211, 71, 'category');
-        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'automatic dependency hooks should honor disabled automatic indexing');
+        assert_same([], wp_fts_test_queue_ids($fake), 'automatic dependency hooks should honor disabled automatic indexing');
         assert_same(1, WP_FTS_Plugin::invalidate_post_content_dependencies([211, 211, 9999]), 'explicit invalidation should queue one existing indexable host post');
-        assert_same([211], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'explicit invalidation should expose the coalesced host queue');
-        assert_same(0, WP_FTS_Plugin::invalidate_post_content_dependencies(211), 'repeated explicit invalidation should report no new queue row');
+        assert_same([211], wp_fts_test_queue_ids($fake), 'explicit invalidation should expose the coalesced host queue');
+        assert_same(1, WP_FTS_Plugin::invalidate_post_content_dependencies(211), 'repeated explicit invalidation should enqueue one newer generation');
+        assert_same(2, $fake->queue[211]['generation'] ?? null, 'repeated explicit invalidation should preserve the newer generation');
     } finally {
         $wpdb = $oldWpdb;
     }
