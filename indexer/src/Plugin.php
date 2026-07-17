@@ -778,8 +778,12 @@ final class WP_FTS_Plugin
         try {
             self::index_queue(false)->clear();
         } catch (Throwable $e) {
-            // A partial install may not have created the queue table yet. The
-            // option cleanup below must still be allowed to finish.
+            // A pre-migration partial install may not have created the queue
+            // table yet. Once schema v2 is recorded, failing to clear that
+            // retained table must abort uninstall instead of hiding stale work.
+            if (self::option_matches_schema_version(self::get_option(self::SCHEMA_VERSION_OPTION, null))) {
+                throw $e;
+            }
         }
 
         foreach (self::uninstall_option_names() as $option_name) {

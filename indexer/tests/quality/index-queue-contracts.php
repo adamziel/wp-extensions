@@ -251,3 +251,29 @@ test_case('generation-aware queue activation failure preserves its migration sou
         $wpdb = $oldWpdb;
     }
 });
+
+test_case('generation-aware queue uninstall surfaces durable cleanup failures', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $wpdb = new WP_FTS_Test_WPDB();
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    wp_fts_test_seed_queue($wpdb, [54]);
+    $wpdb->failQueryPrefix = 'DELETE FROM wp_fts_queue';
+
+    try {
+        $thrown = null;
+        try {
+            WP_FTS_Plugin::uninstall();
+        } catch (RuntimeException $e) {
+            $thrown = $e;
+        }
+
+        assert_true($thrown instanceof RuntimeException, 'a migrated install should surface a durable queue cleanup failure');
+        assert_same([54], array_keys($wpdb->queue), 'failed uninstall cleanup should leave the durable work visible for a retry');
+        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'failed uninstall cleanup should not delete the schema state and report success');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
