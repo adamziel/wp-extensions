@@ -277,3 +277,52 @@ test_case('generation-aware queue uninstall surfaces durable cleanup failures', 
         $wpdb = $oldWpdb;
     }
 });
+
+test_case('generation-aware queue uninstall preserves pre-version durable work on cleanup failure', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $wpdb = new WP_FTS_Test_WPDB();
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 1;
+    wp_fts_test_seed_queue($wpdb, [55]);
+    $wpdb->failQueryPrefix = 'DELETE FROM wp_fts_queue';
+
+    try {
+        $thrown = null;
+        try {
+            WP_FTS_Plugin::uninstall();
+        } catch (RuntimeException $e) {
+            $thrown = $e;
+        }
+
+        assert_true($thrown instanceof RuntimeException, 'a pre-version install should surface a durable queue cleanup failure');
+        assert_same([55], array_keys($wpdb->queue), 'pre-version durable work should remain visible after failed uninstall cleanup');
+        assert_same(1, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'failed pre-version cleanup should preserve operational state for a retry');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('generation-aware queue uninstall tolerates only an uncreated durable table', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $wpdb = new WP_FTS_Test_WPDB();
+    $wpdb->queueTableExists = false;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 1;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [56];
+
+    try {
+        WP_FTS_Plugin::uninstall();
+
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'a partial install without a queue table should still remove its schema state');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION]), 'a partial install without a queue table should still remove its legacy queue option');
+        assert_same('SHOW TABLES LIKE %s', $wpdb->prepared[0]['sql'] ?? null, 'missing-table compatibility should use a metadata probe instead of parsing a DELETE error');
+        assert_same(['wp\\_fts\\_queue'], $wpdb->prepared[0]['args'] ?? null, 'the metadata probe should escape wildcard characters in the table name');
+        assert_true(!in_array('DELETE FROM wp_fts_queue', $wpdb->queries, true), 'missing-table compatibility should skip the durable DELETE');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});

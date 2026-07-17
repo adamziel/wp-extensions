@@ -318,6 +318,25 @@ WHERE post_id = %d
     }
 
     /**
+     * Clear queued work unless an interrupted installation never created it.
+     *
+     * The table probe, rather than a database error message, distinguishes the
+     * compatible missing-table state. Probe and DELETE failures remain visible.
+     */
+    public function clear_if_table_exists(): void
+    {
+        $table = $this->get_var($this->wpdb->prepare(
+            'SHOW TABLES LIKE %s',
+            $this->wpdb->esc_like($this->table)
+        ), 'inspect the FTS indexing queue table');
+        if (!is_scalar($table) || (string) $table !== $this->table) {
+            return;
+        }
+
+        $this->clear();
+    }
+
+    /**
      * Clear all pending work while retaining the queue schema.
      */
     public function clear(): int
@@ -409,7 +428,7 @@ WHERE post_id = %d
         return is_array($rows) ? $rows : [];
     }
 
-    private function get_var(string $statement, string $context): mixed
+    private function get_var(mixed $statement, string $context): mixed
     {
         $value = $this->wpdb->get_var($statement);
         $this->assert_no_database_error($context);

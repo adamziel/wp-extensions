@@ -2011,6 +2011,7 @@ final class WP_FTS_Test_WPDB
     public ?object $dbh = null;
     public bool $missPreparedTermLookups = false;
     public bool $recordReadQueries = false;
+    public bool $queueTableExists = true;
 
     /** @var array<int,string|array{0:string,1:float,2:string}> */
     public array $queries = [];
@@ -2071,6 +2072,11 @@ final class WP_FTS_Test_WPDB
         return new WP_FTS_Test_Prepared_SQL($sql, $args);
     }
 
+    public function esc_like(string $text): string
+    {
+        return addcslashes($text, '_%\\');
+    }
+
     public function get_blog_prefix(int $blog_id = 0): string
     {
         return $blog_id <= 1 ? $this->base_prefix : $this->base_prefix . $blog_id . '_';
@@ -2080,6 +2086,9 @@ final class WP_FTS_Test_WPDB
     {
         [$sql, $args] = $this->statement_parts($statement);
         $this->record_read_query($sql);
+        if ($sql === 'SHOW TABLES LIKE %s') {
+            return $this->queueTableExists ? $this->prefix . 'fts_queue' : null;
+        }
         if ($sql === 'SELECT COUNT(*) FROM wp_fts_queue') {
             return count($this->queue);
         }
