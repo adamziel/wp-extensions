@@ -1025,7 +1025,7 @@ function qrs_build_medium_corpus(WP_FTS_Indexer $indexer): array
     ];
 }
 
-test_case('quality rigorous FTS medium corpus verifies ranking, partition isolation, pagination, fast top-k, and hidden text', function (): void {
+test_case('quality rigorous FTS medium corpus verifies ranking, partition isolation, pagination, candidate capping, and hidden text', function (): void {
     $fixture = qrs_fixture(false);
     $indexer = $fixture['indexer'];
     $searcher = $fixture['searcher'];
@@ -1044,7 +1044,7 @@ test_case('quality rigorous FTS medium corpus verifies ranking, partition isolat
 
     $exact = $searcher->search('mediumanchor', ['lang' => 'en', 'limit' => 10, 'exact' => true]);
     $fast = $searcher->search('mediumanchor', ['lang' => 'en', 'limit' => 10, 'fast_top_k' => true, 'candidate_cap' => 200]);
-    assert_same(qrs_ids($exact), qrs_ids($fast), 'explicit fast top-k should match exact ordering when the cap covers all English candidates');
+    assert_same(qrs_ids($exact), qrs_ids($fast['results']), 'explicit candidate-capped retrieval should match exact ordering when the cap covers all English candidates');
 
     $firstPage = $searcher->search('mediumanchor', ['lang' => 'en', 'limit' => 3, 'include_total' => true]);
     $secondPage = $searcher->search('mediumanchor', ['lang' => 'en', 'limit' => 3, 'offset' => 3, 'include_total' => true]);

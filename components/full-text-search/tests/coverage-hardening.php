@@ -152,7 +152,9 @@ wp_fts_component_hardening_same('post', $filtered[0]['post_type'] ?? null, 'meta
 
 $exact = $searcher->search('common', ['lang' => 'en', 'limit' => 10, 'exact' => true]);
 $fast = $searcher->search('common', ['lang' => 'en', 'limit' => 10, 'fast_top_k' => true, 'candidate_cap' => 10]);
-wp_fts_component_hardening_same(array_column($exact, 'doc_id'), array_column($fast, 'doc_id'), 'fast top-k with a safe cap should preserve ordering on compact corpus');
+wp_fts_component_hardening_same(array_column($exact, 'doc_id'), array_column($fast['results'], 'doc_id'), 'candidate-capped retrieval with a safe cap should preserve ordering on compact corpus');
+wp_fts_component_hardening_same(false, $fast['total_is_exact'] ?? null, 'candidate-capped retrieval should mark its total as inexact');
+wp_fts_component_hardening_same(true, $fast['results_may_be_incomplete'] ?? null, 'candidate-capped retrieval should expose incomplete-result risk');
 
 $plainTotal = $searcher->search('common', ['lang' => 'en', 'limit' => 2, 'include_total' => true]);
 wp_fts_component_hardening_check(!array_key_exists('explain', $plainTotal), 'search explain payload should be absent unless explicitly requested');
@@ -339,6 +341,9 @@ wp_fts_component_hardening_same('approximate', $fastMode['mode'] ?? null, 'expla
 wp_fts_component_hardening_same('explicit_option', $fastMode['source'] ?? null, 'explain fast mode should record explicit fast source');
 wp_fts_component_hardening_same(2, $fastMode['candidate_cap'] ?? null, 'explain fast mode should record the resolved candidate cap');
 wp_fts_component_hardening_same('approximate', $fastExplain['explain']['scoring']['total_accuracy'] ?? null, 'fast explain search should report approximate totals');
+wp_fts_component_hardening_same('candidate_capped', $fastExplain['retrieval_mode'] ?? null, 'candidate-capped response should identify its retrieval mode');
+wp_fts_component_hardening_same(false, $fastExplain['total_is_exact'] ?? null, 'candidate-capped response should not claim an exact total');
+wp_fts_component_hardening_same(true, $fastExplain['results_may_be_incomplete'] ?? null, 'candidate-capped response should expose incomplete-result risk');
 
 $snippet = $searcher->snippet_for_text(
     '<p>Intro al<strong>pha</strong> target</p><script>alpha hidden</script>',

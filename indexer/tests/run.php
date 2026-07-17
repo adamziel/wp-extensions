@@ -11080,11 +11080,11 @@ test_case('enabled diagnostics record frontend search timings counts language se
         assert_same('exact', $terms[0]['rank_class'] ?? null, 'frontend diagnostics should classify exact query candidates');
 
         $fastMode = is_array($explain['fast_mode'] ?? null) ? $explain['fast_mode'] : [];
-        assert_same('exact', $fastMode['mode'] ?? null, 'frontend diagnostics should record exact fast-mode outcome for compact searches');
-        assert_same('no_threshold_crossing', $fastMode['source'] ?? null, 'frontend diagnostics should record the fast-mode decision source');
-        assert_true((int) ($fastMode['estimated_candidates'] ?? 0) >= 2, 'frontend diagnostics should include estimated candidate count when auto fast mode probes');
-        assert_true((int) ($fastMode['threshold'] ?? 0) > 0, 'frontend diagnostics should include the auto fast-mode threshold');
-        assert_contains('exact scoring was retained', (string) ($fastMode['reason'] ?? ''), 'frontend diagnostics should include the fast-mode decision reason');
+        assert_same('exact', $fastMode['mode'] ?? null, 'frontend diagnostics should record exact retrieval for compact searches');
+        assert_same('default_exact', $fastMode['source'] ?? null, 'frontend diagnostics should record the default exact decision source');
+        assert_same(null, $fastMode['estimated_candidates'] ?? null, 'default exact retrieval should not run a candidate estimate probe');
+        assert_same(null, $fastMode['threshold'] ?? null, 'default exact retrieval should not report an automatic threshold');
+        assert_contains('Exact retrieval is the default', (string) ($fastMode['reason'] ?? ''), 'frontend diagnostics should explain the correctness-first default');
 
         $scoring = is_array($explain['scoring'] ?? null) ? $explain['scoring'] : [];
         assert_true((int) ($scoring['candidate_rows_fetched'] ?? 0) >= 2, 'frontend diagnostics should include fetched candidate row shape');
@@ -11171,7 +11171,7 @@ test_case('frontend empty-scope bailout without storage timing reports unavailab
     }
 });
 
-test_case('enabled diagnostics record auto fast mode threshold and cap decisions', function (): void {
+test_case('enabled diagnostics record exact default retrieval for broad searches', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -11215,24 +11215,23 @@ test_case('enabled diagnostics record auto fast mode threshold and cap decisions
             'post_type' => 'post',
         ]);
         $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
-        assert_same([], $posts, 'auto fast diagnostics fixture should not create or require visible WordPress posts');
+        assert_same([], $posts, 'exact retrieval diagnostics fixture should not create or require visible WordPress posts');
 
         $traces = WP_FTS_Plugin::debug_traces();
-        assert_same(1, count($traces), 'auto fast diagnostics should record one frontend trace');
+        assert_same(1, count($traces), 'exact retrieval diagnostics should record one frontend trace');
         $trace = $traces[0];
-        assert_same('ran', $trace['status'] ?? null, 'auto fast diagnostics should finish as a successful FTS run');
+        assert_same('ran', $trace['status'] ?? null, 'exact retrieval diagnostics should finish as a successful FTS run');
         $explain = is_array($trace['search_explain'] ?? null) ? $trace['search_explain'] : [];
         $fastMode = is_array($explain['fast_mode'] ?? null) ? $explain['fast_mode'] : [];
-        assert_same('approximate', $fastMode['mode'] ?? null, 'auto fast diagnostics should record approximate mode after threshold crossing');
-        assert_same('auto_threshold', $fastMode['source'] ?? null, 'auto fast diagnostics should record threshold source');
-        assert_same(2001, (int) ($fastMode['estimated_candidates'] ?? 0), 'auto fast diagnostics should expose the capped threshold-crossing estimate');
-        assert_same(2000, (int) ($fastMode['threshold'] ?? 0), 'auto fast diagnostics should expose the active threshold');
-        assert_same(1000, (int) ($fastMode['candidate_cap'] ?? 0), 'auto fast diagnostics should expose the active candidate cap');
-        assert_contains('exceeded threshold', (string) ($fastMode['reason'] ?? ''), 'auto fast diagnostics should explain the threshold crossing');
-        assert_contains('cap 1000', (string) ($fastMode['reason'] ?? ''), 'auto fast diagnostics should explain the active cap');
+        assert_same('exact', $fastMode['mode'] ?? null, 'broad frontend searches should retain exact retrieval by default');
+        assert_same('default_exact', $fastMode['source'] ?? null, 'broad frontend diagnostics should record the default exact source');
+        assert_same(null, $fastMode['estimated_candidates'] ?? null, 'broad exact retrieval should not run a candidate estimate probe');
+        assert_same(null, $fastMode['threshold'] ?? null, 'broad exact retrieval should not report an automatic threshold');
+        assert_same(null, $fastMode['candidate_cap'] ?? null, 'broad exact retrieval should not apply a candidate cap');
+        assert_contains('cannot guarantee the highest-ranked results', (string) ($fastMode['reason'] ?? ''), 'broad exact diagnostics should explain why candidate capping is not automatic');
         $scoring = is_array($explain['scoring'] ?? null) ? $explain['scoring'] : [];
-        assert_same('approximate', $scoring['total_accuracy'] ?? null, 'auto fast diagnostics should mark totals approximate');
-        assert_same(1000, (int) ($scoring['candidate_docs_scored'] ?? 0), 'auto fast diagnostics should expose capped scored documents');
+        assert_same('exact', $scoring['total_accuracy'] ?? null, 'broad default retrieval should mark totals exact');
+        assert_same(2001, (int) ($scoring['candidate_docs_scored'] ?? 0), 'broad default retrieval should score every matching document');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -17913,38 +17912,32 @@ test_case('search bounded top-k preserves totals offsets and exact metadata filt
     }
 });
 
-test_case('search auto fast mode keeps threshold-sized candidate sets exact', function (): void {
-    [$searcher] = single_term_search_fixture(2000, 2000);
+test_case('search default retrieval ranking is invariant to high and low winning document ids', function (): void {
+    [$highIdSearcher] = single_term_search_fixture(2101, 2101);
+    [$lowIdSearcher] = single_term_search_fixture(2101, 1);
 
-    $payload = $searcher->search('needle', [
+    $highIdPayload = $highIdSearcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+    ]);
+    $lowIdPayload = $lowIdSearcher->search('needle', [
         'lang' => 'en',
         'limit' => 1,
         'include_total' => true,
     ]);
 
-    assert_same(2000, $payload['total'], 'candidate count equal to the default threshold should stay exact');
-    assert_same(2000, $payload['results'][0]['doc_id'] ?? null, 'exact threshold-sized search should keep the strongest late candidate');
-});
-
-test_case('search auto fast mode switches above threshold and explicit exact disables it', function (): void {
-    [$searcher] = single_term_search_fixture(2001, 2001);
-
-    $auto = $searcher->search('needle', [
-        'lang' => 'en',
-        'limit' => 1,
-        'include_total' => true,
-    ]);
-    $explicitExact = $searcher->search('needle', [
-        'lang' => 'en',
-        'limit' => 1,
-        'include_total' => true,
-        'fast_top_k' => false,
-    ]);
-
-    assert_same(1000, $auto['total'], 'auto fast mode should use the default candidate cap above the threshold');
-    assert_true(($auto['results'][0]['doc_id'] ?? null) !== 2001, 'auto fast mode may miss a stronger candidate outside the cap');
-    assert_same(2001, $explicitExact['total'], 'explicit false fast_top_k should force exact scoring above the threshold');
-    assert_same(2001, $explicitExact['results'][0]['doc_id'] ?? null, 'explicit exact search should keep the strongest late candidate');
+    assert_same(2101, $highIdPayload['total'], 'default retrieval should count all 2101 matching documents');
+    assert_same(true, $highIdPayload['total_is_exact'] ?? null, 'default retrieval should expose an exact total');
+    assert_same('exact', $highIdPayload['retrieval_mode'] ?? null, 'default retrieval should identify exact mode');
+    assert_same(false, $highIdPayload['results_may_be_incomplete'] ?? null, 'default retrieval should guarantee a complete candidate set');
+    assert_same(2101, $highIdPayload['results'][0]['doc_id'] ?? null, 'default retrieval should keep the strongest high-id document beyond the former cap');
+    assert_same(1, $lowIdPayload['results'][0]['doc_id'] ?? null, 'permuting the strongest document to a low id should preserve its winning rank');
+    assert_float_near(
+        (float) ($lowIdPayload['results'][0]['score'] ?? 0.0),
+        (float) ($highIdPayload['results'][0]['score'] ?? -1.0),
+        'permuting document ids should not change the winning relevance score'
+    );
 });
 
 test_case('search explain fast mode includes bounded decision reasons', function (): void {
@@ -17958,10 +17951,10 @@ test_case('search explain fast mode includes bounded decision reasons', function
     $exactFastMode = is_array($exact['explain']['fast_mode'] ?? null) ? $exact['explain']['fast_mode'] : [];
     $exactReason = (string) ($exactFastMode['reason'] ?? '');
 
-    assert_same('no_threshold_crossing', $exactFastMode['source'] ?? null, 'exact auto explain should identify no threshold crossing');
-    assert_contains('did not exceed threshold', $exactReason, 'exact auto explain reason should describe the threshold decision');
-    assert_contains('exact scoring was retained', $exactReason, 'exact auto explain reason should identify exact scoring retention');
-    assert_true(strlen($exactReason) <= 240, 'exact auto explain reason should stay bounded');
+    assert_same('default_exact', $exactFastMode['source'] ?? null, 'default explain should identify exact retrieval');
+    assert_contains('Exact retrieval is the default', $exactReason, 'default explain reason should describe the correctness-first policy');
+    assert_contains('cannot guarantee the highest-ranked results', $exactReason, 'default explain reason should identify the candidate-cap ranking limitation');
+    assert_true(strlen($exactReason) <= 240, 'default exact explain reason should stay bounded');
 
     $explicit = $smallSearcher->search('needle', [
         'lang' => 'en',
@@ -17976,24 +17969,11 @@ test_case('search explain fast mode includes bounded decision reasons', function
 
     assert_same('explicit_option', $explicitFastMode['source'] ?? null, 'explicit approximate explain should identify the explicit option source');
     assert_contains('explicitly requested', $explicitReason, 'explicit approximate reason should identify the explicit request');
-    assert_contains('candidate cap is 3', $explicitReason, 'explicit approximate reason should identify the active cap');
+    assert_contains('cap of 3', $explicitReason, 'explicit approximate reason should identify the active cap');
+    assert_contains('may be incomplete', $explicitReason, 'explicit approximate reason should identify incomplete-result risk');
+    assert_true(strlen($explicitReason) <= 240, 'explicit approximate explain reason should stay bounded');
 
-    [$broadSearcher] = single_term_search_fixture(2001, 2001);
-    $auto = $broadSearcher->search('needle', [
-        'lang' => 'en',
-        'limit' => 1,
-        'include_total' => true,
-        'explain' => true,
-    ]);
-    $autoFastMode = is_array($auto['explain']['fast_mode'] ?? null) ? $auto['explain']['fast_mode'] : [];
-    $autoReason = (string) ($autoFastMode['reason'] ?? '');
-
-    assert_same('auto_threshold', $autoFastMode['source'] ?? null, 'auto approximate explain should identify threshold crossing');
-    assert_contains('exceeded threshold', $autoReason, 'auto approximate reason should describe the threshold crossing');
-    assert_contains('cap 1000', $autoReason, 'auto approximate reason should identify the active cap');
-    assert_true(strlen($autoReason) <= 240, 'auto approximate explain reason should stay bounded');
-
-    $forcedExact = $broadSearcher->search('needle', [
+    $forcedExact = $smallSearcher->search('needle', [
         'lang' => 'en',
         'limit' => 1,
         'include_total' => true,
@@ -18005,10 +17985,10 @@ test_case('search explain fast mode includes bounded decision reasons', function
 
     assert_same('forced_exact', $forcedFastMode['source'] ?? null, 'forced exact explain should identify the exact override');
     assert_contains('Exact scoring was explicitly requested', $forcedReason, 'forced exact reason should identify the exact override');
-    assert_contains('approximate top-K was disabled', $forcedReason, 'forced exact reason should identify approximate top-K disablement');
+    assert_contains('candidate-capped retrieval was disabled', $forcedReason, 'forced exact reason should identify candidate-cap disablement');
 });
 
-test_case('search auto fast mode applies metadata filters before threshold switch when probed', function (): void {
+test_case('search default exact retrieval applies metadata filters before ranking', function (): void {
     [$searcher] = single_term_search_fixture(
         2001,
         2001,
@@ -18029,11 +18009,11 @@ test_case('search auto fast mode applies metadata filters before threshold switc
         'post_type' => 'page',
     ]);
 
-    assert_same(1, $payload['total'], 'filtered candidate count below threshold should remain exact');
+    assert_same(1, $payload['total'], 'metadata-filtered default retrieval should keep an exact total');
     assert_same(2001, $payload['results'][0]['doc_id'] ?? null, 'metadata-filtered exact search should keep the matching late candidate');
 });
 
-test_case('search fast top-k candidate cap is explicit approximate opt-in', function (): void {
+test_case('search candidate cap is explicit approximate opt-in with mandatory result status', function (): void {
     $storage = new WP_FTS_Storage_InMemory();
     $analyzer = new WP_FTS_Analyzer([
         'enable_stemming' => false,
@@ -18071,14 +18051,12 @@ test_case('search fast top-k candidate cap is explicit approximate opt-in', func
     $fast = $searcher->search('needle', [
         'lang' => 'en',
         'limit' => 1,
-        'include_total' => true,
         'fast_top_k' => true,
         'candidate_cap' => 3,
     ]);
     $fastAlias = $searcher->search('needle', [
         'lang' => 'en',
         'limit' => 1,
-        'include_total' => true,
         'approximate_top_k' => true,
         'candidate_cap' => 3,
     ]);
@@ -18086,9 +18064,13 @@ test_case('search fast top-k candidate cap is explicit approximate opt-in', func
     assert_same(6, $exact['total'], 'exact search should count every candidate by default');
     assert_same(6, $exact['results'][0]['doc_id'] ?? null, 'exact search should rank the strongest late candidate first');
     assert_same($exact, $capWithoutFast, 'candidate_cap without fast_top_k should preserve exact default behavior');
-    assert_same(3, $fast['total'], 'fast top-k should report only capped approximate candidates');
-    assert_same($fast, $fastAlias, 'approximate_top_k alias should enable the same explicit capped fast path');
-    assert_true(($fast['results'][0]['doc_id'] ?? null) !== 6, 'fast top-k may miss a stronger candidate outside the cap');
+    assert_same(3, $fast['total'], 'candidate-capped retrieval should report only the considered candidates');
+    assert_same('candidate_capped', $fast['retrieval_mode'] ?? null, 'candidate-capped retrieval should identify its mode without requiring include_total');
+    assert_same(false, $fast['total_is_exact'] ?? null, 'candidate-capped retrieval should mark its total as inexact');
+    assert_same(true, $fast['results_may_be_incomplete'] ?? null, 'candidate-capped retrieval should expose incomplete-result risk');
+    assert_same(3, $fast['candidate_cap'] ?? null, 'candidate-capped retrieval should expose the applied cap');
+    assert_same($fast, $fastAlias, 'approximate_top_k alias should enable the same explicit candidate-capped path');
+    assert_true(($fast['results'][0]['doc_id'] ?? null) !== 6, 'candidate-capped retrieval may miss a stronger document outside the cap');
 });
 
 test_case('recency boost is default-off and can reorder equally relevant documents', function (): void {
@@ -18147,7 +18129,7 @@ test_case('recency boost is default-off and can reorder equally relevant documen
         'recency_boost_half_life_days' => 7,
         'now_gmt' => '2026-06-20 00:00:00',
     ]);
-    assert_same([2, 1], array_column($fast['results'], 'doc_id'), 'fast-mode recency boost should apply inside the scored candidate set before sorting');
+    assert_same([2, 1], array_column($fast['results'], 'doc_id'), 'candidate-capped recency boost should apply inside the scored candidate set before sorting');
 });
 
 test_case('recency boost stays bounded and ignores missing or invalid dates safely', function (): void {
@@ -19068,6 +19050,9 @@ test_case('wp cli search format json emits payload metadata and rows', function 
         $payload = wp_fts_test_decode_cli_json_object($raw);
 
         assert_same(2, $payload['total'] ?? null, 'CLI JSON search should expose total metadata');
+        assert_same(true, $payload['total_is_exact'] ?? null, 'CLI JSON search should expose exact total status');
+        assert_same('exact', $payload['retrieval_mode'] ?? null, 'CLI JSON search should expose exact retrieval mode');
+        assert_same(false, $payload['results_may_be_incomplete'] ?? null, 'CLI JSON search should expose complete-result status');
         assert_same(1, $payload['limit'] ?? null, 'CLI JSON search should expose the effective limit');
         assert_same(0, $payload['offset'] ?? null, 'CLI JSON search should expose the effective offset');
         assert_same('en', $payload['query_lang'] ?? null, 'CLI JSON search should expose query language');
@@ -19094,7 +19079,7 @@ test_case('wp cli search explain json includes structured diagnostics and per-re
         assert_true(is_array($explain['fast_mode'] ?? null), 'CLI explain JSON should include fast_mode diagnostics');
         assert_true(is_array($explain['scoring'] ?? null), 'CLI explain JSON should include scoring diagnostics');
         assert_same('OR', $explain['query_plan']['match_mode'] ?? null, 'CLI explain JSON should expose the effective match mode');
-        assert_contains('exact scoring was retained', (string) ($explain['fast_mode']['reason'] ?? ''), 'CLI explain JSON should expose the fast-mode decision reason');
+        assert_contains('Exact retrieval is the default', (string) ($explain['fast_mode']['reason'] ?? ''), 'CLI explain JSON should expose the retrieval-mode decision reason');
         assert_same('exact', $explain['scoring']['total_accuracy'] ?? null, 'small CLI explain search should report exact totals');
         assert_true(is_array($explain['results'][0]['matches'] ?? null), 'CLI explain JSON should include per-result match rows');
         assert_true(($explain['results'][0]['matches'] ?? []) !== [], 'CLI explain JSON should include at least one matched term for the indexed result');
@@ -19201,7 +19186,7 @@ test_case('wp cli diagnose format json emits support bundle with status and expl
         assert_same(2, $summary['visible_total'] ?? null, 'diagnose summary should include visible total');
         assert_same('mysql', $summary['storage_backend'] ?? null, 'diagnose summary should include storage backend');
         assert_same('exact', $summary['fast_mode']['mode'] ?? null, 'diagnose summary should include fast-mode mode');
-        assert_contains('exact scoring was retained', (string) ($summary['fast_mode']['reason'] ?? ''), 'diagnose summary should include fast-mode reason');
+        assert_contains('Exact retrieval is the default', (string) ($summary['fast_mode']['reason'] ?? ''), 'diagnose summary should include retrieval-mode reason');
         assert_true(is_int($summary['candidate_rows_fetched'] ?? null), 'diagnose summary should include candidate row diagnostics');
         assert_true(is_int($summary['candidate_docs_scored'] ?? null), 'diagnose summary should include candidate doc diagnostics');
         assert_true(in_array('en', $summary['matched_languages'] ?? [], true), 'diagnose summary should include matched languages');
@@ -19701,7 +19686,7 @@ test_case('quality discovery loads tests/quality files', function (): void {
     assert_same(1, $GLOBALS['wp_fts_quality_discovery_sentinel'] ?? 0, 'quality discovery should include tests/quality/*.php exactly once');
 });
 
-test_case('search auto fast mode constants override threshold and candidate cap', function (): void {
+test_case('search legacy automatic mode constants cannot weaken exact default retrieval', function (): void {
     if (defined('WP_FTS_FAST_MODE_THRESHOLD') && constant('WP_FTS_FAST_MODE_THRESHOLD') !== 2) {
         throw new WP_FTS_TestPending('WP_FTS_FAST_MODE_THRESHOLD is already defined by the process.');
     }
@@ -19721,9 +19706,16 @@ test_case('search auto fast mode constants override threshold and candidate cap'
         'limit' => 1,
         'include_total' => true,
     ]);
+    $explicit = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'fast_top_k' => true,
+    ]);
 
-    assert_same(2, $payload['total'], 'constant candidate cap should apply after constant threshold switches on fast mode');
-    assert_true(($payload['results'][0]['doc_id'] ?? null) !== 3, 'constant-capped auto fast mode may miss a stronger late candidate');
+    assert_same(3, $payload['total'], 'legacy automatic threshold settings should not cap default retrieval');
+    assert_same(3, $payload['results'][0]['doc_id'] ?? null, 'default retrieval should keep the strongest late candidate despite legacy automatic settings');
+    assert_same(2, $explicit['candidate_cap'] ?? null, 'the legacy candidate-cap constant should remain available after explicit approximate opt-in');
+    assert_true(($explicit['results'][0]['doc_id'] ?? null) !== 3, 'explicit candidate-capped retrieval may omit the stronger late candidate');
 });
 
 wp_fts_run_registered_tests_and_exit();

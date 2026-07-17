@@ -30,6 +30,19 @@ $searcher = new WP_FTS_Searcher($storage, $analyzer);
 $results = $searcher->search('portable search', ['lang' => 'en']);
 ```
 
+## Retrieval Accuracy
+
+Search considers every matching candidate by default. This keeps ranking and
+totals exact regardless of document-id order.
+
+The legacy `fast_top_k` and `approximate_top_k` options explicitly select a
+document-id candidate cap. That mode is not a ranking-aware top-K algorithm and
+may omit stronger documents beyond the cap. It always returns a payload with
+`retrieval_mode: candidate_capped`, `total_is_exact: false`,
+`results_may_be_incomplete: true`, and the applied `candidate_cap`, even when
+`include_total` is omitted. Incompleteness here means matching documents may be
+omitted before normal limit/offset pagination.
+
 ## Search Explain Payloads
 
 `WP_FTS_Searcher::search()` keeps the legacy list return shape by default.
@@ -45,7 +58,7 @@ $payload = $searcher->search('portable search', [
 ```
 
 The `explain` payload reports the storage backend, query surfaces with their
-analyzed storage terms/keys, prefix expansion count, fast-mode decision,
+analyzed storage terms/keys, prefix expansion count, retrieval-mode decision,
 candidate/scoring shape, total accuracy, and bounded per-result match reasons
 for the returned page. Set
 `explain_result_matches` to `false` when a caller needs plan/scoring diagnostics

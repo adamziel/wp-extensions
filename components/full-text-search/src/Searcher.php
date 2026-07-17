@@ -10,7 +10,6 @@ declare(strict_types=1);
  */
 final class WP_FTS_Searcher
 {
-    private const DEFAULT_AUTO_FAST_MODE_THRESHOLD = 2000;
     private const DEFAULT_FAST_MODE_CANDIDATE_CAP = 1000;
     private const DEFAULT_PREFIX_MIN_LENGTH = 4;
     private const DEFAULT_PREFIX_MAX_TERMS = 64;
@@ -59,25 +58,25 @@ final class WP_FTS_Searcher
      * `results`; `include_metadata` adds WordPress result fields; and
      * `include_snippets` builds bounded snippets from stored extracted text.
      * `post_type`, `post_status`, `date_after`, and `date_before` filter only
-     * when the storage backend exposes document metadata. `fast_top_k` or
-     * `approximate_top_k` enables an explicit approximate mode that can trade
-     * recall, ranking, and total-count accuracy for latency. Broad searches also
-     * auto-enable that mode when the estimated candidate count exceeds the
-     * configured threshold. Pass `exact_top_k`, `exact`, or an explicit false fast
-     * option to force exact scoring. Word-beginning prefix expansion can be
+     * when the storage backend exposes document metadata. Search is exact by
+     * default. `fast_top_k` or `approximate_top_k` explicitly opts into a
+     * document-id-ordered candidate cap that can trade recall, ranking, and
+     * total-count accuracy for latency. Candidate-capped searches always return
+     * a payload that exposes their incomplete-result risk, even when
+     * `include_total` is omitted. Word-beginning prefix expansion can be
      * controlled with `prefix_matching`; phrase search requires a
      * `search_extension` callback for storage-specific matching. `explain` or
-     * `debug` adds a bounded diagnostics payload only to `include_total`
-     * responses. Query-plan explain rows include the user/query surface when the
+     * `debug` adds bounded diagnostics to pagination or candidate-capped
+     * payloads. Query-plan explain rows include the user/query surface when the
      * analyzer exposes it, plus the analyzed storage term and key used for
      * scoring. `explain_result_matches` can disable the per-result document term
      * lookup when a caller must defer that work.
      *
      * @param array<string,mixed> $opts
-     * @return array<int,array<string,mixed>>|array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
+     * @return array<int,array<string,mixed>>|array{total:int,total_is_exact:bool,retrieval_mode:string,results_may_be_incomplete:bool,candidate_cap:?int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
      *         Results sorted by exact/fallback rank, descending score, and
-     *         ascending doc id for ties, or a pagination payload when
-     *         `include_total` is true.
+     *         ascending doc id for ties, or a status payload when
+     *         `include_total` or candidate-capped retrieval is active.
      * @throws InvalidArgumentException If `mode` is not `OR` or `AND`.
      * @throws LogicException If the analyzer does not provide a query analyzer.
      */
@@ -116,8 +115,10 @@ final class WP_FTS_Searcher
         }
 
         $metadataFilter = $this->has_metadata_filters($opts) ? $this->metadata_filter_values($opts) : null;
-        $useBoundedTopK = !$recencyBoost['enabled'] && $this->can_use_bounded_top_k($opts, $offset);
-        $fastMode = $this->resolve_fast_mode($opts, $limit + $offset, $groups, $mode, $metadataFilter);
+        $fastMode = $this->resolve_fast_mode($opts, $limit + $offset);
+        $useBoundedTopK = !$recencyBoost['enabled']
+            && $fastMode['candidate_cap'] === null
+            && $this->can_use_bounded_top_k($opts, $offset);
         $scoreStats = $this->empty_score_stats();
         $results = $this->score_query_groups($groups, $mode, $useBoundedTopK ? $limit : null, $metadataFilter, $fastMode['candidate_cap'], $scoreStats);
         $recencyStats = $this->apply_recency_boost($results, $recencyBoost);
@@ -142,7 +143,7 @@ final class WP_FTS_Searcher
             ? $this->build_explain_payload($queryPlan, $fastMode, $scoreStats, $recencyStats, $resultExplain, $total, $fastMode['candidate_cap'] === null)
             : null;
 
-        return $this->format_response($page, $total, $opts, $responseLang, $explain);
+        return $this->format_response($page, $total, $opts, $responseLang, $explain, $fastMode['candidate_cap']);
     }
 
     /**
@@ -251,8 +252,8 @@ final class WP_FTS_Searcher
         $stats['candidate_docs_scored'] = count($scoringDocIds);
 
         // Default IDF stays based on the full active posting lists, not on the
-        // later AND/metadata-restricted scoring set. Fast mode uses an approximate
-        // stored posting count to avoid scanning every active row.
+        // later AND/metadata-restricted scoring set. Explicit candidate-capped
+        // retrieval uses an approximate stored posting count instead.
         $docLengthCandidateIds = $candidateCap === null ? array_keys($allCandidateDocIds) : array_keys($scoringDocIds);
         $languages = [];
         foreach ($termsByKey as $termInfo) {
@@ -832,24 +833,13 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * Resolve the approximate candidate cap for explicit or automatic fast mode.
+     * Resolve exact default retrieval or an explicit approximate candidate cap.
      *
      * `candidate_cap`/`max_candidates` alone are inert so callers cannot
      * accidentally degrade recall. `fast_top_k` may be boolean or an integer cap.
-     *
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
-     * @param array{post_types:string[],post_statuses:string[],date_after:?string,date_before:?string}|null $metadataFilter
      */
-    private function resolve_fast_mode(
-        array $opts,
-        int $minimumCandidates,
-        array $groups,
-        string $mode,
-        ?array $metadataFilter
-    ): array
+    private function resolve_fast_mode(array $opts, int $minimumCandidates): array
     {
-        $threshold = null;
-        $estimatedCandidates = null;
         if ($this->explicit_exact_top_k_requested($opts)) {
             return [
                 'mode' => 'exact',
@@ -857,7 +847,7 @@ final class WP_FTS_Searcher
                 'estimated_candidates' => null,
                 'threshold' => null,
                 'candidate_cap' => null,
-                'reason' => $this->fast_mode_reason('forced_exact', null, null, null),
+                'reason' => $this->fast_mode_reason('forced_exact', null),
             ];
         }
 
@@ -871,71 +861,33 @@ final class WP_FTS_Searcher
                 'estimated_candidates' => null,
                 'threshold' => null,
                 'candidate_cap' => $candidateCap,
-                'reason' => $this->fast_mode_reason('explicit_option', null, null, $candidateCap),
+                'reason' => $this->fast_mode_reason('explicit_option', $candidateCap),
             ];
         }
-
-        if (!$this->auto_fast_mode_enabled()) {
-            return [
-                'mode' => 'exact',
-                'source' => 'disabled_constant',
-                'estimated_candidates' => null,
-                'threshold' => null,
-                'candidate_cap' => null,
-                'reason' => $this->fast_mode_reason('disabled_constant', null, null, null),
-            ];
-        }
-
-        $threshold = $this->auto_fast_mode_threshold();
-        $estimatedCandidates = $this->estimate_candidate_count($groups, $mode, $metadataFilter, $threshold);
-        if ($estimatedCandidates <= $threshold) {
-            return [
-                'mode' => 'exact',
-                'source' => 'no_threshold_crossing',
-                'estimated_candidates' => $estimatedCandidates,
-                'threshold' => $threshold,
-                'candidate_cap' => null,
-                'reason' => $this->fast_mode_reason('no_threshold_crossing', $estimatedCandidates, $threshold, null),
-            ];
-        }
-
-        $candidateCap = $this->resolved_fast_candidate_cap($opts, $minimumCandidates, null);
 
         return [
-            'mode' => 'approximate',
-            'source' => 'auto_threshold',
-            'estimated_candidates' => $estimatedCandidates,
-            'threshold' => $threshold,
-            'candidate_cap' => $candidateCap,
-            'reason' => $this->fast_mode_reason('auto_threshold', $estimatedCandidates, $threshold, $candidateCap),
+            'mode' => 'exact',
+            'source' => 'default_exact',
+            'estimated_candidates' => null,
+            'threshold' => null,
+            'candidate_cap' => null,
+            'reason' => $this->fast_mode_reason('default_exact', null),
         ];
     }
 
-    private function fast_mode_reason(string $source, ?int $estimatedCandidates, ?int $threshold, ?int $candidateCap): string
+    private function fast_mode_reason(string $source, ?int $candidateCap): string
     {
         if ($source === 'forced_exact') {
-            return 'Exact scoring was explicitly requested, so approximate top-K was disabled.';
+            return 'Exact scoring was explicitly requested, so candidate-capped retrieval was disabled.';
         }
         if ($source === 'explicit_option') {
-            return sprintf('Approximate fast top-K was explicitly requested, so the active candidate cap is %d.', max(1, (int) $candidateCap));
-        }
-        if ($source === 'disabled_constant') {
-            return 'Automatic fast mode is disabled by configuration, so exact scoring was retained.';
-        }
-        if ($source === 'no_threshold_crossing') {
             return sprintf(
-                'Estimated candidates %d did not exceed threshold %d, so exact scoring was retained.',
-                max(0, (int) $estimatedCandidates),
-                max(0, (int) $threshold)
-            );
-        }
-        if ($source === 'auto_threshold') {
-            return sprintf(
-                'Estimated candidates %d exceeded threshold %d, so approximate top-K used cap %d.',
-                max(0, (int) $estimatedCandidates),
-                max(0, (int) $threshold),
+                'Candidate-capped retrieval was explicitly requested with a cap of %d; recall, ranking, and totals may be incomplete.',
                 max(1, (int) $candidateCap)
             );
+        }
+        if ($source === 'default_exact') {
+            return 'Exact retrieval is the default because a document-id candidate cap cannot guarantee the highest-ranked results or complete totals.';
         }
 
         return 'Fast-mode decision used the default exact scoring path.';
@@ -995,34 +947,7 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * Keep auto fast mode enabled by default, with a constant kill switch.
-     */
-    private function auto_fast_mode_enabled(): bool
-    {
-        if (!defined('WP_FTS_FAST_MODE_ENABLED')) {
-            return true;
-        }
-
-        return $this->truthy_option(constant('WP_FTS_FAST_MODE_ENABLED'));
-    }
-
-    /**
-     * Candidate threshold above which broad searches switch to approximate mode.
-     */
-    private function auto_fast_mode_threshold(): int
-    {
-        if (defined('WP_FTS_FAST_MODE_THRESHOLD')) {
-            $threshold = $this->non_negative_int_option(constant('WP_FTS_FAST_MODE_THRESHOLD'));
-            if ($threshold !== null) {
-                return $threshold;
-            }
-        }
-
-        return self::DEFAULT_AUTO_FAST_MODE_THRESHOLD;
-    }
-
-    /**
-     * Default cap used when fast mode is active and the caller did not supply one.
+     * Default cap used after explicit approximate opt-in when no cap is supplied.
      */
     private function default_fast_candidate_cap(): int
     {
@@ -1034,149 +959,6 @@ final class WP_FTS_Searcher
         }
 
         return self::DEFAULT_FAST_MODE_CANDIDATE_CAP;
-    }
-
-    /**
-     * Estimate candidates for the analyzed query, capped at threshold + 1.
-     *
-     * The probe uses deterministic capped postings when available. Metadata
-     * filters are applied to the probed active candidate ids, so filtered searches
-     * stay exact whenever the filtered probe does not cross the threshold.
-     *
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
-     * @param array{post_types:string[],post_statuses:string[],date_after:?string,date_before:?string}|null $metadataFilter
-     */
-    private function estimate_candidate_count(array $groups, string $mode, ?array $metadataFilter, int $threshold): int
-    {
-        $termsByKey = $this->terms_by_key($groups);
-        if ($termsByKey === []) {
-            return 0;
-        }
-
-        $probeLimit = $threshold >= PHP_INT_MAX ? PHP_INT_MAX : $threshold + 1;
-        $postingsByTerm = WP_FTS_StorageCompat::get_postings($this->storage, array_keys($termsByKey), $probeLimit);
-        if ($postingsByTerm === []) {
-            return 0;
-        }
-
-        return $this->count_active_candidates_from_postings(
-            $groups,
-            $termsByKey,
-            $postingsByTerm,
-            $mode,
-            $metadataFilter,
-            $probeLimit
-        );
-    }
-
-    /**
-     * Count active query candidates from already-probed postings.
-     *
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
-     * @param array<string,array{lang:string,groups:array<int,int>}> $termsByKey
-     * @param array<string,array<int,int>> $postingsByTerm
-     * @param array{post_types:string[],post_statuses:string[],date_after:?string,date_before:?string}|null $metadataFilter
-     */
-    private function count_active_candidates_from_postings(
-        array $groups,
-        array $termsByKey,
-        array $postingsByTerm,
-        string $mode,
-        ?array $metadataFilter,
-        int $limit
-    ): int {
-        $activeDocIdsByLang = $this->active_probe_doc_ids_by_lang($postingsByTerm, $termsByKey);
-        if ($activeDocIdsByLang === []) {
-            return 0;
-        }
-
-        /** @var array<int,bool> $candidateDocIds */
-        $candidateDocIds = [];
-        /** @var array<int,array<int,bool>> $groupDocIds */
-        $groupDocIds = [];
-        foreach ($postingsByTerm as $term => $postings) {
-            if (!isset($termsByKey[$term])) {
-                continue;
-            }
-
-            $lang = $termsByKey[$term]['lang'];
-            foreach ($postings as $docId => $_tf) {
-                $docId = (int) $docId;
-                if (!isset($activeDocIdsByLang[$lang][$docId])) {
-                    continue;
-                }
-
-                if ($mode === 'AND') {
-                    foreach ($termsByKey[$term]['groups'] as $groupId => $_rank) {
-                        $groupDocIds[$groupId][$docId] = true;
-                    }
-                    continue;
-                }
-
-                $candidateDocIds[$docId] = true;
-                if ($metadataFilter === null && count($candidateDocIds) >= $limit) {
-                    return $limit;
-                }
-            }
-        }
-
-        if ($mode === 'AND') {
-            $candidateDocIds = $this->intersect_group_doc_ids($groupDocIds, count($groups));
-            if ($metadataFilter === null && count($candidateDocIds) >= $limit) {
-                return $limit;
-            }
-        }
-
-        if ($candidateDocIds === []) {
-            return 0;
-        }
-
-        if ($metadataFilter !== null) {
-            $matchingDocIds = WP_FTS_StorageCompat::filter_doc_ids_by_metadata(
-                $this->storage,
-                array_keys($candidateDocIds),
-                $metadataFilter['post_types'],
-                $metadataFilter['post_statuses'],
-                $metadataFilter['date_after'],
-                $metadataFilter['date_before']
-            );
-            $candidateDocIds = array_fill_keys($matchingDocIds, true);
-        }
-
-        return min(count($candidateDocIds), $limit);
-    }
-
-    /**
-     * Resolve active candidate ids by language partition for probed postings.
-     *
-     * @param array<string,array<int,int>> $postingsByTerm
-     * @param array<string,array{lang:string,groups:array<int,int>}> $termsByKey
-     * @return array<string,array<int,bool>>
-     */
-    private function active_probe_doc_ids_by_lang(array $postingsByTerm, array $termsByKey): array
-    {
-        /** @var array<string,array<int,bool>> $probeDocIdsByLang */
-        $probeDocIdsByLang = [];
-        foreach ($postingsByTerm as $term => $postings) {
-            $lang = $termsByKey[$term]['lang'] ?? null;
-            if ($lang === null) {
-                continue;
-            }
-
-            foreach (array_keys($postings) as $docId) {
-                $probeDocIdsByLang[$lang][(int) $docId] = true;
-            }
-        }
-
-        $activeDocIdsByLang = [];
-        foreach ($probeDocIdsByLang as $lang => $docIds) {
-            $lengths = WP_FTS_StorageCompat::get_doc_lengths($this->storage, array_keys($docIds), $lang);
-            foreach (array_keys($lengths) as $docId) {
-                $activeDocIdsByLang[$lang][(int) $docId] = true;
-            }
-        }
-
-        return $activeDocIdsByLang;
     }
 
     /**
@@ -1873,19 +1655,31 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * Preserve legacy list results unless callers request pagination metadata.
+     * Preserve legacy list results unless callers request pagination metadata or
+     * explicitly accept candidate-capped retrieval.
      *
      * @param array<int,array<string,mixed>> $results
-     * @return array<int,array<string,mixed>>|array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
+     * @return array<int,array<string,mixed>>|array{total:int,total_is_exact:bool,retrieval_mode:string,results_may_be_incomplete:bool,candidate_cap:?int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
      */
-    private function format_response(array $results, int $total, array $opts, string $queryLang, ?array $explain = null): array
+    private function format_response(
+        array $results,
+        int $total,
+        array $opts,
+        string $queryLang,
+        ?array $explain = null,
+        ?int $candidateCap = null
+    ): array
     {
-        if (empty($opts['include_total'])) {
+        if (empty($opts['include_total']) && $candidateCap === null) {
             return $results;
         }
 
         $payload = [
             'total' => $total,
+            'total_is_exact' => $candidateCap === null,
+            'retrieval_mode' => $candidateCap === null ? 'exact' : 'candidate_capped',
+            'results_may_be_incomplete' => $candidateCap !== null,
+            'candidate_cap' => $candidateCap,
             'limit' => max(1, (int) ($opts['limit'] ?? 10)),
             'offset' => max(0, (int) ($opts['offset'] ?? 0)),
             'query_lang' => WP_FTS_TermNamespace::canonicalize_lang($queryLang),
@@ -1949,8 +1743,6 @@ final class WP_FTS_Searcher
                 'reason' => $this->bounded_explain_text(
                     (string) ($fastMode['reason'] ?? $this->fast_mode_reason(
                         (string) $fastMode['source'],
-                        $fastMode['estimated_candidates'],
-                        $fastMode['threshold'],
                         $fastMode['candidate_cap']
                     )),
                     self::EXPLAIN_MAX_REASON_BYTES

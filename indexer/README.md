@@ -202,49 +202,43 @@ content or create sample posts.
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
 | Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
-| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query surfaces and analyzed terms, fast-mode, scoring, recency boost status, per-result and field-specific match details, performance-budget status, a bounded `posts_pre_query` hook pipeline around Language FTS, and redacted SQL query summaries when the environment already collects `$wpdb->queries`; they are request-local diagnostics rather than persistent logs. |
+| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query surfaces and analyzed terms, retrieval mode, scoring, recency boost status, per-result and field-specific match details, performance-budget status, a bounded `posts_pre_query` hook pipeline around Language FTS, and redacted SQL query summaries when the environment already collects `$wpdb->queries`; they are request-local diagnostics rather than persistent logs. |
 
-## Search Accuracy And Automatic Fast Mode
+## Exact Retrieval And Explicit Candidate Caps
 
-Exact search is the correctness-first baseline. For small or targeted searches,
-the searcher considers every matching candidate document, which preserves the
-best recall, ranking, and total-count exactness.
+Exact search is the correctness-first default for every query. The searcher
+considers every matching candidate document, which preserves recall, ranking,
+and total-count exactness regardless of document-id order.
 
-Broad searches automatically switch to approximate fast top-K mode when the
-analyzed query's estimated matching candidate document count exceeds the
-configured threshold. That estimate is based on the query terms after analysis
-and supported metadata filters; it is not based on the total number of indexed
-posts or pages. Automatic fast mode is enabled by default, uses a threshold of
-`2000` candidates, and scores up to `1000` candidates unless configured
-otherwise.
+Programmatic callers may explicitly request approximate candidate-capped
+retrieval with the legacy `fast_top_k` or `approximate_top_k` option. The cap
+takes a deterministic document-id prefix from each posting list; it is not a
+ranking-aware top-K algorithm and can omit the highest-scoring document. The
+plugin therefore never selects this mode automatically.
 
-Fast mode can improve latency for broad queries, but it is approximate: recall,
-ranking, and total counts may differ from exact scoring. Tune the policy in
-`wp-config.php` or an early plugin/bootstrap file before the plugin loads:
+Candidate-capped retrieval always returns a payload, even when `include_total`
+is omitted, with these status fields:
 
-```php
-define('WP_FTS_FAST_MODE_THRESHOLD', 2000);
-define('WP_FTS_FAST_MODE_CANDIDATE_CAP', 1000);
-define('WP_FTS_FAST_MODE_ENABLED', true);
-```
+- `retrieval_mode` is `candidate_capped` rather than `exact`;
+- `total_is_exact` is `false`;
+- `results_may_be_incomplete` is `true`, meaning matches may be omitted before
+  normal limit/offset pagination;
+- `candidate_cap` reports the applied limit.
 
-Lower threshold or cap values switch sooner or score fewer candidates, which is
-faster and less complete. Higher values keep more broad-query candidates, which
-is more complete and slower. Set `WP_FTS_FAST_MODE_ENABLED` to `false` when a
-site needs exact broad-query recall and exact totals more than broad-query
-latency.
+Callers can set `candidate_cap` or `max_candidates` for the request. When an
+explicit approximate request omits both, the default cap is `1000`; the legacy
+`WP_FTS_FAST_MODE_CANDIDATE_CAP` constant can change that explicit-mode default.
+The former automatic threshold and enable constants no longer switch searches
+away from exact retrieval.
 
-Explicit search options still win over the automatic policy. Programmatic
-callers can force exact scoring with `exact_top_k`, `exact`, or an explicit
-false `fast_top_k`; explicit `fast_top_k` or `approximate_top_k` opts into
-approximate top-K mode for that search.
+The `exact_top_k`, `exact`, and explicit false `fast_top_k` options remain
+accepted for callers that already send them, but exact retrieval no longer
+requires an override.
 
 When diagnostics are active, the Debug Bar panel or Health-tab fallback shows
-which path was used for the current request: exact, explicit approximate, auto
-threshold, forced exact, disabled by constant, or no threshold crossing. The
-same trace reports a bounded human-readable fast-mode reason, the candidate
-estimate, threshold, candidate cap, and whether the result total is exact or
-approximate.
+whether exact retrieval or an explicit approximate candidate cap was used. The
+same trace reports a bounded human-readable reason, the candidate cap, and
+whether the result total is exact or approximate.
 
 Those traces also show a Performance budget row for completed search timing
 data. By default, total search time is compared with a `100ms` budget and the

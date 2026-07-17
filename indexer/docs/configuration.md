@@ -740,24 +740,20 @@ every query term to be present. `limit` is clamped to at least 1. The optional
 recency boost flags apply only to that CLI query and use stored
 `post_date_gmt` metadata.
 
-Broad searches automatically switch to approximate fast top-K mode when the
-analyzed query's estimated active candidate count exceeds 2000 documents. Fast
-mode caps scored candidates at 1000 by default, which improves latency but can
-change recall, ranking, and total counts. Programmatic callers can force exact
-scoring with `exact_top_k`, `exact`, or an explicit false `fast_top_k`; explicit
-`fast_top_k`/`approximate_top_k` still enables approximate mode directly.
-Explain/debug diagnostics include a bounded `fast_mode.reason` string that
-states whether exact scoring was forced or retained, an explicit approximate
-request was used, automatic fast mode was disabled, or the automatic threshold
-was crossed with the active candidate cap.
+Search uses exact retrieval by default for every query. Programmatic callers may
+explicitly request document-id candidate capping with the legacy `fast_top_k`
+or `approximate_top_k` option and a `candidate_cap`/`max_candidates` value. This
+mode is not ranking-aware and can omit a stronger document beyond the cap, so it
+is never enabled automatically.
 
-The automatic policy can be tuned in `wp-config.php` before the plugin loads:
-
-```php
-define('WP_FTS_FAST_MODE_THRESHOLD', 2000);
-define('WP_FTS_FAST_MODE_CANDIDATE_CAP', 1000);
-define('WP_FTS_FAST_MODE_ENABLED', true);
-```
+An explicit candidate-capped search always returns a payload, even without
+`include_total`. `retrieval_mode` is `candidate_capped`, `total_is_exact` is
+`false`, `results_may_be_incomplete` is `true`, and `candidate_cap` records the
+applied limit. If no request cap is supplied, the default is 1000 and can be
+changed with the legacy `WP_FTS_FAST_MODE_CANDIDATE_CAP` constant. The former
+automatic threshold and enable constants no longer select approximate
+retrieval. Explain/debug diagnostics include a bounded `fast_mode.reason` that
+states whether exact retrieval or an explicit candidate cap was used.
 
 ## Search Performance Budget Diagnostics
 
