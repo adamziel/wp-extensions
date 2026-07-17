@@ -12207,13 +12207,17 @@ test_case('REST search surface filters private results by capability', function 
     }
 });
 
-test_case('PHP and REST visibility filtering reaches public results below 250 hidden ranks', function (): void {
+test_case('PHP visibility stays exact while REST visibility remains bounded and approximate', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['rest_api_enabled' => true]
+    );
 
     try {
         $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), WP_FTS_Plugin::runtime_analyzer());
@@ -12268,7 +12272,23 @@ test_case('PHP and REST visibility filtering reaches public results below 250 hi
         ]);
 
         assert_same([$publicId], array_column(WP_FTS_Plugin::search('deepvisibilityneedle', ['limit' => 1, 'lang' => 'en']), 'doc_id'), 'PHP search should rank the readable corpus instead of stopping after 250 hidden rows');
-        assert_same([$publicId], array_column(WP_FTS_Plugin::rest_search(['q' => 'deepvisibilityneedle', 'limit' => 1, 'lang' => 'en'])['results'] ?? [], 'doc_id'), 'REST search should use the same authoritative pre-ranking visibility filter');
+        assert_same(
+            [$publicId],
+            array_column(WP_FTS_Plugin::search('deepvisibilityneedle', [
+                'limit' => 1,
+                'lang' => 'en',
+                'fast_top_k' => 'false',
+                'request_budget_guard' => static fn(): bool => true,
+            ]), 'doc_id'),
+            'false-like fast options should keep authoritative exact PHP visibility even when a request guard is present'
+        );
+        $restResponse = WP_FTS_Plugin::rest_search(['q' => 'deepvisibilityneedle', 'limit' => 1, 'lang' => 'en']);
+        assert_true(
+            is_array($restResponse),
+            'bounded REST search should return a response rather than exhaust its budget: '
+                . ($restResponse instanceof WP_Error ? $restResponse->get_error_code() . ' ' . json_encode($restResponse->get_error_data()) : get_debug_type($restResponse))
+        );
+        assert_same([], $restResponse['results'] ?? null, 'bounded approximate REST search may omit a low-ranked public result outside its visibility refill window');
 
         $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
         $explained = WP_FTS_Plugin::search_with_explain('deepvisibilityneedle', ['limit' => 1, 'lang' => 'en']);
@@ -12276,11 +12296,27 @@ test_case('PHP and REST visibility filtering reaches public results below 250 hi
         assert_same(1, $explained['explain']['scoring']['candidate_docs_scored'] ?? null, 'hidden candidates should be removed before scoring');
         assert_same('candidate_filter', $explained['explain']['fast_mode']['source'] ?? null, 'visibility filtering should force exact discovery before any candidate cap');
 
+        $restExplained = WP_FTS_Plugin::rest_search([
+            'q' => 'deepvisibilityneedle',
+            'limit' => 1,
+            'lang' => 'en',
+            'explain' => '1',
+        ]);
+        assert_true(
+            is_array($restExplained),
+            'operator REST explain should stay within its fixed work budget: '
+                . ($restExplained instanceof WP_Error ? $restExplained->get_error_code() . ' ' . json_encode($restExplained->get_error_data()) : get_debug_type($restExplained))
+        );
+        assert_same([], $restExplained['results'] ?? null, 'operator REST explain should preserve the bounded visibility result set');
+        assert_same('explicit_option', $restExplained['explain']['fast_mode']['source'] ?? null, 'REST explain should identify its explicit approximate retrieval');
+        assert_same(500, $restExplained['explain']['fast_mode']['candidate_cap'] ?? null, 'REST explain should expose the fixed candidate cap');
+        assert_same('approximate', $restExplained['explain']['scoring']['total_accuracy'] ?? null, 'REST explain should label capped totals as approximate');
+
         $visibilityQueries = array_values(array_filter(
             $fake->prepared,
             static fn(array $statement): bool => str_starts_with($statement['sql'], 'SELECT ID, post_type, post_status, post_password FROM `wp_posts`')
         ));
-        assert_same(9, count($visibilityQueries), 'three broad searches should use three bounded canonical-post queries each');
+        assert_same(12, count($visibilityQueries), 'three exact PHP searches plus one bounded REST explain authorization pass should use three canonical-post queries each');
         assert_true(max(array_map(static fn(array $statement): int => count($statement['args']), $visibilityQueries)) <= 100, 'authoritative visibility queries should cap each canonical post lookup at 100 ids');
     } finally {
         $wpdb = $oldWpdb;
@@ -19829,6 +19865,57 @@ test_case('search applies authoritative candidate filtering before ranking and p
     }
     assert_true($extensionFilterThrown, 'candidate filtering should fail closed when an extension owns candidate discovery and pagination');
     assert_same(false, $extensionCalled, 'an incompatible extension must not return rows before candidate filtering is enforced');
+});
+
+test_case('ranked-result reuse cannot bypass candidate filters or request budgets', function (): void {
+    [$searcher] = single_term_search_fixture(3, 3);
+    $base = [
+        'lang' => 'en',
+        'limit' => 3,
+        'include_total' => true,
+        'explain' => true,
+        'reuse_ranked_results' => true,
+    ];
+
+    $firstFiltered = $searcher->search('needle', $base + [
+        'candidate_doc_ids_filter' => static fn(array $docIds): array => [1],
+    ]);
+    $secondFiltered = $searcher->search('needle', $base + [
+        'candidate_doc_ids_filter' => static fn(array $docIds): array => [3],
+    ]);
+
+    assert_same([1], array_column($firstFiltered['results'] ?? [], 'doc_id'), 'the first authoritative filter should define its ranked corpus');
+    assert_same([3], array_column($secondFiltered['results'] ?? [], 'doc_id'), 'a later authoritative filter must not receive a cached ranking from a different visibility context');
+    assert_same(false, $firstFiltered['explain']['scoring']['ranked_results_reused'] ?? null, 'candidate-filtered rankings should not populate the reusable cache');
+    assert_same(false, $secondFiltered['explain']['scoring']['ranked_results_reused'] ?? null, 'candidate-filtered rankings should not consume the reusable cache');
+
+    $warm = $searcher->search('needle', $base);
+    assert_same(false, $warm['explain']['scoring']['ranked_results_reused'] ?? null, 'the unfiltered search should compute and retain its first reusable ranking');
+
+    $explainLimited = $searcher->search('needle', $base + [
+        'explain_doc_ids_filter' => static fn(array $docIds): array => [1],
+    ]);
+    assert_same(3, $explainLimited['total'] ?? null, 'an explain-only document filter must not change ranking totals');
+    assert_same(3, count($explainLimited['results'] ?? []), 'an explain-only document filter must not change the returned ranked page');
+    assert_same([1], array_column($explainLimited['explain']['results'] ?? [], 'doc_id'), 'an explain-only document filter should restrict document-level diagnostic reads');
+
+    $guardCalls = 0;
+    $guarded = $searcher->search('needle', $base + [
+        'request_budget_guard' => static function () use (&$guardCalls): bool {
+            $guardCalls++;
+            return true;
+        },
+    ]);
+    assert_same(false, $guarded['explain']['scoring']['ranked_results_reused'] ?? null, 'a guarded request should execute bounded work instead of bypassing it through the ranking cache');
+    assert_true($guardCalls > 0, 'a guarded request should invoke its circuit breaker while recomputing the ranking');
+
+    $rowBudgetExceeded = false;
+    try {
+        $searcher->search('needle', $base + ['max_candidate_rows' => 2]);
+    } catch (WP_FTS_Search_Budget_Exceeded $error) {
+        $rowBudgetExceeded = $error->budget() === 'candidate rows';
+    }
+    assert_true($rowBudgetExceeded, 'a tighter posting-row budget must invalidate a reusable ranking and fail exact search rather than bypassing the new budget');
 });
 
 test_case('search candidate cap is explicit approximate opt-in with mandatory result status', function (): void {

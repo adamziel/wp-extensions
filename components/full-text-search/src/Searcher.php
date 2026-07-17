@@ -113,6 +113,10 @@ final class WP_FTS_Searcher
      * must not mutate storage between those calls. Reuse is disabled when an
      * authoritative candidate filter or request budget guard is present because
      * their mutable behavior cannot be represented in the ranking fingerprint.
+     * `explain_doc_ids_filter` may limit per-result explain lookups to a subset
+     * of the already-ranked page without changing ranking, totals, or retrieval
+     * mode. This is useful when a bounded caller must authorize rows before
+     * issuing document-level diagnostic reads.
      * `max_query_terms`, `max_prefix_expansions`, and `max_candidate_rows`
      * impose request-wide work limits. `request_budget_guard` may stop work
      * between bounded storage/scoring steps by throwing or returning false.
@@ -234,9 +238,13 @@ final class WP_FTS_Searcher
 
         $total = count($results);
         $page = $useBoundedTopK ? $results : array_slice($results, $offset, $limit);
-        $resultExplain = $this->explain_requested($opts) && $this->explain_result_matches_requested($opts)
-            ? $this->explain_result_matches($page, $groups)
-            : [];
+        $resultExplain = [];
+        if ($this->explain_requested($opts) && $this->explain_result_matches_requested($opts)) {
+            $resultExplain = $this->explain_result_matches(
+                $this->filter_explain_result_page($page, $opts),
+                $groups
+            );
+        }
         if ($this->should_enrich_results($opts) && $page !== []) {
             $pageIds = array_column($page, 'doc_id');
             $this->guard_request_budget();
@@ -1107,6 +1115,36 @@ final class WP_FTS_Searcher
         }
 
         return $opts['candidate_doc_ids_filter'];
+    }
+
+    /**
+     * Restrict document-level explain reads without changing ranked results.
+     *
+     * @param array<int,array{doc_id:int,score:float,_rank:int}> $page
+     * @return array<int,array{doc_id:int,score:float,_rank:int}>
+     */
+    private function filter_explain_result_page(array $page, array $opts): array
+    {
+        if (!array_key_exists('explain_doc_ids_filter', $opts) || $opts['explain_doc_ids_filter'] === null) {
+            return $page;
+        }
+        if (!is_callable($opts['explain_doc_ids_filter'])) {
+            throw new InvalidArgumentException('explain_doc_ids_filter must be callable.');
+        }
+
+        $this->guard_request_budget();
+        $filteredDocIds = ($opts['explain_doc_ids_filter'])(array_map('intval', array_column($page, 'doc_id')));
+        $this->guard_request_budget();
+        if (!is_array($filteredDocIds)) {
+            throw new UnexpectedValueException('explain_doc_ids_filter must return an array of document ids.');
+        }
+
+        $allowedDocIds = array_fill_keys(array_map('intval', $filteredDocIds), true);
+
+        return array_values(array_filter(
+            $page,
+            static fn(array $row): bool => isset($allowedDocIds[(int) $row['doc_id']])
+        ));
     }
 
     /**

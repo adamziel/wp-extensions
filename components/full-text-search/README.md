@@ -116,6 +116,11 @@ for the returned page. Set
 `explain_result_matches` to `false` when a caller needs plan/scoring diagnostics
 but must defer document-term lookups.
 
+Bounded authorization layers can instead pass an `explain_doc_ids_filter`
+callable. It receives the ranked page's document IDs and returns the subset
+eligible for document-level explain reads. The filter does not change ranking,
+totals, pagination, or retrieval mode.
+
 ## Authoritative Candidate Filtering
 
 Callers with an external visibility model can pass a
