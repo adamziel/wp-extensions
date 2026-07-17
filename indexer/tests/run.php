@@ -12725,6 +12725,10 @@ test_case('search integration boundaries preserve WordPress fallback and sanitiz
     $oldWpdb = $wpdb ?? null;
     $wpdb = new WP_FTS_Test_WPDB();
     wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['rest_api_enabled' => true]
+    );
     wp_fts_test_mark_search_takeover_ready();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER] = static function (): array {
