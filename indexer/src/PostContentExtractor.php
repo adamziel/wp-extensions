@@ -17,7 +17,7 @@ final class WP_FTS_PostContentExtractor
         'title' => 5.0,
         'content' => 1.0,
         'excerpt' => 2.0,
-        'terms' => 1.5,
+        'terms' => 2.0,
         'custom_fields' => 1.0,
         'rendered' => 1.0,
     ];
@@ -74,7 +74,7 @@ final class WP_FTS_PostContentExtractor
         $terms = $this->extract_terms($postId, $postType, $post, $opts);
         $termText = $this->structured_text($terms);
         if ($termText !== '') {
-            $fields[] = $this->field('terms', $termText, $fieldBoosts['terms'] ?? 1.5);
+            $fields[] = $this->field('terms', $termText, $fieldBoosts['terms'] ?? 2.0);
         }
 
         $customFields = $this->extract_custom_fields($postId, $post, $opts);
@@ -153,7 +153,7 @@ final class WP_FTS_PostContentExtractor
     }
 
     /**
-     * Clamp boosts to a useful positive range.
+     * Match the integer precision stored in posting frequencies.
      */
     private function positive_boost(float $boost): float
     {
@@ -161,7 +161,7 @@ final class WP_FTS_PostContentExtractor
             return 1.0;
         }
 
-        return min(100.0, $boost);
+        return (float) max(1, round(min(100.0, $boost)));
     }
 
     /**

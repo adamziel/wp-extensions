@@ -86,14 +86,19 @@ ranking:
 | Title | `5.0` | The post title. |
 | Main content | `1.0` | The saved post content. |
 | Excerpt | `2.0` | The saved post excerpt. |
-| Taxonomy terms | `1.5` | Category, tag, and other taxonomy term names. |
+| Taxonomy terms | `2.0` | Category, tag, and other taxonomy term names. |
 | Selected custom fields | `1.0` | Custom fields selected for indexing. |
 | Rendered-only content | `1.0` | Block-rendered output not already present in saved content. |
 
-These weights are written into the index, not applied as live query-time
-overrides. After changing them, reindex content to make the new ranking weights
-fully apply to existing posts. Programmatic indexing can still pass explicit
-`field_boosts` options to override the saved plugin settings for that call.
+The settings accept whole numbers from `1` through `100`, matching the integer
+weighted frequencies stored in postings. Fractional values are rounded,
+positive values below `1` are clamped to `1`, and zero or negative values fall
+back to that field's default. Exclude a field with the
+`wp_fts_post_index_fields` filter rather than a zero weight. These weights are
+written into the index, not applied as live query-time overrides. After changing
+them, reindex content to make the new ranking weights fully apply to existing
+posts. Programmatic indexing can still pass explicit `field_boosts` options to
+override the saved plugin settings for that call.
 Saving changed ranking weights or indexed post-type scope marks stale reindex
 debt in Health/status. The settings save does not rewrite content; a follow-up
 bounded `wp fts process-batch` run rewrites stale existing rows after queued

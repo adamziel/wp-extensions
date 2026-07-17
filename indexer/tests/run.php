@@ -4668,7 +4668,7 @@ test_case('admin menu registration exposes Settings Full-Text Search page and op
         'title' => 5.0,
         'content' => 1.0,
         'excerpt' => 2.0,
-        'terms' => 1.5,
+        'terms' => 2.0,
         'custom_fields' => 1.0,
         'rendered' => 1.0,
     ], WP_FTS_Plugin::default_settings()['field_boosts'], 'default settings should expose the extractor field boost defaults');
@@ -4754,7 +4754,7 @@ test_case('settings sanitization accepts and clamps prefix threshold controls', 
     assert_same(64, $invalid['prefix_max_terms'], 'non-numeric prefix max terms should fall back to the default');
 });
 
-test_case('settings sanitization accepts bounded field boosts and rejects invalid values', function (): void {
+test_case('settings sanitization stores whole-number field boosts and rejects invalid values', function (): void {
     $valid = WP_FTS_Plugin::sanitize_settings([
         'field_boosts' => [
             'title' => '7.25',
@@ -4767,13 +4767,13 @@ test_case('settings sanitization accepts bounded field boosts and rejects invali
         ],
     ]);
     assert_same([
-        'title' => 7.25,
-        'content' => 0.25,
+        'title' => 7.0,
+        'content' => 1.0,
         'excerpt' => 3.0,
-        'terms' => 2.5,
+        'terms' => 3.0,
         'custom_fields' => 100.0,
-        'rendered' => 0.01,
-    ], $valid['field_boosts'], 'valid field boosts should sanitize into the bounded extractor/indexer range');
+        'rendered' => 1.0,
+    ], $valid['field_boosts'], 'field boosts should round and clamp to the integer posting-frequency range');
 
     $invalid = WP_FTS_Plugin::sanitize_settings([
         'field_boosts' => [
@@ -4788,7 +4788,7 @@ test_case('settings sanitization accepts bounded field boosts and rejects invali
         'title' => 5.0,
         'content' => 1.0,
         'excerpt' => 2.0,
-        'terms' => 1.5,
+        'terms' => 2.0,
         'custom_fields' => 1.0,
         'rendered' => 1.0,
     ], $invalid['field_boosts'], 'invalid or missing field boosts should fall back to defaults');
@@ -4905,6 +4905,14 @@ test_case('prepare post index options uses saved field boosts unless caller over
         'custom_fields' => 3.5,
         'rendered' => 4.0,
     ];
+    $normalizedSavedBoosts = [
+        'title' => 1.0,
+        'content' => 8.0,
+        'excerpt' => 2.0,
+        'terms' => 2.0,
+        'custom_fields' => 4.0,
+        'rendered' => 4.0,
+    ];
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
         WP_FTS_Plugin::default_settings(),
         ['field_boosts' => $savedBoosts]
@@ -4920,9 +4928,9 @@ test_case('prepare post index options uses saved field boosts unless caller over
     ];
 
     $settingsOptions = WP_FTS_Plugin::prepare_post_index_options($post, ['lang' => 'en']);
-    assert_same($savedBoosts, $settingsOptions['field_boosts'] ?? null, 'prepare_post_index_options should pass saved field boosts to runtime indexing');
+    assert_same($normalizedSavedBoosts, $settingsOptions['field_boosts'] ?? null, 'prepare_post_index_options should normalize legacy fractional settings to stored integer precision');
 
-    $override = ['title' => 9.0, 'content' => 0.5];
+    $override = ['title' => 9.0, 'content' => 2.0];
     $callerOptions = WP_FTS_Plugin::prepare_post_index_options($post, [
         'lang' => 'en',
         'field_boosts' => $override,
@@ -5076,13 +5084,13 @@ test_case('authorized admin sandbox render includes search form and creates no p
         'title' => ['Title', '5'],
         'content' => ['Main content', '1'],
         'excerpt' => ['Excerpt', '2'],
-        'terms' => ['Taxonomy terms', '1.5'],
+        'terms' => ['Taxonomy terms', '2'],
         'custom_fields' => ['Selected custom fields', '1'],
         'rendered' => ['Rendered-only content', '1'],
     ] as $field => $expected) {
         [$label, $value] = $expected;
         assert_contains($label, $settingsHtml, "settings ranking controls should label {$field} plainly");
-        assert_contains('step="0.01" name="wp_fts_settings[field_boosts][' . $field . ']"', $settingsHtml, "settings ranking controls should use a step compatible with the {$field} boost precision");
+        assert_contains('min="1" max="100" step="1" name="wp_fts_settings[field_boosts][' . $field . ']"', $settingsHtml, "settings ranking controls should expose the stored integer range for {$field}");
         assert_contains('name="wp_fts_settings[field_boosts][' . $field . ']" value="' . $value . '"', $settingsHtml, "settings ranking controls should render the default {$field} boost");
     }
     assert_contains('Matches in the main saved post content', $settingsHtml, 'settings ranking controls should explain main content');
@@ -5441,7 +5449,7 @@ test_case('health dashboard displays search state counts and last indexed conten
     assert_contains('<th scope="row">Public site search</th><td>Enabled</td>', $html, 'health dashboard should show public search replacement state');
     assert_contains('<th scope="row">wp-admin Posts search</th><td>Disabled</td>', $html, 'health dashboard should show admin search replacement state');
     assert_contains('<th scope="row">Search provider compatibility</th><td>Prefer Language FTS</td>', $html, 'health dashboard should show effective provider compatibility mode');
-    assert_contains('<th scope="row">Field ranking weights</th><td>title=5, content=1, excerpt=2, terms=1.5, custom_fields=1, rendered=1</td>', $html, 'health dashboard should summarize effective field boost settings');
+    assert_contains('<th scope="row">Field ranking weights</th><td>title=5, content=1, excerpt=2, terms=2, custom_fields=1, rendered=1</td>', $html, 'health dashboard should summarize effective field boost settings');
     assert_contains('<th scope="row">Recency ranking boost</th><td>Disabled</td>', $html, 'health dashboard should summarize the default-off recency boost');
     assert_contains('<th scope="row">Indexed post types</th><td>page, post</td>', $html, 'health dashboard should show configured indexed post types');
     assert_contains('<th scope="row">Eligible content</th><td>3</td>', $html, 'health dashboard should show total eligible content');
@@ -7570,7 +7578,7 @@ test_case('admin sandbox detail ajax returns bounded why matched explanations', 
         assert_true(isset($fieldsByName['title']), 'match explanation should identify title field matches');
         assert_true(isset($fieldsByName['content']), 'match explanation should identify content field matches');
         assert_float_near(7.0, (float) ($fieldsByName['title']['weight'] ?? -1), 'title match explanation should include the active title weight');
-        assert_float_near(1.25, (float) ($fieldsByName['content']['weight'] ?? -1), 'content match explanation should include the active content weight');
+        assert_float_near(1.0, (float) ($fieldsByName['content']['weight'] ?? -1), 'content match explanation should include the normalized integer content weight');
         assert_true((int) ($fieldsByName['title']['match_count'] ?? 0) >= 1, 'title match explanation should include a hit count');
         assert_true((float) ($fieldsByName['content']['weighted_match_count'] ?? 0.0) > 0.0, 'content match explanation should include weighted hit evidence');
         assert_same(true, $fieldsByName['title']['score_subtotal_approximate'] ?? null, 'field score subtotal should report when it is approximate');
@@ -7955,7 +7963,7 @@ test_case('operator status ranking tuning reports default settings', function ()
     assert_same(4, $ranking['prefix_min_length'] ?? null, 'ranking tuning should expose default prefix minimum length');
     assert_same(64, $ranking['prefix_max_terms'] ?? null, 'ranking tuning should expose default prefix expansion cap');
     assert_same(WP_FTS_Plugin::default_settings()['field_boosts'], $ranking['field_boosts'] ?? null, 'ranking tuning should expose sanitized default field boosts in settings order');
-    assert_same('title=5, content=1, excerpt=2, terms=1.5, custom_fields=1, rendered=1', $ranking['field_boost_summary'] ?? null, 'ranking tuning should expose the default field boost summary');
+    assert_same('title=5, content=1, excerpt=2, terms=2, custom_fields=1, rendered=1', $ranking['field_boost_summary'] ?? null, 'ranking tuning should expose the default field boost summary');
     $recency = is_array($ranking['recency_boost'] ?? null) ? $ranking['recency_boost'] : [];
     assert_same(false, $recency['enabled'] ?? null, 'ranking tuning should report default recency boost as disabled');
     assert_same(0.0, $recency['strength'] ?? null, 'ranking tuning should expose the default recency strength');
@@ -8024,12 +8032,12 @@ test_case('operator status ranking tuning reflects sanitized customized settings
     assert_same([
         'title' => 100.0,
         'content' => 1.0,
-        'excerpt' => 0.25,
-        'terms' => 1.5,
-        'custom_fields' => 0.01,
-        'rendered' => 2.345,
+        'excerpt' => 1.0,
+        'terms' => 2.0,
+        'custom_fields' => 1.0,
+        'rendered' => 2.0,
     ], $ranking['field_boosts'] ?? null, 'ranking tuning should expose sanitized custom field boosts in settings order');
-    assert_same('title=100, content=1, excerpt=0.25, terms=1.5, custom_fields=0.01, rendered=2.35', $ranking['field_boost_summary'] ?? null, 'ranking tuning should summarize sanitized custom boosts');
+    assert_same('title=100, content=1, excerpt=1, terms=2, custom_fields=1, rendered=2', $ranking['field_boost_summary'] ?? null, 'ranking tuning should summarize integer custom boosts');
     $recency = is_array($ranking['recency_boost'] ?? null) ? $ranking['recency_boost'] : [];
     assert_same(true, $recency['enabled'] ?? null, 'ranking tuning should report positive recency strength as enabled');
     assert_same(2.0, $recency['strength'] ?? null, 'ranking tuning should clamp recency strength');
@@ -11125,7 +11133,7 @@ test_case('enabled diagnostics record frontend search timings counts language se
         assert_same('enabled', $settings['prefix_matching'] ?? null, 'frontend diagnostics should record prefix matching setting');
         assert_same(3, (int) ($settings['prefix_min_length'] ?? 0), 'frontend diagnostics should record saved prefix minimum length setting');
         assert_same(9, (int) ($settings['prefix_max_terms'] ?? 0), 'frontend diagnostics should record saved prefix max terms setting');
-        assert_same('title=5, content=1, excerpt=2, terms=1.5, custom_fields=1, rendered=1', $settings['field_boosts'] ?? null, 'frontend diagnostics should summarize effective field boosts');
+        assert_same('title=5, content=1, excerpt=2, terms=2, custom_fields=1, rendered=1', $settings['field_boosts'] ?? null, 'frontend diagnostics should summarize effective field boosts');
         assert_same('Enabled, strength 0.4, half-life 14 days', $settings['recency_boost'] ?? null, 'frontend diagnostics should summarize saved recency boost settings');
 
         $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
@@ -17682,7 +17690,7 @@ test_case('post content extractor indexes realistic WordPress fields and filters
         'render_content_callback' => static fn(string $content, object $post, array $opts): string => '<p>Rendered Shortcode Signal</p>',
         'filters' => [
             'wp_fts_post_index_fields' => static function (array $fields): array {
-                $fields[] = ['name' => 'filtered', 'text' => 'Filterword Contribution', 'boost' => 2.0];
+                $fields[] = ['name' => 'filtered', 'text' => 'Filterword Contribution', 'boost' => 2.4];
                 return $fields;
             },
         ],
@@ -17700,6 +17708,12 @@ test_case('post content extractor indexes realistic WordPress fields and filters
         assert_same(1001, $searcher->search($term, ['lang' => 'en'])[0]['doc_id'] ?? null, "{$term} should come from extracted post fields");
     }
     assert_same([], $searcher->search('hidden', ['lang' => 'en']), 'unselected custom fields should not be indexed');
+
+    $filteredField = array_values(array_filter(
+        $extracted['fields'],
+        static fn(array $field): bool => ($field['name'] ?? '') === 'filtered'
+    ))[0] ?? [];
+    assert_same(2.0, $filteredField['boost'] ?? null, 'filtered field boosts should use the integer posting-frequency precision');
 
     $metadata = $storage->get_doc_metadata([1001])[1001];
     assert_same('post', $metadata['post_type'], 'metadata should include post type');

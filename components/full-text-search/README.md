@@ -75,3 +75,9 @@ but must defer document-term lookups.
 The initial split keeps the legacy `WP_FTS_*` global class names so existing
 plugin code and tests stay compatible. A future publishing pass can add
 namespaced wrappers without changing this first extraction.
+
+Field boosts currently feed integer posting frequencies rather than a BM25F
+field model. Direct callers should use positive whole-number boosts: fractional
+totals are rounded during indexing, and zero or negative field values fall back
+to `1`. Omit a field from `index_document_fields()` when it should not
+contribute to search.
