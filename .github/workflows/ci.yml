@@ -79,6 +79,8 @@ jobs:
           coverage: none
 
       - name: Test source fallbacks without php.ini
+        env:
+          WP_FTS_FAIL_ON_PENDING: '1'
         run: |
           php -n components/full-text-search/tests/smoke.php
           php -n indexer/tests/run.php
