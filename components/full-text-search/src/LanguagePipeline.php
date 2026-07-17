@@ -810,14 +810,10 @@ final class WP_FTS_LanguagePipeline
             return null;
         }
 
-        if (is_object($component) && is_callable([$component, 'index_signature'])) {
-            try {
-                $signature = $component->index_signature();
-                if (is_scalar($signature) && trim((string) $signature) !== '') {
-                    return (string) $signature;
-                }
-            } catch (Throwable) {
-                // Fall through to the callable or class-level descriptor.
+        if (is_object($component)) {
+            $signature = $this->explicitObjectSignature($component);
+            if ($signature !== null) {
+                return $signature;
             }
         }
 
@@ -843,7 +839,9 @@ final class WP_FTS_LanguagePipeline
             }
 
             if (is_array($callback) && count($callback) === 2) {
-                $target = is_object($callback[0]) ? $this->componentSignature($callback[0]) : (string) $callback[0];
+                $target = is_object($callback[0])
+                    ? ($this->explicitObjectSignature($callback[0]) ?? 'object:' . get_debug_type($callback[0]))
+                    : (string) $callback[0];
                 return 'method:' . $target . '::' . (string) $callback[1];
             }
 
@@ -862,13 +860,35 @@ final class WP_FTS_LanguagePipeline
             }
 
             if (is_object($callback)) {
-                return 'invokable:' . $this->componentSignature($callback);
+                $target = $this->explicitObjectSignature($callback) ?? 'object:' . get_debug_type($callback);
+                return 'invokable:' . $target;
             }
         } catch (Throwable) {
             return 'callable:' . get_debug_type($callback);
         }
 
         return 'callable:' . get_debug_type($callback);
+    }
+
+    /**
+     * Return an object's explicit index signature when it provides one.
+     */
+    private function explicitObjectSignature(object $component): ?string
+    {
+        if (!is_callable([$component, 'index_signature'])) {
+            return null;
+        }
+
+        try {
+            $signature = $component->index_signature();
+            if (is_scalar($signature) && trim((string) $signature) !== '') {
+                return (string) $signature;
+            }
+        } catch (Throwable) {
+            // Fall through to the callable or class-level descriptor.
+        }
+
+        return null;
     }
 
     /**

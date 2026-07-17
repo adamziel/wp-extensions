@@ -372,7 +372,7 @@ final class WP_FTS_Plugin
         add_action('trashed_post', [self::class, 'handle_post_delete'], 10, 1);
         add_action('before_delete_post', [self::class, 'handle_post_delete'], 10, 1);
         add_action('wp_initialize_site', [self::class, 'handle_site_initialization'], 10, 2);
-        add_action('init', [self::class, 'detect_index_profile_drift'], 1, 0);
+        add_action('wp_loaded', [self::class, 'detect_index_profile_drift'], 1, 0);
         add_action(self::CRON_HOOK, [self::class, 'process_scheduled_indexing'], 10, 0);
         add_action('rest_api_init', [self::class, 'register_rest_routes'], 10, 0);
         add_action('admin_menu', [self::class, 'register_admin_menu'], 10, 0);
@@ -416,7 +416,7 @@ final class WP_FTS_Plugin
     /**
      * Mark existing documents stale when runtime index behavior changes.
      *
-     * This runs after plugins have registered analyzer filters and before a
+     * This runs after init-time analyzer filter registrations and before a
      * scheduled batch can accept a new profile without sweeping old rows.
      */
     public static function detect_index_profile_drift(): void

@@ -746,6 +746,7 @@ namespace {
             'wp_initialize_site',
             'wp_after_insert_post',
             'wp_ajax_wp_fts_sandbox_result_details',
+            'wp_loaded',
         ];
         sort($expectedHooks, SORT_STRING);
         assert_same($expectedHooks, $hooks, 'plugin runtime hooks should be registered through WordPress add_action');

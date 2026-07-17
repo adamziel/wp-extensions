@@ -4511,7 +4511,6 @@ PHP;
         'admin_init',
         'admin_menu',
         'before_delete_post',
-        'init',
         'loop_end',
         'loop_start',
         'pre_get_posts',
@@ -4524,18 +4523,19 @@ PHP;
         'wp_initialize_site',
         'wp_after_insert_post',
         'wp_ajax_wp_fts_sandbox_result_details',
+        'wp_loaded',
     ];
     sort($expectedHooks, SORT_STRING);
     assert_same($expectedHooks, $hooks, 'bootstrap should register bounded runtime hooks in WordPress context');
 
     $profileDriftAction = null;
     foreach ($GLOBALS['wp_fts_test_actions'] as $action) {
-        if (($action['hook'] ?? null) === 'init') {
+        if (($action['hook'] ?? null) === 'wp_loaded') {
             $profileDriftAction = $action;
             break;
         }
     }
-    assert_same([WP_FTS_Plugin::class, 'detect_index_profile_drift'], $profileDriftAction['callback'] ?? null, 'bootstrap should detect runtime analyzer changes before indexing batches');
+    assert_same([WP_FTS_Plugin::class, 'detect_index_profile_drift'], $profileDriftAction['callback'] ?? null, 'bootstrap should detect runtime analyzer changes after init-time filter registration and before indexing batches');
 
     $filterHooks = array_column($GLOBALS['wp_fts_test_filter_registrations'], 'hook');
     sort($filterHooks, SORT_STRING);
@@ -16963,6 +16963,23 @@ test_case('analyzer signatures include captured callback state', function (): vo
     assert_true((new WP_FTS_Indexer($storage, $firstAnalyzer))->index_document(43, $html, ['lang' => 'en']), 'first callback behavior should index the document');
     assert_true((new WP_FTS_Indexer($storage, $secondAnalyzer))->index_document(43, $html, ['lang' => 'en']), 'changed captured callback state should invalidate the unchanged-content hash');
     assert_same([43], array_column((new WP_FTS_Searcher($storage, $secondAnalyzer))->search('sourceword', ['lang' => 'en']), 'doc_id'), 'search should use postings from the new callback behavior');
+});
+
+test_case('analyzer signatures handle invokable components without recursion', function (): void {
+    $stemmer = new class {
+        public function __invoke(string $term): string
+        {
+            return 'invokablestem';
+        }
+    };
+    $analyzer = new WP_FTS_Analyzer([
+        'auto_detect_language' => false,
+        'stemmers_by_lang' => ['en' => $stemmer],
+    ]);
+
+    $signature = $analyzer->index_signature();
+    assert_same($signature, $analyzer->index_signature(), 'invokable component signatures should remain deterministic');
+    assert_same(['invokablestem'], $analyzer->analyze_query('running', ['lang' => 'en']), 'invokable custom stemmers should remain usable after signature generation');
 });
 
 test_case('indexer consumes analyzer occurrences with language tags', function (): void {
