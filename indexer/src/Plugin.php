@@ -13711,9 +13711,12 @@ JS;
             $post_id = isset($row->ID) ? (int) $row->ID : 0;
             if ($post_id > 0 && isset($blocked[$post_id])) {
                 $blocked_rows++;
-                $last_cursor = max($cursor, $post_id);
                 $summary['failure_recovery_skipped'] = max(0, (int) ($summary['failure_recovery_skipped'] ?? 0)) + 1;
-                continue;
+                // The stale cursor is the only durable record of which retained
+                // rows still need the current profile. Advancing past a row in
+                // backoff would let the sweep complete before that row retries.
+                $summary['has_more'] = true;
+                break;
             }
 
             $work[] = $row;

@@ -10866,6 +10866,8 @@ test_case('stale debt failure leaves cursor before failed row and keeps debt act
 
         $result = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 3]);
         $health = WP_FTS_Plugin::search_health();
+        $blocked = WP_FTS_Plugin::process_scheduled_indexing();
+        $blockedHealth = WP_FTS_Plugin::search_health();
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -10878,6 +10880,11 @@ test_case('stale debt failure leaves cursor before failed row and keeps debt act
     assert_same(0, $health['stale_debt_cursor_post_id'], 'stale failure should not advance cursor past the failed row');
     assert_same(3, $health['stale_debt_remaining_count'], 'stale failure should leave remaining stale rows visible');
     assert_contains('INSERT statement', (string) ($health['last_error'] ?? ''), 'stale failure should redact SQL details');
+    assert_same(0, $blocked['stale_processed'] ?? null, 'a cron pass should not process later stale rows while the first row is in backoff');
+    assert_same(true, $blocked['has_more'] ?? null, 'a blocked stale row should keep the bounded sweep scheduled');
+    assert_same(true, $blockedHealth['stale_debt_active'] ?? null, 'a blocked stale row should not let the sweep report completion');
+    assert_same(0, $blockedHealth['stale_debt_cursor_post_id'] ?? null, 'backoff should leave the stale cursor before the failed row');
+    assert_same(3, $blockedHealth['stale_debt_remaining_count'] ?? null, 'backoff should keep every unprocessed retained row visible');
 });
 
 test_case('profile change during stale sweep restarts debt progress instead of clearing it', function (): void {
