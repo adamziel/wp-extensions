@@ -51,6 +51,10 @@ final class WP_FTS_Plugin
     private const REST_CANDIDATE_CAP = 500;
     private const REST_MAX_CANDIDATE_ROWS = 2000;
     private const REST_MAX_SQL_QUERIES = 32;
+    // Result diagnostics need two per-result reads plus one shared metadata
+    // read; five leaves more than half the request budget for candidate,
+    // scoring, and visibility queries.
+    private const REST_MAX_EXPLAIN_RESULTS = 5;
     private const REST_TIME_BUDGET_SECONDS = 0.25;
     private const DEFAULT_CRON_INDEX_TIME_BUDGET = 10.0;
     private const DEFAULT_MANUAL_INDEX_TIME_BUDGET = 20.0;
@@ -11562,9 +11566,29 @@ JS;
             $search_options['explain_result_matches'] = true;
             if ($boundedApproximateRequest) {
                 // Authorize the capped page before document-level explain
-                // lookups. Ranking remains approximate, while hidden rows do
-                // not consume the public SQL budget merely to be discarded.
-                $search_options['explain_doc_ids_filter'] = static fn(array $doc_ids): array => self::readable_search_candidate_ids($doc_ids);
+                // lookups, then retain a bounded prefix of the requested visible
+                // page in ranked order. The diagnostic ceiling reserves enough
+                // of the public SQL budget for search and visibility reads, while
+                // hidden or later refill rows do not consume it only to be
+                // discarded.
+                $explain_limit = min($limit, self::REST_MAX_EXPLAIN_RESULTS);
+                $search_options['explain_doc_ids_filter'] = static function (array $doc_ids) use ($explain_limit): array {
+                    $readable = array_fill_keys(self::readable_search_candidate_ids($doc_ids), true);
+                    $page = [];
+                    foreach ($doc_ids as $doc_id) {
+                        $doc_id = (int) $doc_id;
+                        if ($doc_id <= 0 || !isset($readable[$doc_id])) {
+                            continue;
+                        }
+
+                        $page[] = $doc_id;
+                        if (count($page) >= $explain_limit) {
+                            break;
+                        }
+                    }
+
+                    return $page;
+                };
             }
         }
         if ($boundedApproximateRequest) {

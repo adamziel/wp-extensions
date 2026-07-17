@@ -12583,6 +12583,88 @@ test_case('REST search explain is operator-gated and filtered to visible rows', 
     });
 });
 
+test_case('REST search explain limits diagnostic reads to the requested visible page', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['rest_api_enabled' => true]
+    );
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    try {
+        $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), WP_FTS_Plugin::runtime_analyzer());
+        for ($post_id = 5001; $post_id <= 5040; $post_id++) {
+            $text = implode(' ', array_fill(0, $post_id === 5040 ? 20 : 1, 'broadexplainneedle'));
+            $post = (object) [
+                'ID' => $post_id,
+                'post_title' => 'Public broad explain ' . $post_id,
+                'post_content' => '',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+            ];
+            $GLOBALS['wp_fts_test_posts'][$post_id] = $post;
+            $indexer->index_document_fields($post_id, [[
+                'name' => 'content',
+                'text' => $text,
+                'boost' => 1.0,
+            ]], [
+                'lang' => 'en',
+                'metadata' => [
+                    'post_id' => $post_id,
+                    'post_type' => 'post',
+                    'post_status' => 'publish',
+                    'title' => $post->post_title,
+                    'search_text' => $text,
+                ],
+            ]);
+        }
+
+        $fake->num_queries = 0;
+        $response = WP_FTS_Plugin::rest_search([
+            'q' => 'broadexplainneedle',
+            'limit' => 1,
+            'lang' => 'en',
+            'explain' => '1',
+        ]);
+        assert_true(
+            is_array($response),
+            'one-result operator explain should not exhaust its SQL budget: '
+                . ($response instanceof WP_Error ? $response->get_error_code() . ' ' . json_encode($response->get_error_data()) : get_debug_type($response))
+        );
+        assert_same([5040], array_column($response['results'] ?? [], 'doc_id'), 'operator explain should return the strongest requested row');
+        assert_same([5040], array_column($response['explain']['results'] ?? [], 'doc_id'), 'operator explain diagnostics should stay aligned with that ranked row');
+        assert_true($fake->num_queries < 32, 'one-result operator explain should stay below the fixed 32-query REST budget');
+
+        $fake->num_queries = 0;
+        $max_response = WP_FTS_Plugin::rest_search([
+            'q' => 'broadexplainneedle',
+            'limit' => 50,
+            'lang' => 'en',
+            'explain' => '1',
+        ]);
+        assert_true(
+            is_array($max_response),
+            'maximum-page operator explain should not exhaust its SQL budget: '
+                . ($max_response instanceof WP_Error ? $max_response->get_error_code() . ' ' . json_encode($max_response->get_error_data()) : get_debug_type($max_response))
+        );
+        $max_result_ids = array_column($max_response['results'] ?? [], 'doc_id');
+        assert_same(40, count($max_result_ids), 'maximum-page operator explain should preserve all available visible results');
+        assert_same(
+            array_slice($max_result_ids, 0, 5),
+            array_column($max_response['explain']['results'] ?? [], 'doc_id'),
+            'maximum-page operator explain should diagnose a bounded ranked prefix'
+        );
+        assert_true($fake->num_queries < 32, 'maximum-page operator explain should stay below the fixed 32-query REST budget');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('REST search explain returns bounded context for empty visible result sets', function (): void {
     wp_fts_test_with_rest_explain_index(static function (): void {
         $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
