@@ -45,11 +45,11 @@
         "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=en --pack-id=en-unimorph-eng-66e0e9e8e2dc --version=66e0e9e8e2dc-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/eng/blob/66e0e9e8e2dcd196da081a25a48e5c1fe3d8b49b/eng --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
     },
     "runtime": {
-        "manifest_sha256": "2087b8d1970dc39cf26d2592c108645ac7ec19a680a5e374f9f4c47096188677",
-        "row_count": 566761,
+        "manifest_sha256": "50cd0cb5683b9572c2bb7cbed8cf9d6ec8c9ad3ba00b34adcccda985fcf1a402",
+        "row_count": 566752,
         "file_count": 6,
-        "byte_count": 2592024,
-        "digest_sha256": "5db7690f96aac3e07cefb1465cbc4cd02ba1b440be118ddf87108adb0c1b217f",
+        "byte_count": 2591902,
+        "digest_sha256": "4224435548bb7263b365f2cecad908a934d8b53333c2515e26b62325e49263f4",
         "contains_third_party_data": true,
         "committed": true,
         "compression": "gzip"

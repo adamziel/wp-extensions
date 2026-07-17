@@ -181,6 +181,14 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
+     * Normalize arbitrary source text before lexical boundaries are selected.
+     */
+    public function normalize_unicode_text(string $text): string
+    {
+        return $this->normalizer->normalize_unicode($text);
+    }
+
+    /**
      * Build a namespaced term key using `lang . "\\x1e" . term`.
      *
      * @param string $language Language partition.
@@ -325,6 +333,7 @@ final class WP_FTS_LanguagePipeline
      */
     private function tokenize(string $text, string $language): array
     {
+        $text = $this->normalizer->normalize_unicode($text);
         $matches = [];
         if (@preg_match_all('/[\p{L}\p{M}\p{N}_]+/u', $text, $matches) !== false) {
             $tokens = [];
@@ -721,11 +730,12 @@ final class WP_FTS_LanguagePipeline
         }
         $payload = [
             'contract' => 'wp-fts-language-pipeline',
-            'version' => 17,
+            'version' => 18,
             'cjk_max_ngram_length' => self::CJK_MAX_NGRAM_LENGTH,
             'min_term_len' => $this->minTermLen,
             'max_term_bytes' => $this->maxTermBytes,
             'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
+            'unicode_normalizer' => $this->normalizer->index_signature(),
             'namespace_terms' => $this->namespaceTerms,
             'enable_stemming' => $this->enableStemming,
             'polish_stemming' => $polishMode,
@@ -747,7 +757,7 @@ final class WP_FTS_LanguagePipeline
             $payload['polish_verified_stemmer'] = WP_FTS_PolishVerifiedStemmerData::VERSION;
         }
 
-        return 'wp-fts-language-pipeline-v17:' . sha1($this->stableJson($payload));
+        return 'wp-fts-language-pipeline-v18:' . sha1($this->stableJson($payload));
     }
 
     /**

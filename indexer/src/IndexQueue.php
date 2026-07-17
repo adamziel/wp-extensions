@@ -282,32 +282,6 @@ WHERE post_id = %d
     }
 
     /**
-     * Remove all pending generations for selected posts.
-     *
-     * @param int[] $post_ids
-     */
-    public function remove(array $post_ids): void
-    {
-        $ids = [];
-        foreach ($post_ids as $post_id) {
-            $post_id = (int) $post_id;
-            if ($post_id > 0) {
-                $ids[$post_id] = true;
-            }
-        }
-        $ids = array_keys($ids);
-        if ($ids === []) {
-            return;
-        }
-
-        $placeholders = implode(',', array_fill(0, count($ids), '%d'));
-        $this->query($this->wpdb->prepare(
-            "DELETE FROM {$this->table} WHERE post_id IN ({$placeholders})",
-            ...$ids
-        ), 'remove FTS indexing work');
-    }
-
-    /**
      * Count pending work without loading every queued post id into memory.
      */
     public function count(): int

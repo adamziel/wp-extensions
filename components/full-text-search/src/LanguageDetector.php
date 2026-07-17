@@ -43,7 +43,7 @@ final class WP_FTS_LanguageDetector
      */
     public function detect_text(string $text, array $candidateLanguages = []): ?string
     {
-        $text = trim(WP_FTS_Utf8::repair($text));
+        $text = trim($this->normalizer->normalize_unicode($text));
         if ($text === '') {
             return null;
         }
@@ -87,9 +87,10 @@ final class WP_FTS_LanguageDetector
      */
     public function index_signature(): string
     {
-        return 'wp-fts-language-detector-v5:' . sha1($this->stableJson([
+        return 'wp-fts-language-detector-v6:' . sha1($this->stableJson([
             'contract' => 'wp-fts-language-detector',
-            'version' => 5,
+            'version' => 6,
+            'unicode_normalizer' => $this->normalizer->index_signature(),
             'minimum_score' => $this->minimumScore,
             'minimum_lead' => $this->minimumLead,
             'evidence_terms' => $this->sortedStringSetMap($this->evidenceTerms),

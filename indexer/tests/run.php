@@ -2097,7 +2097,7 @@ final class WP_FTS_Test_WPDB
             return count($this->queue);
         }
 
-        if (str_starts_with($sql, 'SELECT COALESCE(MAX(d.doc_id), 0)') && str_contains($sql, 'FROM wp_fts_docs d')) {
+        if (str_starts_with($sql, 'SELECT COALESCE(MAX(d.doc_id), 0)') && str_contains($sql, 'FROM ' . $this->prefix . 'fts_docs d')) {
             $ids = array_keys(array_filter(
                 $this->docs,
                 static fn(array $doc): bool => ($doc['is_deleted'] ?? 1) === 0
@@ -8902,6 +8902,12 @@ test_case('network activation chains bounded schema batches for existing subsite
     $GLOBALS['wp_fts_test_sites'] = range(1, 12);
     $GLOBALS['wp_fts_test_use_blog_option_store'] = true;
     $GLOBALS['wp_fts_test_site_options'] = array_fill_keys(range(1, 12), []);
+    $fake->docs[41] = [
+        'lang' => 'en',
+        'doc_len' => 2,
+        'content_hash' => 'retained-before-network-reactivation',
+        'is_deleted' => 0,
+    ];
 
     try {
         WP_FTS_Plugin::activate(true);
@@ -8911,10 +8917,14 @@ test_case('network activation chains bounded schema batches for existing subsite
         ));
         assert_same([[0]], array_column($schemaCalls, 'args'), 'network activation should schedule only the first bounded schema batch');
         assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_site_options'][1][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'network activation should provision the current site immediately');
+        assert_same(['retained_rows_may_be_stale'], $GLOBALS['wp_fts_test_site_options'][1][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['stale_debt_reasons'] ?? null, 'network activation should reconcile retained rows on the current site');
         assert_true(!isset($GLOBALS['wp_fts_test_site_options'][2][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'network activation request should not synchronously mutate a subsite');
+        assert_true(!isset($GLOBALS['wp_fts_test_site_options'][2][WP_FTS_Plugin::INDEX_HEALTH_OPTION]), 'network activation request should leave subsite reconciliation to the bounded schema job');
 
         WP_FTS_Plugin::handle_scheduled_site_schema(0);
         assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_site_options'][2][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'one bounded schema job should provision its target subsite');
+        assert_same(['retained_rows_may_be_stale'], $GLOBALS['wp_fts_test_site_options'][2][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['stale_debt_reasons'] ?? null, 'one bounded schema job should reconcile retained subsite rows');
+        assert_same(41, $GLOBALS['wp_fts_test_site_options'][2][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['stale_debt_max_doc_id'] ?? null, 'subsite reconciliation should bound its retained-row sweep at activation time');
         assert_true(!isset($GLOBALS['wp_fts_test_site_options'][11][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'the first batch should not cross its ten-site bound');
         assert_contains('CREATE TABLE wp_2_fts_docmeta', implode("\n", $fake->queries), 'subsite schema job should use the target site table prefix');
         assert_same([[0], [10]], array_column(array_values(array_filter(
@@ -11006,6 +11016,62 @@ test_case('save status and delete hooks defer tombstones behind the writer lease
     assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'deferred lifecycle tombstones should schedule the queue processor');
 });
 
+test_case('successful lifecycle tombstones preserve queued generations for current-state reconciliation', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    foreach ([811, 812, 813] as $postId) {
+        $fake->docs[$postId] = [
+            'lang' => 'en',
+            'doc_len' => 1,
+            'content_hash' => 'hook-generation-' . $postId,
+            'is_deleted' => 0,
+        ];
+    }
+    $savedTrash = (object) [
+        'ID' => 811,
+        'post_type' => 'post',
+        'post_status' => 'trash',
+        'post_password' => '',
+    ];
+    $transitionedTrash = (object) [
+        'ID' => 812,
+        'post_type' => 'post',
+        'post_status' => 'trash',
+        'post_password' => '',
+    ];
+    $GLOBALS['wp_fts_test_posts'][811] = $savedTrash;
+    $GLOBALS['wp_fts_test_posts'][812] = $transitionedTrash;
+    wp_fts_test_seed_queue($fake, [811, 812, 813]);
+    (new WP_FTS_Index_Queue($fake))->enqueue(811);
+
+    try {
+        WP_FTS_Plugin::handle_post_save(811, $savedTrash);
+        WP_FTS_Plugin::handle_status_transition('trash', 'publish', $transitionedTrash);
+        WP_FTS_Plugin::handle_post_delete(813);
+
+        assert_same(1, $fake->docs[811]['is_deleted'] ?? null, 'save hook should tombstone while it owns the writer lease');
+        assert_same(1, $fake->docs[812]['is_deleted'] ?? null, 'status hook should tombstone while it owns the writer lease');
+        assert_same(1, $fake->docs[813]['is_deleted'] ?? null, 'delete hook should tombstone while it owns the writer lease');
+        assert_same([811, 812, 813], wp_fts_test_queue_ids($fake), 'successful tombstones should not discard durable generations that may represent newer saves');
+        assert_same(2, $fake->queue[811]['generation'] ?? null, 'successful tombstone should preserve the newest queued generation');
+
+        $processed = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 3]);
+        assert_same(3, $processed['queue_processed'] ?? null, 'later queue processing should reconcile every retained lifecycle generation');
+        assert_same([], wp_fts_test_queue_ids($fake), 'generation-aware acknowledgements should drain reconciled lifecycle work');
+        assert_same([1, 1, 1], array_map(
+            static fn(int $postId): int => (int) ($fake->docs[$postId]['is_deleted'] ?? 0),
+            [811, 812, 813]
+        ), 'idempotent lifecycle reconciliation should leave tombstoned documents deleted');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('writer heartbeat renews the same ownership token', function (): void {
     global $wpdb;
 
@@ -12525,6 +12591,88 @@ test_case('REST search explain is operator-gated and filtered to visible rows', 
         assert_true(is_array($explain['results'][0]['field_matches'] ?? null), 'operator REST explain should include per-result field matches');
         assert_true(($explain['results'][0]['field_matches'] ?? []) !== [], 'operator REST explain should include at least one field match');
     });
+});
+
+test_case('REST search explain limits diagnostic reads to the requested visible page', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['rest_api_enabled' => true]
+    );
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    try {
+        $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), WP_FTS_Plugin::runtime_analyzer());
+        for ($post_id = 5001; $post_id <= 5040; $post_id++) {
+            $text = implode(' ', array_fill(0, $post_id === 5040 ? 20 : 1, 'broadexplainneedle'));
+            $post = (object) [
+                'ID' => $post_id,
+                'post_title' => 'Public broad explain ' . $post_id,
+                'post_content' => '',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+            ];
+            $GLOBALS['wp_fts_test_posts'][$post_id] = $post;
+            $indexer->index_document_fields($post_id, [[
+                'name' => 'content',
+                'text' => $text,
+                'boost' => 1.0,
+            ]], [
+                'lang' => 'en',
+                'metadata' => [
+                    'post_id' => $post_id,
+                    'post_type' => 'post',
+                    'post_status' => 'publish',
+                    'title' => $post->post_title,
+                    'search_text' => $text,
+                ],
+            ]);
+        }
+
+        $fake->num_queries = 0;
+        $response = WP_FTS_Plugin::rest_search([
+            'q' => 'broadexplainneedle',
+            'limit' => 1,
+            'lang' => 'en',
+            'explain' => '1',
+        ]);
+        assert_true(
+            is_array($response),
+            'one-result operator explain should not exhaust its SQL budget: '
+                . ($response instanceof WP_Error ? $response->get_error_code() . ' ' . json_encode($response->get_error_data()) : get_debug_type($response))
+        );
+        assert_same([5040], array_column($response['results'] ?? [], 'doc_id'), 'operator explain should return the strongest requested row');
+        assert_same([5040], array_column($response['explain']['results'] ?? [], 'doc_id'), 'operator explain diagnostics should stay aligned with that ranked row');
+        assert_true($fake->num_queries < 32, 'one-result operator explain should stay below the fixed 32-query REST budget');
+
+        $fake->num_queries = 0;
+        $max_response = WP_FTS_Plugin::rest_search([
+            'q' => 'broadexplainneedle',
+            'limit' => 50,
+            'lang' => 'en',
+            'explain' => '1',
+        ]);
+        assert_true(
+            is_array($max_response),
+            'maximum-page operator explain should not exhaust its SQL budget: '
+                . ($max_response instanceof WP_Error ? $max_response->get_error_code() . ' ' . json_encode($max_response->get_error_data()) : get_debug_type($max_response))
+        );
+        $max_result_ids = array_column($max_response['results'] ?? [], 'doc_id');
+        assert_same(40, count($max_result_ids), 'maximum-page operator explain should preserve all available visible results');
+        assert_same(
+            array_slice($max_result_ids, 0, 5),
+            array_column($max_response['explain']['results'] ?? [], 'doc_id'),
+            'maximum-page operator explain should diagnose a bounded ranked prefix'
+        );
+        assert_true($fake->num_queries < 32, 'maximum-page operator explain should stay below the fixed 32-query REST budget');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
 });
 
 test_case('REST search explain returns bounded context for empty visible result sets', function (): void {
@@ -16046,7 +16194,7 @@ test_case('generic lemma packs by language beat baseline and fall back safely', 
     $defaultSignature = $baseline->index_signature();
     $packSignature = $packPipeline->index_signature();
     assert_true($defaultSignature !== $packSignature, 'language pipeline signature should change when a generic pack is enabled');
-    assert_contains('wp-fts-language-pipeline-v17:', $packSignature, 'language pipeline signature should identify the generic-pack contract');
+    assert_contains('wp-fts-language-pipeline-v18:', $packSignature, 'language pipeline signature should identify the generic-pack contract');
 
     $defaultAnalyzer = new WP_FTS_Analyzer();
     $packAnalyzer = new WP_FTS_Analyzer([
@@ -18758,12 +18906,15 @@ test_case('indexed search matches brute-force oracle on generated corpora', func
 });
 
 test_case('T8 per-language analyzer fixtures are enforced when language pipelines exist', function (): void {
+    // Raw source-tree bootstraps preserve the Bengali precomposed letter until
+    // Composer supplies the required Unicode normalization backend.
+    $bengaliSchoolTerm = class_exists('Normalizer') ? 'বিদ্যালয়' : 'বিদ্যালয়';
     $fixtures = [
         ['English normalization', 'en', 'running runs runner', ['run', 'run', 'runner']],
         ['Polish folding', 'pl', 'Wrocław Łódź zażółć', ['wroclaw', 'lodz', 'zazolc']],
         ['German folding', 'de', 'Straße Ärger Öl', ['strasse', 'aerger', 'oel']],
         ['Turkish dotted I folding', 'tr', 'Isparta İstanbul ışık', ['ısparta', 'istanbul', 'ısık']],
-        ['Bengali baseline stemming', 'bn', 'বইটিকে শিক্ষকদেরকে বিদ্যালয়ের সূচিতে', ['বই', 'শিক্ষক', 'বিদ্যালয়', 'সূচি']],
+        ['Bengali baseline stemming', 'bn', 'বইটিকে শিক্ষকদেরকে বিদ্যালয়ের সূচিতে', ['বই', 'শিক্ষক', $bengaliSchoolTerm, 'সূচি']],
         ['Urdu baseline stemming', 'ur', 'لڑکیوں لڑکیاں لڑکے حالات معلومات', ['لڑکی', 'لڑکی', 'لڑک', 'حال', 'معلوم']],
         ['CJK fallback n-grams', 'zh-Hans', '搜索引擎', ['搜', '索', '引', '擎', '搜索', '索引', '引擎', '搜索引', '索引擎', '搜索引擎']],
     ];
@@ -19835,7 +19986,8 @@ test_case('metadata-less replacement clears stale product metadata', function ()
         assert_same(0, $filtered['total'], "{$name} replacement without metadata should not match stale status filters");
         assert_same(1, $unfiltered['total'], "{$name} replacement should keep the new postings searchable");
         assert_same('', $unfiltered['results'][0]['title'] ?? null, "{$name} replacement should clear stale result title");
-        assert_same('', $unfiltered['results'][0]['snippet'] ?? null, "{$name} replacement should clear stale snippet text");
+        $expectedSnippet = $name === 'legacy' ? 'needle new' : '';
+        assert_same($expectedSnippet, $unfiltered['results'][0]['snippet'] ?? null, "{$name} replacement should not retain stale snippet text");
         assert_same('', $metadata['post_status'] ?? null, "{$name} replacement should write normalized empty metadata");
     }
 });
@@ -21111,7 +21263,7 @@ test_case('wp cli reindex accepts language source filters and limit', function (
     assert_same(['Indexed 1 posts in pl-PL.'], WP_CLI::$successMessages, 'CLI should report canonical language and limited count');
     assert_same([10], array_keys($fake->docs), 'CLI limit should restrict indexed posts');
     assert_same('pl-PL', $fake->docs[10]['lang'], 'CLI language option should reach MySQL docs');
-    $expectedDocLength = WP_FTS_AnalyzerPackValidator::gzip_available() ? 9 : 7;
+    $expectedDocLength = WP_FTS_AnalyzerPackValidator::gzip_available() ? 8 : 7;
     assert_same(['pl-PL' => $expectedDocLength], $fake->docLengths[10], 'CLI reindex should write boosted per-language doc length for the active Polish pack');
     assert_same('post', $fake->docMeta[10]['post_type'], 'CLI reindex should store post type metadata');
     assert_same('publish', $fake->docMeta[10]['post_status'], 'CLI reindex should store status metadata');

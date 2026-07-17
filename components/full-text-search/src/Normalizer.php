@@ -81,15 +81,107 @@ final class WP_FTS_Normalizer
     public function normalize_token(string $token, string $language): string
     {
         $language = $this->canonicalize_language($language);
+        $token = $this->normalize_unicode($token);
         $token = $this->lowercase($token, $language);
         $token = $this->normalize_dialect($token, $language);
         $token = $this->apply_token_normalizer($token, $language);
+        $token = $this->normalize_unicode($token);
 
         if (!$this->foldDiacritics) {
             return $token;
         }
 
         return $this->fold_for_language($token, $language);
+    }
+
+    /**
+     * Apply Unicode NFKC normalization before lexical analysis.
+     *
+     * Compatibility normalization includes canonical NFC composition while
+     * also folding presentation variants such as full-width Latin letters and
+     * ligatures. Composer installs the pure-PHP intl normalizer polyfill when
+     * the extension is unavailable; the guarded fallback keeps source-tree
+     * bootstraps usable when dependencies have not been installed yet.
+     */
+    public function normalize_unicode(string $text): string
+    {
+        $text = WP_FTS_Utf8::repair_word_boundaries($text);
+        if (!class_exists('Normalizer')) {
+            return $text;
+        }
+
+        try {
+            $normalized = Normalizer::normalize($text, Normalizer::FORM_KC);
+        } catch (Throwable) {
+            return $text;
+        }
+
+        return is_string($normalized) ? $normalized : $text;
+    }
+
+    /**
+     * Identify the Unicode normalization backend for stale-index checks.
+     *
+     * Composer makes NFKC available through the Symfony polyfill, while raw
+     * source-tree bootstraps may temporarily run without it. Encoding that
+     * distinction prevents installing the dependency later from silently
+     * changing query terms without reindexing existing documents.
+     */
+    public function index_signature(): string
+    {
+        if (!class_exists('Normalizer')) {
+            return 'wp-fts-unicode-normalizer:none';
+        }
+
+        $backend = defined('INTL_ICU_VERSION')
+            ? 'intl-' . (string) constant('INTL_ICU_VERSION')
+            : 'symfony-polyfill-' . $this->polyfill_version_signature();
+
+        return 'wp-fts-unicode-normalizer:nfkc-' . $backend;
+    }
+
+    /**
+     * Resolve the installed polyfill release, with a data hash fallback for
+     * source trees that load the Symfony class without Composer metadata.
+     */
+    private function polyfill_version_signature(): string
+    {
+        if (class_exists('Composer\\InstalledVersions')) {
+            try {
+                $version = Composer\InstalledVersions::getPrettyVersion('symfony/polyfill-intl-normalizer')
+                    ?? Composer\InstalledVersions::getReference('symfony/polyfill-intl-normalizer');
+                if (is_string($version) && $version !== '') {
+                    return $version;
+                }
+            } catch (Throwable) {
+                // Fall through to hashing the loaded normalization tables.
+            }
+        }
+
+        if (!class_exists('Symfony\\Polyfill\\Intl\\Normalizer\\Normalizer')) {
+            return 'unknown';
+        }
+
+        try {
+            $classFile = (new ReflectionClass('Symfony\\Polyfill\\Intl\\Normalizer\\Normalizer'))->getFileName();
+            if (!is_string($classFile) || !is_file($classFile)) {
+                return 'unknown';
+            }
+
+            $files = array_merge(
+                [$classFile],
+                glob(dirname($classFile) . '/Resources/unidata/*.php') ?: []
+            );
+            sort($files, SORT_STRING);
+            $hash = hash_init('sha256');
+            foreach ($files as $file) {
+                hash_update($hash, basename($file) . "\0" . hash_file('sha256', $file) . "\n");
+            }
+
+            return 'data-' . substr(hash_final($hash), 0, 16);
+        } catch (Throwable) {
+            return 'unknown';
+        }
     }
 
     /**

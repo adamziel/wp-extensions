@@ -10,7 +10,7 @@ declare(strict_types=1);
  */
 final class WP_FTS_Indexer
 {
-    private const INDEX_SIGNATURE_VERSION = 'wp-fts-indexer-v2';
+    private const INDEX_SIGNATURE_VERSION = 'wp-fts-indexer-v3';
     private const FIELD_METADATA_MAX_FIELDS = 16;
     private const FIELD_METADATA_TEXT_BYTES = 2000;
     private const FIELD_METADATA_HTML_BYTES = 2000;
@@ -67,16 +67,38 @@ final class WP_FTS_Indexer
 
         $primaryLang = $this->resolve_document_language($opts);
         $hash = $this->content_hash($html, $primaryLang);
-        $metadata = isset($opts['metadata']) && is_array($opts['metadata'])
+        $metadataWasProvided = isset($opts['metadata']) && is_array($opts['metadata']);
+        $metadata = $metadataWasProvided
             ? $opts['metadata']
-            : null;
+            : [];
+        if (!array_key_exists('search_text', $metadata)) {
+            $searchText = rtrim(WP_FTS_Utf8::truncate_bytes(
+                WP_FTS_Html_Text_Stream::visible_text($html),
+                $this->bounded_positive_option(
+                    $opts['metadata_text_limit'] ?? null,
+                    20000,
+                    1,
+                    20000
+                )
+            ));
+            if ($searchText !== '') {
+                $metadata['search_text'] = $searchText;
+            }
+        }
+
+        $nextAlternativeGroup = 0;
+        $occurrences = $this->mark_alternative_groups(
+            $this->analyze_content($html, $opts, $primaryLang),
+            $nextAlternativeGroup
+        );
 
         return $this->index_occurrences(
             $doc_id,
             $primaryLang,
             $hash,
-            $this->analyze_content($html, $opts, $primaryLang),
-            $metadata
+            $occurrences,
+            $metadata,
+            $metadataWasProvided
         );
     }
 
@@ -121,6 +143,7 @@ final class WP_FTS_Indexer
         $hash = $this->content_hash($this->fields_hash_source($fields, $metadata), $primaryLang);
 
         $occurrences = [];
+        $nextAlternativeGroup = 0;
         foreach ($fields as $field) {
             $fieldOpts = $opts;
             $fieldOpts['field_name'] = $field['name'];
@@ -128,7 +151,7 @@ final class WP_FTS_Indexer
                 ? $this->analyze_content((string) $field['html'], $fieldOpts, $primaryLang)
                 : $this->analyze_plain_content((string) $field['text'], $fieldOpts, $primaryLang);
 
-            foreach ($fieldOccurrences as $occurrence) {
+            foreach ($this->mark_alternative_groups($fieldOccurrences, $nextAlternativeGroup) as $occurrence) {
                 if (is_array($occurrence)) {
                     $occurrence['weight'] = (float) ($occurrence['weight'] ?? 1.0) * $field['boost'];
                 }
@@ -140,16 +163,52 @@ final class WP_FTS_Indexer
     }
 
     /**
+     * Give alternatives emitted for one source token an indexer-local group id.
+     *
+     * Analyzer positions restart for every independently analyzed field, so the
+     * monotonically increasing id prevents adjacent fields with the same local
+     * position from being collapsed into one logical occurrence.
+     *
+     * @param array<int,array<string,mixed>|string> $occurrences
+     * @return array<int,array<string,mixed>|string>
+     */
+    private function mark_alternative_groups(array $occurrences, int &$nextGroup): array
+    {
+        $groupsByPosition = [];
+        foreach ($occurrences as &$occurrence) {
+            if (!is_array($occurrence) || !isset($occurrence['position']) || !is_scalar($occurrence['position'])) {
+                continue;
+            }
+
+            $position = (string) $occurrence['position'];
+            if (!isset($groupsByPosition[$position])) {
+                $groupsByPosition[$position] = $nextGroup++;
+            }
+            $occurrence['_alternative_group'] = $groupsByPosition[$position];
+        }
+        unset($occurrence);
+
+        return $occurrences;
+    }
+
+    /**
      * Store analyzed occurrences, document lengths, and optional metadata.
      *
      * @param array<int,array<string,mixed>|string> $occurrences
      * @param array<string,mixed>|null $metadata
      */
-    private function index_occurrences(int $doc_id, string $primaryLang, string $hash, array $occurrences, ?array $metadata): bool
+    private function index_occurrences(
+        int $doc_id,
+        string $primaryLang,
+        string $hash,
+        array $occurrences,
+        ?array $metadata,
+        bool $replaceMetadataOnHashMatch = true
+    ): bool
     {
         $existing = $this->storage->get_doc($doc_id);
         if ($existing !== null && !$existing['deleted'] && $existing['content_hash'] === $hash) {
-            if ($metadata !== null) {
+            if ($metadata !== null && $replaceMetadataOnHashMatch) {
                 WP_FTS_StorageCompat::put_doc_metadata($this->storage, $doc_id, $metadata);
             }
             return false;
@@ -690,15 +749,19 @@ final class WP_FTS_Indexer
      *
      * Occurrences may be structured rows or legacy strings. Terms that already
      * contain a namespace take precedence over the row language. Every stored key
-     * is normalized to `lang . "\\x1e" . term`, and per-language document
-     * lengths are the sum of rounded weighted term frequencies.
+     * is normalized to `lang . "\\x1e" . term`. Alternative lemmas retain
+     * separate postings for recall, but one source-token group contributes only
+     * its strongest weight to document length rather than pretending every
+     * interpretation was another token.
      *
      * @param array<int,array<string,mixed>|string> $occurrences
      * @return array{0:array<string,int>,1:array<string,int>}
      */
     private function weighted_term_frequencies_by_language(array $occurrences, string $defaultLang): array
     {
-        $weights = [];
+        $candidates = [];
+        $alternativeGroups = [];
+        $sequence = 0;
         foreach ($occurrences as $occurrence) {
             $term = is_array($occurrence)
                 ? trim((string) ($occurrence['term'] ?? ''))
@@ -715,38 +778,79 @@ final class WP_FTS_Indexer
                 $lang = $split['lang'];
                 $term = $split['term'];
             }
-
-            $weight = is_array($occurrence) ? (float) ($occurrence['weight'] ?? 1.0) : 1.0;
-            if (
-                is_array($occurrence)
-                && ($occurrence['source'] ?? '') === 'lemma-pack'
-                && isset($occurrence['rank'])
-                && is_numeric($occurrence['rank'])
-                && (int) $occurrence['rank'] === 0
-            ) {
-                $weight *= 2.0;
-            }
-            if ($weight <= 0.0) {
-                continue;
-            }
-
             if (!WP_FTS_TermNamespace::term_key_fits($term, $lang)) {
                 continue;
             }
 
-            $namespacedTerm = WP_FTS_TermNamespace::namespace_term($lang, $term);
-            $weights[$namespacedTerm] = ($weights[$namespacedTerm] ?? 0.0) + $weight;
+            $weight = is_array($occurrence) ? (float) ($occurrence['weight'] ?? 1.0) : 1.0;
+            if ($weight <= 0.0) {
+                continue;
+            }
+
+            $group = is_array($occurrence) && isset($occurrence['_alternative_group']) && is_numeric($occurrence['_alternative_group'])
+                ? (string) (int) $occurrence['_alternative_group']
+                : null;
+            $rank = is_array($occurrence) && isset($occurrence['rank']) && is_numeric($occurrence['rank'])
+                ? max(0, (int) $occurrence['rank'])
+                : 0;
+            $candidates[] = [
+                'key' => WP_FTS_TermNamespace::namespace_term($lang, $term),
+                'lang' => $lang,
+                'weight' => $weight,
+                'length_key' => $group === null ? 'occurrence:' . $sequence : 'alternative:' . $group,
+                'group' => $group,
+                'rank' => $rank,
+                'source' => is_array($occurrence) ? (string) ($occurrence['source'] ?? '') : '',
+            ];
+            $sequence++;
+
+            if ($group === null) {
+                continue;
+            }
+            if (!isset($alternativeGroups[$group])) {
+                $alternativeGroups[$group] = ['count' => 1, 'min_rank' => $rank, 'min_rank_count' => 1];
+                continue;
+            }
+            $alternativeGroups[$group]['count']++;
+            if ($rank < $alternativeGroups[$group]['min_rank']) {
+                $alternativeGroups[$group]['min_rank'] = $rank;
+                $alternativeGroups[$group]['min_rank_count'] = 1;
+            } elseif ($rank === $alternativeGroups[$group]['min_rank']) {
+                $alternativeGroups[$group]['min_rank_count']++;
+            }
+        }
+
+        $weights = [];
+        $lengthWeights = [];
+        foreach ($candidates as $candidate) {
+            $weight = $candidate['weight'];
+            $group = $candidate['group'];
+            if (
+                $group !== null
+                && $candidate['source'] === 'lemma-pack'
+                && ($alternativeGroups[$group]['count'] ?? 0) > 1
+                && ($alternativeGroups[$group]['min_rank_count'] ?? 0) === 1
+                && $candidate['rank'] === ($alternativeGroups[$group]['min_rank'] ?? -1)
+            ) {
+                $weight *= 2.0;
+            }
+
+            $weights[$candidate['key']] = ($weights[$candidate['key']] ?? 0.0) + $weight;
+            $lengthKey = $candidate['length_key'];
+            $lang = $candidate['lang'];
+            $lengthWeights[$lang][$lengthKey] = max($lengthWeights[$lang][$lengthKey] ?? 0.0, $weight);
         }
 
         $frequencies = [];
-        $langLengths = [];
         foreach ($weights as $term => $weight) {
-            $weightedTf = max(1, (int) round($weight));
-            $frequencies[$term] = $weightedTf;
+            $frequencies[$term] = max(1, (int) round($weight));
+        }
 
-            $split = WP_FTS_TermNamespace::split_term($term);
-            $lang = $split !== null ? $split['lang'] : WP_FTS_TermNamespace::canonicalize_lang($defaultLang);
-            $langLengths[$lang] = ($langLengths[$lang] ?? 0) + $weightedTf;
+        $langLengths = [];
+        foreach ($lengthWeights as $lang => $occurrenceWeights) {
+            foreach ($occurrenceWeights as $weight) {
+                $langLengths[$lang] = ($langLengths[$lang] ?? 0) + max(1, (int) round($weight));
+            }
         }
 
         ksort($frequencies, SORT_STRING);
