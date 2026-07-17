@@ -1136,10 +1136,13 @@ final class WP_FTS_Plugin
 
         $options = self::prepare_post_index_options($post);
         $selected_keys = (new WP_FTS_PostContentExtractor())->selected_custom_field_keys($post, $options);
-        if (!in_array($meta_key, $selected_keys, true)) {
+        if (!in_array($meta_key, $selected_keys, true) && !$filtered_selection) {
             return;
         }
 
+        // Metadata hooks run after the mutation. A filter-driven selection can
+        // stop returning a key as a consequence of its deletion, so the current
+        // selection alone cannot prove that the old indexed value was unrelated.
         self::invalidate_post_content_dependencies([$post_id]);
     }
 

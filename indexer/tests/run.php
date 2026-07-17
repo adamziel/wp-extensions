@@ -11336,6 +11336,49 @@ test_case('taxonomy and selected metadata mutations coalesce dependent post rein
     }
 });
 
+test_case('filter-selected metadata deletion invalidates its previously indexed value', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $post = (object) [
+        'ID' => 203,
+        'post_title' => 'Filtered metadata host',
+        'post_content' => '<p>filtered metadata body</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-07-01 00:00:00',
+        'custom_fields' => ['conditional_subtitle' => 'FormerConditionalSignal'],
+    ];
+    $GLOBALS['wp_fts_test_posts'][203] = $post;
+    $fake->postRows = [$post];
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER] = static function (array $options, object $filteredPost): array {
+        if (isset($filteredPost->custom_fields['conditional_subtitle'])) {
+            $options['custom_fields'] = ['conditional_subtitle'];
+        }
+
+        return $options;
+    };
+
+    try {
+        WP_FTS_Plugin::handle_post_save(203, $post);
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        assert_same([203], array_column(WP_FTS_Plugin::search('FormerConditionalSignal', ['limit' => 10]), 'doc_id'), 'setup should index metadata selected by the runtime options filter');
+
+        $post->custom_fields = [];
+        WP_FTS_Plugin::handle_post_meta_change(506, 203, 'conditional_subtitle');
+        assert_same([203], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'post-mutation filter state should not hide a deleted indexed dependency');
+
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        assert_same([], WP_FTS_Plugin::search('FormerConditionalSignal', ['limit' => 10]), 'processing the deletion should remove the former filtered metadata value');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('explicit content dependency invalidation bypasses disabled automatic indexing', function (): void {
     global $wpdb;
 
