@@ -2001,6 +2001,7 @@ final class WP_FTS_Test_WPDB
     public string $prefix = 'wp_';
     public string $base_prefix = 'wp_';
     public string $posts = 'wp_posts';
+    public string $blogs = 'wp_blogs';
     public string $last_error = '';
     public ?string $failQueryPrefix = null;
     /** @var array<int,string> */
@@ -2813,9 +2814,22 @@ final class WP_FTS_Test_WPDB
     /**
      * @return array<int,int|string>
      */
-    public function get_col(string $sql): array
+    public function get_col(mixed $statement): array
     {
+        [$sql, $args] = $this->statement_parts($statement);
         $this->record_read_query($sql);
+        if (str_starts_with($sql, 'SELECT blog_id FROM `wp_blogs` WHERE blog_id > %d')) {
+            $afterSiteId = max(0, (int) ($args[0] ?? 0));
+            $limit = max(0, (int) ($args[count($args) - 1] ?? 0));
+            $sites = array_values(array_filter(
+                array_map('intval', is_array($GLOBALS['wp_fts_test_sites'] ?? null) ? $GLOBALS['wp_fts_test_sites'] : []),
+                static fn(int $siteId): bool => $siteId > $afterSiteId
+            ));
+            sort($sites, SORT_NUMERIC);
+
+            return $limit > 0 ? array_slice($sites, 0, $limit) : $sites;
+        }
+
         if (str_starts_with($sql, 'SELECT term FROM wp_fts_terms')) {
             return array_keys($this->terms);
         }
@@ -8239,13 +8253,25 @@ test_case('network activation chains bounded schema batches for existing subsite
         assert_same([[0], [10]], array_column(array_values(array_filter(
             $GLOBALS['wp_fts_test_schedule_calls'],
             static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::SCHEMA_SITE_CRON_HOOK
-        )), 'args'), 'a full batch should add exactly one successor cursor to the initial event');
+        )), 'args'), 'a full batch should schedule exactly one successor from its last seen site id');
 
+        $GLOBALS['wp_fts_test_sites'] = array_values(array_filter(
+            $GLOBALS['wp_fts_test_sites'],
+            static fn(int $siteId): bool => $siteId !== 2
+        ));
         WP_FTS_Plugin::handle_scheduled_site_schema(10);
+        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_site_options'][11][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'deleting an earlier site between batches should not skip the next site id');
         assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_site_options'][12][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'the successor batch should finish the remaining sites');
         assert_same(11, count($GLOBALS['wp_fts_test_switch_log']), 'the chain should switch once for every non-current site');
         assert_same(array_fill(0, 11, 1), $GLOBALS['wp_fts_test_restore_log'], 'every subsite repair should restore the original site');
-        assert_same(10, $GLOBALS['wp_fts_test_get_sites_calls'][0]['number'] ?? null, 'schema batches should query at most ten sites');
+        $siteQueries = array_values(array_filter(
+            $fake->prepared,
+            static fn(array $query): bool => str_starts_with($query['sql'] ?? '', 'SELECT blog_id FROM `wp_blogs`')
+        ));
+        assert_same([10, 10], array_map(
+            static fn(array $query): int => (int) ($query['args'][count($query['args']) - 1] ?? 0),
+            $siteQueries
+        ), 'schema batches should query at most ten sites with a stable keyset cursor');
     } finally {
         $wpdb = $oldWpdb;
     }

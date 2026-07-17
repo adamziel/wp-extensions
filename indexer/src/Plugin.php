@@ -478,23 +478,10 @@ final class WP_FTS_Plugin
         self::provision_site_schema($site_id);
     }
 
-    public static function handle_scheduled_site_schema(int $offset): void
+    public static function handle_scheduled_site_schema(int $after_site_id): void
     {
-        if (!function_exists('get_sites')) {
-            return;
-        }
-
-        $offset = max(0, $offset);
-        $sites = get_sites([
-            'fields' => 'ids',
-            'number' => self::SCHEMA_SITE_BATCH_SIZE,
-            'offset' => $offset,
-            'orderby' => 'id',
-            'order' => 'ASC',
-        ]);
-        if (!is_array($sites)) {
-            return;
-        }
+        $after_site_id = max(0, $after_site_id);
+        $sites = self::network_schema_site_ids_after($after_site_id);
 
         $current_site_id = function_exists('get_current_blog_id') ? (int) get_current_blog_id() : 0;
         $failure = null;
@@ -512,11 +499,58 @@ final class WP_FTS_Plugin
         }
 
         if (count($sites) === self::SCHEMA_SITE_BATCH_SIZE) {
-            self::schedule_network_schema_batch($offset + self::SCHEMA_SITE_BATCH_SIZE);
+            self::schedule_network_schema_batch($sites[count($sites) - 1]);
         }
         if ($failure !== null) {
             throw $failure;
         }
+    }
+
+    /**
+     * Read one stable keyset page from the multisite site table.
+     *
+     * @return int[]
+     */
+    private static function network_schema_site_ids_after(int $after_site_id): array
+    {
+        global $wpdb;
+
+        if (
+            !isset($wpdb)
+            || !is_object($wpdb)
+            || !isset($wpdb->blogs)
+            || !is_scalar($wpdb->blogs)
+            || !method_exists($wpdb, 'prepare')
+            || !method_exists($wpdb, 'get_col')
+        ) {
+            throw new RuntimeException('Could not query multisite schema targets.');
+        }
+
+        $table = (string) $wpdb->blogs;
+        if (preg_match('/^[A-Za-z0-9_]+$/D', $table) !== 1) {
+            throw new RuntimeException('Could not query multisite schema targets.');
+        }
+
+        $rows = $wpdb->get_col($wpdb->prepare(
+            "SELECT blog_id FROM `{$table}` WHERE blog_id > %d ORDER BY blog_id ASC LIMIT %d",
+            $after_site_id,
+            self::SCHEMA_SITE_BATCH_SIZE
+        ));
+        if (!is_array($rows) || (isset($wpdb->last_error) && (string) $wpdb->last_error !== '')) {
+            throw new RuntimeException('Could not query multisite schema targets.');
+        }
+
+        $sites = [];
+        foreach ($rows as $row) {
+            $site_id = self::site_id_from_value($row);
+            if ($site_id > $after_site_id) {
+                $sites[$site_id] = true;
+            }
+        }
+        $sites = array_keys($sites);
+        sort($sites, SORT_NUMERIC);
+
+        return array_slice($sites, 0, self::SCHEMA_SITE_BATCH_SIZE);
     }
 
     private static function provision_site_schema(int $site_id): void
@@ -538,7 +572,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Network activation starts one cursor-driven repair chain. Each cron event
+     * Network activation starts one last-seen-site-ID repair chain. Each cron event
      * provisions at most SCHEMA_SITE_BATCH_SIZE sites and schedules only its
      * successor, so a large network cannot enqueue an unbounded event storm.
      * New sites continue through wp_initialize_site, and storage(true) remains
