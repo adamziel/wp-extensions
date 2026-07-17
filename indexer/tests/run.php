@@ -2097,7 +2097,7 @@ final class WP_FTS_Test_WPDB
             return count($this->queue);
         }
 
-        if (str_starts_with($sql, 'SELECT COALESCE(MAX(d.doc_id), 0)') && str_contains($sql, 'FROM wp_fts_docs d')) {
+        if (str_starts_with($sql, 'SELECT COALESCE(MAX(d.doc_id), 0)') && str_contains($sql, 'FROM ' . $this->prefix . 'fts_docs d')) {
             $ids = array_keys(array_filter(
                 $this->docs,
                 static fn(array $doc): bool => ($doc['is_deleted'] ?? 1) === 0
@@ -8902,6 +8902,12 @@ test_case('network activation chains bounded schema batches for existing subsite
     $GLOBALS['wp_fts_test_sites'] = range(1, 12);
     $GLOBALS['wp_fts_test_use_blog_option_store'] = true;
     $GLOBALS['wp_fts_test_site_options'] = array_fill_keys(range(1, 12), []);
+    $fake->docs[41] = [
+        'lang' => 'en',
+        'doc_len' => 2,
+        'content_hash' => 'retained-before-network-reactivation',
+        'is_deleted' => 0,
+    ];
 
     try {
         WP_FTS_Plugin::activate(true);
@@ -8911,10 +8917,14 @@ test_case('network activation chains bounded schema batches for existing subsite
         ));
         assert_same([[0]], array_column($schemaCalls, 'args'), 'network activation should schedule only the first bounded schema batch');
         assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_site_options'][1][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'network activation should provision the current site immediately');
+        assert_same(['retained_rows_may_be_stale'], $GLOBALS['wp_fts_test_site_options'][1][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['stale_debt_reasons'] ?? null, 'network activation should reconcile retained rows on the current site');
         assert_true(!isset($GLOBALS['wp_fts_test_site_options'][2][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'network activation request should not synchronously mutate a subsite');
+        assert_true(!isset($GLOBALS['wp_fts_test_site_options'][2][WP_FTS_Plugin::INDEX_HEALTH_OPTION]), 'network activation request should leave subsite reconciliation to the bounded schema job');
 
         WP_FTS_Plugin::handle_scheduled_site_schema(0);
         assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_site_options'][2][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'one bounded schema job should provision its target subsite');
+        assert_same(['retained_rows_may_be_stale'], $GLOBALS['wp_fts_test_site_options'][2][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['stale_debt_reasons'] ?? null, 'one bounded schema job should reconcile retained subsite rows');
+        assert_same(41, $GLOBALS['wp_fts_test_site_options'][2][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['stale_debt_max_doc_id'] ?? null, 'subsite reconciliation should bound its retained-row sweep at activation time');
         assert_true(!isset($GLOBALS['wp_fts_test_site_options'][11][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'the first batch should not cross its ten-site bound');
         assert_contains('CREATE TABLE wp_2_fts_docmeta', implode("\n", $fake->queries), 'subsite schema job should use the target site table prefix');
         assert_same([[0], [10]], array_column(array_values(array_filter(

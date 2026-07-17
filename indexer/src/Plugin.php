@@ -615,6 +615,7 @@ final class WP_FTS_Plugin
         try {
             self::mark_initial_index_pending();
             self::upgrade_schema();
+            self::mark_retained_rows_for_reconciliation();
             self::schedule_queue_processor();
         } finally {
             restore_current_blog();
