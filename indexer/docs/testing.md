@@ -788,20 +788,31 @@ TCC/TCC+ rules, or tokenizer adapter are committed.
 
 ## WordPress Playground SQLite Smoke
 
-Run the committed Playground smoke from the repository worktree root:
+Build the direct-install ZIP, place the smoke Blueprint next to it as a
+Blueprint bundle, and run that exact artifact from the repository worktree
+root:
 
 ```sh
-npx @wp-playground/cli@latest run-blueprint --blueprint=indexer/playground/sqlite-smoke-blueprint.json --mount="$(pwd)/indexer:/wordpress/wp-content/plugins/indexer" --blueprint-may-read-adjacent-files
+SMOKE="$(mktemp -d)"
+trap 'rm -rf "$SMOKE"' EXIT
+php indexer/tools/build-release-zip.php \
+  --build-dir="$SMOKE/build" \
+  --output="$SMOKE/wp-fts-indexer.zip"
+cp indexer/playground/sqlite-smoke-blueprint.json "$SMOKE/blueprint.json"
+npx @wp-playground/cli@latest run-blueprint \
+  --blueprint="$SMOKE/blueprint.json" \
+  --blueprint-may-read-adjacent-files
 ```
 
-The smoke activates the mounted `indexer` plugin in WordPress Playground,
-asserts SQLite runtime evidence, inserts a small multilingual post set, indexes
-through `WP_FTS_Indexer`, and searches through `WP_FTS_Searcher`. It probes
-Polish stemming/detection, German detection, explicit language override, and
-fallback behavior for text without detector evidence. It also covers the public
-REST search route (`q`, `query`, invalid `mode`, missing query, and visible
-result refill after hidden stale rows) plus WP-CLI `wp fts reindex` and
-`wp fts search` when the Playground WP-CLI library is available.
+The smoke installs and activates the self-contained release ZIP in WordPress
+Playground without mounting the source checkout, asserts SQLite runtime
+evidence, inserts a small multilingual post set, indexes through
+`WP_FTS_Indexer`, and searches through `WP_FTS_Searcher`. It probes Polish
+stemming/detection, German detection, explicit language override, and fallback
+behavior for text without detector evidence. It also covers the public REST
+search route (`q`, `query`, invalid `mode`, missing query, and visible result
+refill after hidden stale rows) plus WP-CLI `wp fts reindex` and `wp fts search`
+when the Playground WP-CLI library is available.
 
 ## Optional BM25 Python Reference
 

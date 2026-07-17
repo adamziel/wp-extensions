@@ -3,6 +3,13 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../../tools/build-release-zip.php';
 
+/**
+ * The public preview is pinned to the v0.1.12 core asset and the digest in that
+ * release's SHA256SUMS.txt. Update both only after its activation smoke passes.
+ */
+const WP_FTS_RELEASE_PACKAGE_URL = 'https://github.com/adamziel/wp-extensions/releases/download/language-fts-v0.1.12/language-fts-core.zip';
+const WP_FTS_RELEASE_PACKAGE_SHA256 = '4a7baff284b74d7fc72d071f589730269748c66bb82f68b0ce426739f57bdc7f';
+
 function wp_fts_release_packaging_contract_contains(string $needle, string $haystack, string $message): void
 {
     if (function_exists('assert_contains')) {
@@ -259,6 +266,133 @@ function wp_fts_release_packaging_contract_composer_env_run(): void
     }
 }
 
+function wp_fts_release_packaging_contract_public_install_run(): void
+{
+    $pluginRoot = dirname(__DIR__, 2);
+    $repoRoot = dirname($pluginRoot);
+    $blueprint = wp_fts_release_packaging_contract_blueprint($pluginRoot . '/playground/blueprint.json');
+    $steps = (array) ($blueprint['steps'] ?? []);
+
+    wp_fts_release_packaging_contract_same(['writeFile', 'runPHP', 'installPlugin'], array_column($steps, 'step'), 'public Blueprint should verify the download before it installs and activates it');
+    wp_fts_release_packaging_contract_same('/tmp/language-fts-core.zip', $steps[0]['path'] ?? null, 'public Blueprint should download to a stable VFS path');
+    wp_fts_release_packaging_contract_same('url', $steps[0]['data']['resource'] ?? null, 'public Blueprint should download a release asset');
+    wp_fts_release_packaging_contract_same(WP_FTS_RELEASE_PACKAGE_URL, $steps[0]['data']['url'] ?? null, 'public Blueprint should pin the published core release');
+    wp_fts_release_packaging_contract_contains(WP_FTS_RELEASE_PACKAGE_SHA256, (string) ($steps[1]['code'] ?? ''), 'public Blueprint should verify the release digest before activation');
+    wp_fts_release_packaging_contract_contains("hash_file('sha256'", (string) ($steps[1]['code'] ?? ''), 'public Blueprint should compute the downloaded release SHA-256');
+    wp_fts_release_packaging_contract_contains('hash_equals(', (string) ($steps[1]['code'] ?? ''), 'public Blueprint should reject a different release digest');
+    wp_fts_release_packaging_contract_same('vfs', $steps[2]['pluginData']['resource'] ?? null, 'public Blueprint should install the verified VFS artifact');
+    wp_fts_release_packaging_contract_same('/tmp/language-fts-core.zip', $steps[2]['pluginData']['path'] ?? null, 'public Blueprint should install the file whose digest it verified');
+    wp_fts_release_packaging_contract_same(true, $steps[2]['options']['activate'] ?? null, 'public Blueprint should activate the packaged plugin');
+    wp_fts_release_packaging_contract_same('indexer', $steps[2]['options']['targetFolderName'] ?? null, 'public Blueprint should preserve the plugin slug');
+
+    $smoke = wp_fts_release_packaging_contract_blueprint($pluginRoot . '/playground/sqlite-smoke-blueprint.json');
+    $smokeInstall = $smoke['steps'][0] ?? [];
+    wp_fts_release_packaging_contract_same('installPlugin', $smokeInstall['step'] ?? null, 'Playground smoke should install before exercising the plugin');
+    wp_fts_release_packaging_contract_same('bundled', $smokeInstall['pluginData']['resource'] ?? null, 'Playground smoke should install a built artifact rather than mount source');
+    wp_fts_release_packaging_contract_same('wp-fts-indexer.zip', $smokeInstall['pluginData']['path'] ?? null, 'Playground smoke should install the release builder output');
+    wp_fts_release_packaging_contract_same(true, $smokeInstall['options']['activate'] ?? null, 'Playground smoke should exercise release artifact activation');
+
+    $quickstart = wp_fts_release_packaging_contract_markdown_section((string) file_get_contents($pluginRoot . '/README.md'), 'Quickstart');
+    wp_fts_release_packaging_contract_contains(WP_FTS_RELEASE_PACKAGE_URL, $quickstart, 'Quickstart should install the same release as Playground');
+    wp_fts_release_packaging_contract_contains(WP_FTS_RELEASE_PACKAGE_SHA256, $quickstart, 'Quickstart should verify the same release digest as Playground');
+    wp_fts_release_packaging_contract_contains('shasum -a 256 --check', $quickstart, 'Quickstart should stop when the release digest differs');
+    wp_fts_release_packaging_contract_contains('--check \\' . "\n" . '  && wp plugin install', $quickstart, 'Quickstart should gate installation on the checksum result');
+    wp_fts_release_packaging_contract_contains('wp plugin install', $quickstart, 'Quickstart should install the verified ZIP with WP-CLI');
+    wp_fts_release_packaging_contract_true(!str_contains($quickstart, 'rsync '), 'Quickstart should not copy a dependency-incomplete source directory');
+    wp_fts_release_packaging_contract_true(!str_contains($quickstart, 'composer install'), 'Quickstart should not run Composer without the path repository');
+    wp_fts_release_packaging_contract_contains(WP_FTS_RELEASE_PACKAGE_URL, (string) file_get_contents($repoRoot . '/README.md'), 'repository overview should identify the Playground release artifact');
+    wp_fts_release_packaging_contract_contains('self-contained Language FTS core ZIP', (string) file_get_contents($pluginRoot . '/readme.txt'), 'WordPress install instructions should require the packaged runtime');
+    wp_fts_release_packaging_contract_true(!file_exists($pluginRoot . '/playground/indexer-preview.zip'), 'obsolete committed preview ZIP should not compete with the release artifact');
+}
+
+/**
+ * Return one second-level Markdown section without parsing its contents.
+ */
+function wp_fts_release_packaging_contract_markdown_section(string $markdown, string $heading): string
+{
+    $section = [];
+    $inside = false;
+    foreach (explode("\n", str_replace(["\r\n", "\r"], "\n", $markdown)) as $line) {
+        if ($line === '## ' . $heading) {
+            $inside = true;
+            continue;
+        }
+        if ($inside && str_starts_with($line, '## ')) {
+            break;
+        }
+        if ($inside) {
+            $section[] = $line;
+        }
+    }
+
+    return implode("\n", $section);
+}
+
+/**
+ * @return array<string,mixed>
+ */
+function wp_fts_release_packaging_contract_blueprint(string $path): array
+{
+    $decoded = json_decode((string) file_get_contents($path), true, flags: JSON_THROW_ON_ERROR);
+    if (!is_array($decoded)) {
+        throw new RuntimeException("Blueprint is not a JSON object: {$path}");
+    }
+
+    return $decoded;
+}
+
+function wp_fts_release_packaging_contract_standalone_bootstrap_run(): void
+{
+    $tmp = wp_fts_release_packaging_contract_temp_dir();
+    $zip = null;
+    try {
+        $result = (new WP_FTS_ReleasePackageBuilder())->build([
+            'build_dir' => $tmp . '/build',
+            'output' => $tmp . '/wp-fts-indexer.zip',
+        ]);
+        $zip = new ZipArchive();
+        wp_fts_release_packaging_contract_same(true, $zip->open((string) ($result['zip_path'] ?? '')), 'release ZIP should open successfully');
+        wp_fts_release_packaging_contract_true($zip->locateName('indexer/indexer.php') !== false, 'release ZIP should contain the plugin entrypoint');
+        wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/autoload.php') !== false, 'release ZIP should contain the Composer autoloader');
+        wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/wp-php-toolkit/full-text-search/src/bootstrap.php') !== false, 'release ZIP should contain the FTS component runtime');
+
+        $plugins = $tmp . '/wp-content/plugins';
+        wp_fts_release_packaging_contract_true(mkdir($plugins, 0777, true), 'standalone plugins directory should be created');
+        wp_fts_release_packaging_contract_true($zip->extractTo($plugins), 'release ZIP should extract into a standalone plugins directory');
+        $zip->close();
+        $zip = null;
+        wp_fts_release_packaging_contract_true(!is_file($tmp . '/wp-content/plugins/components/full-text-search/src/bootstrap.php'), 'standalone proof should not provide the adjacent monorepo component');
+
+        $code = <<<'PHP'
+$pluginRoot = $argv[1];
+define('ABSPATH', $pluginRoot . '/');
+require $pluginRoot . '/indexer.php';
+if (
+    ! is_file($pluginRoot . '/vendor/autoload.php')
+    || ! class_exists('WP_FTS_Analyzer', false)
+    || ! class_exists('WP_FTS_Plugin', false)
+) {
+    exit(1);
+}
+fwrite(STDOUT, "SELF_CONTAINED_RELEASE_OK\n");
+PHP;
+        $process = proc_open([PHP_BINARY, '-r', $code, $plugins . '/indexer'], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $plugins);
+        wp_fts_release_packaging_contract_true(is_resource($process), 'standalone proof should launch a fresh PHP process');
+        fclose($pipes[0]);
+        $stdout = (string) stream_get_contents($pipes[1]);
+        $stderr = (string) stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        wp_fts_release_packaging_contract_same(0, proc_close($process), 'packaged plugin should bootstrap without the monorepo component: ' . trim($stderr));
+        wp_fts_release_packaging_contract_contains('SELF_CONTAINED_RELEASE_OK', $stdout, 'fresh PHP should load runtime classes from packaged vendor files');
+    } finally {
+        if ($zip instanceof ZipArchive) {
+            $zip->close();
+        }
+        wp_fts_release_packaging_contract_remove_tree($tmp);
+    }
+}
+
 if (function_exists('test_case')) {
     test_case('quality release packaging excludes dependency-internal vendor tests', function (): void {
         wp_fts_release_packaging_contract_run();
@@ -269,9 +403,22 @@ if (function_exists('test_case')) {
     test_case('quality release packaging scrubs nested Composer environment', function (): void {
         wp_fts_release_packaging_contract_composer_env_run();
     });
+    test_case('quality public install paths use a digest-pinned release artifact', function (): void {
+        wp_fts_release_packaging_contract_public_install_run();
+    });
+    // This case builds and extracts a ZIP in-process. The normal PHP and
+    // release-artifact lanes provide ZipArchive; php -n covers the remaining
+    // packaging contracts without weakening the strict pending-test gate.
+    if (class_exists('ZipArchive')) {
+        test_case('quality release artifact bootstraps outside the monorepo', function (): void {
+            wp_fts_release_packaging_contract_standalone_bootstrap_run();
+        });
+    }
 } elseif (PHP_SAPI === 'cli' && realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === __FILE__) {
     wp_fts_release_packaging_contract_run();
     wp_fts_release_packaging_contract_prune_run();
     wp_fts_release_packaging_contract_composer_env_run();
-    fwrite(STDOUT, "OK: release packaging contract prunes dependency dotfiles, auth files, and vendor tests.\n");
+    wp_fts_release_packaging_contract_public_install_run();
+    wp_fts_release_packaging_contract_standalone_bootstrap_run();
+    fwrite(STDOUT, "OK: release packaging and self-contained install contracts passed.\n");
 }
