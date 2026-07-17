@@ -978,6 +978,7 @@ namespace {
             'deleted_term_relationships',
             'edited_term',
             'init',
+            'init',
             'loop_end',
             'loop_start',
             'pre_get_posts',

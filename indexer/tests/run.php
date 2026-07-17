@@ -5141,6 +5141,24 @@ function wp_fts_test_index_saved_post(int $post_id, object $post, mixed ...$unus
     }
 }
 
+function wp_fts_test_mark_search_takeover_ready(): void
+{
+    global $wpdb;
+
+    if (!isset($wpdb) || !is_object($wpdb)) {
+        $wpdb = new WP_FTS_Test_WPDB();
+    }
+
+    $health = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
+    $health = is_array($health) ? $health : [];
+    $health['initial_index_status'] = 'ready';
+    $health['initial_index_started_at'] = '2026-07-17 00:00:00';
+    $health['initial_index_completed_at'] = '2026-07-17 00:01:00';
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = $health;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    WP_FTS_Plugin::reset_request_caches();
+}
+
 function wp_fts_test_mark_field_boost_stale_debt(float $title_boost = 8.0): array
 {
     $oldPost = $_POST;
@@ -5221,6 +5239,7 @@ PHP;
         'deleted_post_meta',
         'deleted_term_relationships',
         'edited_term',
+        'init',
         'loop_end',
         'loop_start',
         'pre_get_posts',
@@ -5290,6 +5309,19 @@ PHP;
         'edited_term' => ['callback' => [WP_FTS_Plugin::class, 'handle_taxonomy_term_edit'], 'accepted_args' => 4],
         'updated_post_meta' => ['callback' => [WP_FTS_Plugin::class, 'handle_post_meta_change'], 'accepted_args' => 4],
     ], $dependencyHooks, 'bootstrap should register post dependency invalidation after metadata and taxonomy mutations');
+
+    $readinessAction = null;
+    foreach ($GLOBALS['wp_fts_test_actions'] as $action) {
+        if (
+            ($action['hook'] ?? null) === 'init'
+            && ($action['callback'] ?? null) === [WP_FTS_Plugin::class, 'maybe_schedule_initial_index_readiness']
+        ) {
+            $readinessAction = $action;
+            break;
+        }
+    }
+    assert_same([WP_FTS_Plugin::class, 'maybe_schedule_initial_index_readiness'], $readinessAction['callback'] ?? null, 'bootstrap should schedule the legacy readiness migration on init');
+    assert_same(0, $readinessAction['accepted_args'] ?? null, 'readiness migration should not accept request data');
 
     $siteDeletionFilter = null;
     foreach ($GLOBALS['wp_fts_test_filter_registrations'] as $filter) {
@@ -8636,6 +8668,152 @@ test_case('schema migration refuses to overwrite a newer installed version', fun
     assert_true($thrown, 'an older plugin build should fail closed on a newer schema version');
     assert_same(WP_FTS_Plugin::SCHEMA_VERSION + 1, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'failed downgrade protection must preserve the newer migration cursor');
     assert_same([], $fake->queries, 'downgrade protection should reject the schema before running DDL');
+});
+
+test_case('search takeover waits for a complete initial corpus and usable physical schema', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $fake->postRows = [
+        wp_fts_test_backfill_post(41, 'post', 'publish', 'Initial Readiness One'),
+        wp_fts_test_backfill_post(42, 'post', 'publish', 'Initial Readiness Two'),
+    ];
+    foreach ($fake->postRows as $post) {
+        $GLOBALS['wp_fts_test_posts'][(int) $post->ID] = $post;
+    }
+
+    try {
+        WP_FTS_Plugin::activate();
+        $pending = WP_FTS_Plugin::search_takeover_status();
+        assert_same(false, $pending['ready'] ?? null, 'activation should not make a partial index eligible for search takeover');
+        assert_same('initial_index_pending', $pending['reason'] ?? null, 'activation should expose the initial corpus as pending');
+        assert_same(false, $pending['physical_schema_checked'] ?? null, 'pending readiness should avoid a physical probe on each search request');
+
+        $incoming = [(object) ['ID' => 9001, 'post_title' => 'Native WordPress result']];
+        $query = new WP_FTS_Test_Query(['s' => 'batchindexneedle', 'posts_per_page' => 10, 'post_type' => 'post']);
+        assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query), 'WordPress should retain search ownership while the initial index is pending');
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['pagenow'] = 'edit.php';
+        $adminQuery = new WP_FTS_Test_Query([
+            's' => 'batchindexneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ]);
+        assert_same($incoming, WP_FTS_Plugin::replace_admin_post_search_posts($incoming, $adminQuery), 'WordPress should retain wp-admin search ownership while the initial index is pending');
+        $GLOBALS['wp_fts_test_is_admin'] = false;
+        unset($GLOBALS['pagenow']);
+
+        $first = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        $partial = WP_FTS_Plugin::search_takeover_status();
+        assert_same(1, $first['processed'] ?? null, 'the first bounded readiness batch should index one post');
+        assert_same(true, $first['has_more'] ?? null, 'the first bounded readiness batch should report remaining corpus work');
+        assert_same(false, $partial['ready'] ?? null, 'a partially indexed corpus must remain ineligible for takeover');
+
+        $second = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        $ready = WP_FTS_Plugin::search_takeover_status();
+        assert_same(1, $second['processed'] ?? null, 'the completing readiness batch should index the final post');
+        assert_same(false, $second['has_more'] ?? null, 'the completing readiness batch should prove no corpus work remains');
+        assert_same(true, $ready['ready'] ?? null, 'a complete corpus with usable tables should permit configured search takeover');
+        assert_same('ready', $ready['initial_index_status'] ?? null, 'completion should persist explicit initial readiness state');
+        assert_same(true, $ready['physical_schema_checked'] ?? null, 'ready takeover should include a physical schema probe');
+        assert_same(true, $ready['physical_schema_usable'] ?? null, 'the physical schema probe should cover the usable index contract');
+
+        $readyQuery = new WP_FTS_Test_Query(['s' => 'batchindexneedle', 'posts_per_page' => 10, 'post_type' => 'post']);
+        $readyPosts = WP_FTS_Plugin::replace_frontend_search_posts(null, $readyQuery);
+        assert_same([41, 42], array_map(static fn(object $post): int => (int) $post->ID, $readyPosts), 'FTS should take over only after readiness completes');
+
+        $fake->failQueryPrefix = 'SELECT t.term, t.doc_freq';
+        WP_FTS_Plugin::reset_request_caches();
+        $unusable = WP_FTS_Plugin::search_takeover_status();
+        assert_same(false, $unusable['ready'] ?? null, 'saved readiness must not override missing or damaged physical tables');
+        assert_same('physical_schema_unusable', $unusable['reason'] ?? null, 'physical schema failure should identify why takeover is unavailable');
+        $unusableQuery = new WP_FTS_Test_Query(['s' => 'batchindexneedle', 'posts_per_page' => 10, 'post_type' => 'post']);
+        assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $unusableQuery), 'physical index failure should leave WordPress search in control');
+
+        unset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]);
+        $scheduleCalls = count($GLOBALS['wp_fts_test_schedule_calls']);
+        $repaired = WP_FTS_Plugin::repair_schema();
+        $afterRepair = WP_FTS_Plugin::search_takeover_status();
+        assert_same('current', $repaired['status'] ?? null, 'schema repair should restore the saved schema contract');
+        assert_same(false, $afterRepair['ready'] ?? null, 'repairing an unusable ready schema should require corpus verification before takeover resumes');
+        assert_same('pending', $afterRepair['initial_index_status'] ?? null, 'schema repair should invalidate readiness recorded for the damaged index');
+        assert_same($scheduleCalls + 1, count($GLOBALS['wp_fts_test_schedule_calls']), 'schema repair should schedule the pending corpus verification');
+        $afterRepairQuery = new WP_FTS_Test_Query(['s' => 'batchindexneedle', 'posts_per_page' => 10, 'post_type' => 'post']);
+        assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $afterRepairQuery), 'schema repair should leave WordPress search in control until corpus verification completes');
+    } finally {
+        $GLOBALS['wp_fts_test_is_admin'] = false;
+        unset($GLOBALS['pagenow']);
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('failed initial indexing and legacy readiness migration stay fail closed', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $fake->postRows = [
+        wp_fts_test_backfill_post(51, 'post', 'publish', 'Initial Good'),
+        wp_fts_test_backfill_post(52, 'post', 'publish', 'Initial Failure'),
+    ];
+    $fake->failDocWriteErrors[52] = "initial failure SELECT * FROM wp_users WHERE password=must-not-render\n#0 stack";
+
+    try {
+        WP_FTS_Plugin::activate();
+        $batch = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
+        $status = WP_FTS_Plugin::search_takeover_status();
+        assert_same(1, $batch['last_batch_failures'] ?? null, 'initial indexing should report a failed corpus row');
+        assert_same(false, $status['ready'] ?? null, 'a failed corpus row must prevent initial readiness');
+        assert_same('pending', $status['initial_index_status'] ?? null, 'failure should leave explicit readiness pending');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = ['last_run_at' => '2026-07-16 00:00:00'];
+        WP_FTS_Plugin::maybe_schedule_initial_index_readiness();
+        $migrated = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
+        assert_same('pending', $migrated['initial_index_status'] ?? null, 'legacy health state should migrate to an explicit pending readiness check');
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'legacy readiness migration should schedule one corpus verification run');
+        $scheduleCalls = count($GLOBALS['wp_fts_test_schedule_calls']);
+        WP_FTS_Plugin::maybe_schedule_initial_index_readiness();
+        assert_same($scheduleCalls, count($GLOBALS['wp_fts_test_schedule_calls']), 'pending readiness should not duplicate scheduled work');
+        unset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]);
+        WP_FTS_Plugin::maybe_schedule_initial_index_readiness();
+        assert_same($scheduleCalls + 1, count($GLOBALS['wp_fts_test_schedule_calls']), 'pending readiness should replace a lost one-shot cron event');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('runtime schema repair returns saved readiness to pending', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_mark_search_takeover_ready();
+    assert_same(true, WP_FTS_Plugin::search_takeover_status()['ready'] ?? null, 'the pre-repair readiness cache should describe the intact schema');
+    unset($fake->schemaColumns['wp_fts_docmeta'], $fake->schemaIndexes['wp_fts_docmeta']);
+
+    try {
+        assert_same('damaged', WP_FTS_Plugin::schema_status()['status'] ?? null, 'a missing table should make a previously ready schema damaged');
+
+        WP_FTS_Plugin::maybe_upgrade_schema();
+        $status = WP_FTS_Plugin::search_takeover_status();
+
+        assert_same('current', $status['schema_status'] ?? null, 'runtime schema repair should restore the physical table contract');
+        assert_same(false, $status['ready'] ?? null, 'runtime schema repair should not trust readiness recorded for the damaged index');
+        assert_same('pending', $status['initial_index_status'] ?? null, 'runtime schema repair should require corpus verification before takeover resumes');
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'runtime schema repair should schedule the pending corpus verification');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
 });
 
 test_case('multisite new-site provisioning is a no-op without a resolvable site id or switch APIs', function (): void {
@@ -12567,6 +12745,68 @@ test_case('REST search rejects abusive complexity rate and SQL budget exhaustion
     }
 });
 
+test_case('search integration boundaries preserve WordPress fallback and sanitize REST failures', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $wpdb = new WP_FTS_Test_WPDB();
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['rest_api_enabled' => true]
+    );
+    wp_fts_test_mark_search_takeover_ready();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER] = static function (): array {
+        throw new RuntimeException("search boundary SELECT * FROM wp_users WHERE password=must-not-render\n#0 private stack");
+    };
+
+    try {
+        $incoming = [(object) ['ID' => 7001, 'post_title' => 'Native fallback result']];
+        $frontendQuery = new WP_FTS_Test_Query(['s' => 'boundaryneedle', 'posts_per_page' => 10, 'post_type' => 'post']);
+        assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $frontendQuery), 'frontend FTS exceptions should return the incoming WordPress result unchanged');
+        assert_same(0, $frontendQuery->found_posts, 'frontend failure should not install FTS pagination state');
+        $frontendTrace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        assert_same('failed', $frontendTrace['status'] ?? null, 'frontend diagnostics should record the bounded integration failure');
+        $frontendTraceJson = json_encode($frontendTrace, JSON_THROW_ON_ERROR);
+        assert_true(!str_contains($frontendTraceJson, 'SELECT * FROM'), 'frontend failure diagnostics should redact raw SQL');
+        assert_true(!str_contains($frontendTraceJson, 'must-not-render'), 'frontend failure diagnostics should redact secret values');
+        assert_true(!str_contains($frontendTraceJson, '#0'), 'frontend failure diagnostics should omit stack traces');
+
+        WP_FTS_Plugin::reset_request_caches();
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['pagenow'] = 'edit.php';
+        $adminQuery = new WP_FTS_Test_Query([
+            's' => 'boundaryneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ]);
+        assert_same($incoming, WP_FTS_Plugin::replace_admin_post_search_posts($incoming, $adminQuery), 'wp-admin FTS exceptions should return the incoming WordPress result unchanged');
+        assert_same(0, $adminQuery->found_posts, 'wp-admin failure should not install FTS pagination state');
+        assert_same('failed', WP_FTS_Plugin::debug_traces()[0]['status'] ?? null, 'wp-admin diagnostics should record the bounded integration failure');
+
+        WP_FTS_Plugin::reset_request_caches();
+        $GLOBALS['wp_fts_test_is_admin'] = false;
+        unset($GLOBALS['pagenow']);
+        $rest = WP_FTS_Plugin::rest_search(['q' => 'boundaryneedle']);
+        assert_true($rest instanceof WP_Error, 'REST FTS exceptions should return a WordPress error response');
+        assert_same('wp_fts_search_unavailable', $rest->get_error_code(), 'REST failure should use a stable unavailable code');
+        assert_same('Search is temporarily unavailable.', $rest->get_error_message(), 'REST failure should expose only a bounded generic message');
+        assert_same(503, $rest->get_error_data()['status'] ?? null, 'REST failure should carry HTTP 503 status');
+        $restJson = json_encode([
+            'code' => $rest->get_error_code(),
+            'message' => $rest->get_error_message(),
+            'data' => $rest->get_error_data(),
+        ], JSON_THROW_ON_ERROR);
+        assert_true(!str_contains($restJson, 'SELECT * FROM'), 'REST failure response should not expose raw SQL');
+        assert_true(!str_contains($restJson, 'must-not-render'), 'REST failure response should not expose secret values');
+        assert_true(strlen($rest->get_error_message()) <= 80, 'REST unavailable message should remain byte bounded');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('search refills requested limit after filtering hidden stale rows', function (): void {
     global $wpdb;
 
@@ -12846,6 +13086,7 @@ test_case('frontend empty-scope bailout without storage timing reports unavailab
     $oldPostTypes = array_map(static fn(object $postType): object => clone $postType, $GLOBALS['wp_fts_test_post_types']);
     $GLOBALS['wp_fts_test_post_types']['post']->exclude_from_search = true;
     $GLOBALS['wp_fts_test_post_types']['page']->exclude_from_search = true;
+    wp_fts_test_mark_search_takeover_ready();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
 
     try {
@@ -12892,6 +13133,7 @@ test_case('enabled diagnostics record exact default retrieval for broad searches
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_mark_search_takeover_ready();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
 
     try {
@@ -13125,6 +13367,7 @@ test_case('front-end search replacement overrides earlier posts_pre_query provid
 
 test_case('enabled diagnostics record search provider compatibility stand-down', function (): void {
     wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_mark_search_takeover_ready();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
         WP_FTS_Plugin::default_settings(),
@@ -13171,6 +13414,7 @@ test_case('enabled diagnostics record search provider compatibility stand-down',
 
 test_case('provider stand-down diagnostics include bounded posts_pre_query hook pipeline', function (): void {
     wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_mark_search_takeover_ready();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
         WP_FTS_Plugin::default_settings(),
@@ -14561,6 +14805,7 @@ test_case('front-end search replacement only returns public searchable published
             $GLOBALS['wp_fts_test_posts'][$postId] = $post;
             $indexer->index_post($post, ['lang' => 'en']);
         }
+        wp_fts_test_mark_search_takeover_ready();
 
         $GLOBALS['wp_fts_test_caps']['read_post'][702] = true;
         $query = new WP_FTS_Test_Query([
@@ -14914,6 +15159,7 @@ test_case('front-end snippets bound active analyzer-pack languages while recall 
                 'field_boosts' => $extracted['field_boosts'],
             ]);
         }
+        wp_fts_test_mark_search_takeover_ready();
 
         assert_true(isset($fake->terms[WP_FTS_TermNamespace::namespace_term('qaa', 'qaalemma')]), 'synthetic qaa pack should be active for runtime indexing');
 

@@ -198,6 +198,7 @@ test_case('provider compatibility certification respects earlier providers in co
     $oldWpdb = $wpdb ?? null;
     $wpdb = new WP_FTS_Test_WPDB();
     wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_mark_search_takeover_ready();
     wp_fts_provider_certification_enable_debug();
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = wp_fts_provider_certification_settings([
         'search_provider_compatibility' => 'respect_existing',
