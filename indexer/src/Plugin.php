@@ -11638,6 +11638,10 @@ JS;
             }
         }
 
+        if (self::search_query_has_unsupported_fields($query)) {
+            return true;
+        }
+
         if (self::search_query_has_unsupported_page_size($query)) {
             return true;
         }
@@ -11675,6 +11679,10 @@ JS;
             if (self::query_var_has_constraint($query, $key)) {
                 return true;
             }
+        }
+
+        if (self::search_query_has_unsupported_fields($query)) {
+            return true;
         }
 
         if (self::search_query_has_unsupported_page_size($query)) {
@@ -11784,7 +11792,6 @@ JS;
             'date_query',
             'day',
             'exact',
-            'fields',
             'hour',
             'm',
             'meta_compare',
@@ -11826,6 +11833,16 @@ JS;
         ];
     }
 
+    private static function search_query_has_unsupported_fields(mixed $query): bool
+    {
+        $fields = self::query_var($query, 'fields', null);
+        if (!self::constraint_value_present($fields)) {
+            return false;
+        }
+
+        return !is_scalar($fields) || trim((string) $fields) !== 'all';
+    }
+
     private static function search_query_has_unsupported_page_size(mixed $query): bool
     {
         $postsPerPage = self::query_var($query, 'posts_per_page', null);
@@ -11860,7 +11877,7 @@ JS;
     {
         $requested = self::query_var($query, 'post_type', null);
         if ($requested === null || $requested === '' || $requested === 'any') {
-            $expected = self::public_searchable_post_types();
+            $expected = self::wordpress_any_search_post_types();
         } else {
             $expected = self::normalize_string_list($requested);
         }
@@ -11870,6 +11887,33 @@ JS;
         sort($supported, SORT_STRING);
 
         return $expected !== $supported;
+    }
+
+    /**
+     * Return the complete post-type scope WordPress assigns to post_type=any.
+     *
+     * @return string[]
+     */
+    private static function wordpress_any_search_post_types(): array
+    {
+        if (!function_exists('get_post_types')) {
+            return self::public_searchable_post_types();
+        }
+
+        $raw = get_post_types(['exclude_from_search' => false], 'names');
+        if (!is_array($raw)) {
+            return self::public_searchable_post_types();
+        }
+
+        $types = [];
+        foreach ($raw as $key => $value) {
+            $type = is_scalar($value) ? trim((string) $value) : (is_scalar($key) ? trim((string) $key) : '');
+            if ($type !== '') {
+                $types[$type] = true;
+            }
+        }
+
+        return array_keys($types);
     }
 
     private static function query_var_has_constraint(mixed $query, string $key): bool
