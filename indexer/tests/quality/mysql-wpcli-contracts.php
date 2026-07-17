@@ -885,6 +885,7 @@ namespace {
         sort($hooks, SORT_STRING);
         $expectedHooks = [
             WP_FTS_Plugin::CRON_HOOK,
+            WP_FTS_Plugin::SCHEMA_SITE_CRON_HOOK,
             'add_meta_boxes',
             'admin_init',
             'admin_init',

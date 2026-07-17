@@ -299,7 +299,7 @@ test_case('quality disposable release smoke builds bounded WP-CLI command sequen
                     return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['schema_status' => 'ok', 'pending_queue_count' => 0]), 'stderr' => ''];
                 }
                 if (str_contains($joined, 'fts repair')) {
-                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['schema_status' => 'ok', 'schema_version' => 1]), 'stderr' => ''];
+                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['schema_status' => 'ok', 'schema_version' => WP_FTS_Plugin::SCHEMA_VERSION]), 'stderr' => ''];
                 }
                 if (str_contains($joined, 'post create')) {
                     return ['exit' => 0, 'stdout' => "123\n", 'stderr' => ''];
@@ -399,7 +399,7 @@ test_case('quality disposable release smoke sanitizes successful JSON evidence',
                     ]), 'stderr' => ''];
                 }
                 if (str_contains($joined, 'fts repair')) {
-                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['schema_status' => 'ok', 'schema_version' => 1]), 'stderr' => ''];
+                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['schema_status' => 'ok', 'schema_version' => WP_FTS_Plugin::SCHEMA_VERSION]), 'stderr' => ''];
                 }
                 if (str_contains($joined, 'post create')) {
                     return ['exit' => 0, 'stdout' => "123\n", 'stderr' => ''];

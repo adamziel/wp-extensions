@@ -121,6 +121,281 @@ PRIMARY KEY  (lang,k)
     }
 
     /**
+     * Inspect the physical table, column, and index contract.
+     *
+     * The schema version option is only a migration cursor; callers must use
+     * this result before treating the index as usable or persisting a version.
+     *
+     * @return array{valid:bool,available:bool,missing_tables:string[],missing_columns:string[],missing_indexes:string[]}
+     */
+    public function verify_schema(): array
+    {
+        $missingTables = [];
+        $missingColumns = [];
+        $missingIndexes = [];
+
+        foreach ($this->schema_contract() as $table => $contract) {
+            $physical = $this->is_sqlite_runtime()
+                ? $this->inspect_sqlite_schema($table)
+                : $this->inspect_mysql_schema($table);
+            if (!$physical['exists']) {
+                $missingTables[] = $table;
+                continue;
+            }
+
+            foreach ($contract['columns'] as $column) {
+                if (!in_array($column, $physical['columns'], true)) {
+                    $missingColumns[] = $table . '.' . $column;
+                }
+            }
+            foreach ($contract['indexes'] as $index) {
+                if (!$this->schema_has_index($physical['indexes'], $index)) {
+                    $missingIndexes[] = $table . '(' . implode(',', $index['columns']) . ')';
+                }
+            }
+        }
+
+        sort($missingTables, SORT_STRING);
+        sort($missingColumns, SORT_STRING);
+        sort($missingIndexes, SORT_STRING);
+
+        return [
+            'valid' => $missingTables === [] && $missingColumns === [] && $missingIndexes === [],
+            'available' => true,
+            'missing_tables' => $missingTables,
+            'missing_columns' => $missingColumns,
+            'missing_indexes' => $missingIndexes,
+        ];
+    }
+
+    /**
+     * @return array<string,array{columns:string[],indexes:array<int,array{columns:string[],unique:bool}>}>
+     */
+    private function schema_contract(): array
+    {
+        return [
+            $this->termsTable => [
+                'columns' => ['term', 'doc_freq'],
+                'indexes' => [
+                    ['columns' => ['term'], 'unique' => true],
+                ],
+            ],
+            $this->postingsTable => [
+                'columns' => ['term', 'doc_id', 'tf'],
+                'indexes' => [
+                    ['columns' => ['term', 'doc_id'], 'unique' => true],
+                    ['columns' => ['doc_id'], 'unique' => false],
+                ],
+            ],
+            $this->docsTable => [
+                'columns' => ['doc_id', 'lang', 'doc_len', 'content_hash', 'is_deleted'],
+                'indexes' => [
+                    ['columns' => ['doc_id'], 'unique' => true],
+                    ['columns' => ['lang'], 'unique' => false],
+                    ['columns' => ['is_deleted'], 'unique' => false],
+                ],
+            ],
+            $this->docLengthsTable => [
+                'columns' => ['doc_id', 'lang', 'doc_len'],
+                'indexes' => [
+                    ['columns' => ['doc_id', 'lang'], 'unique' => true],
+                    ['columns' => ['lang'], 'unique' => false],
+                ],
+            ],
+            $this->docMetaTable => [
+                'columns' => ['doc_id', 'post_id', 'post_type', 'post_status', 'post_date_gmt', 'title', 'excerpt', 'search_text', 'data'],
+                'indexes' => [
+                    ['columns' => ['doc_id'], 'unique' => true],
+                    ['columns' => ['post_id'], 'unique' => false],
+                    ['columns' => ['post_type', 'post_status', 'post_date_gmt'], 'unique' => false],
+                ],
+            ],
+            $this->metaTable => [
+                'columns' => ['lang', 'k', 'v'],
+                'indexes' => [
+                    ['columns' => ['lang', 'k'], 'unique' => true],
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @return array{exists:bool,columns:string[],indexes:array<int,array{columns:string[],unique:bool}>}
+     */
+    private function inspect_mysql_schema(string $table): array
+    {
+        $identifier = $this->schema_identifier($table);
+        if ($identifier === null) {
+            return ['exists' => false, 'columns' => [], 'indexes' => []];
+        }
+
+        $columnRows = $this->schema_rows("SHOW COLUMNS FROM {$identifier}");
+        if ($columnRows === []) {
+            return ['exists' => false, 'columns' => [], 'indexes' => []];
+        }
+
+        $columns = [];
+        foreach ($columnRows as $row) {
+            $column = $this->schema_row_value($row, ['Field', 'field']);
+            if ($column !== '') {
+                $columns[$column] = true;
+            }
+        }
+
+        $byName = [];
+        foreach ($this->schema_rows("SHOW INDEX FROM {$identifier}") as $row) {
+            $name = $this->schema_row_value($row, ['Key_name', 'key_name']);
+            $column = $this->schema_row_value($row, ['Column_name', 'column_name']);
+            $position = (int) $this->schema_row_value($row, ['Seq_in_index', 'seq_in_index']);
+            if ($name !== '' && $column !== '') {
+                $byName[$name]['columns'][max(1, $position)] = $column;
+                $byName[$name]['unique'] = (int) $this->schema_row_value($row, ['Non_unique', 'non_unique']) === 0;
+            }
+        }
+
+        return [
+            'exists' => $columns !== [],
+            'columns' => array_keys($columns),
+            'indexes' => $this->ordered_schema_indexes($byName),
+        ];
+    }
+
+    /**
+     * @return array{exists:bool,columns:string[],indexes:array<int,array{columns:string[],unique:bool}>}
+     */
+    private function inspect_sqlite_schema(string $table): array
+    {
+        $identifier = $this->sqlite_schema_identifier($table);
+        $columnRows = $this->schema_rows("PRAGMA table_info({$identifier})");
+        if ($columnRows === []) {
+            return ['exists' => false, 'columns' => [], 'indexes' => []];
+        }
+
+        $columns = [];
+        $primary = [];
+        foreach ($columnRows as $row) {
+            $column = $this->schema_row_value($row, ['name']);
+            $position = (int) $this->schema_row_value($row, ['pk']);
+            if ($column !== '') {
+                $columns[$column] = true;
+                if ($position > 0) {
+                    $primary[$position] = $column;
+                }
+            }
+        }
+
+        $indexes = [];
+        if ($primary !== []) {
+            ksort($primary, SORT_NUMERIC);
+            $indexes[] = ['columns' => array_values($primary), 'unique' => true];
+        }
+        foreach ($this->schema_rows("PRAGMA index_list({$identifier})") as $row) {
+            $name = $this->schema_row_value($row, ['name']);
+            if ($name === '') {
+                continue;
+            }
+
+            $indexColumns = [];
+            foreach ($this->schema_rows('PRAGMA index_info(' . $this->sqlite_schema_identifier($name) . ')') as $indexRow) {
+                $column = $this->schema_row_value($indexRow, ['name']);
+                $position = (int) $this->schema_row_value($indexRow, ['seqno']);
+                if ($column !== '') {
+                    $indexColumns[$position] = $column;
+                }
+            }
+            if ($indexColumns !== []) {
+                ksort($indexColumns, SORT_NUMERIC);
+                $indexes[] = [
+                    'columns' => array_values($indexColumns),
+                    'unique' => (int) $this->schema_row_value($row, ['unique']) === 1,
+                ];
+            }
+        }
+
+        return [
+            'exists' => $columns !== [],
+            'columns' => array_keys($columns),
+            'indexes' => $indexes,
+        ];
+    }
+
+    /**
+     * @param array<string,array{columns:array<int,string>,unique:bool}> $byName
+     * @return array<int,array{columns:string[],unique:bool}>
+     */
+    private function ordered_schema_indexes(array $byName): array
+    {
+        $indexes = [];
+        foreach ($byName as $index) {
+            $columns = $index['columns'];
+            ksort($columns, SORT_NUMERIC);
+            $indexes[] = [
+                'columns' => array_values($columns),
+                'unique' => $index['unique'],
+            ];
+        }
+
+        return $indexes;
+    }
+
+    /**
+     * @param array<int,array{columns:string[],unique:bool}> $indexes
+     * @param array{columns:string[],unique:bool} $expected
+     */
+    private function schema_has_index(array $indexes, array $expected): bool
+    {
+        foreach ($indexes as $index) {
+            $columnsMatch = $expected['unique']
+                ? $index['columns'] === $expected['columns']
+                : array_slice($index['columns'], 0, count($expected['columns'])) === $expected['columns'];
+            if ($columnsMatch && $index['unique'] === $expected['unique']) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return object[]
+     */
+    private function schema_rows(string $sql): array
+    {
+        if (!method_exists($this->wpdb, 'get_results')) {
+            return [];
+        }
+
+        $rows = $this->wpdb->get_results($sql);
+
+        return is_array($rows) ? array_values(array_filter($rows, static fn(mixed $row): bool => is_object($row) || is_array($row))) : [];
+    }
+
+    /**
+     * @param string[] $keys
+     */
+    private function schema_row_value(object|array $row, array $keys): string
+    {
+        foreach ($keys as $key) {
+            $value = is_array($row) ? ($row[$key] ?? null) : ($row->{$key} ?? null);
+            if (is_scalar($value)) {
+                return (string) $value;
+            }
+        }
+
+        return '';
+    }
+
+    private function schema_identifier(string $identifier): ?string
+    {
+        return preg_match('/^[A-Za-z0-9_]+$/D', $identifier) === 1 ? '`' . $identifier . '`' : null;
+    }
+
+    private function sqlite_schema_identifier(string $identifier): string
+    {
+        return '"' . str_replace('"', '""', $identifier) . '"';
+    }
+
+    /**
      * Return existing term rows for the requested keys in the legacy blob shape.
      *
      * MySQL stores postings as rows, but the public storage contract still
