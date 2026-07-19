@@ -17,6 +17,7 @@ final class WP_FTS_Index_Successor_Schedule_Failed extends RuntimeException
 {
     public readonly string $reason_code;
 
+    /** Preserves the scheduling cause while exposing one stable recovery reason. */
     public function __construct(?Throwable $previous = null)
     {
         $this->reason_code = 'successor_schedule_failed';
@@ -70,6 +71,7 @@ final class WP_FTS_Plugin
     public const MAX_SEARCH_LIMIT = WP_FTS_Set_Oriented_Search_Storage::MAX_PAGE_SIZE;
     private const REST_MAX_QUERY_TERMS = 12;
     private const MAX_SEARCH_QUERY_BYTES = 4096;
+    private const MAX_WP_QUERY_SEARCH_BYTES = 1600;
     private const MAX_SEARCH_MODE_BYTES = 8;
     private const MAX_SEARCH_LANGUAGE_BYTES = 64;
     private const MAX_SEARCH_CURSOR_BYTES = 2048;
@@ -305,7 +307,7 @@ final class WP_FTS_Plugin
         ],
     ];
     private const DEFAULT_SETTINGS = [
-        'index_post_types' => ['post', 'page'],
+        'index_post_types' => ['post', 'page', 'attachment'],
         'auto_index' => true,
         'replace_frontend_search' => true,
         'replace_admin_post_search' => true,
@@ -334,6 +336,46 @@ final class WP_FTS_Plugin
     private const DEBUG_MAX_TIMING_PHASES = 16;
     private const DEBUG_SEARCH_HOOK = 'posts_pre_query';
     private const DEBUG_SEARCH_FINAL_OWNERSHIP_QUERY_VAR = 'wp_fts_search_final_ownership_trace_id';
+    private const DEBUG_SEARCH_RESULT_SIGNATURE_MAX_ITEMS = 64;
+    private const DEBUG_SEARCH_RESULT_SIGNATURE_MAX_BYTES = 4096;
+    private const CORE_SEARCH_CALLBACK_QUERY_VAR = 'wp_fts_core_search_callback_hook';
+    private const INVALID_SEARCH_INPUT_QUERY_VAR = 'wp_fts_invalid_search_input';
+    private const FRONTEND_SEARCH_PREPARED_QUERY_VAR = 'wp_fts_frontend_search_prepared';
+    private const ADMIN_SEARCH_PREPARED_QUERY_VAR = 'wp_fts_admin_search_prepared';
+    private const MAX_SEARCH_CALLBACKS_INSPECTED = 32;
+    private const CORE_SEARCH_CALLBACK_HOOKS = [
+        'post_search_columns',
+        'wp_query_search_exclusion_prefix',
+        'wp_search_stopwords',
+        'wp_allow_query_attachment_by_filename',
+        'posts_search',
+        'posts_search_orderby',
+        'posts_where',
+        'posts_join',
+        'posts_where_paged',
+        'posts_join_paged',
+        'posts_groupby',
+        'posts_orderby',
+        'posts_distinct',
+        'post_limits',
+        'post_limits_request',
+        'posts_fields',
+        'posts_fields_request',
+        'posts_where_request',
+        'posts_groupby_request',
+        'posts_join_request',
+        'posts_orderby_request',
+        'posts_distinct_request',
+        'posts_clauses',
+        'posts_clauses_request',
+        'posts_request',
+        'posts_request_ids',
+        'posts_results',
+        'the_posts',
+        'split_the_query',
+        'found_posts_query',
+        'found_posts',
+    ];
     private const DEBUG_MAX_HOOK_CALLBACKS = self::DEBUG_MAX_LIST_ITEMS;
     private const ANALYZER_PACK_STATUS_MATRIX_MAX_ROWS = 64;
     private const FTS_TABLE_SUFFIXES = [
@@ -376,6 +418,9 @@ final class WP_FTS_Plugin
      * @var array<int,array<string,mixed>>
      */
     private static array $search_final_ownership_state = [];
+
+    /** Exact live queries whose owned empty result still needs final enforcement. */
+    private static ?WeakMap $pending_search_fail_closed_queries = null;
 
     /**
      * Request-local capability for the lease currently fencing index writes.
@@ -499,6 +544,7 @@ final class WP_FTS_Plugin
         self::$debug_next_trace_id = 1;
         self::$debug_sql_query_starts = [];
         self::$search_final_ownership_state = [];
+        self::$pending_search_fail_closed_queries = null;
         self::$admin_health_support_snapshot_visible = false;
         self::$relationship_pre_mutations = [];
         self::$relationship_post_mutations = [];
@@ -534,6 +580,7 @@ final class WP_FTS_Plugin
         self::clear_site_analyzer_caches();
     }
 
+    /** Clears analyzer state that cannot survive a WordPress blog-prefix switch. */
     private static function clear_site_analyzer_caches(): void
     {
         self::$runtime_analyzer_pack_statuses_cache = null;
@@ -823,6 +870,7 @@ final class WP_FTS_Plugin
         }
     }
 
+    /** Provisions one bounded multisite keyset page without skipping failed sites. */
     public static function handle_scheduled_site_schema(int $after_site_id, string $network_activation_token = ''): void
     {
         $after_site_id = max(0, $after_site_id);
@@ -836,7 +884,7 @@ final class WP_FTS_Plugin
             return;
         }
         try {
-            $sites = self::network_schema_site_ids_after($after_site_id);
+            $sites = self::network_site_ids_after($after_site_id, self::SCHEMA_SITE_BATCH_SIZE);
         } catch (Throwable $error) {
             self::schedule_network_schema_batch($after_site_id, $network_activation_token);
             throw $error;
@@ -880,9 +928,11 @@ final class WP_FTS_Plugin
      *
      * @return int[]
      */
-    private static function network_schema_site_ids_after(int $after_site_id): array
+    private static function network_site_ids_after(int $after_site_id, int $limit): array
     {
         global $wpdb;
+
+        $limit = max(1, min(self::UNINSTALL_SITE_BATCH_SIZE, $limit));
 
         if (
             !isset($wpdb)
@@ -892,21 +942,21 @@ final class WP_FTS_Plugin
             || !method_exists($wpdb, 'prepare')
             || !method_exists($wpdb, 'get_col')
         ) {
-            throw new RuntimeException('Could not query multisite schema targets.');
+            throw new RuntimeException('Could not query multisite site IDs.');
         }
 
         $table = (string) $wpdb->blogs;
         if (preg_match('/^[A-Za-z0-9_]+$/D', $table) !== 1) {
-            throw new RuntimeException('Could not query multisite schema targets.');
+            throw new RuntimeException('Could not query multisite site IDs.');
         }
 
         $rows = $wpdb->get_col($wpdb->prepare(
             "SELECT blog_id FROM `{$table}` WHERE blog_id > %d ORDER BY blog_id ASC LIMIT %d",
             $after_site_id,
-            self::SCHEMA_SITE_BATCH_SIZE
+            $limit
         ));
         if (!is_array($rows) || (isset($wpdb->last_error) && (string) $wpdb->last_error !== '')) {
-            throw new RuntimeException('Could not query multisite schema targets.');
+            throw new RuntimeException('Could not query multisite site IDs.');
         }
 
         $sites = [];
@@ -919,9 +969,10 @@ final class WP_FTS_Plugin
         $sites = array_keys($sites);
         sort($sites, SORT_NUMERIC);
 
-        return array_slice($sites, 0, self::SCHEMA_SITE_BATCH_SIZE);
+        return array_slice($sites, 0, $limit);
     }
 
+    /** Builds one site schema under the network lease and queues its reconciliation. */
     private static function provision_site_schema(int $site_id, string $network_activation_token = ''): void
     {
         if ($site_id <= 0 || !function_exists('switch_to_blog') || !function_exists('restore_current_blog')) {
@@ -1011,6 +1062,7 @@ final class WP_FTS_Plugin
         }
     }
 
+    /** Coalesces the next multisite keyset page into one cron event. */
     private static function schedule_network_schema_batch(int $offset, string $network_activation_token = ''): bool
     {
         if (!function_exists('wp_schedule_single_event')) {
@@ -1172,6 +1224,7 @@ final class WP_FTS_Plugin
             && (int) ($payload['expires_at'] ?? 0) > $now;
     }
 
+    /** Acquires the network lifecycle lease with an atomic insert-if-absent. */
     private static function insert_network_lifecycle_lock(string $serialized): bool
     {
         global $wpdb;
@@ -1210,6 +1263,7 @@ final class WP_FTS_Plugin
         return (int) $result === 1;
     }
 
+    /** Retires only the exact serialized network lease still owned by this process. */
     private static function delete_network_lifecycle_lock_row(string $serialized): bool
     {
         global $wpdb;
@@ -1238,6 +1292,7 @@ final class WP_FTS_Plugin
         return $serialized;
     }
 
+    /** Returns the validated network options table that owns the global lease. */
     private static function network_lifecycle_lock_table(): string
     {
         global $wpdb;
@@ -1277,6 +1332,7 @@ final class WP_FTS_Plugin
         return $token;
     }
 
+    /** Checks that a scheduled activation still belongs to the live network lease. */
     private static function network_activation_token_is_current(string $token): bool
     {
         if ($token === '' || !function_exists('get_site_option')) {
@@ -1287,6 +1343,7 @@ final class WP_FTS_Plugin
         return is_string($stored) && hash_equals($stored, $token);
     }
 
+    /** Retires the activation marker only after its bounded site chain completes. */
     private static function clear_network_activation_token(): void
     {
         if (function_exists('delete_site_option')) {
@@ -1451,7 +1508,7 @@ final class WP_FTS_Plugin
             return self::unique_table_names($tables);
         }
 
-        return self::unique_table_names(array_merge($tables, self::fts_table_names($prefix)));
+        return self::unique_table_names(array_merge($tables, self::owned_site_table_names($prefix)));
     }
 
     /**
@@ -1630,15 +1687,6 @@ final class WP_FTS_Plugin
         $guardQueue = new WP_FTS_Index_Queue($wpdb, $prefix);
         $exclusiveGuard = $guardQueue->acquire_exclusive_foreground_owner_guard();
         try {
-            $tables = [];
-            $suffixes = array_merge(
-                self::FTS_TABLE_SUFFIXES,
-                array_keys(self::legacy_relational_table_suffixes()),
-                array_values(self::legacy_relational_table_suffixes())
-            );
-            foreach (array_values(array_unique($suffixes)) as $suffix) {
-                $tables[] = self::migration_identifier($prefix . $suffix);
-            }
             $storage = new WP_FTS_Storage_Mysql(
                 $wpdb,
                 $prefix,
@@ -1646,9 +1694,10 @@ final class WP_FTS_Plugin
                     self::assert_index_writer_ownership();
                 }
             );
-            foreach ($storage->reset_generation_table_names() as $table) {
-                $tables[] = self::migration_identifier($table);
-            }
+            $tables = array_map(
+                static fn(string $table): string => self::migration_identifier($table),
+                self::owned_site_table_names($prefix)
+            );
             $option_names = self::uninstall_option_names();
             $locked = self::run_index_writer_with_lock(
                 'uninstall',
@@ -1778,7 +1827,6 @@ final class WP_FTS_Plugin
         if (
             !function_exists('is_multisite')
             || !is_multisite()
-            || !function_exists('get_sites')
             || !function_exists('switch_to_blog')
             || !function_exists('restore_current_blog')
         ) {
@@ -1790,29 +1838,14 @@ final class WP_FTS_Plugin
         $cleaned = false;
         $failed_count = 0;
         $first_failed_site_id = 0;
-        $offset = 0;
+        $after_site_id = 0;
         do {
-            $sites = get_sites([
-                'fields' => 'ids',
-                'number' => self::UNINSTALL_SITE_BATCH_SIZE,
-                'offset' => $offset,
-                'orderby' => 'id',
-                'order' => 'ASC',
-            ]);
-            if (!is_array($sites)) {
-                throw new RuntimeException('Could not enumerate multisite blogs for FTS uninstall cleanup.');
-            }
+            $sites = self::network_site_ids_after($after_site_id, self::UNINSTALL_SITE_BATCH_SIZE);
             $page_count = count($sites);
-            $offset += $page_count;
-
-            $page_ids = [];
-            foreach ($sites as $site) {
-                $site_id = self::site_id_from_value($site);
-                if ($site_id > 0) {
-                    $page_ids[$site_id] = true;
-                }
+            if ($page_count > 0) {
+                $after_site_id = $sites[$page_count - 1];
             }
-            foreach (array_keys($page_ids) as $site_id) {
+            foreach ($sites as $site_id) {
                 if ($site_id === $original_site_id) {
                     $original_attempted = true;
                     try {
@@ -2002,6 +2035,7 @@ final class WP_FTS_Plugin
         return false;
     }
 
+    /** Advances the resumable migration and reports whether it queued reconciliation. */
     private static function run_schema_migration(WP_FTS_Storage_Mysql $storage, int $version): bool
     {
         if ($version === 1) {
@@ -2255,6 +2289,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         ];
     }
 
+    /** Checks one allowlisted migration table without enumerating the schema. */
     private static function migration_table_exists(string $table): bool
     {
         global $wpdb;
@@ -2266,6 +2301,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return is_scalar($value) && (string) $value === $table;
     }
 
+    /** Checks one migration column before issuing a resumable DDL phase. */
     private static function migration_table_has_column(string $table, string $column): bool
     {
         global $wpdb;
@@ -2277,6 +2313,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return in_array($column, array_map('strval', $rows), true);
     }
 
+    /** Executes migration SQL and turns adapter errors into hard migration failures. */
     private static function migration_query(string $sql): void
     {
         global $wpdb;
@@ -2314,6 +2351,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         self::migration_query('DROP TABLE IF EXISTS ' . implode(', ', array_values(array_unique($tables))));
     }
 
+    /** Quotes only migration identifiers that satisfy MySQL name constraints. */
     private static function migration_identifier(string $identifier): string
     {
         if ($identifier === '' || strlen($identifier) > 64 || preg_match('/^[A-Za-z0-9_]+$/D', $identifier) !== 1) {
@@ -2421,6 +2459,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         }
     }
 
+    /** Coalesces a failed schema repair into one delayed retry event. */
     private static function schedule_schema_provisioning(int $delay_seconds = 10): bool
     {
         if (!function_exists('wp_schedule_single_event')) {
@@ -2460,6 +2499,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return self::compare_and_swap_index_health($expected, $state);
     }
 
+    /** Revokes readiness and persists a bounded schema failure diagnostic. */
     private static function remember_schema_upgrade_failure(Throwable $error): void
     {
         self::clear_search_ready_incarnation();
@@ -2873,6 +2913,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         self::begin_post_meta_mutation($post_id, $meta_key);
     }
 
+    /** Crosses the dirty fence before selected post metadata can change. */
     private static function begin_post_meta_mutation(int $post_id, string $meta_key): void
     {
         if (self::foreground_corpus_fence_active()) {
@@ -3050,6 +3091,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return self::queue_posts($post_ids);
     }
 
+    /** Checks whether one post metadata mutation needs a durable generation. */
     private static function post_meta_change_requires_reindex(int $post_id, string $meta_key): bool
     {
         return self::is_normal_post_id($post_id)
@@ -3057,6 +3099,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
             && self::post_meta_key_may_affect_index($meta_key, $post_id);
     }
 
+    /** Conservatively classifies metadata keys that can alter indexed content. */
     private static function post_meta_key_may_affect_index(string $meta_key, int $post_id = 0): bool
     {
         if ($meta_key === '') {
@@ -3691,6 +3734,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return array_keys($post_types);
     }
 
+    /** Explains whether current ranking settings are fully reconciled. */
     private static function operator_ranking_tuning_advice(bool $reconciliation_active): string
     {
         if ($reconciliation_active) {
@@ -5323,6 +5367,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         ];
     }
 
+    /** Normalizes one wpdb timing entry to non-negative milliseconds. */
     private static function debug_sql_query_time_ms(mixed $entry): ?float
     {
         if (is_array($entry)) {
@@ -5342,6 +5387,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return null;
     }
 
+    /** Redacts and bounds one SQL entry for operator diagnostics. */
     private static function debug_sql_query_entry_summary(string $sql): string
     {
         $scan = self::debug_scan_sql_summary($sql);
@@ -5800,6 +5846,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         self::$debug_traces[$trace_id]['counts'] = $counts;
     }
 
+    /** Records one canonical query language in the active bounded trace. */
     private static function debug_set_query_language(int $trace_id, string $query_lang): void
     {
         if (!isset(self::$debug_traces[$trace_id])) {
@@ -5927,6 +5974,8 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         if ($expected_signature !== null) {
             $row['expected_kind'] = (string) ($expected_signature['kind'] ?? 'unknown');
             $row['expected_count'] = max(0, (int) ($expected_signature['count'] ?? 0));
+            $row['expected_inspected_count'] = max(0, (int) ($expected_signature['inspected_count'] ?? 0));
+            $row['expected_truncated'] = !empty($expected_signature['truncated']);
             $row['expected_post_ids'] = self::debug_post_id_sample($expected_signature['post_ids'] ?? []);
             $row['expected_hash'] = self::debug_hash_prefix((string) ($expected_signature['hash'] ?? ''));
         }
@@ -5934,6 +5983,8 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         if ($final_signature !== null) {
             $row['final_kind'] = (string) ($final_signature['kind'] ?? 'unknown');
             $row['final_count'] = max(0, (int) ($final_signature['count'] ?? 0));
+            $row['final_inspected_count'] = max(0, (int) ($final_signature['inspected_count'] ?? 0));
+            $row['final_truncated'] = !empty($final_signature['truncated']);
             $row['final_post_ids'] = self::debug_post_id_sample($final_signature['post_ids'] ?? []);
             $row['final_hash'] = self::debug_hash_prefix((string) ($final_signature['hash'] ?? ''));
         }
@@ -5973,7 +6024,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
     }
 
     /**
-     * @return array{kind:string,count:int,post_ids:int[],hash:string,comparable:bool,reason:string}
+     * @return array{kind:string,count:int,inspected_count:int,truncated:bool,post_ids:int[],hash:string,comparable:bool,reason:string}
      */
     private static function debug_search_result_signature(mixed $posts): array
     {
@@ -5981,6 +6032,8 @@ WHERE kind = 'scope' AND scope_coverage = ''"
             return [
                 'kind' => 'null',
                 'count' => 0,
+                'inspected_count' => 0,
+                'truncated' => false,
                 'post_ids' => [],
                 'hash' => sha1('null'),
                 'comparable' => true,
@@ -5991,7 +6044,9 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         if (!is_array($posts)) {
             return [
                 'kind' => self::debug_truncate_text(get_debug_type($posts), 80),
-                'count' => is_countable($posts) ? max(0, count($posts)) : 1,
+                'count' => 1,
+                'inspected_count' => 0,
+                'truncated' => false,
                 'post_ids' => [],
                 'hash' => sha1('unavailable:' . get_debug_type($posts)),
                 'comparable' => false,
@@ -5999,43 +6054,70 @@ WHERE kind = 'scope' AND scope_coverage = ''"
             ];
         }
 
-        $parts = ['array', 'count:' . count($posts)];
+        $count = count($posts);
+        $header = 'array|count:' . $count;
+        $hash_context = hash_init('sha1');
+        hash_update($hash_context, $header);
+        $signature_bytes = strlen($header);
+        $inspection_limit = min($count, self::DEBUG_SEARCH_RESULT_SIGNATURE_MAX_ITEMS);
+        $inspected_count = 0;
         $post_ids = [];
         $comparable = true;
-        foreach (array_values($posts) as $item) {
+        foreach ($posts as $item) {
             $post_id = self::debug_search_result_post_id($item);
-            if ($post_id > 0) {
-                $post_ids[] = $post_id;
-                $parts[] = 'id:' . $post_id;
-            } else {
-                $parts[] = 'id:0';
-            }
-
+            $item_signature = '|id:' . $post_id;
             if (is_object($item)) {
-                $parts[] = 'object:' . spl_object_id($item);
+                $item_signature .= '|object:' . spl_object_id($item);
             } elseif (is_array($item)) {
-                $parts[] = 'array:' . count($item);
+                $item_signature .= '|array:' . count($item);
                 if ($post_id <= 0) {
                     $comparable = false;
                 }
             } elseif (is_scalar($item)) {
-                $parts[] = 'scalar:' . get_debug_type($item);
+                $item_signature .= '|scalar:' . get_debug_type($item);
                 if ($post_id <= 0) {
                     $comparable = false;
                 }
             } else {
-                $parts[] = 'type:' . get_debug_type($item);
+                $item_signature .= '|type:' . get_debug_type($item);
                 $comparable = false;
             }
+
+            $item_bytes = strlen($item_signature);
+            if ($signature_bytes + $item_bytes > self::DEBUG_SEARCH_RESULT_SIGNATURE_MAX_BYTES) {
+                break;
+            }
+            hash_update($hash_context, $item_signature);
+            $signature_bytes += $item_bytes;
+            $inspected_count++;
+            if ($post_id > 0 && count($post_ids) < self::DEBUG_MAX_LIST_ITEMS) {
+                $post_ids[] = $post_id;
+            }
+            if ($inspected_count >= $inspection_limit) {
+                break;
+            }
+        }
+
+        $truncated = $inspected_count < $count;
+        if ($truncated) {
+            $comparable = false;
+        }
+        $reason = '';
+        if ($truncated) {
+            $reason = 'Final ownership comparison was truncated by the bounded diagnostic signature window.';
+        } elseif (!$comparable) {
+            $reason = 'posts_pre_query result items were not all identifiable by post ID or object identity.';
         }
 
         return [
             'kind' => 'array',
-            'count' => count($posts),
-            'post_ids' => array_slice($post_ids, 0, self::DEBUG_MAX_LIST_ITEMS),
-            'hash' => sha1(implode('|', $parts)),
+            'count' => $count,
+            'inspected_count' => $inspected_count,
+            'truncated' => $truncated,
+            'post_ids' => $post_ids,
+            'hash' => $truncated ? '' : hash_final($hash_context),
             'comparable' => $comparable,
-            'reason' => $comparable ? '' : 'posts_pre_query result items were not all identifiable by post ID or object identity.',
+            'reason' => $reason,
         ];
     }
 
@@ -6055,13 +6137,34 @@ WHERE kind = 'scope' AND scope_coverage = ''"
     }
 
     /**
-     * Read-only late posts_pre_query observer used only for diagnostics.
+     * Observe final ownership and restore an FTS-owned fail-closed empty page.
      */
     public static function observe_final_search_posts(mixed $posts, mixed $query): mixed
     {
-        self::debug_observe_search_final_ownership($posts, $query);
+        // Consume the exact object capability before inspecting provider data.
+        // Diagnostics are read-only: even hostile magic properties must not
+        // prevent the owned empty page from being enforced.
+        $failed_closed = self::consume_search_query_fail_closed($query);
+        if ($failed_closed) {
+            // A late membership callback may have cleared this public query
+            // var. Restore it after that callback so later result filters
+            // cannot repopulate the owned empty page.
+            self::set_query_var($query, 'suppress_filters', true);
+        }
+        try {
+            self::debug_observe_search_final_ownership($posts, $query);
+        } catch (Throwable) {
+            try {
+                self::debug_forget_search_final_ownership_query(
+                    self::query_object_key($query),
+                    $query
+                );
+            } catch (Throwable) {
+                // Diagnostic cleanup cannot participate in search ownership.
+            }
+        }
 
-        return $posts;
+        return $failed_closed ? [] : $posts;
     }
 
     private static function debug_observe_search_final_ownership(mixed $posts, mixed $query): void
@@ -6135,7 +6238,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
                 ? 'later_provider_changed_respected_provider'
                 : 'later_provider_changed_fts';
             $reason = $changed_respected_provider
-                ? 'A later posts_pre_query callback changed the provider result after compatibility mode stood down.'
+                ? 'A later posts_pre_query callback changed the provider result after Language FTS stood down.'
                 : 'A later posts_pre_query callback changed the final result after Language FTS recorded its trace.';
 
             return self::debug_search_final_ownership_row(
@@ -6157,7 +6260,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
                 $origin,
                 $expected_signature,
                 $final_signature,
-                'Compatibility mode respected an earlier non-null provider result through the final observer.'
+                'Language FTS respected an earlier non-null provider result through the final observer.'
             );
         }
 
@@ -6196,7 +6299,6 @@ WHERE kind = 'scope' AND scope_coverage = ''"
             'result_ids_returned' => 0,
             'visible_results' => 0,
             'incoming_provider_results' => 0,
-            'prior_provider_responses_replaced' => 0,
             'snippets_reused' => 0,
             'snippet_reuse_misses' => 0,
             'snippets_generated' => 0,
@@ -6218,6 +6320,8 @@ WHERE kind = 'scope' AND scope_coverage = ''"
             'hook' => self::DEBUG_SEARCH_HOOK,
             'fts_priority' => self::SEARCH_REPLACEMENT_PRIORITY,
             'total_callbacks' => 0,
+            'total_relation' => 'exact',
+            'inspected_priority_buckets' => 0,
             'shown_count' => 0,
             'counts' => [
                 'before' => 0,
@@ -6227,6 +6331,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
             ],
             'callbacks' => [],
             'more' => false,
+            'truncated' => false,
             'reason' => '',
         ];
 
@@ -6248,57 +6353,56 @@ WHERE kind = 'scope' AND scope_coverage = ''"
             return $summary;
         }
 
-        $buckets = [];
-        $order = 0;
+        $priority_buckets = 0;
+        $callbacks_examined = 0;
+        $truncated = false;
         foreach ($callbacks_by_priority as $priority => $bucket) {
-            $buckets[] = [
-                'priority' => self::debug_hook_priority_value($priority),
-                'raw_priority' => $priority,
-                'bucket' => $bucket,
-                'order' => $order++,
-            ];
-        }
-        usort($buckets, static function (array $left, array $right): int {
-            $left_priority = $left['priority'];
-            $right_priority = $right['priority'];
-            if ($left_priority === null && $right_priority === null) {
-                return $left['order'] <=> $right['order'];
+            if ($priority_buckets >= self::MAX_SEARCH_CALLBACKS_INSPECTED) {
+                $truncated = true;
+                break;
             }
-            if ($left_priority === null) {
-                return 1;
-            }
-            if ($right_priority === null) {
-                return -1;
-            }
-            if ($left_priority === $right_priority) {
-                return $left['order'] <=> $right['order'];
-            }
-
-            return $left_priority <=> $right_priority;
-        });
-
-        foreach ($buckets as $bucket_info) {
-            $priority = is_int($bucket_info['priority']) ? $bucket_info['priority'] : null;
-            $relation = self::debug_hook_priority_relation($priority);
-            $entries = self::debug_hook_bucket_entries($bucket_info['bucket']);
+            $priority_buckets++;
+            $numeric_priority = self::debug_hook_priority_value($priority);
+            $relation = self::debug_hook_priority_relation($numeric_priority);
+            // Array assignment is copy-on-write; unlike array_values(), this
+            // does not duplicate an attacker-sized callback bucket.
+            $entries = is_array($bucket) ? $bucket : [$bucket];
             foreach ($entries as $entry) {
-                $summary['total_callbacks']++;
+                if ($callbacks_examined >= self::MAX_SEARCH_CALLBACKS_INSPECTED) {
+                    $truncated = true;
+                    break 2;
+                }
+                $callbacks_examined++;
                 $summary['counts'][$relation] = max(0, (int) ($summary['counts'][$relation] ?? 0)) + 1;
                 if (count($summary['callbacks']) >= self::DEBUG_MAX_HOOK_CALLBACKS) {
                     continue;
                 }
 
                 $summary['callbacks'][] = [
-                    'priority' => $priority ?? 'unknown',
+                    'priority' => $numeric_priority ?? 'unknown',
                     'relation' => $relation,
                     'label' => self::debug_hook_callback_label(self::debug_hook_callback_from_entry($entry)),
                 ];
             }
         }
 
+        if (
+            $callbacks_examined >= self::MAX_SEARCH_CALLBACKS_INSPECTED
+            || $priority_buckets >= self::MAX_SEARCH_CALLBACKS_INSPECTED
+        ) {
+            // At the exact boundary, deliberately report a lower bound rather
+            // than traversing one more untrusted entry to prove completeness.
+            $truncated = true;
+        }
+        $summary['total_callbacks'] = $callbacks_examined;
+        $summary['total_relation'] = $truncated ? 'at_least' : 'exact';
+        $summary['inspected_priority_buckets'] = $priority_buckets;
+        $summary['truncated'] = $truncated;
         $summary['shown_count'] = count($summary['callbacks']);
-        $summary['more'] = $summary['shown_count'] < $summary['total_callbacks'];
-        if ($summary['total_callbacks'] === 0) {
+        $summary['more'] = $truncated || $summary['shown_count'] < $summary['total_callbacks'];
+        if ($truncated) {
+            $summary['reason'] = 'Hook inspection stopped at the bounded 32-callback/priority window; counts are lower bounds.';
+        } elseif ($summary['total_callbacks'] === 0) {
             $summary['reason'] = 'No posts_pre_query callbacks are registered.';
         }
 
@@ -6356,18 +6460,6 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return 'after';
     }
 
-    /**
-     * @return mixed[]
-     */
-    private static function debug_hook_bucket_entries(mixed $bucket): array
-    {
-        if (!is_array($bucket)) {
-            return [$bucket];
-        }
-
-        return $bucket === [] ? [] : array_values($bucket);
-    }
-
     private static function debug_hook_callback_from_entry(mixed $entry): mixed
     {
         if (is_array($entry) && array_key_exists('function', $entry)) {
@@ -6377,6 +6469,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return $entry;
     }
 
+    /** Returns a bounded, payload-free label for one untrusted hook callback. */
     private static function debug_hook_callback_label(mixed $callback): string
     {
         if ($callback instanceof Closure) {
@@ -6388,8 +6481,8 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         }
 
         if (is_array($callback)) {
-            $parts = array_values($callback);
-            if (count($parts) !== 2 || !is_scalar($parts[1])) {
+            $parts = self::two_part_callback($callback);
+            if ($parts === null || !is_scalar($parts[1])) {
                 return 'unknown';
             }
 
@@ -6423,6 +6516,21 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         }
 
         return 'unknown';
+    }
+
+    /** Reads a valid callable tuple without copying an oversized array. */
+    private static function two_part_callback(mixed $callback): ?array
+    {
+        if (!is_array($callback) || count($callback) !== 2) {
+            return null;
+        }
+
+        $parts = [];
+        foreach ($callback as $part) {
+            $parts[] = $part;
+        }
+
+        return $parts;
     }
 
     private static function debug_hook_string_callback_label(string $callback): string
@@ -6819,6 +6927,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return rtrim(WP_FTS_Utf8::truncate_bytes($value, max(0, $max_bytes - 3))) . '...';
     }
 
+    /** Renders the bounded search trace without triggering diagnostic work. */
     private static function render_debug_diagnostics_panel(string $heading, bool $include_indexing_batch = true): void
     {
         echo '<div class="wp-fts-debug-diagnostics">';
@@ -6865,6 +6974,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         echo '</div>';
     }
 
+    /** Renders the last persisted worker batch without querying corpus rows. */
     private static function render_debug_indexing_batch_diagnostics(): void
     {
         $diagnostics = self::latest_index_batch_diagnostics_from_health(self::index_health_state());
@@ -6891,6 +7001,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         echo '<tr><th scope="row">' . self::esc_html($label) . '</th><td>' . self::esc_html($value !== '' ? $value : '-') . '</td></tr>';
     }
 
+    /** Formats one scalar diagnostic value without exposing unbounded content. */
     private static function debug_scalar_summary(mixed $value): string
     {
         if (is_bool($value)) {
@@ -6992,6 +7103,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return $elapsed_summary . '/' . $budget_summary;
     }
 
+    /** Formats only the retained bounded SQL trace entries. */
     private static function debug_sql_queries_summary(mixed $value): string
     {
         if (!is_array($value)) {
@@ -7169,6 +7281,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return self::debug_truncate_text(implode(', ', $parts), 800);
     }
 
+    /** Formats the bounded logical plan and omits raw analyzer payloads. */
     private static function debug_query_plan_summary(mixed $value): string
     {
         if (!is_array($value)) {
@@ -7856,6 +7969,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return array_values(array_filter(array_slice($posts, 0, $limit), 'is_object'));
     }
 
+    /** Recognizes only plugin-owned legacy sandbox fixtures for deletion. */
     private static function is_legacy_sandbox_demo_cleanup_target(object $post): bool
     {
         if (self::post_status_from_object($post) === 'trash') {
@@ -7966,6 +8080,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         echo '<p class="description wp-fts-admin-summary"><strong>What this does:</strong> Full-text search (FTS) builds its own searchable index for site content. Analyzer packs add language-specific word-form matching when available.</p>';
     }
 
+    /** Renders read-only health state and explicit bounded recovery controls. */
     private static function render_health_tab(): void
     {
         $settings = self::settings();
@@ -8128,6 +8243,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
             : (string) $count;
     }
 
+    /** Renders nonce-protected export controls for the redacted support snapshot. */
     private static function render_health_support_snapshot_controls(): void
     {
         echo '<h3>Support snapshot</h3>';
@@ -8815,6 +8931,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         };
     }
 
+    /** Renders the persisted analyzer and ranking settings form. */
     private static function render_settings_tab(): void
     {
         $settings = self::settings();
@@ -9027,12 +9144,12 @@ WHERE kind = 'scope' AND scope_coverage = ''"
             (string) $settings['search_provider_compatibility'],
             [
                 self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS => [
-                    'label' => 'Prefer Language FTS',
-                    'description' => 'Eligible searches use Language FTS even when another search provider has already answered.',
+                    'label' => 'Use Language FTS when providers abstain',
+                    'description' => 'Earlier non-null provider results are preserved. Language FTS runs only after earlier providers return null and no unsafe later callback is registered.',
                 ],
                 self::SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING => [
-                    'label' => 'Keep another search provider\'s results when it has already answered',
-                    'description' => 'Useful when another search plugin or theme filter should stay in charge on the same search surfaces.',
+                    'label' => 'Keep provider-integrated searches on WordPress',
+                    'description' => 'Any registered third-party posts_pre_query provider keeps that search on core WordPress, even when the provider returns null.',
                 ],
             ]
         );
@@ -9075,6 +9192,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         echo '</td></tr>';
     }
 
+    /** Renders the bounded search sandbox without running a query implicitly. */
     private static function render_admin_sandbox_tab(): void
     {
         $state = self::admin_sandbox_state(false);
@@ -9448,13 +9566,14 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         ];
     }
 
+    /** Returns the operator-facing behavior of one provider coexistence mode. */
     private static function search_provider_compatibility_label(string $mode): string
     {
         if ($mode === self::SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING) {
-            return 'Keep another search provider\'s results';
+            return 'Keep provider-integrated searches on WordPress';
         }
 
-        return 'Prefer Language FTS';
+        return 'Use Language FTS when providers abstain';
     }
 
     private static function search_provider_compatibility_debug_value(string $mode): string
@@ -9607,10 +9726,10 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         }
 
         if ($mode === self::SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING) {
-            return 'Keep another search provider\'s results is appropriate when the detected provider should stay in charge; use Prefer Language FTS only when Language FTS should override earlier provider results.';
+            return 'Keep provider-integrated searches on WordPress is appropriate when the detected provider should retain the whole query, including null handoffs.';
         }
 
-        return 'Prefer Language FTS is appropriate when Language FTS should own eligible searches; switch to Keep another search provider\'s results if the detected provider should answer first.';
+        return 'Use Language FTS when providers abstain preserves every non-null provider result and runs FTS only after an earlier provider returns null.';
     }
 
     /**
@@ -9913,6 +10032,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         }
     }
 
+    /** Hashes the effective analyzer configuration used to detect stale documents. */
     private static function runtime_analyzer_index_signature(): string
     {
         try {
@@ -10167,6 +10287,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         return wp_verify_nonce($nonce, self::POST_LANGUAGE_NONCE_ACTION) !== false;
     }
 
+    /** Resolves an explicit per-post language without loading unrelated metadata. */
     private static function post_language_override(int $post_id, ?object $post = null): ?string
     {
         if ($post !== null && property_exists($post, 'fts_language_override')) {
@@ -10739,6 +10860,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         if ($options == (is_array($stored) ? $stored : [])) {
             return $options;
         }
+        self::assert_runtime_analyzer_options_can_enable($options);
 
         $previousProfile = self::current_index_profile();
         $schemaCurrent = self::option_matches_schema_version(
@@ -10818,6 +10940,10 @@ WHERE kind = 'scope' AND scope_coverage = ''"
             $options = self::remove_exact_bundled_runtime_lemma_pack_entry($options, $language, $manifestPath);
         }
 
+        if ($options != (is_array($stored) ? $stored : [])) {
+            self::assert_runtime_analyzer_options_can_enable($options);
+        }
+
         if ($persist) {
             self::set_option(self::ANALYZER_OPTIONS_OPTION, $options);
         }
@@ -10831,15 +10957,39 @@ WHERE kind = 'scope' AND scope_coverage = ''"
      */
     private static function assert_runtime_lemma_pack_can_enable(string $language, string $manifestPath): void
     {
-        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath, false);
-        $actualLanguage = WP_FTS_TermNamespace::canonicalize_lang((string) $validation['manifest']['language']);
+        $validator = new WP_FTS_AnalyzerPackValidator();
+        $metadata = $validator->validate_metadata($manifestPath, false);
+        $actualLanguage = WP_FTS_TermNamespace::canonicalize_lang((string) $metadata['manifest']['language']);
         if (self::base_language($actualLanguage) !== self::base_language($language)) {
             throw new RuntimeException('Analyzer pack language does not match the requested runtime language.');
         }
 
-        // Construction exercises the exact metadata and lookup reader used by
-        // normal indexing/search after the full streamed verification above.
-        WP_FTS_LanguageLemmaPack::from_manifest_file($manifestPath, null, $language);
+        // Reject structurally unusable output before a missing sidecar can make
+        // enablement stream and hash an entire dictionary that will never load.
+        WP_FTS_LanguageLemmaPack::from_manifest_file($manifestPath, $validator, $language);
+
+        // Activatable packs still receive the complete streamed integrity audit
+        // before their configuration is persisted.
+        $validator->validate($manifestPath, false);
+    }
+
+    /**
+     * Validate the complete effective runtime pack set before mutating options
+     * or readiness. Individually valid packs may still exceed the aggregate
+     * configured resource envelope when combined.
+     *
+     * @param array<string,mixed> $storedOptions
+     */
+    private static function assert_runtime_analyzer_options_can_enable(array $storedOptions): void
+    {
+        $options = self::raw_analyzer_options_with_bundled_packs(
+            self::bundled_runtime_lemma_packs_by_lang(),
+            self::bundled_runtime_segmenter_packs_by_lang(),
+            $storedOptions
+        );
+        new WP_FTS_Analyzer(self::with_wordpress_analyzer_options(
+            self::sanitize_runtime_analyzer_options($options)
+        ));
     }
 
     /**
@@ -10884,9 +11034,49 @@ WHERE kind = 'scope' AND scope_coverage = ''"
     {
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'WordPress analyzer options');
         $statuses = [];
-        $runtimeFiles = 0;
-        $lookupBlocks = 0;
-        foreach (self::runtime_lemma_pack_options_by_language($options) as $language => $option) {
+        $lemmaPackOptions = self::runtime_lemma_pack_options_by_language($options);
+        $admission = new WP_FTS_ConfiguredLemmaPackAdmission();
+        $lemmaPackPreflights = [];
+        foreach ($lemmaPackOptions as $language => $option) {
+            if (self::lemma_pack_option_is_disabled($option)) {
+                continue;
+            }
+            $manifestPath = WP_FTS_LanguageLemmaPack::manifest_path_from_option(
+                $option,
+                self::default_lemma_pack_manifest_for_language($language)
+            );
+            if ($manifestPath === null) {
+                $lemmaPackPreflights[$language] = ['state' => 'unresolved'];
+                continue;
+            }
+            $realManifestPath = realpath($manifestPath);
+            if (!is_string($realManifestPath) || !is_file($realManifestPath)) {
+                $lemmaPackPreflights[$language] = ['state' => 'missing'];
+                continue;
+            }
+            try {
+                $descriptor = $admission->preflight_manifest(
+                    $realManifestPath,
+                    $language
+                );
+                $lemmaPackPreflights[$language] = $descriptor['language_matches'] === true
+                    ? [
+                        'state' => 'admitted',
+                        'manifest_path' => $descriptor['manifest_path'],
+                    ]
+                    : ['state' => 'language-mismatch'];
+            } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
+                throw $error;
+            } catch (Throwable $error) {
+                $lemmaPackPreflights[$language] = [
+                    'state' => 'failed',
+                    'error' => $error,
+                ];
+            }
+        }
+
+        $lemmaPackAttemptsByManifest = [];
+        foreach ($lemmaPackOptions as $language => $option) {
             if (self::lemma_pack_option_is_disabled($option)) {
                 $statuses[] = [
                     'language' => $language,
@@ -10899,11 +11089,8 @@ WHERE kind = 'scope' AND scope_coverage = ''"
                 continue;
             }
 
-            $manifestPath = WP_FTS_LanguageLemmaPack::manifest_path_from_option(
-                $option,
-                self::default_lemma_pack_manifest_for_language($language)
-            );
-            if ($manifestPath === null) {
+            $preflight = $lemmaPackPreflights[$language] ?? ['state' => 'unresolved'];
+            if ($preflight['state'] === 'unresolved') {
                 $statuses[] = [
                     'language' => $language,
                     'kind' => 'lemmatizer',
@@ -10914,7 +11101,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
                 ];
                 continue;
             }
-            if (!is_file($manifestPath)) {
+            if ($preflight['state'] === 'missing') {
                 $statuses[] = [
                     'language' => $language,
                     'kind' => 'lemmatizer',
@@ -10927,16 +11114,59 @@ WHERE kind = 'scope' AND scope_coverage = ''"
             }
 
             try {
-                $validation = (new WP_FTS_AnalyzerPackValidator())->validate_metadata($manifestPath, true);
-                $actualLanguage = WP_FTS_TermNamespace::canonicalize_lang((string) $validation['manifest']['language']);
-                if (self::base_language($actualLanguage) !== self::base_language($language)) {
+                if ($preflight['state'] === 'failed') {
+                    throw $preflight['error'];
+                }
+                if ($preflight['state'] === 'language-mismatch') {
                     throw new RuntimeException('Analyzer pack language does not match requested language.');
+                }
+                if ($preflight['state'] !== 'admitted') {
+                    throw new LogicException('Configured lemma-pack status requires a successful manifest preflight.');
+                }
+                $constructionPath = (string) $preflight['manifest_path'];
+                $manifestIdentity = $constructionPath;
+                if (array_key_exists($manifestIdentity, $lemmaPackAttemptsByManifest)) {
+                    $attempt = $lemmaPackAttemptsByManifest[$manifestIdentity];
+                    if ($attempt instanceof Throwable) {
+                        throw $attempt;
+                    }
+                    $validation = $attempt;
+                } else {
+                    try {
+                        $validator = new WP_FTS_AnalyzerPackValidator();
+                        $expectedManifestSha256 = $admission->expected_manifest_sha256($constructionPath);
+                        $metadata = $validator->validate_metadata($constructionPath, false, $expectedManifestSha256);
+                        $actualLanguage = WP_FTS_TermNamespace::canonicalize_lang((string) $metadata['manifest']['language']);
+                        if (self::base_language($actualLanguage) !== self::base_language($language)) {
+                            throw new RuntimeException('Analyzer pack language does not match requested language.');
+                        }
+                        $pack = WP_FTS_LanguageLemmaPack::from_manifest_file(
+                            $constructionPath,
+                            $validator,
+                            $language,
+                            $admission
+                        );
+                        $validation = $validator->validate_metadata($constructionPath, true, $expectedManifestSha256);
+                        unset($pack);
+                        gc_collect_cycles();
+                    } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
+                        throw $error;
+                    } catch (Throwable $error) {
+                        // Cache failed physical attempts too; otherwise aliases
+                        // repeat the same bounded but expensive digest or
+                        // eager-decoding work.
+                        $lemmaPackAttemptsByManifest[$manifestIdentity] = $error;
+                        throw $error;
+                    }
+                    $lemmaPackAttemptsByManifest[$manifestIdentity] = $validation;
                 }
             } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
                 throw $error;
             } catch (Throwable $e) {
                 $message = strtolower($e->getMessage());
-                $notActive = str_contains($message, 'does not match requested language')
+                $missingLookup = str_contains($message, 'requires a validated lookup sidecar');
+                $notActive = $missingLookup
+                    || str_contains($message, 'does not match requested language')
                     || (str_contains($message, 'zlib') && str_contains($message, 'support'));
                 $statuses[] = [
                     'language' => $language,
@@ -10944,26 +11174,13 @@ WHERE kind = 'scope' AND scope_coverage = ''"
                     'status' => $notActive ? 'not-active' : 'corrupt',
                     'pack_id' => '',
                     'fixture_only' => false,
-                    'reason' => $notActive
-                        ? 'Configured pack is language-mismatched or lacks its optional runtime dependency and is not active.'
-                        : 'Configured pack failed strict runtime integrity verification and is not active.',
+                    'reason' => $missingLookup
+                        ? 'Configured non-eager pack is missing a validated lookup sidecar for at least one runtime shard and is not active.'
+                        : ($notActive
+                            ? 'Configured pack is language-mismatched or lacks its optional runtime dependency and is not active.'
+                            : 'Configured pack failed strict runtime integrity verification and is not active.'),
                 ];
                 continue;
-            }
-
-            $runtimeFiles += count($validation['runtime_files']);
-            foreach ($validation['runtime_files'] as $file) {
-                $lookupBlocks += isset($file['lookup']['blocks']) && is_array($file['lookup']['blocks'])
-                    ? count($file['lookup']['blocks'])
-                    : 0;
-            }
-            if ($runtimeFiles > WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_RUNTIME_FILES
-                || $lookupBlocks > WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LOOKUP_BLOCKS
-            ) {
-                throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-                    'configured_pack_metadata',
-                    'Configured lemma packs exceed the 128-file or 4,096-block metadata limit.'
-                );
             }
 
             $statuses[] = [
@@ -11059,11 +11276,20 @@ WHERE kind = 'scope' AND scope_coverage = ''"
     /**
      * @param array<string,bool|string> $bundled_lemma_packs
      * @param array<string,bool|string> $bundled_segmenter_packs
+     * @param array<string,mixed>|null $stored_options Prospective stored value, or null to read WordPress.
      * @return array<string,mixed>
      */
-    private static function raw_analyzer_options_with_bundled_packs(array $bundled_lemma_packs, array $bundled_segmenter_packs): array
+    private static function raw_analyzer_options_with_bundled_packs(
+        array $bundled_lemma_packs,
+        array $bundled_segmenter_packs,
+        ?array $stored_options = null
+    ): array
     {
-        $options = self::raw_analyzer_options_before_filter($bundled_lemma_packs, $bundled_segmenter_packs);
+        $options = self::raw_analyzer_options_before_filter(
+            $bundled_lemma_packs,
+            $bundled_segmenter_packs,
+            $stored_options
+        );
 
         if (function_exists('apply_filters')) {
             $base = $options;
@@ -11086,16 +11312,21 @@ WHERE kind = 'scope' AND scope_coverage = ''"
      *
      * @param array<string,bool|string> $bundled_lemma_packs
      * @param array<string,bool|string> $bundled_segmenter_packs
+     * @param array<string,mixed>|null $stored_options Prospective stored value, or null to read WordPress.
      * @return array<string,mixed>
      */
-    private static function raw_analyzer_options_before_filter(array $bundled_lemma_packs, array $bundled_segmenter_packs): array
+    private static function raw_analyzer_options_before_filter(
+        array $bundled_lemma_packs,
+        array $bundled_segmenter_packs,
+        ?array $stored_options = null
+    ): array
     {
         $options = [
             'lemmatizer_packs_by_lang' => $bundled_lemma_packs,
             'segmenter_packs_by_lang' => $bundled_segmenter_packs,
         ];
 
-        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
+        $stored = $stored_options ?? self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
         if (is_array($stored)) {
             WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($stored, 'Stored WordPress analyzer options');
             $options = self::merge_runtime_analyzer_options($options, $stored);
@@ -11844,8 +12075,16 @@ WHERE kind = 'scope' AND scope_coverage = ''"
 
         $cache = [];
         $path = dirname(__DIR__) . '/config/top-language-lemma-packs.json';
-        $json = is_file($path) ? file_get_contents($path) : false;
-        if (!is_string($json)) {
+        $json = is_file($path)
+            ? file_get_contents(
+                $path,
+                false,
+                null,
+                0,
+                WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES + 1
+            )
+            : false;
+        if (!is_string($json) || strlen($json) > WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES) {
             return $cache;
         }
 
@@ -12255,6 +12494,7 @@ WHERE kind = 'scope' AND scope_coverage = ''"
         self::render_sandbox_result_details_script();
     }
 
+    /** Emits the bounded client used to request one sandbox detail page. */
     private static function render_sandbox_result_details_script(): void
     {
         echo <<<'JS'
@@ -12366,13 +12606,15 @@ JS;
         return max(1, (int) $raw);
     }
 
+    /** Reads the non-negative admin keyset cursor from the current request. */
     private static function sandbox_indexed_posts_cursor(): int
     {
         $raw = self::request_text_value($_GET, self::ADMIN_POSTS_CURSOR_FIELD, 20);
 
-        return $raw !== '' && ctype_digit($raw) ? max(0, (int) $raw) : 0;
+        return self::is_ascii_decimal_digits($raw) ? max(0, (int) $raw) : 0;
     }
 
+    /** Allows only forward or backward sandbox keyset traversal. */
     private static function sandbox_indexed_posts_cursor_direction(): string
     {
         return self::request_text_value($_GET, self::ADMIN_POSTS_CURSOR_DIRECTION_FIELD, 8) === 'before'
@@ -12812,6 +13054,7 @@ LIMIT %d",
         return strtolower((string) ($parts[0] ?? $language));
     }
 
+    /** Builds an adjacent sandbox page URL while preserving bounded filters. */
     private static function sandbox_indexed_posts_page_url(
         int $page,
         string $query,
@@ -13673,7 +13916,7 @@ LIMIT %d",
             if (
                 $value === ''
                 || strlen($value) > self::MAX_SEARCH_NUMERIC_BYTES
-                || !ctype_digit($value)
+                || !self::is_ascii_decimal_digits($value)
                 || (strlen($value) > 1 && $value[0] === '0')
             ) {
                 throw new InvalidArgumentException("Search {$key} must be an integer from {$minimum} through {$maximum}.");
@@ -13694,9 +13937,9 @@ LIMIT %d",
             $parts = strlen($value) <= self::MAX_SEARCH_NUMERIC_BYTES ? explode('.', $value) : [];
             $valid = ($parts !== [] && count($parts) <= 2)
                 && $parts[0] !== ''
-                && ctype_digit($parts[0])
+                && self::is_ascii_decimal_digits($parts[0])
                 && (strlen($parts[0]) === 1 || $parts[0][0] !== '0')
-                && (count($parts) === 1 || ($parts[1] !== '' && ctype_digit($parts[1])));
+                && (count($parts) === 1 || self::is_ascii_decimal_digits($parts[1]));
             if (!$valid) {
                 throw new InvalidArgumentException("Search {$key} must be a finite number from {$minimum} through {$maximum}.");
             }
@@ -13711,6 +13954,12 @@ LIMIT %d",
         }
 
         return $value;
+    }
+
+    /** Accepts only a nonempty sequence of ASCII decimal digits. */
+    private static function is_ascii_decimal_digits(string $value): bool
+    {
+        return $value !== '' && strspn($value, '0123456789') === strlen($value);
     }
 
     /** Recency toggles accept explicit switches or a strength in the documented range. */
@@ -14017,9 +14266,12 @@ LIMIT %d",
                     self::debug_effective_settings(self::settings())
                 );
             }
+            self::set_query_var($query, self::FRONTEND_SEARCH_PREPARED_QUERY_VAR, true);
             return;
         }
 
+        self::mark_invalid_search_text_input($query);
+        self::set_query_var($query, self::FRONTEND_SEARCH_PREPARED_QUERY_VAR, true);
         self::set_query_var($query, 'wp_fts_search_candidate', true);
     }
 
@@ -14050,8 +14302,11 @@ LIMIT %d",
      */
     public static function replace_frontend_search_posts(mixed $posts, mixed $query): mixed
     {
+        $owns_shape = false;
         try {
-            return self::run_frontend_search_replacement($posts, $query);
+            $owns_shape = self::frontend_search_replacement_owns_shape($query);
+
+            return self::run_frontend_search_replacement($posts, $query, $owns_shape);
         } catch (Throwable $error) {
             self::clear_frontend_search_replacement_state($query);
             self::debug_record_search_boundary_failure(
@@ -14060,18 +14315,18 @@ LIMIT %d",
                 'The enabled FTS replacement failed closed without running core LIKE search.'
             );
 
-            return self::frontend_search_replacement_owns_shape($query)
+            return $owns_shape
                 ? self::frontend_search_fail_closed($posts, $query, 'runtime_failure')
                 : $posts;
         }
     }
 
-    private static function run_frontend_search_replacement(mixed $posts, mixed $query): mixed
+    /** Replaces an owned frontend search with one fail-closed relational page. */
+    private static function run_frontend_search_replacement(mixed $posts, mixed $query, bool $owns_shape): mixed
     {
-        if (!self::should_replace_frontend_search($query)) {
-            if (self::frontend_search_replacement_owns_shape($query)) {
-                $settings = self::settings();
-                if (self::should_preserve_prior_search_provider_result($posts, $settings)) {
+        if (!self::should_replace_frontend_search($query, $owns_shape)) {
+            if ($owns_shape) {
+                if (self::should_preserve_prior_search_provider_result($posts)) {
                     return $posts;
                 }
 
@@ -14102,7 +14357,7 @@ LIMIT %d",
         }
 
         $settings = self::settings();
-        if (self::should_preserve_prior_search_provider_result($posts, $settings)) {
+        if (self::should_preserve_prior_search_provider_result($posts)) {
             $trace_id = self::debug_record_prior_search_provider_stand_down(
                 'frontend search',
                 $search_query,
@@ -14116,8 +14371,30 @@ LIMIT %d",
         $trace_id = self::debug_start_trace('frontend search', $search_query, self::debug_effective_settings($settings), [
             'search_hook_pipeline' => self::debug_search_hook_pipeline(),
         ]);
-        self::debug_record_prior_search_provider_replacement($trace_id, $posts);
         $result = self::frontend_search_result_page($query, $search_query, $trace_id, $settings);
+        $callback_hook = self::search_query_core_callback_hook($query);
+        if ($callback_hook !== '') {
+            self::clear_frontend_search_replacement_state($query);
+            self::debug_add_notes($trace_id, [
+                'Late WordPress search callback appeared during Language FTS; ranked results were discarded, result filters suppressed, and the owned query failed closed.',
+            ]);
+            self::debug_finish_trace(
+                $trace_id,
+                'bailed',
+                'Registered ' . $callback_hook . ' callbacks appeared during Language FTS execution; the owned query returned an empty page without core LIKE fallback.'
+            );
+
+            $failed_closed = self::frontend_search_fail_closed($posts, $query, 'late_callback_registration');
+            self::debug_remember_search_final_ownership(
+                $query,
+                $trace_id,
+                'late_callback_failed_closed',
+                $failed_closed
+            );
+
+            return $failed_closed;
+        }
+
         self::store_frontend_search_query_state(
             $query,
             $result['total'],
@@ -14133,7 +14410,7 @@ LIMIT %d",
         self::debug_remember_search_final_ownership(
             $query,
             $trace_id,
-            $posts === null ? 'language_fts_from_null' : 'language_fts_replaced_prior_provider',
+            'language_fts_from_null',
             $result['posts']
         );
 
@@ -14236,6 +14513,7 @@ LIMIT %d",
         return self::frontend_search_cursor_link($link, $cursor, $direction);
     }
 
+    /** Extracts an adjacent page number from a WordPress pagination link. */
     private static function frontend_search_page_from_link(string $link): int
     {
         $parts = parse_url(html_entity_decode($link, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
@@ -14282,6 +14560,7 @@ LIMIT %d",
         return 1;
     }
 
+    /** Binds a signed adjacent cursor to a frontend pagination URL. */
     private static function frontend_search_cursor_link(string $link, string $cursor, string $direction): string
     {
         if (function_exists('add_query_arg')) {
@@ -14326,6 +14605,7 @@ LIMIT %d",
         }
     }
 
+    /** Builds an adjacent wp-admin URL from a signed search cursor. */
     private static function admin_search_cursor_url(string $cursor, string $direction, int $page): string
     {
         $base = isset($_SERVER['REQUEST_URI']) && is_scalar($_SERVER['REQUEST_URI'])
@@ -14360,9 +14640,12 @@ LIMIT %d",
                     self::debug_effective_settings(self::settings())
                 );
             }
+            self::set_query_var($query, self::ADMIN_SEARCH_PREPARED_QUERY_VAR, true);
             return;
         }
 
+        self::mark_invalid_search_text_input($query);
+        self::set_query_var($query, self::ADMIN_SEARCH_PREPARED_QUERY_VAR, true);
         self::set_query_var($query, 'wp_fts_admin_post_search_candidate', true);
     }
 
@@ -14375,8 +14658,11 @@ LIMIT %d",
      */
     public static function replace_admin_post_search_posts(mixed $posts, mixed $query): mixed
     {
+        $owns_shape = false;
         try {
-            return self::run_admin_post_search_replacement($posts, $query);
+            $owns_shape = self::admin_post_search_replacement_owns_shape($query);
+
+            return self::run_admin_post_search_replacement($posts, $query, $owns_shape);
         } catch (Throwable $error) {
             self::clear_admin_post_search_replacement_state($query);
             self::debug_record_search_boundary_failure(
@@ -14385,18 +14671,18 @@ LIMIT %d",
                 'The enabled FTS replacement failed closed without running core LIKE search.'
             );
 
-            return self::admin_post_search_replacement_owns_shape($query)
+            return $owns_shape
                 ? self::admin_post_search_fail_closed($posts, $query, 'runtime_failure')
                 : $posts;
         }
     }
 
-    private static function run_admin_post_search_replacement(mixed $posts, mixed $query): mixed
+    /** Replaces an owned wp-admin search with one fail-closed relational page. */
+    private static function run_admin_post_search_replacement(mixed $posts, mixed $query, bool $owns_shape): mixed
     {
-        if (!self::should_replace_admin_post_search($query)) {
-            if (self::admin_post_search_replacement_owns_shape($query)) {
-                $settings = self::settings();
-                if (self::should_preserve_prior_search_provider_result($posts, $settings)) {
+        if (!self::should_replace_admin_post_search($query, $owns_shape)) {
+            if ($owns_shape) {
+                if (self::should_preserve_prior_search_provider_result($posts)) {
                     return $posts;
                 }
 
@@ -14427,7 +14713,7 @@ LIMIT %d",
         }
 
         $settings = self::settings();
-        if (self::should_preserve_prior_search_provider_result($posts, $settings)) {
+        if (self::should_preserve_prior_search_provider_result($posts)) {
             $trace_id = self::debug_record_prior_search_provider_stand_down(
                 'admin post search',
                 $search_query,
@@ -14441,8 +14727,30 @@ LIMIT %d",
         $trace_id = self::debug_start_trace('admin post search', $search_query, self::debug_effective_settings($settings), [
             'search_hook_pipeline' => self::debug_search_hook_pipeline(),
         ]);
-        self::debug_record_prior_search_provider_replacement($trace_id, $posts);
         $result = self::admin_post_search_result_page($query, $search_query, $trace_id, $settings);
+        $callback_hook = self::search_query_core_callback_hook($query);
+        if ($callback_hook !== '') {
+            self::clear_admin_post_search_replacement_state($query);
+            self::debug_add_notes($trace_id, [
+                'Late WordPress search callback appeared during Language FTS; ranked results were discarded, result filters suppressed, and the owned query failed closed.',
+            ]);
+            self::debug_finish_trace(
+                $trace_id,
+                'bailed',
+                'Registered ' . $callback_hook . ' callbacks appeared during Language FTS execution; the owned query returned an empty page without core LIKE fallback.'
+            );
+
+            $failed_closed = self::admin_post_search_fail_closed($posts, $query, 'late_callback_registration');
+            self::debug_remember_search_final_ownership(
+                $query,
+                $trace_id,
+                'late_callback_failed_closed',
+                $failed_closed
+            );
+
+            return $failed_closed;
+        }
+
         self::store_admin_post_search_query_state(
             $query,
             $result['total'],
@@ -14456,13 +14764,14 @@ LIMIT %d",
         self::debug_remember_search_final_ownership(
             $query,
             $trace_id,
-            $posts === null ? 'language_fts_from_null' : 'language_fts_replaced_prior_provider',
+            'language_fts_from_null',
             $result['posts']
         );
 
         return $result['posts'];
     }
 
+    /** Clears every provisional frontend ownership value before core fallback. */
     private static function clear_frontend_search_replacement_state(mixed $query): void
     {
         try {
@@ -14476,6 +14785,7 @@ LIMIT %d",
         }
     }
 
+    /** Clears every provisional admin ownership value before core fallback. */
     private static function clear_admin_post_search_replacement_state(mixed $query): void
     {
         try {
@@ -14489,30 +14799,83 @@ LIMIT %d",
         }
     }
 
+    /** Prevents an owned frontend search from falling through to core LIKE SQL. */
     private static function frontend_search_fail_closed(mixed $posts, mixed $query, string $reason): mixed
     {
-        $settings = self::settings();
-        if (self::should_preserve_prior_search_provider_result($posts, $settings)) {
+        if (self::should_preserve_prior_search_provider_result($posts)) {
             return $posts;
         }
 
+        // No later post-result callback may repopulate an owned empty page,
+        // including one registered immediately before a runtime exception.
+        self::set_query_var($query, 'suppress_filters', true);
         self::store_frontend_search_query_state($query, 0, 1, '', [], [], false, null, null);
         self::set_query_var($query, 'wp_fts_search_unavailable', $reason);
+        self::remember_search_query_fail_closed($query);
+        self::rearm_final_search_guard();
 
         return [];
     }
 
+    /** Prevents an owned admin search from falling through after relational failure. */
     private static function admin_post_search_fail_closed(mixed $posts, mixed $query, string $reason): mixed
     {
-        $settings = self::settings();
-        if (self::should_preserve_prior_search_provider_result($posts, $settings)) {
+        if (self::should_preserve_prior_search_provider_result($posts)) {
             return $posts;
         }
 
+        self::set_query_var($query, 'suppress_filters', true);
         self::store_admin_post_search_query_state($query, 0, 1, '', false, null, null);
         self::set_query_var($query, 'wp_fts_search_unavailable', $reason);
+        self::remember_search_query_fail_closed($query);
+        self::rearm_final_search_guard();
 
         return [];
+    }
+
+    /** Retains one exact query until the final posts_pre_query observer runs. */
+    private static function remember_search_query_fail_closed(mixed $query): void
+    {
+        if (!is_object($query)) {
+            return;
+        }
+        self::$pending_search_fail_closed_queries ??= new WeakMap();
+        self::$pending_search_fail_closed_queries[$query] = true;
+    }
+
+    /** Atomically consumes one exact query's pending fail-closed capability. */
+    private static function consume_search_query_fail_closed(mixed $query): bool
+    {
+        if (!is_object($query) || self::$pending_search_fail_closed_queries === null) {
+            return false;
+        }
+        $failed_closed = isset(self::$pending_search_fail_closed_queries[$query]);
+        if ($failed_closed) {
+            unset(self::$pending_search_fail_closed_queries[$query]);
+        }
+
+        return $failed_closed;
+    }
+
+    /**
+     * Move the final guard behind callbacks registered during this hook run.
+     *
+     * WP_Hook preserves insertion order inside one priority bucket. A callback
+     * added at PHP_INT_MAX while Language FTS is running would otherwise be
+     * appended after the observer registered at bootstrap.
+     */
+    private static function rearm_final_search_guard(): void
+    {
+        if (!function_exists('remove_filter') || !function_exists('add_filter')) {
+            return;
+        }
+
+        $callback = [self::class, 'observe_final_search_posts'];
+        if (!remove_filter(self::DEBUG_SEARCH_HOOK, $callback, self::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY)) {
+            return;
+        }
+
+        add_filter(self::DEBUG_SEARCH_HOOK, $callback, self::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY, 2);
     }
 
     private static function debug_record_search_boundary_failure(string $context, Throwable $error, string $outcome): void
@@ -14955,16 +15318,22 @@ LIMIT %d",
         return '<p>' . $snippet . '</p>';
     }
 
-    private static function should_replace_frontend_search(mixed $query): bool
+    /** Rechecks callback ownership and adapter bounds before readiness or FTS SQL. */
+    private static function should_replace_frontend_search(mixed $query, bool $owns_shape): bool
     {
-        if (!self::is_frontend_search_query($query)) {
+        if (
+            !$owns_shape
+            || self::search_query_has_malformed_adapter_input($query)
+            || self::search_query_has_oversized_adapter_input($query)
+        ) {
             return false;
         }
 
-        return self::frontend_search_replacement_enabled($query)
+        return self::search_query_core_callback_hook($query) === ''
             && !empty(self::search_takeover_status()['ready']);
     }
 
+    /** Applies the explicit frontend takeover policy filter. */
     private static function frontend_search_replacement_enabled(mixed $query): bool
     {
         $replace = self::settings()['replace_frontend_search'];
@@ -14983,18 +15352,16 @@ LIMIT %d",
         return $enabled;
     }
 
-    /**
-     * @param array<string,mixed> $settings
-     */
-    private static function should_preserve_prior_search_provider_result(mixed $posts, array $settings): bool
+    /** A non-null posts_pre_query value means another provider owns membership. */
+    private static function should_preserve_prior_search_provider_result(mixed $posts): bool
     {
-        return $posts !== null
-            && (string) ($settings['search_provider_compatibility'] ?? self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS) === self::SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING;
+        return $posts !== null;
     }
 
+    /** Explains why every non-null earlier provider response retains membership. */
     private static function prior_search_provider_result_bailout_reason(): string
     {
-        return 'Another search provider already returned a non-null posts_pre_query result; compatibility mode kept that result.';
+        return 'Another search provider already returned a non-null posts_pre_query result; Language FTS kept that provider\'s membership result.';
     }
 
     /**
@@ -15012,27 +15379,12 @@ LIMIT %d",
         $incoming_count = self::prior_search_provider_result_count($posts);
         self::debug_add_count($trace_id, 'incoming_provider_results', $incoming_count);
         self::debug_add_notes($trace_id, [
-            'Compatibility mode kept an earlier non-null posts_pre_query result from another search provider.',
+            'Language FTS kept an earlier non-null posts_pre_query result because that provider already owns membership.',
             'Incoming provider result count: ' . $incoming_count . '.',
         ]);
         self::debug_finish_trace($trace_id, 'bailed', self::prior_search_provider_result_bailout_reason());
 
         return $trace_id;
-    }
-
-    private static function debug_record_prior_search_provider_replacement(int $trace_id, mixed $posts): void
-    {
-        if ($trace_id <= 0 || $posts === null) {
-            return;
-        }
-
-        $incoming_count = self::prior_search_provider_result_count($posts);
-        self::debug_add_count($trace_id, 'incoming_provider_results', $incoming_count);
-        self::debug_add_count($trace_id, 'prior_provider_responses_replaced');
-        self::debug_add_notes($trace_id, [
-            'FTS replaced an earlier non-null posts_pre_query result from another search provider.',
-            'Incoming provider result count: ' . $incoming_count . '.',
-        ]);
     }
 
     private static function prior_search_provider_result_count(mixed $posts): int
@@ -15044,16 +15396,22 @@ LIMIT %d",
         return 1;
     }
 
-    private static function should_replace_admin_post_search(mixed $query): bool
+    /** Rechecks callback ownership and adapter bounds before readiness or FTS SQL. */
+    private static function should_replace_admin_post_search(mixed $query, bool $owns_shape): bool
     {
-        if (!self::is_admin_post_search_query($query)) {
+        if (
+            !$owns_shape
+            || self::search_query_has_malformed_adapter_input($query)
+            || self::search_query_has_oversized_adapter_input($query)
+        ) {
             return false;
         }
 
-        return self::admin_post_search_replacement_enabled($query)
+        return self::search_query_core_callback_hook($query) === ''
             && !empty(self::search_takeover_status()['ready']);
     }
 
+    /** Applies the explicit wp-admin takeover policy filter. */
     private static function admin_post_search_replacement_enabled(mixed $query): bool
     {
         $replace = self::settings()['replace_admin_post_search'];
@@ -15075,37 +15433,273 @@ LIMIT %d",
     /**
      * Whether enabled FTS owns this main search boundary.
      *
-     * Unsupported constraints cannot fall through to WordPress's unindexed
-     * LIKE/OFFSET path. The supported subset runs FTS; every other owned shape
-     * fails closed. Only an explicit suppress_filters opt-out leaves core in
-     * control.
+     * Membership, projection, pagination, and ordering constraints that the
+     * relational plan cannot express stay on core WordPress search. An
+     * otherwise supported route remains owned while FTS is unavailable.
+     * Malformed or oversized adapter inputs remain owned only so they can fail
+     * closed before reaching an unbounded core query.
      */
     private static function frontend_search_replacement_owns_shape(mixed $query): bool
     {
-        return is_object($query)
-            && !self::is_admin_request()
-            && !self::is_rest_request()
-            && !self::is_cron_request()
-            && self::query_is_search($query)
-            && self::query_is_main($query)
-            && !self::query_var_truthy($query, 'suppress_filters')
-            && self::frontend_search_replacement_enabled($query);
+        if (
+            !is_object($query)
+            || self::is_admin_request()
+            || self::is_rest_request()
+            || self::is_cron_request()
+        ) {
+            return false;
+        }
+
+        $invalid_input = self::search_query_has_invalid_search_text_input($query);
+        if (
+            (!$invalid_input && !self::query_is_search($query))
+            || !self::query_is_main($query)
+            || self::query_var_truthy($query, 'suppress_filters')
+            || !self::frontend_search_replacement_enabled($query)
+        ) {
+            return false;
+        }
+
+        if ($invalid_input) {
+            return true;
+        }
+
+        if (self::frontend_search_query_text($query) === '') {
+            return false;
+        }
+
+        return self::is_frontend_search_query($query);
     }
 
+    /** Recognizes an admin post-list shape that FTS owns or must bound. */
     private static function admin_post_search_replacement_owns_shape(mixed $query): bool
     {
-        return is_object($query)
-            && self::is_admin_request()
-            && !self::is_rest_request()
-            && !self::is_cron_request()
-            && self::is_admin_post_list_screen()
-            && self::query_var($query, 'page', '') !== self::ADMIN_PAGE_SLUG
-            && self::query_is_search($query)
-            && self::query_is_main($query)
-            && !self::query_var_truthy($query, 'suppress_filters')
-            && self::admin_post_search_replacement_enabled($query);
+        if (
+            !is_object($query)
+            || !self::is_admin_request()
+            || self::is_rest_request()
+            || self::is_cron_request()
+            || !self::is_admin_post_list_screen()
+            || self::query_var($query, 'page', '') === self::ADMIN_PAGE_SLUG
+        ) {
+            return false;
+        }
+
+        $invalid_input = self::search_query_has_invalid_search_text_input($query);
+        if (
+            (!$invalid_input && !self::query_is_search($query))
+            || !self::query_is_main($query)
+            || self::query_var_truthy($query, 'suppress_filters')
+            || !self::admin_post_search_replacement_enabled($query)
+        ) {
+            return false;
+        }
+
+        if ($invalid_input) {
+            return true;
+        }
+
+        if (self::frontend_search_query_text($query) === '') {
+            return false;
+        }
+
+        return self::is_admin_post_search_query($query);
     }
 
+    /** Detects explicitly supplied adapter values that cannot be normalized safely. */
+    private static function search_query_has_malformed_adapter_input(mixed $query): bool
+    {
+        if (self::search_query_has_malformed_search_text_input($query)) {
+            return true;
+        }
+
+        $original = is_array($query) ? $query : null;
+        if (is_object($query)) {
+            try {
+                $original = $query->query ?? null;
+            } catch (Throwable) {
+                return true;
+            }
+        }
+
+        foreach (['offset', 'paged', 'page', 'posts_per_page', 'wp_fts_lang'] as $key) {
+            $value = self::query_var($query, $key, null);
+            if ($value !== null && !is_scalar($value)) {
+                return true;
+            }
+            if (
+                is_array($original)
+                && array_key_exists($key, $original)
+                && $original[$key] !== null
+                && !is_scalar($original[$key])
+            ) {
+                return true;
+            }
+        }
+
+        $direction = self::query_var($query, 'wp_fts_cursor_direction', null);
+        if ($direction !== null && (
+            !is_scalar($direction)
+            || strlen((string) $direction) > self::MAX_SEARCH_MODE_BYTES
+            || !in_array(strtolower(trim((string) $direction)), ['after', 'before'], true)
+        )) {
+            return true;
+        }
+        if (is_array($original) && array_key_exists('wp_fts_cursor_direction', $original)) {
+            $direction = $original['wp_fts_cursor_direction'];
+            if (
+                !is_scalar($direction)
+                || strlen((string) $direction) > self::MAX_SEARCH_MODE_BYTES
+                || !in_array(strtolower(trim((string) $direction)), ['after', 'before'], true)
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Detects only search text that core cannot safely scalarize. */
+    private static function search_query_has_malformed_search_text_input(mixed $query): bool
+    {
+        if (self::query_var_truthy($query, self::INVALID_SEARCH_INPUT_QUERY_VAR)) {
+            return true;
+        }
+
+        $value = self::query_var($query, 's', null);
+        if ($value !== null && !is_scalar($value)) {
+            return true;
+        }
+
+        $original = is_array($query) ? $query : null;
+        if (is_object($query)) {
+            try {
+                $original = $query->query ?? null;
+            } catch (Throwable) {
+                return true;
+            }
+        }
+
+        return is_array($original)
+            && array_key_exists('s', $original)
+            && $original['s'] !== null
+            && !is_scalar($original['s']);
+    }
+
+    /** Whether search text itself is malformed or beyond the WP_Query ceiling. */
+    private static function search_query_has_invalid_search_text_input(mixed $query): bool
+    {
+        return self::search_query_has_malformed_search_text_input($query)
+            || self::search_query_has_oversized_search_text_input($query);
+    }
+
+    /** Retains ownership after core normalizes invalid WP_Query search text. */
+    private static function mark_invalid_search_text_input(mixed $query): void
+    {
+        if (!self::search_query_has_invalid_search_text_input($query)) {
+            return;
+        }
+
+        self::set_query_var($query, self::INVALID_SEARCH_INPUT_QUERY_VAR, true);
+    }
+
+    /** Detects core phrase or exclusion syntax that the relational plan cannot represent. */
+    private static function search_query_has_unsupported_core_search_syntax(mixed $query): bool
+    {
+        if (
+            self::search_query_has_malformed_adapter_input($query)
+            || self::search_query_has_oversized_adapter_input($query)
+        ) {
+            return false;
+        }
+
+        $value = self::query_var($query, 's', '');
+        if (!is_scalar($value)) {
+            return false;
+        }
+
+        $prepared_var = self::is_admin_request()
+            ? self::ADMIN_SEARCH_PREPARED_QUERY_VAR
+            : self::FRONTEND_SEARCH_PREPARED_QUERY_VAR;
+        // Before pre_get_posts returns, mirror the one stripslashes() call in
+        // WP_Query::parse_search(). At posts_pre_query core has already made
+        // that mutation, so the retained preparation marker prevents a second
+        // unescape from changing phrase/exclusion meaning.
+        $text = (string) $value;
+        if (!self::query_var_truthy($query, $prepared_var)) {
+            $text = stripslashes($text);
+        }
+        $length = min(strlen($text), self::MAX_SEARCH_QUERY_BYTES);
+        $at_token_start = true;
+        for ($offset = 0; $offset < $length; $offset++) {
+            $character = $text[$offset];
+            if ($character === '"') {
+                return true;
+            }
+            if ($character === '-' && $at_token_start) {
+                return true;
+            }
+            $byte = ord($character);
+            if ($character === ' ' || ($byte >= 0x09 && $byte <= 0x0D) || $character === ',' || $character === '+') {
+                $at_token_start = true;
+                continue;
+            }
+
+            $at_token_start = false;
+        }
+
+        return false;
+    }
+
+    /** Keeps oversized public adapter input away from core's unbounded path. */
+    private static function search_query_has_oversized_adapter_input(mixed $query): bool
+    {
+        if (self::search_query_has_oversized_search_text_input($query)) {
+            return true;
+        }
+
+        foreach (['offset', 'paged', 'page', 'posts_per_page'] as $key) {
+            $value = self::query_var($query, $key, null);
+            if (is_string($value) && strlen($value) > self::MAX_SEARCH_NUMERIC_BYTES) {
+                return true;
+            }
+        }
+
+        $language = self::query_var($query, 'wp_fts_lang', null);
+        if (is_string($language) && strlen($language) > self::MAX_SEARCH_LANGUAGE_BYTES) {
+            return true;
+        }
+
+        $cursor = self::query_var($query, 'wp_fts_cursor', null);
+
+        return $cursor !== null
+            && (!is_scalar($cursor) || strlen((string) $cursor) > self::MAX_SEARCH_CURSOR_BYTES);
+    }
+
+    /** Applies the separate core-compatible byte ceiling to WP_Query search text. */
+    private static function search_query_has_oversized_search_text_input(mixed $query): bool
+    {
+        if (is_object($query)) {
+            try {
+                $original = $query->query ?? null;
+            } catch (Throwable) {
+                return true;
+            }
+            if (is_array($original) && array_key_exists('s', $original) && is_scalar($original['s'])) {
+                if (strlen((string) $original['s']) > self::MAX_WP_QUERY_SEARCH_BYTES) {
+                    return true;
+                }
+            }
+        }
+
+        if (strlen(self::frontend_search_query_text($query)) > self::MAX_SEARCH_QUERY_BYTES) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /** Returns the first stable reason frontend takeover is not safe. */
     private static function frontend_search_bailout_reason(mixed $query): string
     {
         if (!is_object($query)) {
@@ -15128,8 +15722,17 @@ LIMIT %d",
             return 'Unsupported query shape: suppress_filters is enabled.';
         }
 
+        if (self::search_query_has_unsupported_route($query)) {
+            return 'Unsupported query shape: only an ordinary search archive can use the relational replacement.';
+        }
+
+        $callback_hook = self::search_query_core_callback_hook($query);
+        if ($callback_hook !== '') {
+            return 'Unsupported query shape: registered ' . $callback_hook . ' callbacks can change membership outside the relational SQL plan, so core WordPress search retains this query.';
+        }
+
         if (self::frontend_search_query_has_unsupported_constraints($query)) {
-            return 'Unsupported query shape: the enabled FTS boundary cannot represent these constraints and will fail closed.';
+            return 'Unsupported query shape: the enabled FTS boundary cannot represent these constraints.';
         }
 
         if (self::frontend_search_query_text($query) === '') {
@@ -15154,6 +15757,7 @@ LIMIT %d",
         return 'Search replacement is disabled by settings or the wp_fts_replace_frontend_search filter.';
     }
 
+    /** Returns the first stable reason admin takeover is not safe. */
     private static function admin_post_search_bailout_reason(mixed $query): string
     {
         if (!is_object($query)) {
@@ -15180,6 +15784,15 @@ LIMIT %d",
             return 'Unsupported query shape: suppress_filters is enabled.';
         }
 
+        if (self::search_query_has_unsupported_route($query)) {
+            return 'Unsupported query shape: feed, embed, preview, singular, and other non-list routes stay on core WordPress.';
+        }
+
+        $callback_hook = self::search_query_core_callback_hook($query);
+        if ($callback_hook !== '') {
+            return 'Unsupported query shape: registered ' . $callback_hook . ' callbacks can change membership outside the relational SQL plan, so core WordPress search retains this query.';
+        }
+
         if (self::admin_post_search_post_types($query) === []) {
             return 'Unsupported query shape: the requested post type is not indexed for wp-admin Posts search.';
         }
@@ -15189,7 +15802,7 @@ LIMIT %d",
         }
 
         if (self::frontend_search_query_has_unsupported_constraints($query)) {
-            return 'Unsupported query shape: the enabled FTS boundary cannot represent these constraints and will fail closed.';
+            return 'Unsupported query shape: the enabled FTS boundary cannot represent these constraints.';
         }
 
         if (self::admin_post_search_has_unsupported_permission_scope($query)) {
@@ -15229,6 +15842,7 @@ LIMIT %d",
         return 'Search replacement is disabled by settings or the wp_fts_replace_admin_post_search filter.';
     }
 
+    /** Whether the main archive has a relationally representable shape owned by no core callback. */
     private static function is_frontend_search_query(mixed $query): bool
     {
         if (!is_object($query)) {
@@ -15239,7 +15853,8 @@ LIMIT %d",
             return false;
         }
 
-        if (!self::query_is_search($query) || !self::query_is_main($query)) {
+        $invalid_input = self::search_query_has_invalid_search_text_input($query);
+        if ((!$invalid_input && !self::query_is_search($query)) || !self::query_is_main($query)) {
             return false;
         }
 
@@ -15247,13 +15862,26 @@ LIMIT %d",
             return false;
         }
 
+        if (self::search_query_has_unsupported_route($query)) {
+            return false;
+        }
+
+        if (self::search_query_core_callback_hook($query) !== '') {
+            return false;
+        }
+
         if (self::frontend_search_query_has_unsupported_constraints($query)) {
             return false;
+        }
+
+        if ($invalid_input) {
+            return true;
         }
 
         return self::frontend_search_query_text($query) !== '';
     }
 
+    /** Whether the main Posts-list search is representable and owned by no core callback. */
     private static function is_admin_post_search_query(mixed $query): bool
     {
         if (!is_object($query)) {
@@ -15268,7 +15896,8 @@ LIMIT %d",
             return false;
         }
 
-        if (!self::query_is_search($query) || !self::query_is_main($query)) {
+        $invalid_input = self::search_query_has_invalid_search_text_input($query);
+        if ((!$invalid_input && !self::query_is_search($query)) || !self::query_is_main($query)) {
             return false;
         }
 
@@ -15276,13 +15905,214 @@ LIMIT %d",
             return false;
         }
 
+        if (self::search_query_has_unsupported_route($query)) {
+            return false;
+        }
+
+        if (self::search_query_core_callback_hook($query) !== '') {
+            return false;
+        }
+
         if (self::admin_post_search_query_has_unsupported_constraints($query)) {
             return false;
+        }
+
+        if ($invalid_input) {
+            return true;
         }
 
         return self::frontend_search_query_text($query) !== '';
     }
 
+    /** Keeps feed/embed/preview/singular variants on their native WP_Query path. */
+    private static function search_query_has_unsupported_route(mixed $query): bool
+    {
+        foreach (['is_feed', 'is_comment_feed', 'is_embed', 'is_preview', 'is_trackback', 'is_singular', 'is_robots', 'is_favicon'] as $method) {
+            if (!is_object($query) || !is_callable([$query, $method])) {
+                continue;
+            }
+
+            try {
+                if ((bool) $query->{$method}()) {
+                    return true;
+                }
+            } catch (Throwable) {
+                return true;
+            }
+        }
+
+        foreach (['feed', 'embed', 'preview', 'tb', 'robots', 'favicon'] as $key) {
+            if (self::query_var_truthy($query, $key)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Returns the registered hook that requires core WordPress membership.
+     *
+     * The decision is persisted on the query. A callback present during
+     * pre_get_posts therefore cannot remove itself before posts_pre_query and
+     * silently move the same query back into the relational path.
+     */
+    private static function search_query_core_callback_hook(mixed $query): string
+    {
+        $persisted = self::query_var($query, self::CORE_SEARCH_CALLBACK_QUERY_VAR, '');
+        if (is_scalar($persisted) && trim((string) $persisted) !== '') {
+            return trim((string) $persisted);
+        }
+
+        $hook = self::registered_search_callback_hook_requiring_core();
+        if ($hook !== '') {
+            self::set_query_var($query, self::CORE_SEARCH_CALLBACK_QUERY_VAR, $hook);
+        }
+
+        return $hook;
+    }
+
+    /** Finds one callback boundary that cannot be compiled into ranking SQL. */
+    private static function registered_search_callback_hook_requiring_core(): string
+    {
+        try {
+            global $wp_filter;
+            if (!isset($wp_filter)) {
+                return '';
+            }
+            if (!is_array($wp_filter)) {
+                return 'WordPress search hook';
+            }
+
+            $hooks = array_merge([self::DEBUG_SEARCH_HOOK], self::CORE_SEARCH_CALLBACK_HOOKS);
+            $provider_mode = (string) (self::settings()['search_provider_compatibility'] ?? self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS);
+            $callbacks_examined = 0;
+            $buckets_examined = 0;
+            foreach ($hooks as $hook) {
+                if (!array_key_exists($hook, $wp_filter)) {
+                    continue;
+                }
+
+                $callbacks_by_priority = self::debug_hook_callbacks_by_priority($wp_filter[$hook]);
+                if ($callbacks_by_priority === null) {
+                    return $hook;
+                }
+
+                foreach ($callbacks_by_priority as $priority => $bucket) {
+                    $buckets_examined++;
+                    if ($buckets_examined > self::MAX_SEARCH_CALLBACKS_INSPECTED) {
+                        return $hook;
+                    }
+
+                    $numeric_priority = self::debug_hook_priority_value($priority);
+                    $entries = is_array($bucket) ? $bucket : [$bucket];
+                    foreach ($entries as $entry) {
+                        $callbacks_examined++;
+                        if ($callbacks_examined > self::MAX_SEARCH_CALLBACKS_INSPECTED) {
+                            return $hook;
+                        }
+
+                        $callback = self::debug_hook_callback_from_entry($entry);
+                        if (self::is_wordpress_core_search_callback($hook, $callback, $numeric_priority)) {
+                            continue;
+                        }
+                        if (self::is_language_fts_found_posts_callback($hook, $callback)) {
+                            continue;
+                        }
+                        if (
+                            $hook === self::DEBUG_SEARCH_HOOK
+                            && self::is_language_fts_posts_pre_query_callback($callback)
+                        ) {
+                            continue;
+                        }
+
+                        if (
+                            $hook === self::DEBUG_SEARCH_HOOK
+                            && $provider_mode === self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS
+                            && $numeric_priority !== null
+                            && $numeric_priority < self::SEARCH_REPLACEMENT_PRIORITY
+                            && is_callable($callback)
+                        ) {
+                            // This provider has already run by the time our
+                            // posts_pre_query callback executes. A non-null
+                            // result is preserved below; null means it abstained.
+                            continue;
+                        }
+
+                        return $hook;
+                    }
+                }
+            }
+        } catch (Throwable) {
+            // Unknown hook state is not a safe basis for claiming membership.
+            return 'WordPress search hook';
+        }
+
+        return '';
+    }
+
+    /**
+     * Allows only stock callbacks whose behavior remains valid after FTS LIMIT.
+     *
+     * WordPress 6.5 through 7.0 register this callback on the_posts. It adjusts
+     * comment state but neither removes nor reorders posts. Every other
+     * post-retrieval callback stays on core because its membership effect is
+     * unknowable before the relational LIMIT.
+     */
+    private static function is_wordpress_core_search_callback(string $hook, mixed $callback, ?int $priority): bool
+    {
+        return $hook === 'the_posts'
+            && $priority === 10
+            && $callback === '_close_comments_for_old_posts';
+    }
+
+    /** Identifies only the two found_posts callbacks registered here. */
+    private static function is_language_fts_found_posts_callback(string $hook, mixed $callback): bool
+    {
+        if ($hook !== 'found_posts' || !is_array($callback)) {
+            return false;
+        }
+
+        $parts = self::two_part_callback($callback);
+        return $parts !== null
+            && is_string($parts[0])
+            && ltrim($parts[0], '\\') === ltrim(self::class, '\\')
+            && is_string($parts[1])
+            && in_array($parts[1], [
+                'filter_frontend_search_found_posts',
+                'filter_admin_post_search_found_posts',
+            ], true);
+    }
+
+    /** Identifies only the three posts_pre_query callbacks registered here. */
+    private static function is_language_fts_posts_pre_query_callback(mixed $callback): bool
+    {
+        if (!is_array($callback)) {
+            return false;
+        }
+
+        $parts = self::two_part_callback($callback);
+        if ($parts === null || !is_string($parts[1])) {
+            return false;
+        }
+
+        if (is_object($parts[0])) {
+            $class = get_class($parts[0]);
+        } elseif (is_string($parts[0])) {
+            $class = ltrim($parts[0], '\\');
+        } else {
+            return false;
+        }
+
+        return $class === ltrim(self::class, '\\')
+            && in_array($parts[1], [
+                'replace_frontend_search_posts',
+                'replace_admin_post_search_posts',
+                'observe_final_search_posts',
+            ], true);
+    }
+
+    /** Reads one bounded scalar frontend query without lossy array coercion. */
     private static function frontend_search_query_text(mixed $query): string
     {
         $value = self::query_var($query, 's', '');
@@ -15304,6 +16134,7 @@ LIMIT %d",
         return trim($value);
     }
 
+    /** Rejects frontend constraints the relational plan cannot reproduce. */
     private static function frontend_search_query_has_unsupported_constraints(mixed $query): bool
     {
         return self::search_query_has_unsupported_pagination($query)
@@ -15311,12 +16142,25 @@ LIMIT %d",
             || self::frontend_search_query_has_unsupported_nonpagination_constraints($query);
     }
 
+    /** Rejects unsupported frontend filters while allowing adjacent pagination. */
     private static function frontend_search_query_has_unsupported_nonpagination_constraints(mixed $query): bool
     {
+        if (self::search_query_has_unsupported_core_search_syntax($query)) {
+            return true;
+        }
+
         foreach (self::frontend_search_unsupported_constraint_vars() as $key) {
-            if (self::query_var_has_constraint($query, $key)) {
+            if (self::unsupported_query_var_is_set($query, $key)) {
                 return true;
             }
+        }
+
+        if (self::query_var_has_constraint($query, 'no_found_rows') || self::query_var_has_constraint($query, 'nopaging')) {
+            return true;
+        }
+
+        if (self::unsupported_query_var_is_set($query, 'perm')) {
+            return true;
         }
 
         if (self::search_query_has_unsupported_fields($query)) {
@@ -15328,6 +16172,10 @@ LIMIT %d",
         }
 
         if (self::frontend_search_has_unsupported_post_types($query)) {
+            return true;
+        }
+
+        if (self::search_query_has_custom_post_type_query_var($query, self::frontend_query_post_types($query))) {
             return true;
         }
 
@@ -15349,15 +16197,19 @@ LIMIT %d",
     {
         $offset = self::query_var($query, 'offset', null);
         if (is_string($offset) && strlen($offset) > self::MAX_SEARCH_NUMERIC_BYTES) {
-            return true;
+            // Keep an otherwise-supported query owned so the adapter-wide
+            // bound rejects it before core builds a huge numeric offset.
+            return false;
         }
-        if (is_numeric($offset) && (int) $offset > 0) {
+        if (is_numeric($offset)) {
+            // Core applies absint() and lets every explicit numeric offset,
+            // including zero and negatives, override paged pagination.
             return true;
         }
 
         $paged = self::query_var($query, 'paged', self::query_var($query, 'page', 1));
         if (is_string($paged) && strlen($paged) > self::MAX_SEARCH_NUMERIC_BYTES) {
-            return true;
+            return false;
         }
         $page = is_numeric($paged) ? max(1, (int) $paged) : 1;
         $cursor = self::query_var($query, 'wp_fts_cursor', null);
@@ -15377,6 +16229,7 @@ LIMIT %d",
         return trim((string) $cursor) === '';
     }
 
+    /** Rejects admin constraints the relational plan cannot reproduce. */
     private static function admin_post_search_query_has_unsupported_constraints(mixed $query): bool
     {
         return self::search_query_has_unsupported_pagination($query)
@@ -15384,8 +16237,13 @@ LIMIT %d",
             || self::admin_post_search_query_has_unsupported_nonpagination_constraints($query);
     }
 
+    /** Rejects unsupported admin filters while allowing adjacent pagination. */
     private static function admin_post_search_query_has_unsupported_nonpagination_constraints(mixed $query): bool
     {
+        if (self::search_query_has_unsupported_core_search_syntax($query)) {
+            return true;
+        }
+
         if (self::admin_post_search_post_types($query) === []) {
             return true;
         }
@@ -15395,9 +16253,13 @@ LIMIT %d",
         }
 
         foreach (self::frontend_search_unsupported_constraint_vars() as $key) {
-            if (self::query_var_has_constraint($query, $key)) {
+            if (self::unsupported_query_var_is_set($query, $key)) {
                 return true;
             }
+        }
+
+        if (self::query_var_has_constraint($query, 'no_found_rows') || self::query_var_has_constraint($query, 'nopaging')) {
+            return true;
         }
 
         if (self::search_query_has_unsupported_fields($query)) {
@@ -15412,6 +16274,10 @@ LIMIT %d",
             return true;
         }
 
+        if (self::search_query_has_custom_post_type_query_var($query, self::admin_post_search_post_types($query))) {
+            return true;
+        }
+
         if (
             self::constraint_value_present(self::query_var($query, 'post_status', null))
             && self::admin_post_search_statuses($query) === []
@@ -15422,6 +16288,7 @@ LIMIT %d",
         return false;
     }
 
+    /** Rejects admin status combinations not expressible by one SQL visibility scope. */
     private static function admin_post_search_has_unsupported_permission_scope(mixed $query): bool
     {
         $perm = self::query_var($query, 'perm', null);
@@ -15509,24 +16376,30 @@ LIMIT %d",
             'category__in',
             'category__not_in',
             'category_name',
+            'comment_count',
+            'comment_status',
             'date_query',
             'day',
             'exact',
+            'has_password',
             'hour',
             'm',
             'meta_compare',
+            'meta_compare_key',
             'meta_key',
             'meta_query',
+            'meta_type',
+            'meta_type_key',
             'meta_value',
             'meta_value_num',
+            'menu_order',
             'minute',
             'monthnum',
             'name',
-            'no_found_rows',
-            'nopaging',
             'p',
             'page_id',
             'pagename',
+            'ping_status',
             'post__in',
             'post__not_in',
             'post_mime_type',
@@ -15535,9 +16408,13 @@ LIMIT %d",
             'post_parent__in',
             'post_parent__not_in',
             'post_password',
+            'posts_per_archive_page',
             'sentence',
             'second',
             'search_columns',
+            'showposts',
+            'subpost',
+            'subpost_id',
             'tag',
             'tag__and',
             'tag__in',
@@ -15548,11 +16425,53 @@ LIMIT %d",
             'tax_query',
             'taxonomy',
             'term',
+            'term_id',
+            'title',
             'w',
             'year',
         ];
     }
 
+    /**
+     * Rejects one custom post-type slug query that core maps after pre_get_posts.
+     *
+     * @param string[] $post_types
+     */
+    private static function search_query_has_custom_post_type_query_var(mixed $query, array $post_types): bool
+    {
+        if (!function_exists('get_post_type_object')) {
+            return false;
+        }
+
+        $examined = 0;
+        foreach ($post_types as $post_type) {
+            if (++$examined > self::MAX_SEARCH_SCOPE_VALUES || !is_string($post_type)) {
+                return true;
+            }
+            $object = get_post_type_object($post_type);
+            if (!is_object($object)) {
+                return true;
+            }
+            $raw_query_var = $object->query_var ?? false;
+            if ($raw_query_var === false || $raw_query_var === null || $raw_query_var === '') {
+                continue;
+            }
+            if ($raw_query_var === true) {
+                $raw_query_var = $post_type;
+            }
+            if (!is_scalar($raw_query_var) || strlen((string) $raw_query_var) > self::MAX_SEARCH_SCOPE_VALUE_BYTES) {
+                return true;
+            }
+            $query_var = trim((string) $raw_query_var);
+            if ($query_var !== '' && self::unsupported_query_var_is_set($query, $query_var)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Rejects partial-object WP_Query projections the adapter cannot preserve. */
     private static function search_query_has_unsupported_fields(mixed $query): bool
     {
         $fields = self::query_var($query, 'fields', null);
@@ -15565,11 +16484,14 @@ LIMIT %d",
             || trim((string) $fields) !== 'all';
     }
 
+    /** Rejects page sizes outside the bounded relational contract. */
     private static function search_query_has_unsupported_page_size(mixed $query): bool
     {
         $postsPerPage = self::query_var($query, 'posts_per_page', null);
         if (is_string($postsPerPage) && strlen($postsPerPage) > self::MAX_SEARCH_NUMERIC_BYTES) {
-            return true;
+            // The replacement's adapter-wide bound owns and rejects this
+            // before it can become an unbounded core LIMIT.
+            return false;
         }
         if (!is_numeric($postsPerPage)) {
             return false;
@@ -15667,6 +16589,84 @@ LIMIT %d",
         return self::constraint_value_present(self::query_var($query, $key, null));
     }
 
+    /** Applies WP_Query-aware presence rules to unsupported membership inputs. */
+    private static function unsupported_query_var_is_set(mixed $query, string $key): bool
+    {
+        if (self::original_query_var_was_supplied($query, $key)) {
+            // WP_Query retains caller arguments separately from normalized
+            // defaults. Conservatively leave every explicitly requested,
+            // uncompiled predicate on core instead of maintaining a fragile
+            // per-key catalogue of false/zero/empty coercion rules.
+            return true;
+        }
+
+        if (in_array($key, ['post_password', 'has_password'], true)) {
+            // Core applies these predicates with isset(), so empty-string and
+            // false values constrain membership while absent/null values do not.
+            return self::query_var_is_defined($query, $key);
+        }
+
+        $value = self::query_var($query, $key, null);
+        if ($value === null || $value === []) {
+            return false;
+        }
+
+        if (is_array($value)) {
+            // Core treats every nonempty ID/tax/meta/date array as a real
+            // constraint, including arrays whose only scalar value is zero.
+            return true;
+        }
+
+        if ($value === '') {
+            return false;
+        }
+
+        if (in_array($key, ['attachment', 'author_name', 'comment_count', 'hour', 'menu_order', 'meta_value', 'minute', 'name', 'pagename', 'post_mime_type', 'post_parent', 'second', 'subpost', 'title'], true)) {
+            // Their normalized zero values still produce WHERE predicates;
+            // absent core defaults remain null or the empty string above.
+            return true;
+        }
+
+        return self::constraint_value_present($value);
+    }
+
+    /** Distinguishes explicit caller input from defaults filled by WP_Query. */
+    private static function original_query_var_was_supplied(mixed $query, string $key): bool
+    {
+        if (is_object($query)) {
+            try {
+                $original = $query->query ?? null;
+            } catch (Throwable) {
+                return true;
+            }
+
+            return is_array($original) && array_key_exists($key, $original);
+        }
+
+        return is_array($query) && array_key_exists($key, $query);
+    }
+
+    /** Mirrors the isset() membership test used by selected WP_Query clauses. */
+    private static function query_var_is_defined(mixed $query, string $key): bool
+    {
+        if (is_object($query) && isset($query->query_vars) && is_array($query->query_vars)) {
+            return isset($query->query_vars[$key]);
+        }
+
+        if (is_array($query)) {
+            return isset($query[$key]);
+        }
+
+        if (is_object($query) && is_callable([$query, 'get'])) {
+            $missing = new stdClass();
+            $value = $query->get($key, $missing);
+            return $value !== $missing && $value !== null;
+        }
+
+        return false;
+    }
+
+    /** Checks a query constraint through a bounded graph walk. */
     private static function constraint_value_present(mixed $value): bool
     {
         $remaining = self::MAX_QUERY_CONSTRAINT_NODES;
@@ -15674,6 +16674,7 @@ LIMIT %d",
         return self::bounded_constraint_value_present($value, 0, $remaining);
     }
 
+    /** Detects a nonempty nested constraint without unbounded recursion or iteration. */
     private static function bounded_constraint_value_present(mixed $value, int $depth, int &$remaining): bool
     {
         if ($depth > self::MAX_QUERY_CONSTRAINT_DEPTH || --$remaining < 0) {
@@ -15902,12 +16903,19 @@ LIMIT %d",
             if ((int) ($row->ID ?? 0) !== $post_id) {
                 continue;
             }
+            if (function_exists('sanitize_post')) {
+                // Mark the database row raw before WP_Query calls get_post().
+                // Without this, WP_Post::filter('raw') reloads every cold ID;
+                // core can then honor cache_results without hidden SQL here.
+                $row = sanitize_post($row, 'raw');
+            }
             $posts[] = class_exists('WP_Post') ? new WP_Post($row) : $row;
         }
 
         return $posts;
     }
 
+    /** Normalizes public cursor direction to the two supported adjacent values. */
     private static function search_cursor_direction(mixed $value): string
     {
         if (!is_scalar($value) || strlen((string) $value) > self::MAX_SEARCH_MODE_BYTES) {
@@ -15935,7 +16943,12 @@ LIMIT %d",
         int $trace_id = 0
     ): void
     {
-        $current_page = max(1, (int) self::query_var($query, 'paged', self::query_var($query, 'page', 1)));
+        $page_value = self::query_var($query, 'paged', self::query_var($query, 'page', 1));
+        $current_page = is_scalar($page_value)
+            && (!is_string($page_value) || strlen($page_value) <= self::MAX_SEARCH_NUMERIC_BYTES)
+            && is_numeric($page_value)
+            ? max(1, (int) $page_value)
+            : 1;
         $total = $total > 0 ? (($current_page - 1) * max(1, $limit)) + $total : 0;
         // `has_more` describes the direction that produced this page. After a
         // reverse query reaches page one it is false, but next_cursor still
@@ -15977,6 +16990,7 @@ LIMIT %d",
         self::set_query_var($query, 'wp_fts_previous_cursor', $previous_cursor);
     }
 
+    /** Publishes bounded cursor and count state back to the admin WP_Query. */
     private static function store_admin_post_search_query_state(
         mixed $query,
         int $total,
@@ -15988,7 +17002,12 @@ LIMIT %d",
         int $trace_id = 0
     ): void
     {
-        $current_page = max(1, (int) self::query_var($query, 'paged', 1));
+        $page_value = self::query_var($query, 'paged', 1);
+        $current_page = is_scalar($page_value)
+            && (!is_string($page_value) || strlen($page_value) <= self::MAX_SEARCH_NUMERIC_BYTES)
+            && is_numeric($page_value)
+            ? max(1, (int) $page_value)
+            : 1;
         $total = $total > 0 ? (($current_page - 1) * max(1, $limit)) + $total : 0;
         // wp-admin's native paginator emits arbitrary numeric offsets. Suppress
         // it and render only the cursor-backed adjacent links above.
@@ -16360,16 +17379,29 @@ LIMIT %d",
     }
 
     /**
+     * Return every exact table name owned by one site's FTS lifecycle.
+     *
+     * This deliberately uses allowlisted migration names and deterministic
+     * reset generations rather than matching arbitrary prefix-like tables.
+     *
      * @return string[]
      */
-    private static function fts_table_names(string $prefix): array
+    private static function owned_site_table_names(string $prefix): array
     {
+        global $wpdb;
+
+        $suffixes = array_merge(
+            self::FTS_TABLE_SUFFIXES,
+            array_keys(self::legacy_relational_table_suffixes()),
+            array_values(self::legacy_relational_table_suffixes())
+        );
         $tables = [];
-        foreach (self::FTS_TABLE_SUFFIXES as $suffix) {
+        foreach (array_values(array_unique($suffixes)) as $suffix) {
             $tables[] = $prefix . $suffix;
         }
 
-        return $tables;
+        $name_source = new WP_FTS_Storage_Mysql($wpdb, $prefix);
+        return self::unique_table_names(array_merge($tables, $name_source->reset_generation_table_names()));
     }
 
     /**
@@ -16628,6 +17660,7 @@ LIMIT %d",
         return true;
     }
 
+    /** Checks whether a request still owns the exact foreground mutation target. */
     private static function foreground_mutation_target_is_retained(string $identity): bool
     {
         return isset(self::$foreground_mutation_targets[$identity]);
@@ -16787,6 +17820,7 @@ LIMIT %d",
         }
     }
 
+    /** Verifies that the request-global file capability still matches this site. */
     private static function foreground_owner_guard_is_current(): bool
     {
         $owner = self::$foreground_owner_guard;
@@ -16838,6 +17872,7 @@ LIMIT %d",
         }
     }
 
+    /** Releases the shared mutation guard only after durable handoff completes. */
     private static function release_foreground_owner_guard(bool $schedule_ready_work = true): void
     {
         $owner = self::$foreground_owner_guard;
@@ -16975,6 +18010,7 @@ LIMIT %d",
         }
     }
 
+    /** Derives the guarded recovery deadline for an abandoned mutation fence. */
     private static function mutation_fence_available_at(): int
     {
         return time() + self::MUTATION_FENCE_SECONDS;
@@ -17004,6 +18040,7 @@ LIMIT %d",
         return $depth;
     }
 
+    /** Returns the active taxonomy hook without inspecting the call stack. */
     private static function current_relationship_hook(): string
     {
         global $wp_current_filter;
@@ -17091,6 +18128,7 @@ LIMIT %d",
         return $queue;
     }
 
+    /** Checks the request latch that forbids further writes for this site prefix. */
     private static function foreground_queue_blocked_for_current_prefix(): bool
     {
         return isset(self::$foreground_queue_blocked_prefixes[self::current_database_prefix()]);
@@ -17322,6 +18360,7 @@ LIMIT %d",
         self::schedule_schema_provisioning(300);
     }
 
+    /** Latches a bounded foreground queue failure and leaves durable fences closed. */
     private static function remember_foreground_queue_failure(Throwable $error): void
     {
         $incarnation = '';
@@ -19091,6 +20130,7 @@ ORDER BY p.ID ASC",
         return $ordered;
     }
 
+    /** Extracts a canonical language code from one bounded Polylang row. */
     private static function polylang_language_from_row(object $row): string
     {
         $description = is_scalar($row->language_description ?? null)
@@ -19370,6 +20410,7 @@ ORDER BY p.ID ASC",
         return $last === ';' || $last === '}';
     }
 
+    /** Builds the SQL byte measure for the source columns fetched by a worker. */
     private static function post_source_bytes_sql(string $alias): string
     {
         return "OCTET_LENGTH(COALESCE({$alias}.post_title, ''))"
@@ -19377,6 +20418,7 @@ ORDER BY p.ID ASC",
             . " + OCTET_LENGTH(COALESCE({$alias}.post_excerpt, ''))";
     }
 
+    /** Builds the SQL byte measure for the canonical post hydration columns. */
     private static function canonical_post_bytes_sql(string $alias): string
     {
         return implode(' + ', array_map(
@@ -19703,6 +20745,7 @@ WHERE pm.meta_id IN ({$id_sql})";
         return ['rows' => $rows, 'incomplete_post_ids' => $incomplete];
     }
 
+    /** Rounds dependency bytes to a bounded allocation bucket. */
     private static function dependency_value_bucket(int $bytes): int
     {
         if ($bytes <= 0) {
@@ -19998,6 +21041,7 @@ WHERE p.ID IN ({$post_placeholders})";
         return null;
     }
 
+    /** Returns a typed sentinel for source work deferred to another worker pass. */
     private static function deferred_index_source(int $post_id): object
     {
         return (object) [
@@ -20006,6 +21050,7 @@ WHERE p.ID IN ({$post_placeholders})";
         ];
     }
 
+    /** Returns a typed poison-source sentinel with a stable reason code. */
     private static function rejected_index_source(int $post_id, string $reason_code, string $message): object
     {
         return (object) [
@@ -20017,11 +21062,13 @@ WHERE p.ID IN ({$post_placeholders})";
         ];
     }
 
+    /** Normalizes adapter counts without allowing negative byte or row values. */
     private static function nonnegative_database_integer(mixed $value): int
     {
         return is_numeric($value) ? max(0, (int) $value) : 0;
     }
 
+    /** Fails the worker immediately when a required database operation failed. */
     private static function assert_worker_database_result(mixed $result, string $context): void
     {
         global $wpdb;
@@ -20461,6 +21508,7 @@ WHERE p.ID IN ({$post_placeholders})";
         return !empty($summary['skipped_locked']) ? 'scheduled_after_lock_skip' : 'scheduled';
     }
 
+    /** Returns a bounded diagnostic title without loading another post. */
     private static function failure_post_title(?object $post): string
     {
         $title = $post !== null && isset($post->post_title) && is_scalar($post->post_title)
@@ -20726,6 +21774,7 @@ WHERE p.ID IN ({$post_placeholders})";
         ];
     }
 
+    /** Allows only the durable failure recovery states understood by the worker. */
     private static function sanitize_failure_recovery_status(mixed $value): string
     {
         $status = is_scalar($value) ? self::sanitize_key((string) $value) : '';
@@ -21031,6 +22080,7 @@ WHERE p.ID IN ({$post_placeholders})";
         );
     }
 
+    /** Acquires or renews the site writer lease with compare-and-swap semantics. */
     private static function acquire_index_lock(
         string $mode,
         ?string &$blocked_reason = null,
@@ -21117,6 +22167,7 @@ WHERE p.ID IN ({$post_placeholders})";
         return null;
     }
 
+    /** Allows only lifecycle modes that explicitly own uninstall-fence transitions. */
     private static function writer_mode_may_cross_uninstall_fence(string $mode): bool
     {
         return in_array($mode, ['uninstall', 'activation', 'network-activation-provision'], true);
@@ -21375,6 +22426,7 @@ STRAIGHT_JOIN {$work_table} work_row
         ];
     }
 
+    /** Checks whether the adapter can retire queue work in the writer transaction. */
     private static function supports_atomic_worker_acknowledgement(): bool
     {
         global $wpdb;
@@ -21389,6 +22441,7 @@ STRAIGHT_JOIN {$work_table} work_row
             && !self::database_adapter_is_sqlite($wpdb);
     }
 
+    /** Detects the WordPress SQLite adapter without issuing dialect-specific SQL. */
     private static function database_adapter_is_sqlite(object $wpdb): bool
     {
         $signals = [get_class($wpdb)];
@@ -21442,6 +22495,7 @@ STRAIGHT_JOIN {$work_table} work_row
         return (int) ($lock['expires_at'] ?? 0) - time() >= self::MIN_INDEX_TRANSACTION_LEASE_SECONDS;
     }
 
+    /** Returns the validated site prefix bound to current WordPress state. */
     private static function current_database_prefix(): string
     {
         global $wpdb;
@@ -21684,6 +22738,7 @@ STRAIGHT_JOIN {$work_table} work_row
         return $current !== '' && $accepted !== '' && $current !== $accepted;
     }
 
+    /** Rotates readiness before any operation can invalidate the accepted corpus. */
     private static function mark_initial_index_pending(
         bool $rotate_incarnation = true,
         string $target_profile_hash = ''
@@ -21717,6 +22772,7 @@ STRAIGHT_JOIN {$work_table} work_row
         return $incarnation;
     }
 
+    /** Publishes a fresh random identity for one reconciliation generation. */
     private static function rotate_readiness_incarnation(): string
     {
         $incarnation = bin2hex(random_bytes(16));
@@ -21729,6 +22785,7 @@ STRAIGHT_JOIN {$work_table} work_row
         return $incarnation;
     }
 
+    /** Returns the validated pending reconciliation identity. */
     private static function readiness_incarnation(): string
     {
         return self::sanitize_readiness_incarnation(
@@ -21736,11 +22793,13 @@ STRAIGHT_JOIN {$work_table} work_row
         );
     }
 
+    /** Returns the validated identity of the accepted searchable generation. */
     private static function search_ready_incarnation(): string
     {
         return self::search_ready_capability()['incarnation'];
     }
 
+    /** Returns the analyzer profile bound to the accepted searchable generation. */
     private static function search_ready_profile_hash(): string
     {
         return self::search_ready_capability()['profile_hash'];
@@ -21760,6 +22819,7 @@ STRAIGHT_JOIN {$work_table} work_row
         ];
     }
 
+    /** Revokes the publication capability before unsafe state changes. */
     private static function clear_search_ready_incarnation(): void
     {
         self::set_option(self::SEARCH_READY_INCARNATION_OPTION, '');
@@ -21768,6 +22828,7 @@ STRAIGHT_JOIN {$work_table} work_row
         }
     }
 
+    /** Publishes readiness only for the exact completed incarnation and profile. */
     private static function publish_search_ready_incarnation(string $incarnation, string $profile_hash): bool
     {
         $incarnation = self::sanitize_readiness_incarnation($incarnation);
@@ -21816,6 +22877,7 @@ STRAIGHT_JOIN {$work_table} work_row
         return true;
     }
 
+    /** Accepts only the fixed-width hexadecimal readiness identity. */
     private static function sanitize_readiness_incarnation(mixed $value): string
     {
         if (!is_scalar($value)) {
@@ -21826,6 +22888,7 @@ STRAIGHT_JOIN {$work_table} work_row
         return preg_match('/^[a-f0-9]{32}$/D', $value) === 1 ? $value : '';
     }
 
+    /** Checks that health, incarnation, and analyzer profile share one generation. */
     private static function readiness_completion_matches(array $state): bool
     {
         $current = self::readiness_incarnation();
@@ -22058,6 +23121,7 @@ STRAIGHT_JOIN {$work_table} work_row
         ];
     }
 
+    /** Resets derived health while preserving the new pending generation boundary. */
     private static function reset_index_health_state(): void
     {
         $state = self::default_index_health_state();
@@ -22747,6 +23811,7 @@ STRAIGHT_JOIN {$work_table} work_row
         return self::is_configured_index_post_type($type);
     }
 
+    /** Checks whether one post belongs to the configured admin-search corpus. */
     private static function is_admin_indexable_post(object $post): bool
     {
         if (isset($post->post_password) && (string) $post->post_password !== '') {
@@ -22943,6 +24008,7 @@ STRAIGHT_JOIN {$work_table} work_row
         }
     }
 
+    /** Removes the coalesced schema retry after successful provisioning. */
     private static function clear_scheduled_schema_provisioning(): void
     {
         if (function_exists('wp_clear_scheduled_hook')) {
@@ -23522,6 +24588,7 @@ STRAIGHT_JOIN {$work_table} work_row
         return $language !== '' ? $language : null;
     }
 
+    /** Clamps the REST page size before analysis or SQL construction. */
     private static function rest_limit(mixed $request): int
     {
         $limit = self::request_param($request, 'limit', 10);
@@ -23539,6 +24606,7 @@ STRAIGHT_JOIN {$work_table} work_row
         return self::clamp_int($limit, 1, self::MAX_SEARCH_LIMIT);
     }
 
+    /** Reads and bounds one opaque REST search-after cursor. */
     private static function rest_cursor(mixed $request): ?string
     {
         $value = self::request_param($request, 'cursor', null);
@@ -23556,6 +24624,7 @@ STRAIGHT_JOIN {$work_table} work_row
         return $cursor !== '' ? $cursor : null;
     }
 
+    /** Allows only adjacent forward or backward REST traversal. */
     private static function rest_cursor_direction(mixed $request): string
     {
         $value = self::request_param($request, 'direction', 'after');
@@ -23570,6 +24639,7 @@ STRAIGHT_JOIN {$work_table} work_row
         return $direction;
     }
 
+    /** Enables bounded explain metadata only for an explicit truthy REST value. */
     private static function rest_explain_requested(mixed $request): bool
     {
         $value = self::request_param($request, 'explain', false);

@@ -1137,6 +1137,7 @@ final class WP_FTS_Searcher
         return [$cursor, $direction ?? 'after'];
     }
 
+    /** Validate one opaque search-after cursor before handing it to storage. */
     private function set_oriented_cursor_value(mixed $value): ?string
     {
         if ($value === null) {

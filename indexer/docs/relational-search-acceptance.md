@@ -31,14 +31,20 @@ WordPress adapter from bypassing that factory.
    packs must not add language plans or SQL statements.
 4. Restrict prefix matching to the final group and compile it as one indexed
    dictionary range. Never enumerate completions into PHP or per-term SQL.
-5. Execute at most three plugin-owned statements: bounded dictionary plus
+5. A ready search executes at most three plugin-owned statements: bounded dictionary plus
    singleton work/epoch/scope-control planning, relational ranking/top-K, and
    page hydration. The plan statement's complete physical relation allowlist is
    `fts_terms` plus `fts_work`; calling it dictionary-only would omit the
    control rows that authenticate readiness and reject pending scopes. An impossible mandatory term
    executes at most one statement. That planning statement must still read the
    mutation epoch and authenticate any supplied cursor before the impossible
-   result returns; an analyzer-empty cursor request is rejected before SQL.
+   result returns; an analyzer-empty cursor request is rejected before SQL. An
+   unexpected database failure is a separate fail-closed control path: it
+   executes exactly one failed search statement, then at most four bounded
+   option/cron statements to revoke publication, persist unhealthy state, reload
+   the invalidated option cache, and persist a repair event. Its complete
+   failure-request ceiling is five plugin-owned statements; it never continues
+   to ranking or hydration.
 6. Keep statement count unchanged at 2,000, 50,000, and 100,000 documents, with
    one pack or all distributable packs active.
 7. Execute no SQL in term, alternative, prefix, language, candidate, or result
@@ -59,16 +65,49 @@ WordPress adapter from bypassing that factory.
     include the blog's physical index namespace, and hydration cursors advance
     across every inspected rank row even when an old oversized canonical row
     cannot be transported.
-11. Perform no `SHOW`, `DESCRIBE`, `information_schema`, migration, or repair
+11. Leave valid WordPress query shapes with unsupported SQL membership,
+    projection, ordering, page-size, or numbered-pagination constraints on core
+    WordPress search. In particular, arbitrary PHP visibility callbacks and
+    numbered wp-admin pages cannot participate in the relational path. Core-owned
+    membership includes title/menu-order/comment/password/parent constraints,
+    legacy or archive page-size overrides, meta/tax/date/ID arrays, frontend
+    permission scopes, and requested post-type query vars that core maps to a
+    slug predicate only after `pre_get_posts`. Quoted phrases and token-leading
+    exclusion syntax such as `apple -banana` also remain on core because the
+    relational analyzer has no phrase or NOT representation; internal hyphens
+    such as `e-mail` remain relationally eligible. Once FTS owns an
+    otherwise-supported shape, that policy/shape decision is evaluated once and
+    retained: stale readiness or a later runtime failure remains fail-closed.
+    A callback first registered after relational execution starts discards the
+    ranked page, suppresses later result filters, and returns an owned empty
+    page; it may not resume core LIKE after spending the bounded FTS statements.
+    Fresh default scope covers post, page, and attachment so an ordinary stock
+    unscoped search is eligible without narrowing WordPress's built-in search
+    types. Saved custom scopes remain authoritative and stand down on unscoped
+    queries whenever any current core-searchable type is absent.
+    On an otherwise FTS-compatible, enabled main query shape, malformed
+    original `WP_Query` search input is retained as an owned-invalid marker even
+    after core normalizes `query_vars['s']`, and malformed or oversized adapter
+    inputs are rejected before core search. Unsupported membership shapes,
+    REST requests, secondary queries, and policy-disabled replacements remain
+    core-owned and retain their original `s` even when an irrelevant FTS cursor
+    or auxiliary value is malformed. The WordPress query adapter follows core's
+    1,600-byte `s` ceiling; direct plugin/REST PHP search retains the separate
+    4,096-byte public search ceiling.
+12. Perform no `SHOW`, `DESCRIBE`, `information_schema`, migration, or repair
     work during normal readiness/search.
-12. Keep every valid worst-case search statement at or below 32 KiB, PHP
+13. Keep every valid worst-case search statement at or below 32 KiB, PHP
     allocation, live RSS, and Linux high-water RSS deltas at or below 16 MiB,
     and both PHP peak and absolute Linux `VmHWM` at or below 128 MiB.
-13. Reject source text above 2 MiB, more than 20,000 analyzed occurrences,
+14. Reject source text above 2 MiB, more than 20,000 analyzed occurrences,
     more than 4,096 distinct terms per document, a lexical run above 4 KiB,
     query text above 4 KiB, or a query plan above 12 groups/12 alternatives
     before an unbounded value, posting list, or SQL statement is materialized.
-14. Resolve exact dictionary identities from a constant relation of at most
+    Plain unquoted ten-to-twelve-group input deliberately keeps the relational
+    twelve-group semantics instead of core's fallback that collapses more than
+    nine parsed terms into one sentence; phrase and exclusion syntax never uses
+    that divergence because it stays on core.
+15. Resolve exact dictionary identities from a constant relation of at most
     twelve requested `(lang, kind, term)` tuples through the unique
     `(lang,kind,term)` identity index. The exact planning arm returns one row
     per requested identity. A final-word prefix adds one typed `kind=1` binary
@@ -77,11 +116,12 @@ WordPress adapter from bypassing that factory.
     `doc_freq`; it reads no postings and returns no completion identities to
     PHP. Multi-group AND compares that dictionary posting-row upper bound with
     each resolved exact group and anchors the cheapest logical group. Exact
-    anchors use candidate/key probes and intersect a non-anchor prefix's actual
-    matching postings. A selected prefix anchor unions its exact alternatives
-    with the range-led postings once, applies visibility once, and probes the
-    remaining groups by `(post_id,term_id)`.
-15. Authenticate the published search-ready incarnation and profile hash, the
+    anchors use candidate/key probes, then drive whichever is smaller: the
+    non-anchor prefix's actual posting sum, or the anchor DF upper bound times
+    the hard per-document posting cap. A selected prefix anchor unions its exact
+    alternatives with the range-led postings once, applies visibility once, and
+    probes the remaining groups by `(post_id,term_id)`.
+16. Authenticate the published search-ready incarnation and profile hash, the
     authoritative active-scope profile provenance, and the singleton search
     epoch plus its random incarnation inside every plan, rank, and hydration
     statement. Every returned data row carries that control evidence;
@@ -163,6 +203,62 @@ authenticated wp-admin Posts searches: each must still have exactly three
 plugin statements and zero option/sitemeta SQL. Hot debug formatting must use
 already-computed request state; it may not run provider option probes or fully validate/read analyzer packs
 merely to render a trace.
+The real front-end request matrix includes both the explicitly scoped control
+and a stock `/?s=...` URL with no `post_type` or `post_status`. With the fresh
+`post`, `page`, and `attachment` scope, the unscoped request must return the
+same independent-oracle page through exactly plan+rank+hydrate, with exactly
+zero core `wp_posts ... LIKE` statements.
+
+The cold front-end cache lane runs the complete WordPress 6.5+ main
+`WP_Query` lifecycle, rather than calling the plugin's `posts_pre_query`
+callback directly, after evicting post, metadata, taxonomy-relationship, user,
+and user-metadata caches. Before returning, the plugin passes only the
+already-hydrated canonical `WP_Post` objects after raw normalization. This
+executes no SQL: core's intervening `get_post()` normalization becomes an
+identity operation, while the normal `WP_Query` lifecycle remains the sole
+owner of post, metadata, and taxonomy cache policy.
+At page sizes K=1, K=20, and K=50, it must observe
+exactly three plugin-owned statements (one plan, one rank, and one hydrate),
+then exactly two batched core pre-loop cache statements (one `postmeta` and one
+`term_relationships`), then exactly two batched author-cache statements (one
+`users` and one `usermeta`) on the first `the_post()`. The complete envelope is
+therefore exactly five statements before the loop and seven through its first
+result at every K. All remaining result iterations must add zero statements
+while reading the canonical post cache, `get_post_meta()`, `get_the_terms()`,
+and `get_userdata()` for every result; the cache-prime and author-prime count
+vectors must both be `[2,2,2]`. A separate 20-result case with
+`update_post_meta_cache` and `update_post_term_cache` disabled must retain the
+three plugin statements, execute zero core metadata/taxonomy prime statements,
+and still serve every canonical `get_post()` read without SQL. This is the
+release proof that result count cannot create an N+1 query path. A source-order
+contract additionally verifies that supported core keeps the final
+`get_post()` normalization between `posts_pre_query` and
+`update_post_caches()` in `WP_Query::get_posts()` and performs
+`update_post_author_caches()` in `WP_Query::the_post()`.
+
+The explicit `cache_results=false` branch is also measured cold at K=50. It
+must still execute only plan+rank+hydrate, perform zero canonical `wp_posts`
+reads, return fifty raw-normalized post objects, and leave all fifty IDs absent
+from the `posts` object cache. Re-normalizing those returned objects must add
+zero statements. Thus the bounded takeover preserves WordPress's cache opt-out
+instead of hiding its own unconditional cache write or paying one post query
+per result.
+
+A separate stock-unscoped lifecycle case runs a real main `WP_Query` whose
+original arguments omit both `post_type` and `post_status`. It must retain the
+FTS candidate marker, return the exact 20-row oracle order, execute no more
+than the three plugin plan/rank/hydrate statements, execute zero core cache or
+canonical-post statements with cache flags disabled, and execute zero core
+`wp_posts ... LIKE` statements. This prevents an explicitly scoped test from
+hiding a broken ordinary WordPress search takeover.
+
+That seven-statement envelope covers plugin-owned search, the stock WordPress
+cache lifecycle, and the ordinary template reads named above. WordPress allows
+arbitrary third-party hooks and templates to issue their own SQL, so this plugin
+cannot promise a total request ceiling for that unrelated application code.
+The controlled acceptance lane classifies any extra core or unowned statement
+as `other` and fails; deployments with custom result-loop callbacks must profile
+those callbacks independently rather than attribute their queries to FTS.
 
 A slow independent PHP oracle computes every matching row on a 2,000-post slice,
 then traverses production search to the terminal cursor and compares the complete
@@ -203,6 +299,18 @@ but database work is proportional to matching postings. This is the explicit
 small/medium-site tradeoff; sites whose broad exact OR workload no longer fits
 it should use a dedicated search service rather than expect a relational plan
 to skip rows it must score.
+
+For a multi-group `AND` whose cheapest group is exact and whose final group is
+a prefix, ranking chooses between two bounded drivers without another query.
+The plan already has the prefix posting sum `P` and an upper bound `A` for the
+exact anchor's document frequency. If `P <= A × 8,192`, the rank statement
+streams the indexed surface range and intersects the exact candidates. If the
+range is larger, it scans each exact candidate's hard-capped 8,192-posting
+envelope through `post_term_impact` and classifies those term IDs through the
+dictionary primary key. The comparison is multiplication-free in PHP, so even
+saturated integer costs cannot wrap. Both paths preserve exact membership and
+per-surface scoring in one rank statement; neither can create work proportional
+to both the entire prefix range and every candidate posting envelope.
 
 ## Production data invariants
 
@@ -430,7 +538,15 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
     `process-batch` only advances the automatic scope when a manual pass is
     needed.
 
-Validation runs the named boundary cases, not substitutes with smaller data:
+Validation runs the named boundary cases, not substitutes with smaller data.
+The SCRIPT/STYLE gate ignores 20,001 tag-looking payload strings in each opaque
+element while counting every real opener and closer, rejects real token/depth
+max+1, and preserves both escaped/double-escaped SCRIPT boundaries with 20,001
+hidden words. The lazy-lemma race gate binds reads to the attested runtime and
+sidecar descriptors plus the authenticated block digest: an atomic rename keeps
+the manifested generation, a same-inode mutation rejects, and restoration
+cannot consume poisoned decoded bytes. Both gates run their exact 128-MiB cases
+under normal PHP and `php -n`.
 
 ```sh
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='schema repair performs zero' php indexer/tests/run.php
@@ -463,12 +579,19 @@ WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='automatic reconciliation cannot' php ind
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='automatic reset reconciliation completes' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='encoded metadata extraction' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='streamed HTML metadata' php indexer/tests/run.php
+WP_FTS_MIN_CHECKS=12 WP_FTS_FAIL_ON_PENDING=1 WP_FTS_TEST_FILTER='HTML raw-text contents cannot invent markup depth or tokens' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='lemma runtime lines' php indexer/tests/run.php
-WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='whole-gzip and sidecar paths enforce' php indexer/tests/run.php
-WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='exact 8-MiB boundaries' php indexer/tests/run.php
-WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='compressed lemma lookup' php indexer/tests/run.php
+WP_FTS_MIN_CHECKS=60 WP_FTS_FAIL_ON_PENDING=1 WP_FTS_TEST_FILTER='lazy lemma block reads stay bound to the attested file generation' php indexer/tests/run.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='non-eager lemma packs require sidecars' php indexer/tests/run.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='non-eager compressed packs reject' php indexer/tests/run.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='compressed lemma pack importer emits' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='64-file lemma packs' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='bundled multi-file lemma pack' php indexer/tests/run.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='non-fixture lemma importer rejects unindexed' php indexer/tests/run.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='lemma source importers' php indexer/tests/run.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='generic importer refuses plain fixtures' php indexer/tests/run.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='top-language pack audit' php indexer/tests/run.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='PoliMorf external pack workflow' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='Jieba dictionary giant line' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='Jieba 32-prefix fanout' php indexer/tests/run.php
 ```
@@ -582,29 +705,120 @@ the production analyzer, indexer, MySQL storage, searcher, and queue:
   presentation cap cannot change term frequencies, the content hash, other
   field metadata, or later required metadata;
 - plain and gzip lemma runtime rows accept exactly 4,096 bytes and reject byte
-  4,097 with one typed reason. Whole-gzip lookup and seek-index construction
-  enforce the same decoded-line boundary. A fresh 128 MiB process then creates
-  valid, sorted runtime shards containing exactly 8,388,608 decoded bytes and
-  proves acceptance through plain streaming, forced gzip streaming, whole-gzip
-  binary lookup, and a seek sidecar. Adding one valid nine-byte sorted row must
-  reject both unindexed streaming modes and whole-gzip lookup with
-  `runtime_lookup_decoded_bytes`; the indexed >8-MiB shard remains supported by
-  inflating one <=1-MiB block and inspecting at most 32 rows. Every operation
-  must finish within two seconds, the complete eight-path process within eight
-  seconds, PHP allocation growth within 32 MiB, and absolute PHP/RSS within
-  128 MiB. A separate fresh 128 MiB process selects a valid
-  651,493-byte gzip shard that expands to 191,900,013 bytes and has no seek
-  sidecar. Lookup must stop after its 8 MiB decoded envelope in at most two
-  seconds, add at most 16 MiB PHP allocation, and stay below 128 MiB absolute
-  RSS instead of passing the compressed-size admission check and exhausting
-  PHP while decoding;
+  4,097 with one typed reason. Eager fixture validation and lookup-index
+  construction enforce the same decoded-line boundary. A fresh 128 MiB process
+  then creates a valid, sorted, non-fixture gzip shard containing exactly
+  8,388,608 decoded bytes and 32,768 rows. Without a sidecar it must reject at
+  pack construction before any document/query token lookup, complete-runtime
+  digest, or indexed payload read. The indexed equivalent auto-shards into two
+  runtime files with 512 exact 16-KiB-or-smaller blocks. Its exact
+  4,096-distinct-term maximum document must retain all 4,096 morphologies while
+  opening each file once and loading exactly 64 blocks / 1 MiB decoded; its
+  twelve-group adversarial query opens the same two files once and loads exactly
+  twelve blocks / 192 KiB decoded. The two runtimes and two sidecars are hashed
+  exactly once before first payload use. Measured compressed payload work is
+  24,163 document bytes and 4,530 query bytes; complete attestation is 253,603
+  bytes. Rejection must finish within one second;
+  the complete indexed proof within five seconds; both fresh children must stay
+  below 128 MiB PHP/RSS. A separate fresh 128 MiB process supplies a compressed
+  shard expanding beyond 180 MiB without a sidecar. Construction must reject
+  structurally with zero payload hashes or reads, before expansion can approach
+  the process memory limit;
+- two fresh 128 MiB processes send one 32-MiB unterminated plain or gzip line
+  through each of the normalized-TSV, CoNLL-U, UniMorph, and PoliMorf source
+  readers. All eight paths must reject at the shared 64-KiB source-line boundary
+  before publishing a manifest, the complete four-importer child within ten
+  seconds and 32 MiB PHP peak. Separate fresh children import 17,000 unique
+  maximum-width namespaced pairs (251-byte `qaa` terms and 252-byte `pl` terms)
+  through the generic and PoliMorf importers with both row settings left at
+  200,000. Each must retain every row, flush exactly two lexical-byte chunks,
+  retain at most 8,388,608 lexical bytes per dedupe map, and auto-shard before
+  either a 256-block or 64-KiB header boundary. The measured packs use six
+  runtime files and 532 blocks, with at most 98 blocks per file and at most
+  16,128 / 16,192 decoded bytes in one block; combined encoded-runtime plus
+  lookup evidence is 441,557 / 442,622 bytes. Each completes below 0.7 seconds,
+  30 MiB PHP, and 128 MiB RSS. Two more fresh children force 15,000
+  reverse-sorted one-row chunks. Both must preserve the exact sorted digest and
+  first/middle/last lookup, merge through three levels with fan-in at most 64
+  and at most 130 live temporary files, and complete below two seconds / 16 MiB
+  PHP. High-entropy 300,000-row children (39.6 / 41.4 MB sources) must reject at
+  the 16-MiB physical runtime-plus-lookup boundary before a manifest, remove all
+  partial output, and complete below 6.1 seconds / 31 MiB PHP. A final fresh
+  child proves unindexed fixture
+  output at row 50,001 and decoded byte 8,388,609 rejects before manifest
+  publication and removes every partial pack artifact while directing the
+  operator to indexed gzip;
+- fresh normal and `php -n` children drive all four source importers through
+  every original-input boundary. A 65,536-byte line, 64-MiB physical artifact,
+  512-MiB decoded gzip stream, and 8,000,000-line source each produce an
+  activatable one-row pack; the first byte or line above each boundary rejects
+  with no manifest or partial output. The four-importer proofs have 32-MiB PHP
+  ceilings and one-CPU time ceilings of 5 / 10 / 10 / 90 seconds respectively.
+  A stale physical preflight followed by growth to 67,108,865 bytes or a
+  same-size inode replacement rejects before hashing source bytes. PoliMorf
+  NOTICE retention accepts exactly 64 metadata lines / 65,536 bytes and rejects
+  the next line or byte before append. Root output symlinks and source/output
+  overlap are refused by all four importers and the external builder without
+  changing the target; injected directory symlinks inside owned temporary trees
+  are unlinked rather than followed, while caller-owned parent sentinels remain
+  byte-identical;
+- fresh 128 MiB CoNLL-U and UniMorph wrapper processes prove recursive source
+  discovery at exactly 256 accepted files, 32,768 relative-path bytes, and
+  eight directory levels; file/path/depth max+1 and in-root symlinks to outside
+  bytes reject before staging or hashing. Both wrappers discard a first
+  252-byte `qaa` token before staging, accept exactly 1,250,000 staged rows and
+  67,108,864 staged bytes, reject the next row and byte, and remove all staging
+  output. The 64-MiB byte cases complete below one second; the row-boundary
+  exact/max+1 cases run under a 90-second one-CPU ceiling with at most 128 MiB
+  PHP/RSS. CoNLL-U manifests, source locks, and notices must attest the original
+  per-file path, digest, byte count, and ten-column model rather than the
+  temporary normalized TSV;
+- fresh normal and `php -n` 128 MiB audit processes classify a sparse 140-MiB
+  explicit manifest as `invalid_pack` with a normal exit and 16 MiB PHP peak.
+  Recursive pack-root discovery accepts exactly 256 manifests, 4,096 entries,
+  262,144 aggregate path bytes, and depth eight; each max+1 rejects, while a
+  symlinked manifest and a `root`/`root2` prefix escape discover zero packs;
 - fresh normal and no-extension 128 MiB processes exercise the full 64-shard
   manifest limit. Missing, overlapping, out-of-order, and unnormalized ranges
   must reject during manifest validation before runtime path resolution. A
-  valid 64-shard pack must return first, middle, and last terms while opening
-  exactly one file and decoding no more than one 8 MiB shard per term; a gap
-  miss opens zero files. The complete proof must finish within two seconds, add
+  valid indexed 64-shard pack must return first, middle, and last terms while
+  opening exactly one file and decoding no more than one bounded block per term;
+  a gap miss opens zero files. The complete proof must finish within two seconds, add
   at most 32 MiB PHP allocation, and stay below 128 MiB PHP/RSS;
+- a fresh 128 MiB production process configures two independent 64-file packs,
+  reaching the exact 128-file analyzer aggregate. Thirty-two language-scoped
+  HTML fields retain 4,096 morphologies while opening each selected file once,
+  reading 4,096 blocks, 1,548,588 compressed bytes, and exactly 64 MiB decoded.
+  Current-second integrity work hashes 256 runtime/sidecar files and 2,056,748
+  physical bytes once. The measured run completes in 1.885 seconds with 40 MiB
+  PHP peak and about 69 MB process RSS. Two distinct physical copies are
+  accepted; a third declares 192 files and must raise `configured_pack_metadata`
+  before opening any lookup header or payload, in normal PHP and `php -n`;
+- fresh normal and `php -n` 128 MiB processes configure 32 distinct
+  eager-eligible fixture manifests. Exactly 50,000 declared rows must construct
+  all 32 maps, total exactly 8,388,608 decoded bytes, and retain one long,
+  pack-specific morphology per language. Row 50,001 must raise
+  `configured_eager_fixture_rows` before pack construction, even when an earlier
+  runtime digest is corrupt and the complete set remains below the physical
+  configured-pack ceiling. A companion two-manifest proof configures one
+  manifest under two language aliases: exact 8-MiB plain and gzip pairs must
+  construct through `WP_FTS_LanguagePipeline` and report all three aliases active
+  through `WP_FTS_Plugin::runtime_analyzer_pack_statuses()`; decoded byte
+  8,388,609 must raise `configured_eager_fixture_bytes` through both paths. The
+  plain +1 case must beat an earlier corrupt digest during metadata preflight;
+  the gzip +1 case must use valid digests and discover the overflow during its
+  bounded decoded scan. Every case must complete within five seconds, add at
+  most 32 MiB PHP allocation, remain below 128 MiB PHP/RSS, and perform zero
+  lookup-header or indexed-payload I/O;
+- runtime and sidecar attestation must not trust a pre-read `stat()`: a
+  deterministic stream that reports one byte and then grows stops after reading byte
+  16,777,217 with `runtime_lookup_bytes`, within two seconds and 128 MiB. A
+  direct lookup-builder source of 16 MiB plus one rejects from its initial
+  `fstat()` before hashing or staging, preserves its prefix/suffix and size, and
+  leaves no temporary artifact. A same-size in-place current-second replacement
+  with identical coarse `dev`/`ino`/size/mtime/ctime is rehashed and rejected in
+  the next lookup batch without sleeping; one batch still hashes each selected
+  file only once. All three gates run under normal PHP and `php -n`;
 - one document with exactly 4,096 distinct terms is written with all 4,096
   terms and postings, while 4,097 terms are rejected before SQL;
 - eighty distinct 252-byte source surfaces create exactly eighty `kind=1`
@@ -652,8 +866,9 @@ statements for every path, requires zero statements across all rejecting paths,
 removes and verifies every fixture row, and retains PHP peak allocation plus
 Linux `VmHWM`/`VmRSS`; each must remain within 128 MiB.
 
-Analyzer-pack validation and every lazy lookup mode enforce the same maximum of
-twelve lemmas for one surface, including candidates split across shards. Twelve
+Analyzer-pack validation, eager fixture loading, and indexed runtime lookup
+enforce the same maximum of twelve lemmas for one surface, including candidates
+split across shards. Twelve
 must round-trip. The streamed source compiler must turn thirteen or more source
 lemmas into one explicit surface-to-itself ambiguity no-op and publish the
 source-pair count; it must never retain a lexical first-twelve subset. A raw or
@@ -662,7 +877,13 @@ rather than disappear or create a thirteenth query alternative. Optional Jieba
 segmentation preserves exact dictionary matching when a run has more than 32
 distinct prefixes. A custom source is admitted only through explicit
 fixture-only construction; production custom dictionaries are unsupported
-rather than rebuilt and rehashed on each request. A fixture builds one bounded
+instead of being rebuilt and rehashed on each request. Construction streams at
+most 16 MiB through one opened generation while hashing and copying the exact
+bytes to a private snapshot; every later custom-dictionary scan uses that
+snapshot. Replacing the original in place with same-size bytes and a restored
+mtime therefore cannot alter the accepted analyzer, and destruction removes the
+snapshot. The shared stat-to-read growth gate stops on byte 16,777,217 even when
+the initial `fstat()` reports one byte. A fixture builds one bounded
 range index and proves complete-cache admission in that one source scan;
 candidate prefix maps then populate lazily from indexed ranges, each at most
 once, without eviction. The pinned source uses its attested first-codepoint
@@ -747,6 +968,21 @@ contain no raw Jieba checkout. A fresh process extracted from the ZIP must make
 `from_pack_option(true, 'zh')` select that runtime source and lookup with zero
 full-source hash scans before real segmentation succeeds.
 
+Every one of those ten pinned-source workloads is also repeated in its own
+fresh PHP process with `memory_limit=128M`. Each child records its absolute PHP
+peak and Linux `VmHWM` and must keep both at or below 128 MiB, so a high-water
+mark left by an earlier adversary cannot be mistaken for the current workload.
+In each fresh child, PHP 8.1's non-resettable allocator is measured
+conservatively as lifetime PHP peak after the workload minus live PHP usage
+before it; Linux peak growth is `VmHWM` after minus `VmRSS` before. Thus a
+transient allocation below an older high-water mark cannot disappear. The
+child's input byte count, SHA-256, logical unit count, term/range inventory, and
+fanout candidate inventory bind it to the parent workload. Those isolated
+figures are authoritative for the 24, 40, or 64 MiB per-case limits. The parent
+still records every `rss_peak_bytes` and its final PHP/`VmHWM` lifetime peak as
+a cumulative multi-workload diagnostic; it is not relabeled as one request's
+memory after earlier adversaries have raised that process high-water mark.
+
 Twenty additional posts carry exactly 1.9 MB of canonical source each. Their
 padding is valid ignored HTML comment content, so the analyzer sees one bounded
 visible token rather than a forbidden lexical run. Indexing must accept all
@@ -797,7 +1033,11 @@ Warm measurements use 20 warmups and 200 individual samples. Before every one
 of the ten buffer-pool-cold samples, the proof reads and checksums all 8,192
 64-KiB payloads in a dedicated 512-MiB InnoDB relation—exactly twice the
 declared buffer pool—and retains its full-scan plan and duration. The relation
-is removed and its absence verified before concurrency. Eight concurrent
+is removed and its absence verified before concurrency. These counts never
+scale down with corpus size: the
+`2k/mysql-5.7` compatibility lane runs the same 20 warmups, 200 warm samples,
+ten conditioned cold samples per case, and 100-request idle HTTP baseline as
+the 50k and 100k lanes. Eight concurrent
 clients run the fixed query mix while two writers reconcile disjoint 20-post
 assignments. All ten processes must publish readiness before the coordinator
 releases one run-ID-bound monotonic start/deadline window. The window is 62
@@ -812,6 +1052,36 @@ finalizer rejects a short, non-overlapping, incomplete, or zero-progress
 artifact. Quantiles use nearest rank.
 In normative lowercase terms, every process records its own elapsed time; a
 coordinator-only duration can never satisfy the concurrency gate.
+
+Warm-loop Linux high-water increments are explicitly cumulative diagnostics,
+not per-request peak evidence: `VmHWM` cannot be reset after an earlier warm
+case raises it. Every one of the thirteen required production search shapes is
+therefore repeated once in a dedicated PHP process after validation. Each child
+is bound to the source SHA, release-ZIP SHA-256, harness SHA-256, lane, engine,
+corpus-manifest SHA-256, preliminary-evidence SHA-256, canonical case-definition
+SHA-256, result IDs/hash/score signature, and exact SQL statement shape. Its
+process identity combines the Linux boot ID, PID, and `/proc/self/stat` start
+ticks. Finalization requires the exact thirteen-file/case/gate inventory,
+thirteen distinct process identities, every child self-hash, and no unexpected
+search-memory artifact. Removing a case or gate and recomputing the outer hash
+must still fail.
+
+Those fresh children reset PHP's peak counter immediately before the measured
+search. Authoritative PHP growth is peak usage after minus live usage before;
+authoritative Linux growth is `VmHWM` after minus `VmRSS` before—never
+`VmHWM` after minus an older `VmHWM`. Reset support is a hard runtime
+precondition, not an optional downgrade. The PHP absolute peak is the maximum
+of the lifetime peak captured before reset and the measured phase peak after
+reset; it is never relabeled from the reset phase alone. Both deltas must be at
+most 16 MiB, and both absolute peaks must be positive and at most 128 MiB. Each of the forty
+conditioned cold samples uses the same formula and absolute gates in its own
+source-bound process, with an exact forty-file and forty-process inventory.
+The ten-page maximum-valid front-end traversal likewise uses its complete fresh
+process lifetime, records the raw before/after values, and is self-hashed and
+source-bound. Long-lived dependency-LOB and populated scope-index-upgrade
+measurements cannot reset Linux high water, so they deliberately use the same
+conservative `VmHWM`-after minus `VmRSS`-before attribution plus the positive
+128 MiB absolute ceiling.
 
 After installing and migrating the current ZIP, and before its timed reindex,
 the proof derives the complete index profile through both the real web PHP
@@ -846,6 +1116,8 @@ At 100k on the declared MariaDB profile:
 | common three-term OR warm p95 / p99 | <=500 / <=750 ms |
 | valid 12-group OR+prefix warm p95 / p99 | <=2,000 / <=3,000 ms |
 | rare-anchor AND warm p95 / p99 | <=150 / <=250 ms |
+| exact-anchor surface-range AND warm p95 / p99 | <=500 / <=750 ms |
+| exact-anchor candidate-first AND warm p95 / p99 | <=500 / <=750 ms |
 | selective-prefix anchor AND warm p95 / p99 | <=150 / <=250 ms |
 | 20k-completion prefix warm p95 / p99 | <=500 / <=750 ms |
 | impossible mandatory term p95 | <=50 ms |
@@ -855,22 +1127,40 @@ At 100k on the declared MariaDB profile:
 | concurrent errors, timeouts, wrong result sets | 0 |
 | concurrent p95 degradation | <=2× idle HTTP |
 | plugin-owned search statements | <=3; impossible AND <=1 |
+| missing-table request on every public adapter | exactly 1 failed plan and 0 rank/hydrate; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 total plugin-owned statements; unhealthy/latch/single-event repair state present before harness restoration |
 | largest search SQL | <=32 KiB |
 | planning/ranking/hydration rows sent | <=13 / <=21 / <=20 |
+| candidate-first prefix AND rank / complete-search rows examined | <=32,768 / <=65,536 |
 | selective-prefix anchor rows examined / common exact materializations | <=2,048 / 0 |
 | planning/ranking/hydration control evidence | every returned row; one stripped sentinel on an otherwise empty result |
 | one requested identity with 4,096 unrelated dictionary identities | exactly 1 plan row; `term_identity` access |
 | deleted-identity stale cursor statements | exactly 1 plan / 0 rank / 0 hydrate |
 | injected non-transactional engine | rejected; 1 drop; restored InnoDB; 1 bounded global-corpus recovery scope (harness-only state restoration is fixture cleanup) |
-| search PHP allocation, live RSS, and `VmHWM` delta | each <=16 MiB |
-| PHP peak and absolute Linux `VmHWM` | each <=128 MiB |
+| authoritative search PHP allocation, live RSS, PHP peak delta, and Linux `VmHWM`-after minus `VmRSS`-before | each <=16 MiB in every one of 13 fresh case processes, all 40 cold processes, and the maximum-valid front-end process |
+| PHP peak and absolute Linux `VmHWM` | each positive and <=128 MiB in those source-bound processes |
 | 100k nested tags / 1.8 MiB language attribute | typed rejection; 0 SQL; <=1 second; <=16 MiB PHP allocation delta; <=128 MiB RSS |
 | exact 20k markup tokens x 256 depth | 89,490-byte/0-occurrence and 99,235-byte/9,745-occurrence documents preserved; each <=2 seconds; <=16 MiB PHP allocation delta; <=128 MiB RSS |
 | 20k one-byte inline text segments | typed 4-KiB lexical-run rejection; <=2 seconds; <=16 MiB PHP allocation delta; <=128 MiB RSS; exact 4,096-byte run preserved |
 | 1.5 MiB / 250k encoded-word metadata source | typed occurrence rejection; <=2 seconds; <=16 MiB PHP allocation delta; <=128 MiB RSS; exact 20,000-byte sidecar preserved |
-| exact 8,388,608-byte lemma shard / +9-byte row | exact accepted in all four modes; unindexed +9 rejected; indexed +9 accepted with <=1 MiB decoded; each <=2 seconds; complete matrix <=8 seconds; <=32 MiB PHP allocation delta; <=128 MiB RSS |
-| 651,493-byte / 191,900,013-byte expanded lemma shard | typed decoded-byte rejection; <=2 seconds; <=16 MiB PHP allocation delta; <=128 MiB RSS |
-| 64-shard lemma manifest | missing/overlapping/out-of-order/unnormalized ranges reject before runtime path resolution; first/middle/last each open exactly 1 shard; gap miss opens 0; normal and no-extension processes each <=2 seconds, <=32 MiB PHP allocation delta, <=128 MiB RSS |
+| exact 8,388,608-byte / 32,768-row lemma runtime | unindexed non-fixture construction rejects before token lookup with 0 hashes and 0 payload reads; indexed equivalent auto-shards into 2 files / 512 blocks, preserves 4,096 document morphologies with 2 opens / 64 reads / 1 MiB decoded and twelve query groups with 2 opens / 12 reads / 192 KiB decoded; 253,603 attested bytes; reject <=1 second; indexed proof <=5 seconds; <=128 MiB PHP/RSS |
+| aggregate eager-eligible fixture packs, normal PHP and `php -n` | exact 50,000 retained rows totaling 8,388,608 decoded bytes construct 32 pack-specific morphologies; row 50,001 raises `configured_eager_fixture_rows` before an earlier corrupt digest; two-manifest plain/gzip pairs accept exact 8 MiB through pipeline and public status paths while decoded byte 8,388,609 raises `configured_eager_fixture_bytes`; duplicate aliases are charged once; zero lookup-header/indexed-payload I/O; <=5 seconds / <=32 MiB PHP delta / <=128 MiB PHP/RSS |
+| compressed lemma shard expanding beyond 180 MiB without a sidecar | structural construction rejection; 0 payload hashes/reads; expansion never attempted; <=128 MiB PHP/RSS |
+| 32-MiB plain/gzip lemma source line through four importers | all 8 paths reject at 64 KiB before manifest publication; each four-importer child <=10 seconds / <=32 MiB PHP peak / <=128 MiB RSS |
+| original lemma source envelopes, all four importers, normal PHP and `php -n` | 64-KiB line / 64-MiB physical / 512-MiB decoded / 8,000,000-line exact boundaries accepted; every max+1 rejects without partial output; <=5 / 10 / 10 / 90 seconds; <=32 MiB PHP / <=128 MiB RSS |
+| source swap/restore during all four lemma importers, normal PHP and `php -n` | 5,000 one-row chunks per private snapshot; snapshot digest equals published provenance; attacker source remains installed through manifest publication but contributes zero runtime rows; original path restored; every snapshot removed; measured 2.945 / 2.890 seconds and 23,068,672-byte PHP peak; <=32 MiB PHP / <=128 MiB RSS |
+| invalid temporary parent through all four lemma importers, normal PHP and `php -n` | typed rejection before output setup; caller file retained byte-for-byte; zero output paths; measured <=0.003 seconds / 16 MiB PHP peak |
+| 17,000 maximum namespaced generic/PoliMorf pairs with `chunk_rows=200000` | every row retained; 2 lexical chunks; <=8 MiB keys/chunk; 6 files / 532 blocks / <=98 blocks per file / <=16 KiB decoded per block; 441,557 / 442,622 physical bytes; each child <0.7 seconds / <30 MiB PHP / <=128 MiB RSS |
+| 15,000 reverse-sorted rows with `chunk_rows=1`, both importers | exact sorted digest and boundary lookups; fan-in <=64; 3 levels / 239 merge outputs / <=130 live temporary files; each child <2 seconds / 16 MiB PHP / <=128 MiB RSS |
+| 200,000 short distinct pairs in one generic/PoliMorf chunk, normal PHP and `php -n` | exact option accepted as one 3,000,000-byte lexical chunk; 200,001 option rejects before output; measured 6.102 / 5.820 seconds and 48,250,880-byte PHP peak; <=64 MiB PHP / <=128 MiB RSS |
+| 16,384 initial generic/PoliMorf chunks, normal PHP and `php -n` | exact leaf count compacts and publishes; leaf 16,385 rejects with no manifest or output artifacts; measured 8.688 / 8.308 seconds and 16 MiB PHP peak; <=32 MiB PHP / <=128 MiB RSS |
+| 300,000 high-entropy generic/PoliMorf rows | typed 16-MiB physical pack rejection; no manifest or partial output; each child <6.1 seconds / <31 MiB PHP / <=128 MiB RSS |
+| CoNLL-U / UniMorph recursive source and staging maxima | 256 files / 8 KiB paths / depth 8 accepted; exact-path manifests are 60,009 / 59,973 bytes beneath the 64-KiB runtime read bound; every max+1 and symlink escape rejects before staging/hash; 1,250,000 rows and 64 MiB staging accepted, next row/byte rejects and cleans; <=128 MiB PHP/RSS |
+| sparse 140-MiB audit manifest, normal PHP and `php -n` | normal exit with `invalid_pack`; bounded 64-KiB read; 16 MiB PHP peak; recursive manifest/entry/path/depth max+1 and symlink escapes bounded |
+| unindexed fixture row 50,001 / decoded byte 8,388,609 | rejected before manifest publication; no partial output; error directs to indexed gzip; combined child <=15 seconds / <=128 MiB PHP/RSS |
+| 64-shard lemma manifest | missing/overlapping/out-of-order/unnormalized ranges reject before runtime path resolution; first/middle/last each select exactly 1 indexed shard and decode at most 1 bounded block; gap miss opens 0; normal and no-extension processes each <=2 seconds, <=32 MiB PHP allocation delta, <=128 MiB RSS |
+| exact 128-file configured lemma aggregate | 32 language-scoped fields preserve 4,096 morphologies; 128 opens / 4,096 reads / 1,548,588 compressed bytes / 64 MiB decoded; 256 current-second hashes / 2,056,748 bytes; measured 1.885 seconds / 40 MiB PHP / about 69 MB RSS |
+| third distinct 64-file physical pack copy | two copies / 128 files accepted; third declares 192 and raises `configured_pack_metadata` before lookup-header or payload I/O; normal PHP and `php -n` |
+| stat-to-read lemma file growth | reported size 1; attestation stops after reading byte 16,777,217 with `runtime_lookup_bytes`; direct 16-MiB+1 builder source rejects before hashing/staging and remains unchanged; current-second same-stat replacement is rehashed next batch; normal PHP and `php -n` |
 | worker throughput | >=20 documents/second |
 | 1-100-document worker batch | <=20 total `$wpdb` statements including transaction/lease control; <=15 data statements; exactly acquire/release plus `START TRANSACTION`/`COMMIT` for a successful changed-document batch |
 | mixed maximum document/scope collision | exactly 100 changed documents and <=20 complete worker statements on each document turn; each reserved scope turn <=20 complete statements |
@@ -962,6 +1252,14 @@ an unrelated instrumented search cannot satisfy the gate. Performance Schema
 is configured to retain at least 65,536 bytes of SQL text so a truncated event
 cannot create false identity.
 
+Every `<= 3` search-path count and its wpdb/Performance Schema identity proof
+covers the complete recorded callback, including `START TRANSACTION`, `BEGIN`,
+`COMMIT`, and `ROLLBACK`. Only the harness-owned Performance Schema and
+`SHOW SESSION STATUS` probes outside that callback are excluded. The same rule
+applies to warm, cold, cursor, terminal, pack-cardinality, public-adapter, and
+WP-CLI measurements, so transaction control cannot be filtered out of the
+statement ceiling.
+
 Performance Schema must retain exactly one tagged event for each expected
 planning, ranking, and hydration statement, including the per-statement rows
 sent above. Both engines run `EXPLAIN FORMAT=JSON` for every tagged statement;
@@ -972,7 +1270,7 @@ access. The expected and observed FTS table sets must match, every access must
 have a key, no FTS access may use `ALL`, and the ranking statement must contain
 only the construction-known one, two, or four posting relations for its query
 shape. The four-relation prefix-AND shape is two copies of the rare-anchor scan,
-one exact candidate/key probe, and one prefix-range posting arm.
+one exact candidate/key probe, and one cost-selected prefix arm.
 This makes per-term posting-subquery fanout and candidate-ID lists hard
 failures rather than conventions inferred from a query count.
 
@@ -982,21 +1280,26 @@ The captured plans and metrics must also prove:
   `term_identity`; every prefix plan contains exactly one indexed surface
   `SUM(doc_freq)`, reads no postings, sends one aggregate row rather than
   completions, and examines no more than 21,000 dictionary/control rows against
-  the 20,001-surface completion fixture;
+  the 20,004-surface completion fixture;
 - multi-group AND chooses the least-cost logical group from the bounded exact
   identities and the one surface-range aggregate. Planning never scans
   postings to choose that join order;
 - rare AND examines no more than 8,192 posting rows and starts from the rare
   group;
-- both the deliberately out-of-order rare exact anchor and the one-candidate
-  20,001-surface prefix AND use `post_term_impact` only for exact candidate/key
-  probes, then drive `term_identity` to posting `PRIMARY` through one prefix
-  range and intersect the rare candidate. They examine at most 12k, 175k, and
-  350k rows in the 2k, 50k, and 100k lanes respectively: the constructed actual
-  prefix postings plus two bounded rare-anchor scans, never rare-anchor DF
-  multiplied by unrelated candidate postings. The one-candidate fixture is not
-  sparse: a physical gate requires 4,000–4,096 lexical plus 4,000–4,096 surface
-  postings, and therefore 8,000–8,192 unrelated candidate postings in total;
+- the deliberately out-of-order rare exact anchor proves the range-first side
+  of the driver comparison. Its constructed prefix has exactly 9,900 / 103,500
+  / 201,000 physical postings in the 2k / 50k / 100k lanes, no more than the
+  rare anchor's 131,072 / 262,144 / 524,288 candidate-posting upper bound. It
+  drives `term_identity` to posting `PRIMARY`, intersects the exact candidates,
+  and retains the 12k / 175k / 350k complete-search row gates;
+- the one-candidate query proves the candidate-first side against that same
+  broad prefix. Its prefix posting sum is greater than the anchor's 8,192-row
+  upper bound in every lane, so the rank statement must drive
+  `post_term_impact` from the candidate and classify terms through dictionary
+  `PRIMARY`; a full prefix posting scan fails the SQL/EXPLAIN gates. Rank work is
+  at most 32,768 rows and the complete three-statement search at most 65,536.
+  The physical gate requires 4,000–4,096 lexical plus 4,000–4,096 surface rows,
+  and therefore 8,000–8,192 candidate postings in total;
 - a corpus-wide exact group combined with a one-document final prefix anchors
   the prefix, scans that range once, and performs only page-independent
   `(post_id,term_id)` probes for the common exact group. Its complete public
@@ -1597,6 +1900,20 @@ restart, and a failure after every migration phase must leave ordinary pages
 and saves available while FTS fails closed. Repair, worker drain, and the
 automatically scheduled maintenance finalizer must restore search without
 manual row surgery. Normal requests and workers never run DDL.
+The missing-table proof starts every REST, front-end, admin-post, Sandbox, and
+Sandbox/AJAX request from the same exact published capability, Health, and cron
+state. Each request must reach one attributed failing plan statement, execute no
+rank or hydration, and remain within the five-statement failure ceiling above.
+Before any harness restoration, hashed raw-option snapshots must prove that the
+published search-ready capability is revoked, Health is `unhealthy` with
+`search_runtime_failure_latched=true`, and the exact single-event schema-repair
+hook is present (whether it was newly scheduled or already present). The
+attributed controls must include exactly one mutation of search readiness and
+one mutation of Health; arbitrary option traffic cannot substitute for those
+production state transitions.
+The disposable harness restores the exact three pre-fault option rows between
+adapters only to isolate those five independent requests; production retains the
+revocation and scheduled repair.
 An isolated read timeout or disconnected search query latches takeover
 fail-closed and schedules bounded physical/profile verification; it must not
 mark a proven-ready index pending or enqueue a corpus rebuild unless that
@@ -1742,7 +2059,7 @@ auth or global configuration. Acceptance requires byte-identical ZIPs and
 identical sorted per-entry name/content/metadata manifests. The report binds
 both ZIP and manifest hashes, the full manifest, PHP/Composer/zip/libzip/zlib
 versions where exposed, and PHP/Composer binary hashes to the source SHA. The
-workflow pins PHP 8.4.5 and Composer 2.9.7; a toolchain change is explicit
+workflow pins PHP 8.4.5 and Composer 2.9.8; a toolchain change is explicit
 rather than silently changing the package under the same commit. The immutable
 legacy runtime source is also packaged by this current hardened builder; the
 runner never executes historical packaging code that could re-enable obsolete
@@ -1836,9 +2153,21 @@ Each required lane performs the same fail-closed sequence:
    and 200 measured samples. Require measured/instrumented result parity and
    exact ordered wpdb-to-Performance-Schema SQL identity; real HTTP attribution
    covers every statement on its one tagged connection through shutdown. First
+   run all thirteen production search shapes again in thirteen dedicated PHP
+   processes and require their exact source/case/gate/file inventory, distinct
+   Linux process identities, self-hashes, conservative peak formulas, <=16 MiB
+   deltas, and positive <=128 MiB absolute PHP/`VmHWM` peaks. Treat the reused
+   200-sample warm-loop `VmHWM` increments only as cumulative diagnostics. Then
    seed and migrate the cold schema-v6 request state, then prove fresh ready,
    impossible, nonhydrating, and hydrated requests execute exactly 0, 1, 2,
-   and 3 plugin statements with zero plugin-caused option/sitemeta reads.
+   and 3 plugin statements with zero plugin-caused option/sitemeta reads. For
+   each missing-table adapter, capture the production post-fault option state
+   before restoration and prove readiness revoked, Health unhealthy and latched,
+   and the exact single-event repair hook present. Then restore and verify the
+   exact pre-fault capability, Health, and cron rows. Require one failed plan,
+   exactly one readiness mutation and one Health mutation within 2-4
+   option/cron controls, and no more than five total plugin-attributed
+   statements.
 6. On every required MySQL/MariaDB lane, run the aggregate writer, including the maximum-width document with 4,096
    lexical plus 4,096 surface identities, a 32-byte language, and adversarial
    255-byte raw terms. Require exactly one dictionary UPSERT and one resolver,

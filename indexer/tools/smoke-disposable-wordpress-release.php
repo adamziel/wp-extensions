@@ -567,6 +567,7 @@ final class WP_FTS_DisposableReleaseSmokeRunner
             . ($detail !== '' ? ' Detail: ' . self::sanitize_output($detail) : '');
     }
 
+    /** Fail when packaged WP-CLI help omits any canonical operator command. */
     private function assert_required_fts_subcommands(string $help): void
     {
         $published = [];

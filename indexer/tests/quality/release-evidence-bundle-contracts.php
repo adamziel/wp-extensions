@@ -198,6 +198,7 @@ function wp_fts_release_evidence_contract_lane_ids(array $report): array
     return $ids;
 }
 
+/** Synthesize lifecycle evidence with independently controllable mandatory outcomes. */
 function wp_fts_release_evidence_contract_lifecycle_output(
     string $status,
     string $multisiteStatus = 'passed',
@@ -387,6 +388,7 @@ function wp_fts_release_evidence_contract_fake_runner(): callable
     };
 }
 
+/** Emulate previous-reference Git commands while retaining the exact command trace. */
 function wp_fts_release_evidence_contract_previous_ref_runner(string $mode = 'pass', ?array &$observedCommands = null): callable
 {
     $base = wp_fts_release_evidence_contract_fake_runner();

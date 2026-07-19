@@ -3,200 +3,977 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
 
+$case = $argv[1] ?? '';
 try {
-    echo json_encode(
-        wp_fts_lemma_runtime_boundary_main(),
-        JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
-    ), "\n";
+    if ($case === 'reject') {
+        $evidence = wp_fts_lemma_sidecar_rejection_case();
+    } elseif ($case === 'indexed-document') {
+        $evidence = wp_fts_lemma_sidecar_indexed_document_case();
+    } elseif ($case === 'indexed-query') {
+        $evidence = wp_fts_lemma_sidecar_indexed_query_case();
+    } elseif ($case === 'maximum-document') {
+        $evidence = wp_fts_lemma_sidecar_maximum_case(false);
+    } elseif ($case === 'maximum-query') {
+        $evidence = wp_fts_lemma_sidecar_maximum_case(true);
+    } elseif ($case === 'configured-maximum-document') {
+        $evidence = wp_fts_lemma_sidecar_configured_maximum_case();
+    } elseif ($case === 'configured-overflow') {
+        $evidence = wp_fts_lemma_sidecar_configured_overflow_case();
+    } else {
+        throw new InvalidArgumentException('Expected reject, indexed-document, indexed-query, maximum-document, maximum-query, configured-maximum-document, or configured-overflow fixture case.');
+    }
+
+    echo json_encode($evidence, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), "\n";
 } catch (Throwable $error) {
     fwrite(STDERR, get_class($error) . ': ' . $error->getMessage() . "\n");
     exit(1);
 }
 
 /** @return array<string,mixed> */
-function wp_fts_lemma_runtime_boundary_main(): array
+function wp_fts_lemma_sidecar_rejection_case(): array
 {
     $started = microtime(true);
-    $peakBefore = memory_get_peak_usage(true);
-    $root = sys_get_temp_dir() . '/wp-fts-lemma-runtime-boundaries-' . bin2hex(random_bytes(6));
-    mkdir($root, 0777, true);
+    $root = wp_fts_lemma_sidecar_fixture_root('reject');
     try {
-        file_put_contents($root . '/NOTICE.txt', "Project-owned generated boundary fixture.\n");
-        $limit = WP_FTS_LemmaPackLimits::MAX_RUNTIME_LOOKUP_DECODED_BYTES;
-        $overLine = "zzzzzz\tz\n";
+        $fixture = wp_fts_lemma_sidecar_write_fixture($root, false);
+        $validator = new WP_FTS_AnalyzerPackValidator();
+        $ioBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+        $constructionStarted = microtime(true);
+        $pack = null;
+        $error = null;
+        try {
+            $pack = WP_FTS_LanguageLemmaPack::from_manifest_file(
+                $fixture['manifest'],
+                $validator,
+                'qaa'
+            );
+        } catch (Throwable $caught) {
+            $error = $caught;
+        }
+        $constructionSeconds = microtime(true) - $constructionStarted;
+        $ioAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
 
-        $wholePlain = $root . '/whole-source.tsv';
-        $whole = wp_fts_lemma_runtime_write_exact_rows($wholePlain, 100000, $limit);
-        $wholeExactPath = $root . '/whole-exact.tsv.gz';
-        $wholeOverPath = $root . '/whole-over.tsv.gz';
-        wp_fts_lemma_runtime_gzip_file($wholePlain, $wholeExactPath);
-        wp_fts_lemma_runtime_append_copy($wholePlain, $root . '/whole-over.tsv', $overLine);
-        wp_fts_lemma_runtime_gzip_file($root . '/whole-over.tsv', $wholeOverPath);
-        unlink($wholePlain);
-        unlink($root . '/whole-over.tsv');
-
-        $streamExactPath = $root . '/stream-exact.tsv';
-        $stream = wp_fts_lemma_runtime_write_exact_rows($streamExactPath, 250000, $limit);
-        $streamOverPath = $root . '/stream-over.tsv';
-        wp_fts_lemma_runtime_append_copy($streamExactPath, $streamOverPath, $overLine);
-        $streamExactGzipPath = $root . '/stream-exact.tsv.gz';
-        $streamOverGzipPath = $root . '/stream-over.tsv.gz';
-        wp_fts_lemma_runtime_gzip_file($streamExactPath, $streamExactGzipPath);
-        wp_fts_lemma_runtime_gzip_file($streamOverPath, $streamOverGzipPath);
-
-        $sidecarExactPath = $root . '/sidecar-exact.tsv.gz';
-        $sidecarOverPath = $root . '/sidecar-over.tsv.gz';
-        copy($streamExactGzipPath, $sidecarExactPath);
-        copy($streamOverGzipPath, $sidecarOverPath);
-        $sidecarExact = WP_FTS_LemmaPackLookupIndex::build(
-            $sidecarExactPath,
-            WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
-            (string) hash_file('sha256', $sidecarExactPath),
-            $sidecarExactPath . '.lookup'
-        );
-        $sidecarOver = WP_FTS_LemmaPackLookupIndex::build(
-            $sidecarOverPath,
-            WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
-            (string) hash_file('sha256', $sidecarOverPath),
-            $sidecarOverPath . '.lookup'
-        );
-
-        $manifests = [
-            'plain_exact' => wp_fts_lemma_runtime_manifest($root, 'plain-exact', basename($streamExactPath), $stream['rows'], $stream['first'], $stream['last']),
-            'plain_over' => wp_fts_lemma_runtime_manifest($root, 'plain-over', basename($streamOverPath), $stream['rows'] + 1, $stream['first'], 'zzzzzz'),
-            'whole_gzip_exact' => wp_fts_lemma_runtime_manifest($root, 'whole-gzip-exact', basename($wholeExactPath), $whole['rows'], $whole['first'], $whole['last'], true),
-            'whole_gzip_over' => wp_fts_lemma_runtime_manifest($root, 'whole-gzip-over', basename($wholeOverPath), $whole['rows'] + 1, $whole['first'], 'zzzzzz', true),
-            'stream_gzip_exact' => wp_fts_lemma_runtime_manifest($root, 'stream-gzip-exact', basename($streamExactGzipPath), $stream['rows'], $stream['first'], $stream['last'], true),
-            'stream_gzip_over' => wp_fts_lemma_runtime_manifest($root, 'stream-gzip-over', basename($streamOverGzipPath), $stream['rows'] + 1, $stream['first'], 'zzzzzz', true),
-            'sidecar_exact' => wp_fts_lemma_runtime_manifest($root, 'sidecar-exact', basename($sidecarExactPath), $sidecarExact['rows'], $stream['first'], $stream['last'], true, $sidecarExact),
-            'sidecar_over' => wp_fts_lemma_runtime_manifest($root, 'sidecar-over', basename($sidecarOverPath), $sidecarOver['rows'], $stream['first'], 'zzzzzz', true, $sidecarOver),
-        ];
-
-        $cases = [];
-        foreach ($manifests as $name => $manifestPath) {
-            $cases[$name] = wp_fts_lemma_runtime_case($manifestPath);
+        // Never exercise the potentially explosive legacy lookup if construction
+        // regresses. The parent gate rejects a non-null pack and requires zero
+        // token calls, digest reads, and indexed payload reads.
+        $tokenLookupCalls = 0;
+        if ($pack instanceof WP_FTS_LanguageLemmaPack) {
+            $pack = null;
         }
 
         return [
-            'limit_bytes' => $limit,
-            'exact_fixture_bytes' => [
-                'whole' => $whole['bytes'],
-                'stream' => $stream['bytes'],
-                'sidecar' => $stream['bytes'],
+            'case' => 'reject',
+            'runtime_decoded_bytes' => $fixture['decoded_bytes'],
+        'runtime_compressed_bytes' => $fixture['runtime_compressed_bytes'],
+            'runtime_rows' => $fixture['rows'],
+            'sidecar_exists' => $fixture['sidecar_bytes'] > 0,
+            'document' => wp_fts_lemma_sidecar_document_identity($fixture),
+            'query' => wp_fts_lemma_sidecar_query_identity($fixture),
+            'construction' => [
+                'accepted' => $pack instanceof WP_FTS_LanguageLemmaPack,
+                'error_class' => $error instanceof Throwable ? get_class($error) : null,
+                'error_message' => $error instanceof Throwable ? $error->getMessage() : null,
+                'elapsed_seconds' => $constructionSeconds,
+                'token_lookup_calls' => $tokenLookupCalls,
+                'digest_attestation' => $validator->digest_attestation_stats(),
+                'indexed_io' => wp_fts_lemma_sidecar_diagnostic_delta($ioBefore, $ioAfter),
             ],
-            'over_fixture_bytes' => [
-                'whole' => $whole['bytes'] + strlen($overLine),
-                'stream' => $stream['bytes'] + strlen($overLine),
-                'sidecar' => $stream['bytes'] + strlen($overLine),
-            ],
-            'rows' => [
-                'whole_exact' => $whole['rows'],
-                'stream_exact' => $stream['rows'],
-                'sidecar_exact' => $sidecarExact['rows'],
-                'sidecar_over' => $sidecarOver['rows'],
-            ],
-            'compressed_bytes' => [
-                'whole_exact' => filesize($wholeExactPath),
-                'whole_over' => filesize($wholeOverPath),
-                'stream_exact' => filesize($streamExactGzipPath),
-                'stream_over' => filesize($streamOverGzipPath),
-                'sidecar_exact' => filesize($sidecarExactPath),
-                'sidecar_over' => filesize($sidecarOverPath),
-            ],
-            'sidecar_blocks' => [
-                'exact' => $sidecarExact['blocks'],
-                'over' => $sidecarOver['blocks'],
-            ],
-            'cases' => $cases,
             'elapsed_seconds' => microtime(true) - $started,
             'php_peak_bytes' => memory_get_peak_usage(true),
-            'php_peak_delta_bytes' => max(0, memory_get_peak_usage(true) - $peakBefore),
-            'proc_status' => wp_fts_lemma_runtime_boundary_proc_status(),
+            'proc_status' => wp_fts_lemma_sidecar_proc_status(),
         ];
     } finally {
-        wp_fts_lemma_runtime_boundary_remove_tree($root);
+        wp_fts_lemma_sidecar_remove_tree($root);
     }
 }
 
-/**
- * @return array{bytes:int,rows:int,first:string,last:string}
- */
-function wp_fts_lemma_runtime_write_exact_rows(string $path, int $regularRows, int $bytes): array
+/** @return array<string,mixed> */
+function wp_fts_lemma_sidecar_indexed_document_case(): array
 {
-    $target = "target\tlemma\n";
-    $regularBytes = $bytes - strlen($target);
-    $baseLineBytes = intdiv($regularBytes, $regularRows);
-    $extraLines = $regularBytes % $regularRows;
-    $handle = fopen($path, 'wb');
-    if (!is_resource($handle)) {
-        throw new RuntimeException('Could not create exact runtime fixture.');
-    }
-
-    $buffer = '';
+    $started = microtime(true);
+    $root = wp_fts_lemma_sidecar_fixture_root('indexed-document');
     try {
-        for ($index = 0; $index < $regularRows; $index++) {
-            $lineBytes = $baseLineBytes + ($index < $extraLines ? 1 : 0);
-            $surface = 'a' . str_pad((string) $index, 7, '0', STR_PAD_LEFT);
-            $lemmaBytes = $lineBytes - strlen($surface) - 2;
-            if ($lemmaBytes < 1) {
-                throw new RuntimeException('Exact runtime row cannot fit its normalized columns.');
+        $fixture = wp_fts_lemma_sidecar_write_fixture($root, true);
+        $analyzer = wp_fts_lemma_sidecar_analyzer($fixture['manifest']);
+        $storage = new WP_FTS_Storage_InMemory();
+        $indexer = new WP_FTS_Indexer($storage, $analyzer);
+        $documentIoBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+        $fields = [];
+        foreach (array_chunk($fixture['document_terms'], 128) as $fieldIndex => $terms) {
+            $fields[] = [
+                'name' => 'field_' . $fieldIndex,
+                'text' => implode(' ', $terms),
+                'boost' => 1.0,
+            ];
+        }
+        $prepared = $indexer->prepare_document_fields(1, $fields, ['lang' => 'qaa']);
+        $documentIoAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+        $documentDigest = hash_init('sha256');
+        foreach ($fixture['document_indexes'] as $index => $runtimeIndex) {
+            $surface = $fixture['document_terms'][$index];
+            $expected = wp_fts_lemma_sidecar_lemma($runtimeIndex);
+            $stored = WP_FTS_TermNamespace::namespace_term('qaa', $expected);
+            if (($prepared['term_frequencies'][$stored] ?? 0) < 1) {
+                throw new RuntimeException("Indexed document morphology mismatch for {$surface}.");
             }
-            $buffer .= $surface . "\t" . str_repeat('l', $lemmaBytes) . "\n";
-            if (strlen($buffer) >= 65536) {
-                wp_fts_lemma_runtime_write_all($handle, $buffer);
-                $buffer = '';
+            if (!WP_FTS_TermNamespace::term_key_fits($expected, 'qaa')) {
+                throw new RuntimeException("Indexed document lemma does not fit the production term identity for {$surface}.");
+            }
+            hash_update($documentDigest, $expected . "\n");
+        }
+        $documentEvidence = [
+            'analyzer_path' => 'WP_FTS_Indexer::prepare_document_fields -> WP_FTS_Analyzer::analyze_document_fields',
+            'fields' => count($fields),
+            'lookup_calls' => count($fixture['document_terms']),
+            'distinct_morphologies' => count($prepared['term_frequencies']),
+            'morphology_sha256' => hash_final($documentDigest),
+            'indexed_io' => wp_fts_lemma_sidecar_diagnostic_delta($documentIoBefore, $documentIoAfter),
+        ];
+
+        return [
+            'case' => 'indexed-document',
+            'runtime_decoded_bytes' => $fixture['decoded_bytes'],
+            'runtime_compressed_bytes' => $fixture['runtime_compressed_bytes'],
+            'runtime_rows' => $fixture['rows'],
+            'sidecar_bytes' => $fixture['sidecar_bytes'],
+            'sidecar_blocks' => $fixture['sidecar_blocks'],
+            'decoded_block_rows' => $fixture['decoded_block_rows'],
+            'document' => wp_fts_lemma_sidecar_document_identity($fixture) + $documentEvidence,
+            'digest_attestation' => $analyzer->lemma_pack_diagnostics('qaa')['digest'] ?? null,
+            'elapsed_seconds' => microtime(true) - $started,
+            'php_peak_bytes' => memory_get_peak_usage(true),
+            'proc_status' => wp_fts_lemma_sidecar_proc_status(),
+        ];
+    } finally {
+        wp_fts_lemma_sidecar_remove_tree($root);
+    }
+}
+
+/** @return array<string,mixed> */
+function wp_fts_lemma_sidecar_indexed_query_case(): array
+{
+    $started = microtime(true);
+    $root = wp_fts_lemma_sidecar_fixture_root('indexed-query');
+    try {
+        $fixture = wp_fts_lemma_sidecar_write_fixture($root, true);
+        $analyzer = wp_fts_lemma_sidecar_analyzer($fixture['manifest']);
+        $query = implode(' ', $fixture['query_terms']);
+        $ioBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+        $occurrences = $analyzer->analyze_query_occurrences($query, [
+            'query_lang' => 'qaa',
+            '_max_query_occurrences' => WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_GROUPS,
+        ]);
+        $ioAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+        $digest = hash_init('sha256');
+        foreach ($fixture['query_indexes'] as $index => $runtimeIndex) {
+            $expected = wp_fts_lemma_sidecar_lemma($runtimeIndex);
+            if (($occurrences[$index]['term'] ?? null) !== $expected) {
+                throw new RuntimeException("Indexed query morphology mismatch for {$fixture['query_terms'][$index]}.");
+            }
+            hash_update($digest, $expected . "\n");
+        }
+
+        return [
+            'case' => 'indexed-query',
+            'runtime_decoded_bytes' => $fixture['decoded_bytes'],
+            'runtime_compressed_bytes' => $fixture['runtime_compressed_bytes'],
+            'runtime_rows' => $fixture['rows'],
+            'sidecar_bytes' => $fixture['sidecar_bytes'],
+            'sidecar_blocks' => $fixture['sidecar_blocks'],
+            'decoded_block_rows' => $fixture['decoded_block_rows'],
+            'query' => wp_fts_lemma_sidecar_query_identity($fixture) + [
+                'analyzer_path' => 'WP_FTS_Analyzer::analyze_query_occurrences',
+                'lookup_calls' => count($occurrences),
+                'morphology_sha256' => hash_final($digest),
+                'indexed_io' => wp_fts_lemma_sidecar_diagnostic_delta($ioBefore, $ioAfter),
+            ],
+            'digest_attestation' => $analyzer->lemma_pack_diagnostics('qaa')['digest'] ?? null,
+            'elapsed_seconds' => microtime(true) - $started,
+            'php_peak_bytes' => memory_get_peak_usage(true),
+            'proc_status' => wp_fts_lemma_sidecar_proc_status(),
+        ];
+    } finally {
+        wp_fts_lemma_sidecar_remove_tree($root);
+    }
+}
+
+/** @return array<string,mixed> */
+function wp_fts_lemma_sidecar_maximum_case(bool $queryCase): array
+{
+    $case = $queryCase ? 'maximum-query' : 'maximum-document';
+    $started = microtime(true);
+    $phpUsageBefore = memory_get_usage(true);
+    $phpPeakBefore = memory_get_peak_usage(true);
+    $procBefore = wp_fts_lemma_sidecar_proc_status();
+    $root = wp_fts_lemma_sidecar_fixture_root($case);
+    try {
+        $fixture = wp_fts_lemma_sidecar_write_maximum_fixture($root);
+        $analyzer = wp_fts_lemma_sidecar_analyzer($fixture['manifest']);
+        $ioBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+        $digest = hash_init('sha256');
+        $workload = [];
+        if ($queryCase) {
+            $source = implode(' ', $fixture['query_terms']);
+            $occurrences = $analyzer->analyze_query_occurrences($source, [
+                'query_lang' => 'qaa',
+                '_max_query_occurrences' => WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_GROUPS,
+            ]);
+            foreach ($fixture['query_indexes'] as $index => $runtimeIndex) {
+                $expected = wp_fts_lemma_sidecar_lemma($runtimeIndex);
+                if (($occurrences[$index]['term'] ?? null) !== $expected) {
+                    throw new RuntimeException('Maximum-shape query morphology mismatch.');
+                }
+                hash_update($digest, $expected . "\n");
+            }
+            $workload = [
+                'source_bytes' => strlen($source),
+                'source_sha256' => hash('sha256', $source),
+                'selected_identities' => count($occurrences),
+                'selected_blocks' => count($occurrences),
+                'selected_files' => count(array_unique(array_map(
+                    static fn(int $index): int => intdiv($index, $fixture['rows_per_shard']),
+                    $fixture['query_indexes']
+                ))),
+            ];
+        } else {
+            $fields = [];
+            foreach (array_chunk($fixture['document_terms'], 128) as $fieldIndex => $terms) {
+                $fields[] = ['name' => 'field_' . $fieldIndex, 'text' => implode(' ', $terms), 'boost' => 1.0];
+            }
+            $prepared = (new WP_FTS_Indexer(new WP_FTS_Storage_InMemory(), $analyzer))
+                ->prepare_document_fields(2, $fields, ['lang' => 'qaa']);
+            foreach ($fixture['document_indexes'] as $runtimeIndex) {
+                $expected = wp_fts_lemma_sidecar_lemma($runtimeIndex);
+                if (!isset($prepared['term_frequencies'][WP_FTS_TermNamespace::namespace_term('qaa', $expected)])) {
+                    throw new RuntimeException('Maximum-shape document morphology mismatch.');
+                }
+                hash_update($digest, $expected . "\n");
+            }
+            $source = implode(' ', $fixture['document_terms']);
+            $workload = [
+                'source_bytes' => strlen($source),
+                'source_sha256' => hash('sha256', $source),
+                'fields' => count($fields),
+                'selected_identities' => count($prepared['term_frequencies']),
+                'selected_blocks' => count($fixture['document_terms']),
+                'selected_files' => $fixture['runtime_files'],
+            ];
+        }
+        $ioAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+        $procAfter = wp_fts_lemma_sidecar_proc_status();
+        $phpUsageAfter = memory_get_usage(true);
+        $phpPeakAfter = memory_get_peak_usage(true);
+
+        return [
+            'case' => $case,
+            'declared' => [
+                'runtime_files' => $fixture['runtime_files'],
+                'lookup_blocks' => $fixture['sidecar_blocks'],
+                'decoded_block_bytes' => WP_FTS_LemmaPackLookupIndex::MAX_BLOCK_DECODED_BYTES,
+                'decoded_bytes' => $fixture['decoded_bytes'],
+                'runtime_compressed_bytes' => $fixture['runtime_compressed_bytes'],
+                'sidecar_bytes' => $fixture['sidecar_bytes'],
+                'runtime_lookup_bytes' => $fixture['runtime_compressed_bytes'] + $fixture['sidecar_bytes'],
+            ],
+            'workload' => $workload + [
+                'morphology_sha256' => hash_final($digest),
+                'indexed_io' => wp_fts_lemma_sidecar_diagnostic_delta($ioBefore, $ioAfter),
+            ],
+            'digest_attestation' => $analyzer->lemma_pack_diagnostics('qaa')['digest'] ?? null,
+            'same_second_generation' => $fixture['newest_generation'] >= $fixture['created_second'],
+            'elapsed_seconds' => microtime(true) - $started,
+            'php_peak_bytes' => $phpPeakAfter,
+            'memory' => [
+                'php_usage_before_bytes' => $phpUsageBefore,
+                'php_usage_after_bytes' => $phpUsageAfter,
+                'php_usage_delta_bytes' => max(0, $phpUsageAfter - $phpUsageBefore),
+                'php_peak_before_bytes' => $phpPeakBefore,
+                'php_peak_after_bytes' => $phpPeakAfter,
+                'php_peak_delta_bytes' => max(0, $phpPeakAfter - $phpPeakBefore),
+                'proc_before' => $procBefore,
+                'proc_after' => $procAfter,
+                'rss_delta_bytes' => is_int($procBefore['VmRSS_bytes']) && is_int($procAfter['VmRSS_bytes'])
+                    ? max(0, $procAfter['VmRSS_bytes'] - $procBefore['VmRSS_bytes'])
+                    : null,
+            ],
+            'proc_status' => $procAfter,
+        ];
+    } finally {
+        wp_fts_lemma_sidecar_remove_tree($root);
+    }
+}
+
+/** @return array<string,mixed> */
+function wp_fts_lemma_sidecar_configured_maximum_case(): array
+{
+    $started = microtime(true);
+    $phpUsageBefore = memory_get_usage(true);
+    $phpPeakBefore = memory_get_peak_usage(true);
+    $procBefore = wp_fts_lemma_sidecar_proc_status();
+    $root = wp_fts_lemma_sidecar_fixture_root('configured-maximum-document');
+    try {
+        $packs = [];
+        foreach (['qaa', 'qab'] as $language) {
+            $packRoot = $root . '/' . $language;
+            if (!mkdir($packRoot)) {
+                throw new RuntimeException('Could not create configured fan-out pack directory.');
+            }
+            file_put_contents($packRoot . '/NOTICE.txt', "Project-owned configured fan-out fixture.\n");
+            $packs[$language] = wp_fts_lemma_sidecar_write_block_pack(
+                $packRoot,
+                $language,
+                WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES,
+                intdiv(WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES, 2)
+            );
+        }
+
+        $analyzer = new WP_FTS_Analyzer([
+            'auto_detect_language' => false,
+            'default_lang' => 'qaa',
+            'document_lang' => 'qaa',
+            'query_lang' => 'qaa',
+            'lemmatizer_packs_by_lang' => [
+                'qaa' => $packs['qaa']['manifest'],
+                'qab' => $packs['qab']['manifest'],
+            ],
+        ]);
+        $fields = [];
+        $fieldSources = [];
+        $expectedRows = [];
+        $morphologyDigest = hash_init('sha256');
+        foreach ($packs as $language => $pack) {
+            $indexes = [];
+            for ($ordinal = 0; $ordinal < intdiv(WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES, 2); $ordinal++) {
+                $block = ($ordinal * 2027) % $pack['sidecar_blocks'];
+                $indexes[] = $block * 64;
+            }
+            $terms = array_map(
+                static fn(int $index): string => wp_fts_lemma_sidecar_surface($index, $language),
+                $indexes
+            );
+            foreach ($indexes as $index) {
+                $lemma = wp_fts_lemma_sidecar_lemma($index, $language);
+                $expectedRows[] = ['language' => $language, 'lemma' => $lemma];
+                hash_update($morphologyDigest, $language . "\t" . $lemma . "\n");
+            }
+            foreach (array_chunk($terms, 128) as $fieldIndex => $fieldTerms) {
+                $html = '<div lang="' . $language . '">' . implode(' ', $fieldTerms) . '</div>';
+                $fieldSources[] = $html;
+                $fields[] = [
+                    'name' => $language . '_field_' . $fieldIndex,
+                    'html' => $html,
+                    'boost' => 1.0,
+                ];
             }
         }
-        $buffer .= $target;
-        wp_fts_lemma_runtime_write_all($handle, $buffer);
+
+        $ioBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+        $prepared = (new WP_FTS_Indexer(new WP_FTS_Storage_InMemory(), $analyzer))
+            ->prepare_document_fields(3, $fields, ['lang' => 'qaa']);
+        $ioAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+        foreach ($expectedRows as $row) {
+            $identity = WP_FTS_TermNamespace::namespace_term($row['language'], $row['lemma']);
+            if (!isset($prepared['term_frequencies'][$identity])) {
+                throw new RuntimeException("Configured fan-out morphology mismatch for {$identity}.");
+            }
+        }
+
+        $digest = ['files_hashed' => 0, 'bytes_hashed' => 0];
+        foreach (array_keys($packs) as $language) {
+            $packDigest = $analyzer->lemma_pack_diagnostics($language)['digest'] ?? [];
+            $digest['files_hashed'] += (int) ($packDigest['files_hashed'] ?? 0);
+            $digest['bytes_hashed'] += (int) ($packDigest['bytes_hashed'] ?? 0);
+        }
+        $runtimeCompressedBytes = array_sum(array_column($packs, 'runtime_compressed_bytes'));
+        $sidecarBytes = array_sum(array_column($packs, 'sidecar_bytes'));
+        $sameSecondGeneration = true;
+        foreach ($packs as $pack) {
+            $sameSecondGeneration = $sameSecondGeneration
+                && $pack['newest_generation'] >= $pack['created_second'];
+        }
+        $procAfter = wp_fts_lemma_sidecar_proc_status();
+        $phpUsageAfter = memory_get_usage(true);
+        $phpPeakAfter = memory_get_peak_usage(true);
+        $source = implode("\n", $fieldSources);
+
+        return [
+            'case' => 'configured-maximum-document',
+            'declared' => [
+                'packs' => count($packs),
+                'runtime_files' => array_sum(array_column($packs, 'runtime_files')),
+                'lookup_blocks' => array_sum(array_column($packs, 'sidecar_blocks')),
+                'decoded_block_bytes' => WP_FTS_LemmaPackLookupIndex::MAX_BLOCK_DECODED_BYTES,
+                'decoded_bytes' => array_sum(array_column($packs, 'decoded_bytes')),
+                'runtime_compressed_bytes' => $runtimeCompressedBytes,
+                'sidecar_bytes' => $sidecarBytes,
+                'runtime_lookup_bytes' => $runtimeCompressedBytes + $sidecarBytes,
+            ],
+            'workload' => [
+                'source_bytes' => strlen($source),
+                'source_sha256' => hash('sha256', $source),
+                'fields' => count($fields),
+                'languages' => array_keys($packs),
+                'selected_identities' => count($prepared['term_frequencies']),
+                'selected_blocks' => count($expectedRows),
+                'selected_files' => array_sum(array_column($packs, 'runtime_files')),
+                'morphology_sha256' => hash_final($morphologyDigest),
+                'indexed_io' => wp_fts_lemma_sidecar_diagnostic_delta($ioBefore, $ioAfter),
+            ],
+            'digest_attestation' => $digest,
+            'same_second_generation' => $sameSecondGeneration,
+            'elapsed_seconds' => microtime(true) - $started,
+            'php_peak_bytes' => $phpPeakAfter,
+            'memory' => [
+                'php_usage_before_bytes' => $phpUsageBefore,
+                'php_usage_after_bytes' => $phpUsageAfter,
+                'php_usage_delta_bytes' => max(0, $phpUsageAfter - $phpUsageBefore),
+                'php_peak_before_bytes' => $phpPeakBefore,
+                'php_peak_after_bytes' => $phpPeakAfter,
+                'php_peak_delta_bytes' => max(0, $phpPeakAfter - $phpPeakBefore),
+                'proc_before' => $procBefore,
+                'proc_after' => $procAfter,
+                'rss_delta_bytes' => is_int($procBefore['VmRSS_bytes']) && is_int($procAfter['VmRSS_bytes'])
+                    ? max(0, $procAfter['VmRSS_bytes'] - $procBefore['VmRSS_bytes'])
+                    : null,
+            ],
+            'proc_status' => $procAfter,
+        ];
     } finally {
-        fclose($handle);
+        wp_fts_lemma_sidecar_remove_tree($root);
+    }
+}
+
+/** @return array<string,mixed> */
+function wp_fts_lemma_sidecar_configured_overflow_case(): array
+{
+    $started = microtime(true);
+    $root = wp_fts_lemma_sidecar_fixture_root('configured-overflow');
+    try {
+        $firstRoot = $root . '/copy-1';
+        if (!mkdir($firstRoot)) {
+            throw new RuntimeException('Could not create configured-overflow source pack.');
+        }
+        file_put_contents($firstRoot . '/NOTICE.txt', "Project-owned configured-overflow fixture.\n");
+        $first = wp_fts_lemma_sidecar_write_block_pack(
+            $firstRoot,
+            'qaa',
+            WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES,
+            WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES
+        );
+        $manifests = [$first['manifest']];
+        foreach ([2, 3] as $copy) {
+            $copyRoot = $root . '/copy-' . $copy;
+            if (!mkdir($copyRoot)) {
+                throw new RuntimeException('Could not create configured-overflow copy directory.');
+            }
+            wp_fts_lemma_sidecar_copy_tree($firstRoot, $copyRoot);
+            $manifests[] = $copyRoot . '/manifest.json';
+        }
+
+        $twoPackOptions = [
+            'qaa' => $manifests[0],
+            'qaa-x-copy2' => $manifests[1],
+        ];
+        $acceptedPipeline = new WP_FTS_LanguagePipeline(['lemmatizer_packs_by_lang' => $twoPackOptions]);
+        $statusMethod = new ReflectionMethod(WP_FTS_Plugin::class, 'analyzer_pack_statuses');
+        $statusMethod->setAccessible(true);
+        $acceptedStatuses = $statusMethod->invoke(null, ['lemmatizer_packs_by_lang' => $twoPackOptions], false);
+
+        $thirdLookups = glob(dirname($manifests[2]) . '/*.lookup');
+        if (!is_array($thirdLookups) || !isset($thirdLookups[0])) {
+            throw new RuntimeException('Configured-overflow third copy has no lookup sidecar to corrupt.');
+        }
+        file_put_contents($thirdLookups[0], "malformed third-copy sidecar\n");
+        $threePackOptions = $twoPackOptions + ['qaa-x-copy3' => $manifests[2]];
+
+        $pipelineHeadersBefore = WP_FTS_LemmaPackLookupIndex::metadata_diagnostics();
+        $pipelineIoBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+        $pipelineError = null;
+        try {
+            new WP_FTS_LanguagePipeline(['lemmatizer_packs_by_lang' => $threePackOptions]);
+        } catch (Throwable $caught) {
+            $pipelineError = $caught;
+        }
+        $pipelineHeadersAfter = WP_FTS_LemmaPackLookupIndex::metadata_diagnostics();
+        $pipelineIoAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+
+        $statusHeadersBefore = WP_FTS_LemmaPackLookupIndex::metadata_diagnostics();
+        $statusIoBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+        $statusError = null;
+        try {
+            $statusMethod->invoke(null, ['lemmatizer_packs_by_lang' => $threePackOptions], false);
+        } catch (Throwable $caught) {
+            $statusError = $caught;
+        }
+        $statusHeadersAfter = WP_FTS_LemmaPackLookupIndex::metadata_diagnostics();
+        $statusIoAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+        unset($acceptedPipeline);
+
+        return [
+            'case' => 'configured-overflow',
+            'declared' => [
+                'accepted_physical_packs' => 2,
+                'overflow_physical_packs' => 3,
+                'files_per_pack' => WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES,
+                'accepted_runtime_files' => 2 * WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES,
+                'overflow_runtime_files' => 3 * WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES,
+            ],
+            'accepted' => [
+                'pipeline' => true,
+                'active_statuses' => is_array($acceptedStatuses)
+                    ? count(array_filter(
+                        $acceptedStatuses,
+                        static fn(array $status): bool => ($status['status'] ?? null) === 'active'
+                    ))
+                    : 0,
+            ],
+            'pipeline_overflow' => [
+                'error_class' => $pipelineError === null ? null : get_class($pipelineError),
+                'reason_code' => $pipelineError instanceof WP_FTS_Analyzer_Config_Limit_Exceeded
+                    ? $pipelineError->reason_code
+                    : null,
+                'lookup_header_opens' => $pipelineHeadersAfter['lookup_header_opens']
+                    - $pipelineHeadersBefore['lookup_header_opens'],
+                'indexed_io' => wp_fts_lemma_sidecar_diagnostic_delta($pipelineIoBefore, $pipelineIoAfter),
+            ],
+            'status_overflow' => [
+                'error_class' => $statusError === null ? null : get_class($statusError),
+                'reason_code' => $statusError instanceof WP_FTS_Analyzer_Config_Limit_Exceeded
+                    ? $statusError->reason_code
+                    : null,
+                'lookup_header_opens' => $statusHeadersAfter['lookup_header_opens']
+                    - $statusHeadersBefore['lookup_header_opens'],
+                'indexed_io' => wp_fts_lemma_sidecar_diagnostic_delta($statusIoBefore, $statusIoAfter),
+            ],
+            'elapsed_seconds' => microtime(true) - $started,
+            'php_peak_bytes' => memory_get_peak_usage(true),
+            'proc_status' => wp_fts_lemma_sidecar_proc_status(),
+        ];
+    } finally {
+        wp_fts_lemma_sidecar_remove_tree($root);
+    }
+}
+
+/** @return array<string,mixed> */
+function wp_fts_lemma_sidecar_write_maximum_fixture(string $root): array
+{
+    $runtimeFiles = WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES;
+    $fixture = wp_fts_lemma_sidecar_write_block_pack(
+        $root,
+        'qaa',
+        $runtimeFiles,
+        WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES
+    );
+    $rowsPerBlock = 64;
+    $documentIndexes = [];
+    for ($ordinal = 0; $ordinal < WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES; $ordinal++) {
+        $block = ($ordinal * 4051) % $fixture['sidecar_blocks'];
+        $documentIndexes[] = $block * $rowsPerBlock;
+    }
+    $queryIndexes = [];
+    for ($ordinal = 0; $ordinal < WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_GROUPS; $ordinal++) {
+        $block = ($ordinal * 341) % $fixture['sidecar_blocks'];
+        $queryIndexes[] = $block * $rowsPerBlock;
     }
 
-    $actualBytes = filesize($path);
-    if ($actualBytes !== $bytes) {
-        throw new RuntimeException("Exact runtime fixture is {$actualBytes} bytes instead of {$bytes}.");
-    }
-
-    return [
-        'bytes' => $actualBytes,
-        'rows' => $regularRows + 1,
-        'first' => 'a0000000',
-        'last' => 'target',
+    return $fixture + [
+        'document_indexes' => $documentIndexes,
+        'document_terms' => array_map('wp_fts_lemma_sidecar_surface', $documentIndexes),
+        'query_indexes' => $queryIndexes,
+        'query_terms' => array_map('wp_fts_lemma_sidecar_surface', $queryIndexes),
     ];
 }
 
+/** @return array<string,mixed> */
+function wp_fts_lemma_sidecar_write_block_pack(
+    string $root,
+    string $language,
+    int $runtimeFiles,
+    int $totalBlocks
+): array {
+    if ($runtimeFiles < 1 || $totalBlocks < 1 || $totalBlocks % $runtimeFiles !== 0) {
+        throw new InvalidArgumentException('Block-pack shape must divide evenly across runtime files.');
+    }
+    $createdSecond = time();
+    $blocksPerFile = intdiv($totalBlocks, $runtimeFiles);
+    $rowsPerBlock = 64;
+    $rowsPerShard = $blocksPerFile * $rowsPerBlock;
+    $rows = $runtimeFiles * $rowsPerShard;
+    $decodedBytes = $rows * 256;
+    $runtimeEntries = [];
+    $runtimeCompressedBytes = 0;
+    $sidecarBytes = 0;
+    $sidecarBlocks = 0;
+    $newestGeneration = 0;
+    $rowDigest = hash_init('sha256');
+    for ($shard = 0; $shard < $runtimeFiles; $shard++) {
+        $firstIndex = $shard * $rowsPerShard;
+        $lastIndex = $firstIndex + $rowsPerShard - 1;
+        $plain = $root . "/{$language}-maximum-{$shard}.tsv";
+        $handle = fopen($plain, 'wb');
+        if (!is_resource($handle)) {
+            throw new RuntimeException('Could not create maximum-fan-out lemma runtime shard.');
+        }
+        try {
+            $buffer = '';
+            for ($index = $firstIndex; $index <= $lastIndex; $index++) {
+                $line = wp_fts_lemma_sidecar_surface($index, $language)
+                    . "\t"
+                    . wp_fts_lemma_sidecar_lemma($index, $language)
+                    . "\n";
+                if (strlen($line) !== 256) {
+                    throw new RuntimeException('Maximum-fan-out lemma row is not exactly 256 bytes.');
+                }
+                $buffer .= $line;
+                hash_update($rowDigest, $line);
+                if (strlen($buffer) >= 65536) {
+                    wp_fts_lemma_sidecar_write_all($handle, $buffer);
+                    $buffer = '';
+                }
+            }
+            wp_fts_lemma_sidecar_write_all($handle, $buffer);
+        } finally {
+            fclose($handle);
+        }
+        $runtime = $root . "/{$language}-maximum-{$shard}.tsv.gz";
+        wp_fts_lemma_sidecar_gzip_file($plain, $runtime);
+        unlink($plain);
+        $lookup = $runtime . '.lookup';
+        $sidecar = WP_FTS_LemmaPackLookupIndex::build(
+            $runtime,
+            WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+            (string) hash_file('sha256', $runtime),
+            $lookup
+        );
+        if ($sidecar['blocks'] !== $blocksPerFile) {
+            throw new RuntimeException("Maximum-fan-out shard did not produce exactly {$blocksPerFile} decoded blocks.");
+        }
+        $runtimeEntries[] = [
+            'path' => basename($runtime),
+            'sha256' => $sidecar['runtime_sha256'],
+            'rows' => $rowsPerShard,
+            'first_surface' => wp_fts_lemma_sidecar_surface($firstIndex, $language),
+            'last_surface' => wp_fts_lemma_sidecar_surface($lastIndex, $language),
+            'compression' => WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+            'lookup' => [
+                'format' => $sidecar['format'],
+                'path' => basename($lookup),
+                'sha256' => $sidecar['sha256'],
+                'blocks' => $sidecar['blocks'],
+            ],
+        ];
+        $runtimeCompressedBytes += (int) filesize($runtime);
+        $sidecarBytes += (int) filesize($lookup);
+        $sidecarBlocks += $sidecar['blocks'];
+        $newestGeneration = max($newestGeneration, (int) filemtime($runtime), (int) filemtime($lookup));
+    }
+
+    $manifest = [
+        'schema_version' => 1,
+        'pack_id' => "{$language}-maximum-fan-out-envelope",
+        'language' => $language,
+        'version' => '1',
+        'fixture_only' => false,
+        'default_enabled' => false,
+        'capabilities' => ['dictionary-lemmatizer', 'normalized-runtime-rows', 'indexed-runtime-lookups'],
+        'runtime' => [
+            'format' => WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV,
+            'normalization' => "WP_FTS_Normalizer {$language} with fold_diacritics=true",
+            'ambiguity_policy' => 'ambiguous_surface_noop',
+            'total_rows' => $rows,
+            'total_sha256' => hash_final($rowDigest),
+            'files' => $runtimeEntries,
+        ],
+        'source' => [
+            'name' => 'Project-owned maximum fan-out lemma fixture',
+            'version' => '1',
+            'url' => "urn:wp-fts:test:maximum-fan-out-lemma:{$language}",
+            'artifact_sha256' => hash('sha256', $language),
+            'byte_count' => $decodedBytes,
+        ],
+        'license' => ['spdx_id' => 'CC0-1.0', 'notice_path' => 'NOTICE.txt'],
+        'attribution' => ['note' => 'Project-owned generated fixture.'],
+        'provenance' => ['no_runtime_network_access' => true],
+    ];
+    $manifestPath = $root . '/manifest.json';
+    file_put_contents($manifestPath, json_encode($manifest, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+
+    return [
+        'manifest' => $manifestPath,
+        'language' => $language,
+        'runtime_files' => $runtimeFiles,
+        'rows_per_shard' => $rowsPerShard,
+        'decoded_bytes' => $decodedBytes,
+        'runtime_compressed_bytes' => $runtimeCompressedBytes,
+        'sidecar_bytes' => $sidecarBytes,
+        'sidecar_blocks' => $sidecarBlocks,
+        'created_second' => $createdSecond,
+        'newest_generation' => $newestGeneration,
+    ];
+}
+
+/** Construct the production analyzer shape used by single-pack workloads. */
+function wp_fts_lemma_sidecar_analyzer(string $manifest): WP_FTS_Analyzer
+{
+    return new WP_FTS_Analyzer([
+        'auto_detect_language' => false,
+        'default_lang' => 'qaa',
+        'document_lang' => 'qaa',
+        'query_lang' => 'qaa',
+        'lemmatizer_packs_by_lang' => ['qaa' => $manifest],
+    ]);
+}
+
+/** Create one isolated pack root with the required project-owned notice. */
+function wp_fts_lemma_sidecar_fixture_root(string $case): string
+{
+    $root = sys_get_temp_dir() . '/wp-fts-lemma-sidecar-' . $case . '-' . bin2hex(random_bytes(6));
+    if (!mkdir($root, 0777, true) && !is_dir($root)) {
+        throw new RuntimeException('Could not create lemma-sidecar fixture directory.');
+    }
+    file_put_contents($root . '/NOTICE.txt', "Project-owned generated lemma-sidecar fixture.\n");
+
+    return $root;
+}
+
+/**
+ * @return array{
+ *   manifest:string,
+ *   runtime:string,
+ *   lookup:string,
+ *   decoded_bytes:int,
+ *   rows:int,
+ *   block_rows:int,
+ *   sidecar:?array<string,mixed>,
+ *   document_terms:string[],
+ *   document_indexes:int[],
+ *   query_terms:string[],
+ *   query_indexes:int[]
+ * }
+ */
+function wp_fts_lemma_sidecar_write_fixture(string $root, bool $indexed): array
+{
+    $decodedBytes = WP_FTS_LemmaPackLimits::MAX_RUNTIME_LOOKUP_DECODED_BYTES;
+    $rows = 32768;
+    $lineBytes = intdiv($decodedBytes, $rows);
+    $blockRows = 2048;
+    if ($lineBytes * $rows !== $decodedBytes) {
+        throw new RuntimeException('Lemma-sidecar rows do not divide the exact decoded boundary.');
+    }
+
+    $rowDigest = hash_init('sha256');
+    $runtimeEntries = [];
+    $runtimeCompressedBytes = 0;
+    $sidecarBytes = 0;
+    $sidecarBlocks = 0;
+    $rowsPerShard = intdiv($rows, 2);
+    for ($shard = 0; $shard < 2; $shard++) {
+        $firstIndex = $shard * $rowsPerShard;
+        $lastIndex = $firstIndex + $rowsPerShard - 1;
+        $plain = $root . '/runtime-' . $shard . '.tsv';
+        $plainHandle = fopen($plain, 'wb');
+        if (!is_resource($plainHandle)) {
+            throw new RuntimeException('Could not create exact lemma-sidecar runtime source.');
+        }
+        try {
+            $buffer = '';
+            for ($index = $firstIndex; $index <= $lastIndex; $index++) {
+                $surface = wp_fts_lemma_sidecar_surface($index);
+                $lemma = wp_fts_lemma_sidecar_lemma($index);
+                $line = $surface . "\t" . $lemma . "\n";
+                if (strlen($line) !== $lineBytes) {
+                    throw new RuntimeException('Lemma-sidecar runtime row does not have the exact fixed width.');
+                }
+                $buffer .= $line;
+                hash_update($rowDigest, $line);
+                if (strlen($buffer) >= 65536) {
+                    wp_fts_lemma_sidecar_write_all($plainHandle, $buffer);
+                    $buffer = '';
+                }
+            }
+            wp_fts_lemma_sidecar_write_all($plainHandle, $buffer);
+        } finally {
+            fclose($plainHandle);
+        }
+        if (filesize($plain) !== intdiv($decodedBytes, 2)) {
+            throw new RuntimeException('Lemma-sidecar runtime shard is not exactly 4 MiB.');
+        }
+
+        $runtime = $root . '/runtime-' . $shard . '.tsv.gz';
+        wp_fts_lemma_sidecar_gzip_file($plain, $runtime);
+        unlink($plain);
+        $lookup = $runtime . '.lookup';
+        $sidecar = null;
+        if ($indexed) {
+            $sidecar = WP_FTS_LemmaPackLookupIndex::build(
+                $runtime,
+                WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+                (string) hash_file('sha256', $runtime),
+                $lookup,
+                $blockRows
+            );
+        }
+
+        $runtimeEntry = [
+            'path' => basename($runtime),
+            'sha256' => $sidecar['runtime_sha256'] ?? hash_file('sha256', $runtime),
+            'rows' => $rowsPerShard,
+            'first_surface' => wp_fts_lemma_sidecar_surface($firstIndex),
+            'last_surface' => wp_fts_lemma_sidecar_surface($lastIndex),
+            'compression' => WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+        ];
+        if (is_array($sidecar)) {
+            $runtimeEntry['lookup'] = [
+                'format' => $sidecar['format'],
+                'path' => basename($lookup),
+                'sha256' => $sidecar['sha256'],
+                'blocks' => $sidecar['blocks'],
+            ];
+            $sidecarBytes += (int) filesize($lookup);
+            $sidecarBlocks += $sidecar['blocks'];
+        }
+        $runtimeEntries[] = $runtimeEntry;
+        $runtimeCompressedBytes += (int) filesize($runtime);
+    }
+
+    $manifest = [
+        'schema_version' => 1,
+        'pack_id' => 'qaa-exact-eight-mib-' . ($indexed ? 'indexed' : 'unindexed'),
+        'language' => 'qaa',
+        'version' => '1',
+        'fixture_only' => false,
+        'default_enabled' => false,
+        'capabilities' => ['dictionary-lemmatizer', 'normalized-runtime-rows'],
+        'runtime' => [
+            'format' => WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV,
+            'normalization' => 'WP_FTS_Normalizer qaa with fold_diacritics=true',
+            'ambiguity_policy' => 'ambiguous_surface_noop',
+            'total_rows' => $rows,
+            'total_sha256' => hash_final($rowDigest),
+            'files' => $runtimeEntries,
+        ],
+        'source' => [
+            'name' => 'Project-owned exact 8-MiB lemma-sidecar source',
+            'version' => '1',
+            'url' => 'urn:wp-fts:test:exact-eight-mib-sidecar',
+            'artifact_sha256' => str_repeat('a', 64),
+            'byte_count' => $decodedBytes,
+        ],
+        'license' => ['spdx_id' => 'CC0-1.0', 'notice_path' => 'NOTICE.txt'],
+        'attribution' => ['note' => 'Project-owned generated fixture.'],
+        'provenance' => ['no_runtime_network_access' => true],
+    ];
+    $manifestPath = $root . '/manifest.json';
+    file_put_contents(
+        $manifestPath,
+        json_encode($manifest, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)
+    );
+
+    $documentTerms = [];
+    $documentIndexes = [];
+    $rowsPerDecodedBlock = intdiv(WP_FTS_LemmaPackLookupIndex::MAX_BLOCK_DECODED_BYTES, $lineBytes);
+    $documentBlocks = array_merge(range(0, 31), range(256, 287));
+    for ($row = 0; $row < $rowsPerDecodedBlock; $row++) {
+        foreach ($documentBlocks as $block) {
+            $index = $block * $rowsPerDecodedBlock + $row;
+            $documentIndexes[] = $index;
+            $documentTerms[] = wp_fts_lemma_sidecar_surface($index);
+        }
+    }
+    $queryIndexes = [];
+    foreach (array_merge(range(4, 9), range(260, 265)) as $block) {
+        $queryIndexes[] = $block * $rowsPerDecodedBlock;
+    }
+    $queryTerms = array_map('wp_fts_lemma_sidecar_surface', $queryIndexes);
+
+    return [
+        'manifest' => $manifestPath,
+        'decoded_bytes' => $decodedBytes,
+        'runtime_compressed_bytes' => $runtimeCompressedBytes,
+        'rows' => $rows,
+        'block_rows' => $blockRows,
+        'decoded_block_rows' => $rowsPerDecodedBlock,
+        'sidecar_bytes' => $sidecarBytes,
+        'sidecar_blocks' => $sidecarBlocks,
+        'document_terms' => $documentTerms,
+        'document_indexes' => $documentIndexes,
+        'query_terms' => $queryTerms,
+        'query_indexes' => $queryIndexes,
+    ];
+}
+
+/** Encode a stable sorted surface that routes predictably across shards. */
+function wp_fts_lemma_sidecar_surface(int $index, string $language = 'qaa'): string
+{
+    return $language . str_pad((string) $index, 6, '0', STR_PAD_LEFT);
+}
+
+/** Fill one lemma to the maximum storable namespaced width. */
+function wp_fts_lemma_sidecar_lemma(int $index, string $language = 'qaa'): string
+{
+    $surface = wp_fts_lemma_sidecar_surface($index, $language);
+    $prefix = 'lemma' . $surface;
+
+    return $prefix . str_repeat('l', 245 - strlen($prefix));
+}
+
+/** @param array<string,mixed> $fixture @return array<string,mixed> */
+function wp_fts_lemma_sidecar_document_identity(array $fixture): array
+{
+    $document = implode(' ', $fixture['document_terms']);
+    WP_FTS_Analysis_Limits::assert_source_bytes($document);
+    foreach ($fixture['document_terms'] as $term) {
+        WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($term));
+    }
+
+    return [
+        'source_bytes' => strlen($document),
+        'source_sha256' => hash('sha256', $document),
+        'distinct_terms' => count(array_unique($fixture['document_terms'])),
+        'limit' => WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS,
+    ];
+}
+
+/** @param array<string,mixed> $fixture @return array<string,mixed> */
+function wp_fts_lemma_sidecar_query_identity(array $fixture): array
+{
+    $query = implode(' ', $fixture['query_terms']);
+
+    return [
+        'source_bytes' => strlen($query),
+        'source_sha256' => hash('sha256', $query),
+        'terms' => count($fixture['query_terms']),
+        'limit' => WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_GROUPS,
+    ];
+}
+
+/** @param array<string,int> $before @param array<string,int> $after @return array<string,int> */
+function wp_fts_lemma_sidecar_diagnostic_delta(array $before, array $after): array
+{
+    $delta = [];
+    foreach ($after as $key => $value) {
+        $delta[$key] = max(0, (int) $value - (int) ($before[$key] ?? 0));
+    }
+
+    return $delta;
+}
+
 /** @param resource $handle */
-function wp_fts_lemma_runtime_write_all(mixed $handle, string $data): void
+function wp_fts_lemma_sidecar_write_all(mixed $handle, string $data): void
 {
     $offset = 0;
     $length = strlen($data);
     while ($offset < $length) {
         $written = fwrite($handle, substr($data, $offset));
         if (!is_int($written) || $written < 1) {
-            throw new RuntimeException('Could not write complete runtime fixture.');
+            throw new RuntimeException('Could not write complete lemma-sidecar fixture data.');
         }
         $offset += $written;
     }
 }
 
-function wp_fts_lemma_runtime_append_copy(string $source, string $destination, string $suffix): void
-{
-    if (!copy($source, $destination)) {
-        throw new RuntimeException('Could not copy over-boundary runtime fixture.');
-    }
-    $handle = fopen($destination, 'ab');
-    if (!is_resource($handle)) {
-        throw new RuntimeException('Could not open over-boundary runtime fixture.');
-    }
-    try {
-        wp_fts_lemma_runtime_write_all($handle, $suffix);
-    } finally {
-        fclose($handle);
-    }
-}
-
-function wp_fts_lemma_runtime_gzip_file(string $source, string $destination): void
+/** Stream one plain fixture shard into gzip without materializing it twice. */
+function wp_fts_lemma_sidecar_gzip_file(string $source, string $destination): void
 {
     $input = fopen($source, 'rb');
     $output = gzopen($destination, 'wb9');
@@ -207,19 +984,19 @@ function wp_fts_lemma_runtime_gzip_file(string $source, string $destination): vo
         if (is_resource($output)) {
             gzclose($output);
         }
-        throw new RuntimeException('Could not open gzip boundary fixture streams.');
+        throw new RuntimeException('Could not open lemma-sidecar gzip fixture streams.');
     }
     try {
         while (!feof($input)) {
             $chunk = fread($input, 65536);
             if (!is_string($chunk)) {
-                throw new RuntimeException('Could not read gzip boundary fixture source.');
+                throw new RuntimeException('Could not read lemma-sidecar fixture source.');
             }
             if ($chunk === '') {
                 break;
             }
             if (gzwrite($output, $chunk) !== strlen($chunk)) {
-                throw new RuntimeException('Could not write complete gzip boundary fixture.');
+                throw new RuntimeException('Could not write complete lemma-sidecar gzip fixture.');
             }
         }
     } finally {
@@ -228,108 +1005,30 @@ function wp_fts_lemma_runtime_gzip_file(string $source, string $destination): vo
     }
 }
 
-/**
- * @param array{format:string,sha256:string,runtime_sha256:string,blocks:int,rows:int,rows_sha256:string}|null $lookup
- */
-function wp_fts_lemma_runtime_manifest(
-    string $root,
-    string $id,
-    string $runtimeFile,
-    int $rows,
-    string $first,
-    string $last,
-    bool $gzip = false,
-    ?array $lookup = null
-): string {
-    $runtimePath = $root . '/' . $runtimeFile;
-    $runtime = [
-        'path' => $runtimeFile,
-        'sha256' => $lookup['runtime_sha256'] ?? hash_file('sha256', $runtimePath),
-        'rows' => $rows,
-        'first_surface' => $first,
-        'last_surface' => $last,
-    ];
-    if ($gzip) {
-        $runtime['compression'] = WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP;
-    }
-    if ($lookup !== null) {
-        $runtime['lookup'] = [
-            'format' => $lookup['format'],
-            'path' => $runtimeFile . '.lookup',
-            'sha256' => $lookup['sha256'],
-            'blocks' => $lookup['blocks'],
-        ];
-    }
-
-    $manifest = [
-        'schema_version' => 1,
-        'pack_id' => 'en-runtime-boundary-' . $id,
-        'language' => 'en',
-        'version' => '1',
-        'fixture_only' => false,
-        'default_enabled' => false,
-        'capabilities' => ['dictionary-lemmatizer'],
-        'runtime' => [
-            'format' => WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV,
-            'normalization' => 'WP_FTS_Normalizer en with fold_diacritics=true',
-            'ambiguity_policy' => 'ambiguous_surface_noop',
-            'total_rows' => $rows,
-            'files' => [$runtime],
-        ],
-        'source' => [
-            'name' => 'Project-owned generated boundary source',
-            'version' => '1',
-            'url' => 'urn:wp-fts:test:runtime-boundary',
-            'artifact_sha256' => str_repeat('a', 64),
-            'byte_count' => 1,
-        ],
-        'license' => ['spdx_id' => 'CC0-1.0', 'notice_path' => 'NOTICE.txt'],
-        'attribution' => ['note' => 'Project-owned generated boundary fixture.'],
-        'provenance' => [
-            'no_runtime_network_access' => true,
-            'no_full_third_party_dictionary_dump' => true,
-        ],
-    ];
-    $path = $root . '/manifest-' . $id . '.json';
-    file_put_contents($path, json_encode($manifest, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
-
-    return $path;
-}
-
-/** @return array<string,mixed> */
-function wp_fts_lemma_runtime_case(string $manifestPath): array
+/** Copy a generated pack so aggregate tests use distinct physical manifests. */
+function wp_fts_lemma_sidecar_copy_tree(string $source, string $destination): void
 {
-    $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifestPath, null, 'en');
-    $started = microtime(true);
-    $result = null;
-    $error = null;
-    try {
-        $result = $pack->stem('target', 'en');
-    } catch (Throwable $caught) {
-        $reason = '';
-        for ($current = $caught; $current instanceof Throwable; $current = $current->getPrevious()) {
-            if ($current instanceof WP_FTS_Analyzer_Config_Limit_Exceeded) {
-                $reason = $current->reason_code;
-                break;
-            }
+    foreach (scandir($source) ?: [] as $entry) {
+        if ($entry === '.' || $entry === '..') {
+            continue;
         }
-        $error = [
-            'class' => get_class($caught),
-            'reason_code' => $reason,
-            'message' => $caught->getMessage(),
-        ];
+        $from = $source . '/' . $entry;
+        $to = $destination . '/' . $entry;
+        if (is_dir($from)) {
+            if (!mkdir($to) && !is_dir($to)) {
+                throw new RuntimeException('Could not copy configured-overflow directory.');
+            }
+            wp_fts_lemma_sidecar_copy_tree($from, $to);
+            continue;
+        }
+        if (!copy($from, $to)) {
+            throw new RuntimeException('Could not copy configured-overflow artifact.');
+        }
     }
-
-    return [
-        'result' => $result,
-        'error' => $error,
-        'elapsed_seconds' => microtime(true) - $started,
-        'lookup' => $pack->last_lookup_stats(),
-    ];
 }
 
 /** @return array{VmHWM_bytes:?int,VmRSS_bytes:?int} */
-function wp_fts_lemma_runtime_boundary_proc_status(): array
+function wp_fts_lemma_sidecar_proc_status(): array
 {
     if (!is_readable('/proc/self/status')) {
         return ['VmHWM_bytes' => null, 'VmRSS_bytes' => null];
@@ -351,8 +1050,13 @@ function wp_fts_lemma_runtime_boundary_proc_status(): array
             }
             $value = trim(substr($line, $separator + 1));
             $space = strpos($value, ' ');
-            if ($space !== false && ctype_digit(substr($value, 0, $space)) && strtolower(trim(substr($value, $space + 1))) === 'kb') {
-                $values[$key] = (int) substr($value, 0, $space) * 1024;
+            $digits = $space === false ? '' : substr($value, 0, $space);
+            if (
+                $digits !== ''
+                && strspn($digits, '0123456789') === strlen($digits)
+                && strtolower(trim(substr($value, $space + 1))) === 'kb'
+            ) {
+                $values[$key] = (int) $digits * 1024;
             }
         }
     } finally {
@@ -365,7 +1069,8 @@ function wp_fts_lemma_runtime_boundary_proc_status(): array
     ];
 }
 
-function wp_fts_lemma_runtime_boundary_remove_tree(string $path): void
+/** Remove one generated pack tree after a fresh-process workload. */
+function wp_fts_lemma_sidecar_remove_tree(string $path): void
 {
     if (!is_dir($path)) {
         return;
@@ -375,7 +1080,7 @@ function wp_fts_lemma_runtime_boundary_remove_tree(string $path): void
             continue;
         }
         $child = $path . DIRECTORY_SEPARATOR . $entry;
-        is_dir($child) ? wp_fts_lemma_runtime_boundary_remove_tree($child) : unlink($child);
+        is_dir($child) ? wp_fts_lemma_sidecar_remove_tree($child) : unlink($child);
     }
     rmdir($path);
 }

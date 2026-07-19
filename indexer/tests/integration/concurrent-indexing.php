@@ -17,6 +17,7 @@ try {
     exit(1);
 }
 
+/** Orchestrate independent WP-CLI workers against one disposable shared index. */
 function wp_fts_concurrent_main(): int
 {
     if (!function_exists('proc_open')) {
@@ -140,6 +141,7 @@ function wp_fts_concurrent_drain_with_contending_workers(array $baseCommand, arr
     throw new RuntimeException("concurrent worker drain exceeded {$maxRounds} bounded rounds");
 }
 
+/** Build the isolated WP-CLI program that seeds each worker's disjoint corpus. */
 function wp_fts_concurrent_setup_code(): string
 {
     return <<<'PHP'
@@ -174,6 +176,7 @@ echo "created " . ($workers * $postsPerWorker) . " posts\n";
 PHP;
 }
 
+/** Build the isolated verifier for exact cross-worker posting cardinality. */
 function wp_fts_concurrent_verify_code(): string
 {
     return <<<'PHP'
@@ -212,6 +215,7 @@ echo "verified {$expected} postings\n";
 PHP;
 }
 
+/** Build cleanup code that removes both canonical posts and derived test tables. */
 function wp_fts_concurrent_cleanup_code(): string
 {
     return <<<'PHP'

@@ -22,7 +22,7 @@ function wp_fts_cjk_run_proc_status(): array
         }
         $value = trim(substr($line, $separator + 1));
         $parts = array_values(array_filter(explode(' ', $value), static fn(string $part): bool => $part !== ''));
-        if (isset($parts[0]) && ctype_digit($parts[0])) {
+        if (isset($parts[0]) && $parts[0] !== '' && strspn($parts[0], '0123456789') === strlen($parts[0])) {
             $values[$key] = (int) $parts[0] * 1024;
         }
     }

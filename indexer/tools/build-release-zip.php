@@ -511,6 +511,7 @@ final class WP_FTS_ReleasePackageBuilder
         return $prohibited;
     }
 
+    /** Archive only a pre-screened stage and normalize metadata for reproducible bytes. */
     public static function create_zip_from_stage(string $stagePlugin, string $zipPath): void
     {
         $stagePlugin = self::existing_directory($stagePlugin, 'staged plugin');
@@ -571,6 +572,7 @@ final class WP_FTS_ReleasePackageBuilder
         }
     }
 
+    /** Keep CLI help beside the option parser so their supported surface cannot drift. */
     public static function usage(): string
     {
         return implode("\n", [
@@ -592,6 +594,7 @@ final class WP_FTS_ReleasePackageBuilder
         return sys_get_temp_dir() . '/wp-fts-indexer-release-' . date('Ymd-His') . '-' . bin2hex(random_bytes(4));
     }
 
+    /** Remove source mtime and umask variation from every release entry. */
     private static function normalize_zip_entry_metadata(ZipArchive $zip, string $archiveName): void
     {
         if (!method_exists($zip, 'setMtimeName') || !method_exists($zip, 'setExternalAttributesName')) {
@@ -607,6 +610,7 @@ final class WP_FTS_ReleasePackageBuilder
         }
     }
 
+    /** Reject aliases before cleanup or Composer can mutate immutable source. */
     private static function assert_release_paths_safe(
         string $pluginSource,
         string $componentSource,
@@ -644,6 +648,7 @@ final class WP_FTS_ReleasePackageBuilder
         }
     }
 
+    /** Recheck created paths because preflight candidates can resolve differently later. */
     private static function assert_composer_state_outside_package(
         string $stagePlugin,
         string $componentStage,
@@ -665,6 +670,7 @@ final class WP_FTS_ReleasePackageBuilder
         }
     }
 
+    /** Compare complete path segments in both containment directions. */
     private static function paths_overlap(string $left, string $right): bool
     {
         $left = rtrim(str_replace('\\', '/', $left), '/');
@@ -675,6 +681,7 @@ final class WP_FTS_ReleasePackageBuilder
             || str_starts_with($right . '/', $left . '/');
     }
 
+    /** Resolve the nearest existing ancestor, then normalize the uncreated suffix. */
     private static function canonical_boundary_path(string $path): string
     {
         if ($path === '') {
@@ -703,7 +710,12 @@ final class WP_FTS_ReleasePackageBuilder
 
         $resolved = str_replace('\\', '/', $resolved . ($suffixes === [] ? '' : '/' . implode('/', $suffixes)));
         $prefix = '/';
-        if (strlen($resolved) >= 3 && ctype_alpha($resolved[0]) && $resolved[1] === ':' && $resolved[2] === '/') {
+        if (
+            strlen($resolved) >= 3
+            && strspn($resolved[0], 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz') === 1
+            && $resolved[1] === ':'
+            && $resolved[2] === '/'
+        ) {
             $prefix = substr($resolved, 0, 3);
             $resolved = substr($resolved, 3);
         } else {
@@ -887,6 +899,7 @@ final class WP_FTS_ReleasePackageBuilder
         return $safe;
     }
 
+    /** Pass only deterministic process settings, never credential-shaped variables. */
     private static function is_safe_process_environment_key(string $key): bool
     {
         $upper = strtoupper($key);

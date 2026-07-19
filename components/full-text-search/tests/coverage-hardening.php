@@ -606,6 +606,7 @@ $ambiguousAnalyzer = new class {
         ];
     }
 
+    /** Identifies the ambiguous-alternative analyzer fixture for cache keys. */
     public function index_signature(): string
     {
         return 'ambiguous-alternative-fixture-v1';
@@ -653,6 +654,7 @@ $splitAnalyzer = new class {
         ]];
     }
 
+    /** Identifies the post-source split fixture for analysis-cache keys. */
     public function index_signature(): string
     {
         return 'post-source-split-fixture-v1';
@@ -719,6 +721,7 @@ wp_fts_component_hardening_same(
 $analysisCacheStemmer = new class implements WP_FTS_Stemmer {
     public int $calls = 0;
 
+    /** Records each stem request while preserving the fixture term. */
     public function stem(string $term, string $language): string
     {
         $this->calls++;

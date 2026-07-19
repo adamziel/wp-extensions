@@ -1061,6 +1061,7 @@ function wp_fts_release_readiness_contract_public_complete_fixture_ready(): void
     }
 }
 
+/** Seed every forbidden payload class and require package readiness to reject it. */
 function wp_fts_release_readiness_contract_prohibited_package_paths(): void
 {
     $tmp = wp_fts_release_readiness_contract_temp_dir();

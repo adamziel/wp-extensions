@@ -77,6 +77,7 @@ function wp_fts_mysql_proof_run_from_shell(): int
     return $result['exit'];
 }
 
+/** Run the production storage proof only inside the explicitly disposable site. */
 function wp_fts_mysql_proof_run_inside_wordpress(): void
 {
     if (getenv(WP_FTS_MYSQL_PROOF_ALLOW_ENV) !== '1') {

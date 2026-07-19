@@ -12,6 +12,7 @@ final class WP_FTS_SQLite_Transport_Fixture_WPDB
     public string $prefix = 'wp_';
     public object $dbh;
 
+    /** Expose only the SQLite driver identity needed by transport preflight. */
     public function __construct()
     {
         $this->dbh = new WP_FTS_SQLite_Transport_Fixture_Driver();

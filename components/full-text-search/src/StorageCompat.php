@@ -858,6 +858,7 @@ final class WP_FTS_StorageCompat
         return $normalized;
     }
 
+    /** Report metadata amplification through the shared analysis-limit channel. */
     private static function throw_metadata_limit(string $reason, string $message): never
     {
         throw new WP_FTS_Analysis_Limit_Exceeded($reason, $message);

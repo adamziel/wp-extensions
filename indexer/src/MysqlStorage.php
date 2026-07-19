@@ -9,6 +9,7 @@ declare(strict_types=1);
  */
 final class WP_FTS_Prepared_Document_Rejected extends InvalidArgumentException
 {
+    /** Carry the poison document identity separately from its diagnostic text. */
     public function __construct(
         public readonly int $post_id,
         public readonly string $reason_code,
@@ -21,6 +22,7 @@ final class WP_FTS_Prepared_Document_Rejected extends InvalidArgumentException
 /** A valid prepared batch that must be retried as two smaller claim batches. */
 final class WP_FTS_Prepared_Batch_Split_Required extends InvalidArgumentException
 {
+    /** Describe the deterministic split point that keeps both halves bounded. */
     public function __construct(
         public readonly int $document_count,
         public readonly int $posting_count,
@@ -580,6 +582,7 @@ KEY dirty (post_id,kind)
         }
     }
 
+    /** Force the contract index so a scope page cannot degrade to a table scan. */
     private function scope_keyset_index_hint(string $key): string
     {
         $contract = $this->scope_keyset_index_contracts()[$key] ?? null;
@@ -1478,6 +1481,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         return array_keys($names);
     }
 
+    /** Quote a trusted schema name as a SQLite pragma table-valued argument. */
     private function sqlite_schema_literal(string $value): string
     {
         return "'" . str_replace("'", "''", $value) . "'";
@@ -1535,6 +1539,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         return $indexes;
     }
 
+    /** Check whether inspected schema exposes one exact usable index contract. */
     private function schema_has_index(array $indexes, array $expected): bool
     {
         foreach ($indexes as $index) {
@@ -1550,6 +1555,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         return false;
     }
 
+    /** Match an inspected index against the complete allowlist for its table. */
     private function schema_index_is_expected(array $actual, array $expectedIndexes): bool
     {
         foreach ($expectedIndexes as $expected) {
@@ -1591,6 +1597,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         return $mismatches;
     }
 
+    /** Remove version-dependent integer display widths before schema comparison. */
     private function normalize_mysql_column_type(string $type): string
     {
         $type = strtolower(trim($type));
@@ -1617,6 +1624,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         $this->reject_legacy_unbounded_operation();
     }
 
+    /** Reject legacy point deletion before it can bypass dictionary invariants. */
     public function delete_term(string $term): void
     {
         $this->reject_legacy_unbounded_operation();
@@ -2546,7 +2554,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
                 'resolved_alternatives' => $resolvedAlternativeCount,
                 'anchor_group' => $rankQuery['anchor_group'],
                 'prefix_range' => $effectivePrefix !== null,
-                'prefix_strategy' => $effectivePrefix !== null ? 'surface_range' : 'none',
+                'prefix_strategy' => (string) ($rankQuery['prefix_strategy'] ?? 'none'),
                 'query_statements' => ($includeMetadata || $includeSnippets || $includeCanonicalPostRow) ? 3 : 2,
                 'interactive_total' => 'unknown',
                 'recency_boost' => [
@@ -2957,7 +2965,7 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
         ];
     }
 
-    /** @return array{sql:string,args:array<int,mixed>,reverse:bool,anchor_group:?int,scoring_now_gmt:string} */
+    /** @return array{sql:string,args:array<int,mixed>,reverse:bool,anchor_group:?int,prefix_strategy:string,scoring_now_gmt:string} */
     private function build_rank_query(
         array $groups,
         int $groupCount,
@@ -2986,7 +2994,9 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
         }
         $qSql = implode("\nUNION ALL\n", $qRows);
         $prefixGroup = $prefix['group_id'] ?? null;
+        $prefixStrategy = $prefix !== null ? 'surface_range' : 'none';
         $anchorGroup = null;
+        $groupDocFreqUpperBounds = [];
         if ($mode === 'AND' && $groupCount > 1) {
             $costs = [];
             foreach ($groups as $groupId => $alternatives) {
@@ -2994,9 +3004,20 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
                 // bound. It can overestimate overlapping morphology by at most
                 // the fixed alternative cap, but never scans a broad posting
                 // union merely to choose the rare AND anchor.
-                $costs[$groupId] = array_sum(array_column($alternatives, 'doc_freq'));
+                $groupCost = 0;
+                foreach ($alternatives as $alternative) {
+                    $docFreq = max(0, (int) ($alternative['doc_freq'] ?? 0));
+                    $groupCost = $groupCost > PHP_INT_MAX - $docFreq
+                        ? PHP_INT_MAX
+                        : $groupCost + $docFreq;
+                }
+                $groupDocFreqUpperBounds[$groupId] = $groupCost;
+                $costs[$groupId] = $groupCost;
                 if ($prefixGroup !== null && $groupId === $prefixGroup) {
-                    $costs[$groupId] += max(0, (int) ($prefix['doc_freq'] ?? 0));
+                    $prefixDocFreq = max(0, (int) ($prefix['doc_freq'] ?? 0));
+                    $costs[$groupId] = $costs[$groupId] > PHP_INT_MAX - $prefixDocFreq
+                        ? PHP_INT_MAX
+                        : $costs[$groupId] + $prefixDocFreq;
                 }
             }
             if ($costs !== []) {
@@ -3040,10 +3061,6 @@ GROUP BY c.post_id, q.group_id";
                 $indexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (post_term_impact)';
                 if ($prefix !== null) {
                     // Exact groups use primary-key probes inside the rare anchor.
-                    // The prefix arm starts at its dictionary range and intersects
-                    // those actual matching postings with the same candidate set.
-                    // It therefore never multiplies anchor DF by every unrelated
-                    // posting in an 8,192-identity candidate document.
                     $rawParts[] = "SELECT c.post_id, q.group_id, MAX(po.impact * q.weight) AS group_score
 FROM ({$candidate['sql']}) c
 {$orderedCrossJoin} ({$qSql}) q{$orderedCrossPredicate}
@@ -3051,20 +3068,48 @@ FROM ({$candidate['sql']}) c
 GROUP BY c.post_id, q.group_id";
                     array_push($args, ...$candidate['args']);
 
-                    $surfaceRange = $this->surface_range_sql($prefix);
                     $prefixCandidate = $this->candidate_sql($qSql, $anchorGroup, $options, 'prefix_anchor');
-                    $prefixPostingIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (PRIMARY)';
                     $prefixIntegerType = $this->is_sqlite_runtime() ? 'INTEGER' : 'SIGNED';
                     $prefixScore = "CAST(ppo.impact * CAST(" . self::RARITY_SCALE
                         . " / CASE WHEN pt.doc_freq < 1 THEN 1 ELSE pt.doc_freq END AS {$prefixIntegerType}) * "
                         . self::PREFIX_WEIGHT . " / 1000 AS {$prefixIntegerType})";
-                    $rawParts[] = "SELECT prefix_candidate.post_id, " . (int) $prefix['group_id'] . " AS group_id,
+                    $prefixPostingRows = max(0, (int) ($prefix['doc_freq'] ?? 0));
+                    $anchorDocFreqUpper = max(0, (int) ($groupDocFreqUpperBounds[$anchorGroup] ?? 0));
+                    $useCandidateFirst = $prefixPostingRows > 0
+                        && $anchorDocFreqUpper > 0
+                        && intdiv($prefixPostingRows - 1, self::MAX_DOCUMENT_POSTINGS) >= $anchorDocFreqUpper;
+                    if ($useCandidateFirst) {
+                        // A broad prefix after a rare exact anchor must not read
+                        // its complete posting range merely to discard every
+                        // non-candidate row. Scan each candidate's bounded posting
+                        // envelope, then classify term identities by primary key.
+                        $prefixStrategy = 'candidate_first';
+                        $surfacePredicate = $this->surface_range_predicate($prefix, 'pt');
+                        $prefixPostingIndexHint = $this->is_sqlite_runtime()
+                            ? ''
+                            : ' FORCE INDEX (post_term_impact)';
+                        $prefixTermIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (PRIMARY)';
+                        $rawParts[] = "SELECT prefix_candidate.post_id, " . (int) $prefix['group_id'] . " AS group_id,
+MAX({$prefixScore}) AS group_score
+FROM ({$prefixCandidate['sql']}) prefix_candidate
+{$orderedJoin} {$this->postingsTable} ppo{$prefixPostingIndexHint} ON prefix_candidate.post_id = ppo.post_id
+{$orderedJoin} {$this->termsTable} pt{$prefixTermIndexHint} ON pt.term_id = ppo.term_id
+WHERE {$surfacePredicate['sql']}
+GROUP BY prefix_candidate.post_id";
+                        array_push($args, ...$prefixCandidate['args'], ...$surfacePredicate['args']);
+                    } else {
+                        // A genuinely smaller surface range remains the cheaper
+                        // exact intersection, including ties at the upper bound.
+                        $surfaceRange = $this->surface_range_sql($prefix);
+                        $prefixPostingIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (PRIMARY)';
+                        $rawParts[] = "SELECT prefix_candidate.post_id, " . (int) $prefix['group_id'] . " AS group_id,
 MAX({$prefixScore}) AS group_score
 FROM ({$surfaceRange['sql']}) pt
 {$orderedJoin} {$this->postingsTable} ppo{$prefixPostingIndexHint} ON ppo.term_id = pt.term_id
 {$orderedJoin} ({$prefixCandidate['sql']}) prefix_candidate ON prefix_candidate.post_id = ppo.post_id
 GROUP BY prefix_candidate.post_id";
-                    array_push($args, ...$surfaceRange['args'], ...$prefixCandidate['args']);
+                        array_push($args, ...$surfaceRange['args'], ...$prefixCandidate['args']);
+                    }
                 } else {
                     $rawParts[] = "SELECT c.post_id, q.group_id, MAX(po.impact * q.weight) AS group_score
 FROM ({$candidate['sql']}) c
@@ -3097,7 +3142,7 @@ FROM {$rankGateSql}
             }
         }
         if ($rawParts === []) {
-            return ['sql' => 'SELECT 0 WHERE 1=0', 'args' => [], 'reverse' => false, 'anchor_group' => $anchorGroup, 'scoring_now_gmt' => ''];
+            return ['sql' => 'SELECT 0 WHERE 1=0', 'args' => [], 'reverse' => false, 'anchor_group' => $anchorGroup, 'prefix_strategy' => $prefixStrategy, 'scoring_now_gmt' => ''];
         }
         $having = $mode === 'AND' ? 'HAVING COUNT(*) = ' . $groupCount : '';
         $rawSql = implode("\nUNION ALL\n", $rawParts);
@@ -3210,6 +3255,7 @@ ORDER BY CASE WHEN limited.doc_id IS NULL THEN 1 ELSE 0 END,
             'args' => [...$control['args'], ...$args],
             'reverse' => $reverse,
             'anchor_group' => $anchorGroup,
+            'prefix_strategy' => $prefixStrategy,
             'scoring_now_gmt' => $scoringNow,
         ];
     }
@@ -3421,6 +3467,7 @@ WHERE {$range['sql']}",
             . "/ ({$halfLifeSeconds} + {$ageSeconds})) / 1000000) AS {$integerType}), ranked.score)";
     }
 
+    /** Pin a bounded UTC scoring instant so every cursor page orders identically. */
     private function normalize_scoring_now(mixed $value): string
     {
         $timestamp = is_scalar($value) && strlen((string) $value) <= 64
@@ -3439,6 +3486,7 @@ WHERE {$range['sql']}",
         return [];
     }
 
+    /** Return the minimal compatibility shape without reviving length scoring. */
     public function get_doc(int $doc_id): ?array
     {
         $row = $this->get_row($this->wpdb->prepare(
@@ -3682,6 +3730,7 @@ ORDER BY bounded.post_id, bounded.lang, bounded.term",
         $this->reject_legacy_unbounded_operation();
     }
 
+    /** Start the single writer transaction after enforcing mutation ownership. */
     public function begin_transaction(): void
     {
         $this->guard_mutation();
@@ -3694,6 +3743,7 @@ ORDER BY bounded.post_id, bounded.lang, bounded.term",
         $this->transactionEpochAdvanced = false;
     }
 
+    /** Advance the cursor epoch once, then commit and clear local transaction state. */
     public function commit(): void
     {
         $this->guard_mutation();
@@ -3710,6 +3760,7 @@ ORDER BY bounded.post_id, bounded.lang, bounded.term",
         }
     }
 
+    /** Expose transaction ownership to the queue's atomic retirement path. */
     public function has_active_transaction(): bool
     {
         return $this->transactionActive;
@@ -3725,6 +3776,7 @@ ORDER BY bounded.post_id, bounded.lang, bounded.term",
         $this->transactionEpochAdvanced = true;
     }
 
+    /** Roll back database work and always clear local transaction state. */
     public function rollback(): void
     {
         try {
@@ -3736,6 +3788,7 @@ ORDER BY bounded.post_id, bounded.lang, bounded.term",
         }
     }
 
+    /** No-op for MySQL because writes are sent immediately. */
     public function flush(): void
     {
     }
@@ -3782,6 +3835,7 @@ ORDER BY bounded.post_id, bounded.lang, bounded.term",
         ];
     }
 
+    /** Read the cursor generation that the replacement schema must surpass. */
     private function current_search_epoch_for_reset(): int
     {
         $value = $this->wpdb->get_var($this->wpdb->prepare(
@@ -3793,6 +3847,7 @@ ORDER BY bounded.post_id, bounded.lang, bounded.term",
         return is_numeric($value) ? max(0, (int) $value) : 0;
     }
 
+    /** Publish four empty MySQL tables through one atomic generation swap. */
     private function reset_mysql_generation(int $nextEpoch): void
     {
         $current = [$this->termsTable, $this->postingsTable, $this->documentsTable, $this->workTable];
@@ -3844,6 +3899,7 @@ ORDER BY bounded.post_id, bounded.lang, bounded.term",
         );
     }
 
+    /** Rebuild all four SQLite tables inside one rollback-safe transaction. */
     private function reset_sqlite_generation(int $nextEpoch): void
     {
         $this->query('START TRANSACTION', 'start SQLite FTS reset transaction');
@@ -3870,6 +3926,7 @@ ORDER BY bounded.post_id, bounded.lang, bounded.term",
         }
     }
 
+    /** Seed the singleton cursor epoch before a new generation becomes visible. */
     private function seed_search_epoch(string $workTable, int $generation): void
     {
         $this->query($this->wpdb->prepare(
@@ -3882,6 +3939,7 @@ VALUES (%s, 'meta', 0, %d, 'meta', 0, 0, '', 0, 0, 0, '', 0, %s, '', 0)",
         ), 'seed FTS search epoch after reset');
     }
 
+    /** Derive deterministic bounded staging names without schema discovery. */
     private function reset_generation_table_name(string $table, string $role): string
     {
         $suffix = '_r' . ($role === 'new' ? 'n' : 'o')
@@ -3914,6 +3972,7 @@ VALUES (%s, 'meta', 0, %d, 'meta', 0, 0, '', 0, 0, 0, '', 0, %s, '', 0)",
         return $names;
     }
 
+    /** Convert a validated table name to SQL or fail closed. */
     private function required_schema_identifier(string $table): string
     {
         $identifier = $this->schema_identifier($table);
@@ -3950,6 +4009,7 @@ VALUES (%s, 'meta', 0, %d, 'meta', 0, 0, '', 0, 0, 0, '', 0, %s, '', 0)",
         ];
     }
 
+    /** Perform one bounded dictionary-maintenance page, never a corpus sweep. */
     public function optimize(): void
     {
         // Document frequencies are a transactional writer invariant. Removing
@@ -4148,12 +4208,14 @@ STRAIGHT_JOIN {$this->termsTable} cleanup_target
         return $statement;
     }
 
+    /** Start the single SQLite dictionary-increment statement. */
     private function sqlite_dictionary_increment_prefix(): string
     {
         return "INSERT INTO {$this->termsTable} (lang,kind,term,doc_freq)\n"
             . "/* wp_fts:dictionary-increment */\nVALUES ";
     }
 
+    /** Close the SQLite statement with its conflict-safe DF increment. */
     private function sqlite_dictionary_increment_suffix(): string
     {
         return "\nON CONFLICT(lang,kind,term) DO UPDATE SET doc_freq = doc_freq + excluded.doc_freq";
@@ -4168,12 +4230,14 @@ STRAIGHT_JOIN {$this->termsTable} cleanup_target
             . ',' . max(0, $documentCount) . ')';
     }
 
+    /** Start the bounded VALUES relation used to resolve SQLite term ids. */
     private function sqlite_identity_relation_prefix(): string
     {
         return 'SELECT column1 AS term_ordinal, column2 AS lang,'
             . ' column3 AS kind, column4 AS term FROM (VALUES ';
     }
 
+    /** Close the bounded SQLite identity relation. */
     private function sqlite_identity_relation_suffix(): string
     {
         return ')';
@@ -4188,6 +4252,7 @@ STRAIGHT_JOIN {$this->termsTable} cleanup_target
             . ',' . $this->binary_sql_literal($identity['term']) . ')';
     }
 
+    /** Wrap one bounded identity relation in the exact dictionary-id lookup. */
     private function prepared_term_resolution_sql(string $identityRelation): string
     {
         return $this->prepared_term_resolution_prefix()
@@ -4195,6 +4260,7 @@ STRAIGHT_JOIN {$this->termsTable} cleanup_target
             . $this->prepared_term_resolution_suffix();
     }
 
+    /** Start the portable prepared-term resolution statement. */
     private function prepared_term_resolution_prefix(): string
     {
         return "/* wp_fts:resolve-prepared-terms */
@@ -4202,6 +4268,7 @@ SELECT requested.term_ordinal, stored_term.term_id
 FROM (";
     }
 
+    /** Join the requested identities to the unique dictionary key. */
     private function prepared_term_resolution_suffix(): string
     {
         return ") requested
@@ -4952,6 +5019,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         $this->execute_bounded_write_chunk(array_slice($rows, $middle), $prepareChunk, $context);
     }
 
+    /** Measure both rendered SQL and deferred driver arguments before execution. */
     private function prepared_statement_bytes(mixed $statement): int
     {
         if (is_string($statement)) {
@@ -4978,6 +5046,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         throw new RuntimeException('The WordPress database driver did not return a measurable SQL statement.');
     }
 
+    /** Conservatively include SQL escaping growth for one string argument. */
     private function prepared_string_argument_bytes(string $value): int
     {
         $bytes = strlen($value) + 2;
@@ -4999,7 +5068,11 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         return $this->normalize_frequency_map($frequencies, self::SURFACE_KIND);
     }
 
-    /** @return array<string,int> */
+    /**
+     * Normalize and validate lexical or surface frequencies before row writes.
+     *
+     * @return array<string,int>
+     */
     private function normalize_frequency_map(array $frequencies, int $kind): array
     {
         $normalized = [];
@@ -5014,6 +5087,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         return $normalized;
     }
 
+    /** Quantize weighted term frequency into the posting's self-contained score. */
     private function impact(int $weightedTf): int
     {
         $tf = max(1, $weightedTf);
@@ -5021,6 +5095,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         return max(1, min(self::MAX_POSTING_IMPACT, (int) round(4096.0 * ((2.2 * $tf) / (1.2 + $tf)))));
     }
 
+    /** Convert document frequency to the bounded integer query multiplier. */
     private static function rarity_weight(int $docFreq): int
     {
         return max(1, intdiv(self::RARITY_SCALE, max(1, $docFreq)));
@@ -5206,6 +5281,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         ];
     }
 
+    /** Reject malformed or oversized cursors before base64 and JSON decoding. */
     private function assert_cursor_input_bounds(mixed $cursor): void
     {
         if (
@@ -5237,6 +5313,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         return $data;
     }
 
+    /** Sign the exact final ordering tuple for the next search-after page. */
     private function encode_cursor(object $row, string $fingerprint, string $scoringNow): string
     {
         $data = [
@@ -5253,6 +5330,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         return rtrim(strtr(base64_encode($payload), '+/', '-_'), '=');
     }
 
+    /** Preserve the integral SQL score as exact decimal text across drivers. */
     private function normalize_cursor_score(mixed $score): string
     {
         if (is_int($score)) {
@@ -5280,6 +5358,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         return $score;
     }
 
+    /** Derive the site-bound key that prevents client-forged ordering tuples. */
     private function cursor_secret(): string
     {
         if (function_exists('wp_salt')) {
@@ -5303,6 +5382,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         ];
     }
 
+    /** Report a structural plan overflow without falling back to legacy search. */
     private function throw_search_plan_limit(string $name): never
     {
         if (class_exists('WP_FTS_Search_Budget_Exceeded')) {
@@ -5398,6 +5478,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         return array_is_list($rows) ? $rows : array_values($rows);
     }
 
+    /** Runs a single-row query with explicit database error visibility. */
     private function get_row(mixed $statement, string $context): ?object
     {
         $row = $this->wpdb->get_row($statement);
@@ -5425,6 +5506,9 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
             : [];
     }
 
+    /**
+     * @param string[] $keys
+     */
     private function schema_row_value(object|array $row, array $keys): string
     {
         foreach ($keys as $key) {
@@ -5441,6 +5525,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         return preg_match('/^[A-Za-z0-9_]+$/D', $identifier) === 1 ? '`' . $identifier . '`' : null;
     }
 
+    /** Throws when `$wpdb->last_error` contains a failed operation detail. */
     private function assert_no_database_error(string $context): void
     {
         if (isset($this->wpdb->last_error) && trim((string) $this->wpdb->last_error) !== '') {
@@ -5448,6 +5533,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         }
     }
 
+    /** Preserve the database action and adapter error in one actionable exception. */
     private function database_exception(string $context): RuntimeException
     {
         $error = isset($this->wpdb->last_error) ? trim((string) $this->wpdb->last_error) : '';

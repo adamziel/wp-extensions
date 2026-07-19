@@ -16,14 +16,26 @@ final class WP_FTS_AnalyzerPackValidator
     public const MAX_LEMMAS_PER_SURFACE = WP_FTS_LemmaPackLimits::MAX_LEMMAS_PER_SURFACE;
     private const DEFAULT_MAX_COLLECTED_RUNTIME_ROWS = 50000;
     private const MAX_DIGEST_ATTESTATIONS = 256;
+    private const MAX_RUNTIME_BLOCK_ATTESTATIONS = 8192;
     public const RUNTIME_COMPRESSION_GZIP = 'gzip';
 
     /** @var array<string,true> */
     private static array $digestAttestations = [];
     /** @var string[] */
     private static array $digestAttestationOrder = [];
+    /** @var array<string,array<string,string[]>> */
+    private static array $runtimeBlockAttestations = [];
+    /** @var array<int,array{file:string,layout:string,blocks:int}> */
+    private static array $runtimeBlockAttestationOrder = [];
+    private static int $runtimeBlockAttestationCount = 0;
+    /** @var array<string,true> */
+    private array $requestDigestAttestations = [];
+    /** @var array<string,array<string,string[]>> */
+    private array $requestRuntimeBlockAttestations = [];
 
     private int $maxCollectedRuntimeRows;
+    private int $digestFileHashes = 0;
+    private int $digestBytesHashed = 0;
 
     public function __construct(int $maxCollectedRuntimeRows = self::DEFAULT_MAX_COLLECTED_RUNTIME_ROWS)
     {
@@ -78,8 +90,14 @@ final class WP_FTS_AnalyzerPackValidator
                 continue;
             }
 
-            $json = file_get_contents($manifestPath);
-            if (!is_string($json)) {
+            $json = file_get_contents(
+                $manifestPath,
+                false,
+                null,
+                0,
+                WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES + 1
+            );
+            if (!is_string($json) || strlen($json) > WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES) {
                 continue;
             }
 
@@ -130,6 +148,107 @@ final class WP_FTS_AnalyzerPackValidator
     }
 
     /**
+     * Report actual complete-file digest work performed by this validator.
+     * Cached attestations are not counted because they do not read file bytes.
+     *
+     * @return array{files_hashed:int,bytes_hashed:int}
+     */
+    public function digest_attestation_stats(): array
+    {
+        return [
+            'files_hashed' => $this->digestFileHashes,
+            'bytes_hashed' => $this->digestBytesHashed,
+        ];
+    }
+
+    /**
+     * Start one bounded lookup operation's digest-attestation scope.
+     *
+     * Stable older file generations still use the process cache. A file from
+     * the current/future second is hashed once per batch instead: PHP may expose
+     * only second-resolution stat fields, so carrying that success into a later
+     * batch could miss an in-place same-size replacement with restored mtime.
+     */
+    public function begin_digest_attestation_batch(): void
+    {
+        $this->requestDigestAttestations = [];
+        $this->requestRuntimeBlockAttestations = [];
+    }
+
+    /**
+     * Validate only manifest-declared resource shape and physical file sizes.
+     * Analyzer configuration uses this pass to reject an aggregate overflow
+     * before opening lookup headers or constructing any individual pack.
+     *
+     * @return array{manifest_path:string,manifest_sha256:string,language:string,fixture_only:bool,eager_fixture_candidate:bool,eager_fixture_decoded_bytes:int,runtime_rows:int,runtime_bytes:int,runtime_files:int,lookup_blocks:int,runtime_lookup_bytes:int}
+     */
+    public function resource_envelope(string $manifestPath): array
+    {
+        $manifestData = $this->load_validated_manifest($manifestPath);
+        $manifest = $manifestData['manifest'];
+        $lookupBlocks = 0;
+        $runtimeBytes = 0;
+        $runtimeIsPlain = true;
+        $packDir = dirname($manifestData['path']);
+        foreach ($manifest['runtime']['files'] as $file) {
+            if (isset($file['lookup']['blocks']) && is_int($file['lookup']['blocks'])) {
+                $lookupBlocks += $file['lookup']['blocks'];
+            }
+            if (isset($file['compression'])) {
+                $runtimeIsPlain = false;
+            }
+            $runtimePath = $this->runtime_file_path($packDir, (string) $file['path']);
+            $runtimeSize = @filesize($runtimePath);
+            if (!is_int($runtimeSize) || $runtimeSize < 0) {
+                throw new RuntimeException("Could not size analyzer pack file {$file['path']}.");
+            }
+            $runtimeBytes += $runtimeSize;
+        }
+
+        $eagerFixtureCandidate = self::manifest_can_use_eager_fixture_storage($manifest)
+            && $runtimeBytes
+                <= WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_BYTES
+                    + WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_FRAMING_BYTES;
+
+        return [
+            'manifest_path' => $manifestData['path'],
+            'manifest_sha256' => $manifestData['sha256'],
+            'language' => (string) $manifest['language'],
+            'fixture_only' => (bool) $manifest['fixture_only'],
+            'eager_fixture_candidate' => $eagerFixtureCandidate,
+            'eager_fixture_decoded_bytes' => $eagerFixtureCandidate && $runtimeIsPlain ? $runtimeBytes : 0,
+            'runtime_rows' => $this->declared_runtime_rows($manifest),
+            'runtime_bytes' => $runtimeBytes,
+            'runtime_files' => count($manifest['runtime']['files']),
+            'lookup_blocks' => $lookupBlocks,
+            'runtime_lookup_bytes' => $this->assert_runtime_lookup_pack_bytes(
+                $manifest,
+                $packDir
+            ),
+        ];
+    }
+
+    /**
+     * Return whether manifest metadata permits the bounded eager fixture path.
+     * The caller separately applies the physical and decoded byte ceilings.
+     *
+     * @param array<string,mixed> $manifest
+     */
+    public static function manifest_can_use_eager_fixture_storage(array $manifest): bool
+    {
+        if (($manifest['fixture_only'] ?? false) !== true) {
+            return false;
+        }
+
+        $rows = 0;
+        foreach ($manifest['runtime']['files'] as $file) {
+            $rows += (int) $file['rows'];
+        }
+
+        return $rows <= WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_ROWS;
+    }
+
+    /**
      * Validate manifest shape, pack-local file references, optional compressed
      * file digests, lookup-sidecar attestations, and declared runtime metadata
      * without parsing all runtime rows.
@@ -143,16 +262,22 @@ final class WP_FTS_AnalyzerPackValidator
      *   manifest:array<string,mixed>,
      *   rows:array<int,array{surface:string,lemma:string,file:string,line:int}>,
      *   runtime_rows:int,
+     *   runtime_decoded_bytes:int,
      *   rows_collected:bool,
      *   runtime_files:array<string,array{sha256:string,rows:int,path:string,compression?:string,first_surface?:string,last_surface?:string,lookup?:array<string,mixed>}>
      * }
      */
-    public function validate_metadata(string $manifestPath, bool $verifyRuntimeFileDigests = true): array
-    {
+    public function validate_metadata(
+        string $manifestPath,
+        bool $verifyRuntimeFileDigests = true,
+        ?string $expectedManifestSha256 = null
+    ): array {
         $manifestData = $this->load_validated_manifest($manifestPath);
+        $this->assert_expected_manifest_sha256($manifestData['sha256'], $expectedManifestSha256);
         $manifestPath = $manifestData['path'];
         $manifest = $manifestData['manifest'];
         $packDir = dirname($manifestPath);
+        $runtimeLookupBytes = $this->assert_runtime_lookup_pack_bytes($manifest, $packDir);
 
         $runtimeFiles = [];
         $totalRows = 0;
@@ -199,17 +324,13 @@ final class WP_FTS_AnalyzerPackValidator
             throw new RuntimeException('Analyzer pack runtime total_rows mismatch.');
         }
 
-        $manifestDigest = hash_file('sha256', $manifestPath);
-        if (!is_string($manifestDigest)) {
-            throw new RuntimeException('Could not compute manifest digest.');
-        }
-
         return [
             'manifest_path' => $manifestPath,
-            'manifest_sha256' => $manifestDigest,
+            'manifest_sha256' => $manifestData['sha256'],
             'manifest' => $manifest,
             'rows' => [],
             'runtime_rows' => $totalRows,
+            'runtime_lookup_bytes' => $runtimeLookupBytes,
             'rows_collected' => false,
             'runtime_files' => $runtimeFiles,
         ];
@@ -234,13 +355,23 @@ final class WP_FTS_AnalyzerPackValidator
      *   runtime_files:array<string,array{sha256:string,rows:int,path:string,compression?:string,first_surface?:string,last_surface?:string,lookup?:array<string,mixed>}>
      * }
      */
-    public function validate(string $manifestPath, bool $collectRows = true): array
+    public function validate(
+        string $manifestPath,
+        bool $collectRows = true,
+        ?int $maxCollectedRuntimeBytes = null,
+        ?string $expectedManifestSha256 = null
+    ): array
     {
+        if ($maxCollectedRuntimeBytes !== null && $maxCollectedRuntimeBytes < 1) {
+            throw new InvalidArgumentException('Analyzer pack row collection byte cap must be positive.');
+        }
         $manifestData = $this->load_validated_manifest($manifestPath);
+        $this->assert_expected_manifest_sha256($manifestData['sha256'], $expectedManifestSha256);
         $manifestPath = $manifestData['path'];
         $manifest = $manifestData['manifest'];
 
         $packDir = dirname($manifestPath);
+        $runtimeLookupBytes = $this->assert_runtime_lookup_pack_bytes($manifest, $packDir);
         $rows = [];
         $collectRuntimeRows = $collectRows
             && (bool) $manifest['fixture_only']
@@ -249,6 +380,7 @@ final class WP_FTS_AnalyzerPackValidator
         $previousKey = null;
         $currentSurface = null;
         $currentSurfaceLemmaCount = 0;
+        $collectedRuntimeBytes = 0;
         $totalRows = 0;
         $runtimeDigest = hash_init('sha256');
         foreach ($manifest['runtime']['files'] as $file) {
@@ -269,6 +401,9 @@ final class WP_FTS_AnalyzerPackValidator
                 $previousKey,
                 $currentSurface,
                 $currentSurfaceLemmaCount,
+                $collectedRuntimeBytes,
+                $maxCollectedRuntimeBytes,
+                (int) $file['rows'],
                 $runtimeDigest,
                 $rows
             );
@@ -311,51 +446,111 @@ final class WP_FTS_AnalyzerPackValidator
             throw new RuntimeException('Analyzer pack runtime total_sha256 mismatch.');
         }
 
-        $manifestDigest = hash_file('sha256', $manifestPath);
-        if (!is_string($manifestDigest)) {
-            throw new RuntimeException('Could not compute manifest digest.');
-        }
-
         return [
             'manifest_path' => $manifestPath,
-            'manifest_sha256' => $manifestDigest,
+            'manifest_sha256' => $manifestData['sha256'],
             'manifest' => $manifest,
             'rows' => $rows,
             'runtime_rows' => $totalRows,
+            'runtime_decoded_bytes' => $collectedRuntimeBytes,
+            'runtime_lookup_bytes' => $runtimeLookupBytes,
             'rows_collected' => $collectRuntimeRows,
             'runtime_files' => $runtimeFiles,
         ];
     }
 
     /**
-     * Attest one candidate runtime shard and its optional lookup sidecar before
-     * a lazy dictionary lookup reads either file.
+     * Validate one candidate shard without retaining its open generation.
+     *
+     * This compatibility API proves file integrity only. It cannot bind a later
+     * pathname-based read to the validated generation; lazy lookup code must use
+     * open_attested_runtime_file() and keep its returned descriptors open.
      *
      * @param array{path:string,sha256:string,lookup?:array{path:string,sha256:string}} $runtimeFile
      */
     public function attest_runtime_file(array $runtimeFile): void
     {
-        $this->attest_file_digest(
+        $runtime = $this->open_attested_file(
             $runtimeFile['path'],
             $runtimeFile['sha256'],
             'Runtime digest mismatch for the candidate analyzer shard.'
         );
+        $lookupHandle = null;
+        try {
+            if (isset($runtimeFile['lookup']) && is_array($runtimeFile['lookup'])) {
+                $lookup = $this->open_attested_file(
+                    $runtimeFile['lookup']['path'],
+                    $runtimeFile['lookup']['sha256'],
+                    'Runtime lookup digest mismatch for the candidate analyzer shard.'
+                );
+                $lookupHandle = $lookup['handle'];
+            }
+        } finally {
+            if (is_resource($lookupHandle)) {
+                fclose($lookupHandle);
+            }
+            fclose($runtime['handle']);
+        }
+    }
 
-        if (!isset($runtimeFile['lookup'])) {
-            return;
+    /**
+     * Open and attest one candidate runtime shard and its lookup sidecar.
+     *
+     * The returned descriptors bind the lookup to the exact generations whose
+     * digests were accepted. Per-block digests are derived during that same
+     * authenticated runtime pass, so a later same-inode write cannot poison the
+     * decoded-block cache under the manifest's expected whole-file digest.
+     * Callers own both descriptors and must close them after the block reads.
+     *
+     * @param array{path:string,sha256:string,lookup:array{path:string,sha256:string,blocks:array<int,array{offset:int,length:int}>}} $runtimeFile
+     * @return array{runtime:resource,lookup:resource,block_sha256:string[]}
+     */
+    public function open_attested_runtime_file(array $runtimeFile): array
+    {
+        if (
+            !isset($runtimeFile['lookup'])
+            || !is_array($runtimeFile['lookup'])
+            || !isset($runtimeFile['lookup']['blocks'])
+            || !is_array($runtimeFile['lookup']['blocks'])
+            || $runtimeFile['lookup']['blocks'] === []
+        ) {
+            throw new LogicException('Lazy runtime attestation requires a lookup sidecar.');
+        }
+        if (count($runtimeFile['lookup']['blocks']) > WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_FILE) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'lookup_blocks',
+                'Analyzer pack lookup exceeds the 256-block per-file limit.'
+            );
         }
 
-        $this->attest_file_digest(
-            $runtimeFile['lookup']['path'],
-            $runtimeFile['lookup']['sha256'],
-            'Runtime lookup digest mismatch for the candidate analyzer shard.'
+        $runtime = $this->open_attested_file(
+            $runtimeFile['path'],
+            $runtimeFile['sha256'],
+            'Runtime digest mismatch for the candidate analyzer shard.',
+            $runtimeFile['lookup']['blocks']
         );
+        try {
+            $lookup = $this->open_attested_file(
+                $runtimeFile['lookup']['path'],
+                $runtimeFile['lookup']['sha256'],
+                'Runtime lookup digest mismatch for the candidate analyzer shard.'
+            );
+        } catch (Throwable $error) {
+            fclose($runtime['handle']);
+            throw $error;
+        }
+
+        return [
+            'runtime' => $runtime['handle'],
+            'lookup' => $lookup['handle'],
+            'block_sha256' => $runtime['block_sha256'],
+        ];
     }
 
     /**
      * Read and decode a manifest as an associative array.
      *
-     * @return array<string,mixed>
+     * @return array{manifest:array<string,mixed>,sha256:string}
      */
     private function read_manifest(string $manifestPath): array
     {
@@ -392,7 +587,10 @@ final class WP_FTS_AnalyzerPackValidator
         }
         WP_FTS_Analyzer_Config_Limits::assert_manifest_graph($decoded);
 
-        return $decoded;
+        return [
+            'manifest' => $decoded,
+            'sha256' => hash('sha256', $json),
+        ];
     }
 
     /**
@@ -547,19 +745,26 @@ final class WP_FTS_AnalyzerPackValidator
                 if ($lookupBlocks > WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_PACK) {
                     throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
                         'lookup_blocks',
-                        'Analyzer pack exceeds the 4,096-block metadata limit.'
+                        'Analyzer pack exceeds the 8,192-block metadata limit.'
                     );
                 }
             }
         }
     }
 
+    /** Validate a declared shard boundary as a storable normalized token. */
     private function validate_manifest_runtime_surface(
         string $surface,
         WP_FTS_Normalizer $normalizer,
         string $language,
         string $field
     ): void {
+        if (!WP_FTS_TermNamespace::term_key_fits($surface, $language)) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'runtime_token_bytes',
+                "Analyzer pack runtime {$field} exceeds the storage term-key limit for {$language}."
+            );
+        }
         if (strpbrk($surface, " \t\r\n") !== false || str_contains($surface, WP_FTS_TermNamespace::SEPARATOR)) {
             throw new RuntimeException("Analyzer pack runtime {$field} must be one normalized token.");
         }
@@ -574,6 +779,8 @@ final class WP_FTS_AnalyzerPackValidator
      * @param string|null $previousGlobalKey Previous row key from earlier files.
      * @param string|null $currentGlobalSurface Current surface from earlier rows/files.
      * @param int $currentGlobalSurfaceLemmaCount Distinct lemmas seen for the current surface.
+     * @param int $collectedRuntimeBytes Decoded bytes inspected for eager row collection.
+     * @param int $expectedRows Manifest-declared rows for this runtime file.
      * @param HashContext $runtimeDigest Digest context for normalized data rows.
      * @param array<int,array{surface:string,lemma:string,file:string,line:int}> $rows
      * @return array{
@@ -591,6 +798,9 @@ final class WP_FTS_AnalyzerPackValidator
         ?string &$previousGlobalKey,
         ?string &$currentGlobalSurface,
         int &$currentGlobalSurfaceLemmaCount,
+        int &$collectedRuntimeBytes,
+        ?int $maxCollectedRuntimeBytes,
+        int $expectedRows,
         HashContext $runtimeDigest,
         array &$rows
     ): array
@@ -606,6 +816,15 @@ final class WP_FTS_AnalyzerPackValidator
         $lastSurface = null;
         try {
             while (($line = WP_FTS_LemmaPackLimits::read_runtime_line($handle, $compression)) !== false) {
+                if ($collectRows && $maxCollectedRuntimeBytes !== null) {
+                    $collectedRuntimeBytes += strlen($line);
+                    if ($collectedRuntimeBytes > $maxCollectedRuntimeBytes) {
+                        throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                            'eager_fixture_bytes',
+                            'Fixture-only eager lemma runtime exceeds the 8 MiB decoded byte limit.'
+                        );
+                    }
+                }
                 $lineNumber++;
                 $line = rtrim((string) $line, "\n");
                 $line = rtrim($line, "\r");
@@ -647,6 +866,9 @@ final class WP_FTS_AnalyzerPackValidator
                 $firstSurface ??= $surface;
                 $lastSurface = $surface;
                 $rowsCount++;
+                if ($rowsCount > $expectedRows) {
+                    throw new RuntimeException("Runtime row count exceeds the manifest declaration for {$path}.");
+                }
                 hash_update($runtimeDigest, $key . "\n");
                 hash_update($rowsDigest, $key . "\n");
 
@@ -709,6 +931,9 @@ final class WP_FTS_AnalyzerPackValidator
             $runtimeDigest,
             $runtimeRows
         );
+        if (!hash_equals(strtolower((string) $lookup['sha256']), $metadata['content_sha256'])) {
+            throw new RuntimeException("Runtime lookup digest mismatch for {$lookup['path']}.");
+        }
         if (count($metadata['blocks']) !== (int) $lookup['blocks']) {
             throw new RuntimeException("Runtime lookup block count mismatch for {$lookup['path']}.");
         }
@@ -733,12 +958,37 @@ final class WP_FTS_AnalyzerPackValidator
 
     /**
      * Cache successful file attestations by path, filesystem generation, and
-     * expected digest so repeated lookups do not rehash unchanged shards. A
-     * generation from the current or a future clock second remains uncached
-     * because PHP may expose only second-resolution mtime and ctime values.
+     * expected digest so repeated lookups do not rehash unchanged shards. Every
+     * generation is cached in this request-local validator instance. Only an
+     * older stable generation enters the process-static cache, because another
+     * validator must re-attest a current/future-second replacement when PHP
+     * exposes only second-resolution mtime and ctime values.
      */
     private function attest_file_digest(string $path, string $expectedDigest, string $mismatchMessage): string
     {
+        $attestation = $this->open_attested_file($path, $expectedDigest, $mismatchMessage);
+        fclose($attestation['handle']);
+
+        return strtolower($expectedDigest);
+    }
+
+    /**
+     * Open one exact file generation and authenticate its bounded contents.
+     *
+     * Optional contiguous block ranges derive encoded block digests from the
+     * same stream whose whole-file digest is accepted. Those digests have their
+     * own 8,192-block process ceiling and are reused only with the matching
+     * filesystem generation, expected digest, and block layout.
+     *
+     * @param array<int,array{offset:int,length:int}>|null $blocks
+     * @return array{handle:resource,block_sha256:string[]}
+     */
+    private function open_attested_file(
+        string $path,
+        string $expectedDigest,
+        string $mismatchMessage,
+        ?array $blocks = null
+    ): array {
         clearstatcache(true, $path);
         $stat = @stat($path);
         if (!is_array($stat)) {
@@ -746,6 +996,246 @@ final class WP_FTS_AnalyzerPackValidator
         }
 
         $expectedDigest = strtolower($expectedDigest);
+        $generation = $this->file_generation($stat, $path);
+        $key = hash('sha256', $path . "\0" . implode("\0", $generation) . "\0" . $expectedDigest);
+        $now = time();
+        $cacheableGeneration = $stat['mtime'] < $now && $stat['ctime'] < $now;
+        if ($stat['size'] > WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_LOOKUP_BYTES_PER_PACK) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'runtime_lookup_bytes',
+                'Analyzer pack runtime and lookup files exceed the 16 MiB limit.'
+            );
+        }
+
+        $handle = @fopen($path, 'rb');
+        if (!is_resource($handle)) {
+            throw new RuntimeException("Could not open analyzer pack file {$path} for hashing.");
+        }
+        try {
+            $openedStat = fstat($handle);
+            if (!is_array($openedStat) || !$this->same_file_generation($generation, $openedStat)) {
+                throw new RuntimeException("Analyzer pack file generation changed before opening: {$path}.");
+            }
+
+            $layout = $blocks === null ? null : $this->runtime_block_layout_key($blocks);
+            $digestIsCached = isset($this->requestDigestAttestations[$key])
+                || ($cacheableGeneration && isset(self::$digestAttestations[$key]));
+            $blockSha256 = $layout === null
+                ? []
+                : ($this->requestRuntimeBlockAttestations[$key][$layout]
+                    ?? ($cacheableGeneration ? (self::$runtimeBlockAttestations[$key][$layout] ?? null) : null));
+            if ($digestIsCached && ($layout === null || is_array($blockSha256))) {
+                $this->requestDigestAttestations[$key] = true;
+                if ($layout !== null) {
+                    $this->requestRuntimeBlockAttestations[$key][$layout] = $blockSha256;
+                }
+
+                return ['handle' => $handle, 'block_sha256' => $blockSha256 ?? []];
+            }
+
+            $boundedDigest = $blocks === null
+                ? WP_FTS_LemmaPackLimits::hash_open_file_bounded(
+                    $handle,
+                    WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_LOOKUP_BYTES_PER_PACK,
+                    'runtime_lookup_bytes',
+                    'Analyzer pack runtime and lookup files exceed the 16 MiB limit.'
+                )
+                : $this->hash_runtime_blocks($handle, $blocks);
+            if (!$this->same_file_generation($generation, $boundedDigest['stat'])) {
+                throw new RuntimeException("Analyzer pack file generation changed before hashing: {$path}.");
+            }
+            $computedDigest = $boundedDigest['sha256'];
+            $this->digestFileHashes++;
+            $this->digestBytesHashed += $boundedDigest['bytes'];
+            if (!is_string($computedDigest) || !hash_equals($expectedDigest, strtolower($computedDigest))) {
+                throw new RuntimeException($mismatchMessage);
+            }
+            $this->requestDigestAttestations[$key] = true;
+            $blockSha256 = $boundedDigest['block_sha256'] ?? [];
+            if ($layout !== null) {
+                $this->requestRuntimeBlockAttestations[$key][$layout] = $blockSha256;
+            }
+
+            if ($cacheableGeneration) {
+                $this->cache_file_attestation($key);
+                if ($layout !== null) {
+                    $this->cache_runtime_block_attestation($key, $layout, $blockSha256);
+                }
+            }
+
+            return ['handle' => $handle, 'block_sha256' => $blockSha256];
+        } catch (Throwable $error) {
+            fclose($handle);
+            throw $error;
+        }
+    }
+
+    /**
+     * Hash one indexed runtime stream and each contiguous encoded block in the
+     * same pass.
+     *
+     * @param resource $handle
+     * @param array<int,array{offset:int,length:int}> $blocks
+     * @return array{sha256:string,bytes:int,stat:array<string|int,mixed>,block_sha256:string[]}
+     */
+    private function hash_runtime_blocks(mixed $handle, array $blocks): array
+    {
+        if ($blocks === []) {
+            throw new RuntimeException('Indexed runtime attestation requires declared lookup blocks.');
+        }
+        if (fseek($handle, 0) !== 0) {
+            throw new RuntimeException('Could not rewind indexed runtime payload for hashing.');
+        }
+        $stat = fstat($handle);
+        if (!is_array($stat)) {
+            throw new RuntimeException('Could not identify the indexed runtime generation before hashing.');
+        }
+
+        $digest = hash_init('sha256');
+        $bytes = 0;
+        $blockSha256 = [];
+        foreach ($blocks as $block) {
+            $offset = $block['offset'] ?? null;
+            $length = $block['length'] ?? null;
+            if (!is_int($offset) || !is_int($length) || $offset !== $bytes || $length < 1) {
+                throw new RuntimeException('Indexed runtime block layout is invalid during attestation.');
+            }
+            $blockDigest = hash_init('sha256');
+            $remaining = $length;
+            while ($remaining > 0) {
+                $chunk = fread($handle, min(8192, $remaining));
+                if (!is_string($chunk) || $chunk === '') {
+                    throw new RuntimeException('Could not read an indexed runtime block while hashing.');
+                }
+                $chunkBytes = strlen($chunk);
+                $bytes += $chunkBytes;
+                $remaining -= $chunkBytes;
+                if ($bytes > WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_LOOKUP_BYTES_PER_PACK) {
+                    throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                        'runtime_lookup_bytes',
+                        'Analyzer pack runtime and lookup files exceed the 16 MiB limit.'
+                    );
+                }
+                hash_update($digest, $chunk);
+                hash_update($blockDigest, $chunk);
+            }
+            $blockSha256[] = hash_final($blockDigest);
+        }
+
+        $extra = fread($handle, 1);
+        if (!is_string($extra)) {
+            throw new RuntimeException('Could not confirm the end of an indexed runtime payload.');
+        }
+        if ($extra !== '') {
+            throw new RuntimeException('Indexed runtime contains bytes outside its declared blocks.');
+        }
+
+        return [
+            'sha256' => hash_final($digest),
+            'bytes' => $bytes,
+            'stat' => $stat,
+            'block_sha256' => $blockSha256,
+        ];
+    }
+
+    /**
+     * Bind one block layout to its file-generation attestation cache entry.
+     *
+     * @param array<int,array{offset:int,length:int}> $blocks
+     */
+    private function runtime_block_layout_key(array $blocks): string
+    {
+        if ($blocks === [] || count($blocks) > WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_FILE) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'lookup_blocks',
+                'Analyzer pack lookup exceeds the 256-block per-file limit.'
+            );
+        }
+        $parts = [];
+        foreach ($blocks as $block) {
+            $offset = $block['offset'] ?? null;
+            $length = $block['length'] ?? null;
+            if (!is_int($offset) || !is_int($length) || $offset < 0 || $length < 1) {
+                throw new RuntimeException('Indexed runtime block layout is invalid during attestation.');
+            }
+            $parts[] = $offset . ':' . $length;
+        }
+
+        return hash('sha256', implode(',', $parts));
+    }
+
+    /** Record one bounded successful whole-file attestation. */
+    private function cache_file_attestation(string $key): void
+    {
+        if (isset(self::$digestAttestations[$key])) {
+            return;
+        }
+        self::$digestAttestations[$key] = true;
+        self::$digestAttestationOrder[] = $key;
+        while (count(self::$digestAttestationOrder) > self::MAX_DIGEST_ATTESTATIONS) {
+            $oldest = array_shift(self::$digestAttestationOrder);
+            if (is_string($oldest)) {
+                unset(self::$digestAttestations[$oldest]);
+                $this->remove_runtime_block_attestations($oldest);
+            }
+        }
+    }
+
+    /**
+     * Retain authenticated block digests under the configured 8,192-block cap.
+     *
+     * @param string[] $blockSha256
+     */
+    private function cache_runtime_block_attestation(string $key, string $layout, array $blockSha256): void
+    {
+        if (isset(self::$runtimeBlockAttestations[$key][$layout])) {
+            return;
+        }
+        $blockCount = count($blockSha256);
+        self::$runtimeBlockAttestations[$key][$layout] = $blockSha256;
+        self::$runtimeBlockAttestationOrder[] = [
+            'file' => $key,
+            'layout' => $layout,
+            'blocks' => $blockCount,
+        ];
+        self::$runtimeBlockAttestationCount += $blockCount;
+        while (self::$runtimeBlockAttestationCount > self::MAX_RUNTIME_BLOCK_ATTESTATIONS) {
+            $oldest = array_shift(self::$runtimeBlockAttestationOrder);
+            if (!is_array($oldest)) {
+                break;
+            }
+            unset(self::$runtimeBlockAttestations[$oldest['file']][$oldest['layout']]);
+            if ((self::$runtimeBlockAttestations[$oldest['file']] ?? []) === []) {
+                unset(self::$runtimeBlockAttestations[$oldest['file']]);
+            }
+            self::$runtimeBlockAttestationCount -= $oldest['blocks'];
+        }
+    }
+
+    /** Remove every cached block layout owned by one evicted file generation. */
+    private function remove_runtime_block_attestations(string $key): void
+    {
+        if (!isset(self::$runtimeBlockAttestations[$key])) {
+            return;
+        }
+        foreach (self::$runtimeBlockAttestations[$key] as $blockSha256) {
+            self::$runtimeBlockAttestationCount -= count($blockSha256);
+        }
+        unset(self::$runtimeBlockAttestations[$key]);
+        self::$runtimeBlockAttestationOrder = array_values(array_filter(
+            self::$runtimeBlockAttestationOrder,
+            static fn(array $entry): bool => $entry['file'] !== $key
+        ));
+    }
+
+    /**
+     * Return the filesystem identity fields used to bind a digest cache entry.
+     *
+     * @param array<string|int,mixed> $stat
+     * @return string[]
+     */
+    private function file_generation(array $stat, string $path): array
+    {
         $generation = [];
         foreach (['dev', 'ino', 'size', 'mtime', 'ctime'] as $field) {
             if (!isset($stat[$field]) || !is_int($stat[$field])) {
@@ -758,32 +1248,14 @@ final class WP_FTS_AnalyzerPackValidator
                 $generation[] = $field . '=' . $stat[$field];
             }
         }
-        $key = hash('sha256', $path . "\0" . implode("\0", $generation) . "\0" . $expectedDigest);
-        $now = time();
-        $cacheableGeneration = $stat['mtime'] < $now && $stat['ctime'] < $now;
-        if ($cacheableGeneration && isset(self::$digestAttestations[$key])) {
-            return $expectedDigest;
-        }
 
-        $computedDigest = @hash_file('sha256', $path);
-        if (!is_string($computedDigest) || !hash_equals($expectedDigest, strtolower($computedDigest))) {
-            throw new RuntimeException($mismatchMessage);
-        }
+        return $generation;
+    }
 
-        if (!$cacheableGeneration) {
-            return strtolower($computedDigest);
-        }
-
-        self::$digestAttestations[$key] = true;
-        self::$digestAttestationOrder[] = $key;
-        while (count(self::$digestAttestationOrder) > self::MAX_DIGEST_ATTESTATIONS) {
-            $oldest = array_shift(self::$digestAttestationOrder);
-            if (is_string($oldest)) {
-                unset(self::$digestAttestations[$oldest]);
-            }
-        }
-
-        return strtolower($computedDigest);
+    /** Confirm that fopen() reached the same generation previously statted. */
+    private function same_file_generation(array $expected, array $stat): bool
+    {
+        return $expected === $this->file_generation($stat, 'opened analyzer pack file');
     }
 
     /**
@@ -797,6 +1269,40 @@ final class WP_FTS_AnalyzerPackValidator
         }
 
         return $rows;
+    }
+
+    /**
+     * Reject oversized runtime+lookup payload sets before any full-file digest
+     * or sidecar content read. This is the physical half of the fixed low-end
+     * host envelope; decoded work is bounded independently per v2 block.
+     *
+     * @param array<string,mixed> $manifest
+     */
+    private function assert_runtime_lookup_pack_bytes(array $manifest, string $packDir): int
+    {
+        $bytes = 0;
+        foreach ($manifest['runtime']['files'] as $file) {
+            $paths = [(string) $file['path']];
+            if (isset($file['lookup']['path']) && is_string($file['lookup']['path'])) {
+                $paths[] = $file['lookup']['path'];
+            }
+            foreach ($paths as $relativePath) {
+                $path = $this->runtime_file_path($packDir, $relativePath);
+                $size = @filesize($path);
+                if (!is_int($size) || $size < 0) {
+                    throw new RuntimeException("Could not size analyzer pack file {$relativePath}.");
+                }
+                $bytes += $size;
+                if ($bytes > WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_LOOKUP_BYTES_PER_PACK) {
+                    throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                        'runtime_lookup_bytes',
+                        'Analyzer pack runtime and lookup files exceed the 16 MiB limit.'
+                    );
+                }
+            }
+        }
+
+        return $bytes;
     }
 
     /**
@@ -868,20 +1374,30 @@ final class WP_FTS_AnalyzerPackValidator
     }
 
     /**
-     * @return array{path:string,manifest:array<string,mixed>}
+     * @return array{path:string,manifest:array<string,mixed>,sha256:string}
      */
     private function load_validated_manifest(string $manifestPath): array
     {
         WP_FTS_Analyzer_Config_Limits::assert_path($manifestPath, 'Analyzer pack manifest path');
         $manifestPath = $this->canonical_file($manifestPath, 'manifest');
-        $manifest = $this->read_manifest($manifestPath);
+        $manifestData = $this->read_manifest($manifestPath);
+        $manifest = $manifestData['manifest'];
         $this->validate_manifest_shape($manifest);
         $this->validate_manifest_pack_files($manifest, dirname($manifestPath));
 
         return [
             'path' => $manifestPath,
             'manifest' => $manifest,
+            'sha256' => $manifestData['sha256'],
         ];
+    }
+
+    /** Reject a manifest generation that differs from aggregate preflight. */
+    private function assert_expected_manifest_sha256(string $actual, ?string $expected): void
+    {
+        if ($expected !== null && !hash_equals($expected, $actual)) {
+            throw new RuntimeException('Analyzer pack manifest changed after aggregate preflight.');
+        }
     }
 
     /**
@@ -930,9 +1446,6 @@ final class WP_FTS_AnalyzerPackValidator
     /**
      * @param resource $handle
      */
-    /**
-     * @param resource $handle
-     */
     private function close_runtime_file(mixed $handle, ?string $compression): void
     {
         if ($compression === self::RUNTIME_COMPRESSION_GZIP) {
@@ -943,6 +1456,7 @@ final class WP_FTS_AnalyzerPackValidator
         fclose($handle);
     }
 
+    /** Validate one parsed TSV token before it enters ordering or digest state. */
     private function validate_normalized_runtime_token(
         string $token,
         WP_FTS_Normalizer $normalizer,
@@ -957,11 +1471,18 @@ final class WP_FTS_AnalyzerPackValidator
         if (strpbrk($token, " \t\r\n") !== false || str_contains($token, WP_FTS_TermNamespace::SEPARATOR)) {
             throw new RuntimeException("Runtime {$column} at {$path}:{$lineNumber} must be one normalized token.");
         }
+        if (!WP_FTS_TermNamespace::term_key_fits($token, $language)) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'runtime_token_bytes',
+                "Runtime {$column} at {$path}:{$lineNumber} exceeds the storage term-key limit for {$language}."
+            );
+        }
         if ($normalizer->normalize_token($token, $language) !== $token) {
             throw new RuntimeException("Runtime {$column} at {$path}:{$lineNumber} is not normalized for {$language}.");
         }
     }
 
+    /** Resolve an existing manifest-owned file after applying the path cap. */
     private function canonical_file(string $path, string $label): string
     {
         WP_FTS_Analyzer_Config_Limits::assert_path($path, "Analyzer pack {$label} path");
@@ -973,6 +1494,7 @@ final class WP_FTS_AnalyzerPackValidator
         return $real;
     }
 
+    /** Resolve a runtime path and reject every escape from its pack directory. */
     private function runtime_file_path(string $packDir, string $relativePath): string
     {
         WP_FTS_Analyzer_Config_Limits::assert_path($relativePath, 'Analyzer pack runtime file path');
@@ -993,6 +1515,7 @@ final class WP_FTS_AnalyzerPackValidator
         return $path;
     }
 
+    /** Resolve non-runtime evidence while preserving the same pack-root boundary. */
     private function pack_relative_file_path(string $packDir, string $relativePath, string $label): string
     {
         WP_FTS_Analyzer_Config_Limits::assert_path($relativePath, "Analyzer pack {$label} path");

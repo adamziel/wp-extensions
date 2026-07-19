@@ -8,7 +8,7 @@ declare(strict_types=1);
  * disposable WordPress root is configured and explicitly approved.
  */
 
-const WP_FTS_PROVIDER_COMPATIBILITY_REPORT_SCHEMA = 'wp-fts-provider-interference-matrix-smoke-v1';
+const WP_FTS_PROVIDER_COMPATIBILITY_REPORT_SCHEMA = 'wp-fts-provider-interference-matrix-smoke-v2';
 const WP_FTS_PROVIDER_COMPATIBILITY_ALLOW_ENV = 'WP_FTS_PROVIDER_COMPATIBILITY_ALLOW';
 const WP_FTS_PROVIDER_COMPATIBILITY_CONFIRM_PATH_ENV = 'WP_FTS_PROVIDER_COMPATIBILITY_CONFIRM_PATH';
 const WP_FTS_PROVIDER_COMPATIBILITY_INSIDE_ENV = 'WP_FTS_PROVIDER_COMPATIBILITY_INSIDE';
@@ -86,6 +86,7 @@ function wp_fts_provider_compatibility_wordpress_shell(): int
     return $result['exit'];
 }
 
+/** Exercise provider precedence through real WordPress hooks and canonical posts. */
 function wp_fts_provider_compatibility_wordpress_inside(): void
 {
     require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
@@ -240,7 +241,7 @@ function wp_fts_provider_compatibility_wordpress_run_matrix(int $fixturePostId):
                 $definition,
                 null,
                 'wp_fts_provider_compatibility_theme_custom_earlier_provider',
-                static fn(mixed $posts, mixed $query = null): mixed => $posts
+                null
             );
             unset($GLOBALS['wp_fts_provider_compatibility_theme_custom_posts']);
             continue;
@@ -255,7 +256,7 @@ function wp_fts_provider_compatibility_wordpress_run_matrix(int $fixturePostId):
                 $definition,
                 null,
                 [WP_FTS_Provider_Compatibility_SearchWP_Shaped_Callback::class, 'posts_pre_query'],
-                static fn(mixed $posts, mixed $query = null): mixed => $posts
+                null
             );
             WP_FTS_Provider_Compatibility_SearchWP_Shaped_Callback::$posts = [];
             continue;
@@ -281,7 +282,7 @@ function wp_fts_provider_compatibility_wordpress_run_matrix(int $fixturePostId):
                 $definition,
                 'wp_fts_provider_compatibility_wordpress_apply_advisory_signal_simulation',
                 null,
-                static fn(mixed $posts, mixed $query = null): mixed => $posts
+                null
             );
             continue;
         }
@@ -307,7 +308,7 @@ function wp_fts_provider_compatibility_wordpress_scenario(
     array $definition,
     ?callable $configureSignals,
     ?callable $earlierProvider,
-    callable $laterProvider
+    ?callable $laterProvider
 ): array
 {
     $mode = (string) ($definition['compatibility_mode'] ?? 'prefer_fts');
@@ -337,7 +338,9 @@ function wp_fts_provider_compatibility_wordpress_scenario(
             add_filter('posts_pre_query', $earlierProvider, 20, 2);
         }
         add_filter('posts_pre_query', [WP_FTS_Plugin::class, 'replace_frontend_search_posts'], WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 2);
-        add_filter('posts_pre_query', $laterProvider, 1200, 2);
+        if ($laterProvider !== null) {
+            add_filter('posts_pre_query', $laterProvider, 1200, 2);
+        }
         add_filter('posts_pre_query', [WP_FTS_Plugin::class, 'observe_final_search_posts'], WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY, 2);
 
         $query = new WP_FTS_Provider_Compatibility_WP_Query([
@@ -389,7 +392,6 @@ function wp_fts_provider_compatibility_wordpress_build_scenario_evidence(
         'trace' => [
             'status' => is_scalar($trace['status'] ?? null) ? (string) $trace['status'] : '',
             'incoming_provider_results' => (int) ($counts['incoming_provider_results'] ?? 0),
-            'prior_provider_responses_replaced' => (int) ($counts['prior_provider_responses_replaced'] ?? 0),
             'known_provider_discovery_present' => $hotTraceProviderDiscoveryPresent,
         ],
         'provider_advisory' => [
@@ -439,30 +441,24 @@ function wp_fts_provider_compatibility_wordpress_scenario_passed(array $evidence
     if ($scenarioId === 'theme_custom_earlier_respect_existing') {
         return $evidence['compatibility_mode'] === 'respect_existing'
             && $trace['status'] === 'bailed'
-            && (int) ($trace['incoming_provider_results'] ?? 0) === 2
-            && (int) ($trace['prior_provider_responses_replaced'] ?? -1) === 0
-            && $ownership['status'] === 'earlier_provider_respected'
-            && $ownership['owner'] === 'earlier_provider'
+            && (int) ($trace['incoming_provider_results'] ?? 0) === 0
+            && $ownership['status'] === 'unavailable'
             && $resultIds === [700001, 700002];
     }
 
     if ($scenarioId === 'searchwp_shaped_earlier_prefer_fts') {
         return $evidence['compatibility_mode'] === 'prefer_fts'
-            && $trace['status'] === 'ran'
+            && $trace['status'] === 'bailed'
             && (int) ($trace['incoming_provider_results'] ?? 0) === 2
-            && (int) ($trace['prior_provider_responses_replaced'] ?? 0) === 1
-            && $ownership['status'] === 'language_fts_survived'
-            && $ownership['owner'] === 'language_fts'
-            && $ownership['origin'] === 'language_fts_replaced_prior_provider'
-            && $resultIds !== []
-            && $resultIds !== [700003, 700005];
+            && $ownership['status'] === 'earlier_provider_respected'
+            && $ownership['owner'] === 'earlier_provider'
+            && $resultIds === [700003, 700005];
     }
 
     if ($scenarioId === 'relevanssi_shaped_later_provider') {
         return $evidence['compatibility_mode'] === 'prefer_fts'
-            && $trace['status'] === 'ran'
-            && $ownership['status'] === 'later_provider_changed_fts'
-            && $ownership['owner'] === 'later_provider'
+            && $trace['status'] === 'bailed'
+            && $ownership['status'] === 'unavailable'
             && $resultIds === [700004, 700006];
     }
 

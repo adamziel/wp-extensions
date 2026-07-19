@@ -31,7 +31,7 @@ function wp_fts_encoded_metadata_proc_status(): array
                 continue;
             }
             $kilobytes = substr($value, 0, $space);
-            if (ctype_digit($kilobytes) && strtolower(trim(substr($value, $space + 1))) === 'kb') {
+            if ($kilobytes !== '' && strspn($kilobytes, '0123456789') === strlen($kilobytes) && strtolower(trim(substr($value, $space + 1))) === 'kb') {
                 $values[$key] = (int) $kilobytes * 1024;
             }
         }

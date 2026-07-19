@@ -12,8 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import",
-        "indexed-runtime-lookups"
+        "indexed-runtime-lookups",
+        "unimorph-source-import"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -24,16 +24,16 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "f8ba77ca68ace2a813ae072f4b702d81cfce2c48fee873bddb3b371275c3ab3f",
+                "sha256": "000867644e22a310cc1172d0022c5ba080db95220ab15e18f24c05bca525fd35",
                 "rows": 1049,
                 "first_surface": "అంటించాడు",
                 "last_surface": "స్తుతించింది",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0001.tsv.gz.lookup",
-                    "sha256": "af82d98f01bcf5be6777531456d9de955a1721f1fdc95c607f52a8028f64f0fa",
-                    "blocks": 1
+                    "sha256": "49d70405d06dcedb5936b4427cb6ee8448dccb71f2c1214c0fcf6dbafb3c5633",
+                    "blocks": 4
                 }
             }
         ]
@@ -63,16 +63,48 @@
         "parse_stats": {
             "source_path": "tel",
             "source_files": 1,
-            "files": [
-                "tel"
-            ],
+            "source_path_bytes": 3,
+            "source_entries": 1,
+            "source_max_depth": 0,
+            "source_physical_bytes": 95069,
+            "source_physical_byte_limit": 67108864,
             "source_lines": 1699,
+            "source_line_limit": 8000000,
+            "source_decoded_bytes": 95069,
+            "source_decoded_byte_limit": 536870912,
             "blank_lines": 151,
             "comment_lines": 0,
             "placeholder_rows": 0,
             "invalid_runtime_token_rows": 0,
             "rows_with_features": 1548,
-            "accepted_rows": 1548
+            "accepted_rows": 1548,
+            "staged_tsv_bytes": 107838,
+            "staged_row_limit": 1250000,
+            "staged_tsv_byte_limit": 67108864,
+            "accepted_source_rows": 1548,
+            "rows_with_tags": 1548,
+            "rows_with_source_notes": 1548,
+            "runtime_rows": 1049,
+            "unique_source_rows": 1049,
+            "deduplicated_rows": 499,
+            "ambiguous_surfaces": 3,
+            "unambiguous_surfaces": 1037,
+            "ambiguity_noop_surfaces": 0,
+            "ambiguity_noop_source_pairs": 0,
+            "chunk_files": 1,
+            "chunk_merge_outputs": 0,
+            "chunk_merge_passes": 0,
+            "max_live_chunk_files": 1,
+            "max_chunk_merge_inputs": 1,
+            "chunk_merge_fan_in_limit": 64,
+            "max_chunk_lexical_bytes": 52438,
+            "chunk_lexical_byte_limit": 8388608,
+            "runtime_decoded_bytes": 52438,
+            "runtime_encoded_bytes": 4306,
+            "lookup_index_bytes": 931,
+            "lookup_blocks": 4,
+            "runtime_lookup_bytes": 5237,
+            "runtime_lookup_byte_limit": 16777216
         }
     },
     "license": {

@@ -21,7 +21,7 @@ $zipSha = wp_fts_frontier_env('WP_FTS_FRONTIER_ZIP_SHA256');
 $expectedEngine = wp_fts_frontier_env('WP_FTS_FRONTIER_ENGINE');
 if (
     strlen($sourceSha) !== 40
-    || !ctype_xdigit($sourceSha)
+    || !wp_fts_frontier_is_ascii_hex($sourceSha)
     || strtolower($sourceSha) !== $sourceSha
     || !wp_fts_frontier_is_sha256($zipSha)
 ) {
@@ -762,12 +762,14 @@ final class WP_FTS_Frontier_WPDB
     /** @var array<int,array{method:string,sql:string,row_count:int,duration_ms:float}> */
     private array $statements = [];
 
+    /** Expose only the wpdb surface needed to exercise the real storage writer. */
     public function __construct(public mysqli $dbh, public string $prefix)
     {
         $this->posts = $prefix . 'posts';
         $this->term_relationships = $prefix . 'term_relationships';
     }
 
+    /** Expand the proof's `%d`/`%s` subset without hiding the executed SQL. */
     public function prepare(string $sql, mixed ...$args): string
     {
         $result = '';
@@ -791,6 +793,7 @@ final class WP_FTS_Frontier_WPDB
         return $result;
     }
 
+    /** Execute and record mutation statements with their affected-row result. */
     public function query(string $sql): int|bool
     {
         $started = hrtime(true);
@@ -825,11 +828,13 @@ final class WP_FTS_Frontier_WPDB
         return $rows;
     }
 
+    /** Return one wpdb-shaped object while sharing the recorded result path. */
     public function get_row(string $sql): ?object
     {
         return $this->get_results($sql)[0] ?? null;
     }
 
+    /** Execute scalar reads without dropping their timing or statement evidence. */
     public function get_var(string $sql): mixed
     {
         $started = hrtime(true);
@@ -844,6 +849,7 @@ final class WP_FTS_Frontier_WPDB
         return $row[0] ?? null;
     }
 
+    /** Mark the statement stream immediately before the operation under test. */
     public function statement_marker(): int
     {
         return count($this->statements);
@@ -855,6 +861,7 @@ final class WP_FTS_Frontier_WPDB
         return array_slice($this->statements, $marker);
     }
 
+    /** Retain exact SQL because role and size assertions run after the mutation. */
     private function record(string $method, string $sql, int $rowCount, int $started): void
     {
         $this->statements[] = [
@@ -1346,6 +1353,7 @@ VALUES ('meta:search-epoch', 'meta', 0, {$nextEpoch}, 'meta', 0, 0, '', 0, 0, 0,
     return $sql;
 }
 
+/** Derive collision-resistant reset names that remain within MySQL's 64-byte limit. */
 function wp_fts_frontier_reset_table_name(string $table, string $role): string
 {
     $suffix = '_r' . ($role === 'new' ? 'n' : 'o')
@@ -1487,6 +1495,7 @@ function wp_fts_frontier_prefix_tables(mysqli $db, string $prefix): array
     return $tables;
 }
 
+/** Read Linux peak RSS for the low-host memory gate, or zero when unavailable. */
 function wp_fts_frontier_linux_vmhwm_bytes(): int
 {
     $lines = @file('/proc/self/status', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
@@ -1498,7 +1507,7 @@ function wp_fts_frontier_linux_vmhwm_bytes(): int
             continue;
         }
         $parts = array_values(array_filter(explode(' ', trim(substr($line, strlen('VmHWM:'))))));
-        if (count($parts) !== 2 || !ctype_digit($parts[0]) || strtolower($parts[1]) !== 'kb') {
+        if (count($parts) !== 2 || !wp_fts_frontier_is_ascii_digits($parts[0]) || strtolower($parts[1]) !== 'kb') {
             return 0;
         }
         return (int) $parts[0] * 1024;
@@ -1507,6 +1516,7 @@ function wp_fts_frontier_linux_vmhwm_bytes(): int
     return 0;
 }
 
+/** Install the exact four-table contract used by the old-posting proof. */
 function wp_fts_frontier_create_schema(
     WP_FTS_Frontier_WPDB $db,
     string $terms,
@@ -1558,6 +1568,7 @@ KEY dirty (post_id,kind)
     }
 }
 
+/** Fail the fixture immediately instead of allowing a partial seed state. */
 function wp_fts_frontier_query(mysqli $db, string $sql): void
 {
     if ($db->query($sql) === false) {
@@ -1565,6 +1576,7 @@ function wp_fts_frontier_query(mysqli $db, string $sql): void
     }
 }
 
+/** Promote a failed proof invariant to the enclosing cleanup-aware error path. */
 function wp_fts_frontier_assert(bool $condition, string $message): void
 {
     if (!$condition) {
@@ -1572,6 +1584,7 @@ function wp_fts_frontier_assert(bool $condition, string $message): void
     }
 }
 
+/** Require every wrapper binding that makes the destructive proof disposable. */
 function wp_fts_frontier_env(string $name): string
 {
     $value = getenv($name);
@@ -1581,13 +1594,27 @@ function wp_fts_frontier_env(string $name): string
     return $value;
 }
 
+/** Accepts only a nonempty sequence of ASCII decimal digits. */
+function wp_fts_frontier_is_ascii_digits(string $value): bool
+{
+    return $value !== '' && strspn($value, '0123456789') === strlen($value);
+}
+
+/** Accepts only a nonempty sequence of ASCII hexadecimal digits. */
+function wp_fts_frontier_is_ascii_hex(string $value): bool
+{
+    return $value !== '' && strspn($value, '0123456789abcdefABCDEF') === strlen($value);
+}
+
+/** Accept only the lowercase digest representation written to evidence. */
 function wp_fts_frontier_is_sha256(string $value): bool
 {
     return strlen($value) === 64
-        && ctype_xdigit($value)
+        && wp_fts_frontier_is_ascii_hex($value)
         && strtolower($value) === $value;
 }
 
+/** Convert a monotonic start sample into statement-duration milliseconds. */
 function wp_fts_frontier_elapsed_ms(int $started): float
 {
     return (hrtime(true) - $started) / 1_000_000;

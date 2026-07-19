@@ -5,6 +5,7 @@ require_once __DIR__ . '/../src/bootstrap.php';
 
 $wp_fts_extension_output_checks = 0;
 
+/** Records one assertion and throws when the extension-output invariant fails. */
 function wp_fts_extension_output_check(bool $condition, string $message): void
 {
     global $wp_fts_extension_output_checks;
@@ -14,6 +15,7 @@ function wp_fts_extension_output_check(bool $condition, string $message): void
     }
 }
 
+/** Runs a boundary probe and returns the exception it produced, if any. */
 function wp_fts_extension_output_caught(callable $callback): ?Throwable
 {
     try {

@@ -914,6 +914,7 @@ class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadata
     {
     }
 
+    /** Preserve optional posting capabilities while adding timing instrumentation. */
     public static function wrap(WP_FTS_Storage&WP_FTS_DocumentMetadataStorage $inner): self
     {
         if ($inner instanceof WP_FTS_Row_Postings_Storage && $inner instanceof WP_FTS_Document_Terms_Storage) {
@@ -1107,6 +1108,7 @@ class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadata
 /** Timing adapter for a native posting writer that exposes no posting-list reader. */
 final class WP_FTS_Profiled_Row_Postings_Writer_Storage extends WP_FTS_Profiled_Storage implements WP_FTS_Row_Postings_Writer_Storage, WP_FTS_Document_Terms_Storage
 {
+    /** Time the native writer without substituting posting-list reads. */
     public function replace_doc_postings(int $doc_id, array $term_frequencies): void
     {
         $this->timed(
@@ -1117,11 +1119,13 @@ final class WP_FTS_Profiled_Row_Postings_Writer_Storage extends WP_FTS_Profiled_
         );
     }
 
+    /** @return string[] Stored term keys for one document. */
     public function terms_for_doc(int $doc_id): array
     {
         return $this->timed('terms_for_doc', fn(): array => $this->document_terms_storage()->terms_for_doc($doc_id));
     }
 
+    /** Revalidate the optional writer capability before every delegated call. */
     private function writer_storage(): WP_FTS_Row_Postings_Writer_Storage
     {
         if (!$this->inner instanceof WP_FTS_Row_Postings_Writer_Storage) {
@@ -1131,6 +1135,7 @@ final class WP_FTS_Profiled_Row_Postings_Writer_Storage extends WP_FTS_Profiled_
         return $this->inner;
     }
 
+    /** Revalidate the optional document-terms capability before delegation. */
     private function document_terms_storage(): WP_FTS_Document_Terms_Storage
     {
         if (!$this->inner instanceof WP_FTS_Document_Terms_Storage) {
@@ -1147,6 +1152,7 @@ final class WP_FTS_Profiled_Row_Postings_Writer_Storage extends WP_FTS_Profiled_
  */
 final class WP_FTS_Profiled_Row_Postings_Storage extends WP_FTS_Profiled_Storage implements WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_Document_Terms_Storage
 {
+    /** Time replacement while retaining the row-postings backend semantics. */
     public function replace_doc_postings(int $doc_id, array $term_frequencies): void
     {
         $this->timed(
@@ -1184,6 +1190,7 @@ final class WP_FTS_Profiled_Row_Postings_Storage extends WP_FTS_Profiled_Storage
         );
     }
 
+    /** Time reverse document-term lookup through the preserved capability. */
     public function terms_for_doc(int $doc_id): array
     {
         return $this->timed('terms_for_doc', fn(): array => $this->document_terms_storage()->terms_for_doc($doc_id));
@@ -1198,6 +1205,7 @@ final class WP_FTS_Profiled_Row_Postings_Storage extends WP_FTS_Profiled_Storage
         return $this->inner;
     }
 
+    /** Revalidate reverse term lookup before delegating benchmark traffic. */
     private function document_terms_storage(): WP_FTS_Document_Terms_Storage
     {
         if (!$this->inner instanceof WP_FTS_Document_Terms_Storage) {

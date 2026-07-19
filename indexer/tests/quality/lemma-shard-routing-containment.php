@@ -37,13 +37,13 @@ test_case('64-file lemma packs reject unsafe ranges and route every lookup to at
             $stats = is_array($lookups[$term]['stats'] ?? null) ? $lookups[$term]['stats'] : [];
             assert_same(1, $stats['candidate_files'] ?? null, "{$label} {$term} should binary-select exactly one candidate shard");
             assert_same(1, $stats['files_opened'] ?? null, "{$label} {$term} should open exactly one runtime shard");
-            assert_same(1, $stats['lines_read'] ?? null, "{$label} {$term} should scan only its one-row shard");
+            assert_same(2, $stats['lines_read'] ?? null, "{$label} {$term} should use one bounded locate comparison and read its one result row");
             assert_true(
                 (int) ($stats['bytes_loaded'] ?? 0) > 0
-                    && (int) ($stats['bytes_loaded'] ?? PHP_INT_MAX) <= 8388608,
-                "{$label} {$term} should decode one nonempty shard within the 8-MiB limit"
+                    && (int) ($stats['bytes_loaded'] ?? PHP_INT_MAX) <= WP_FTS_LemmaPackLookupIndex::MAX_BLOCK_DECODED_BYTES,
+                "{$label} {$term} should decode one nonempty block within the 16-KiB limit"
             );
-            assert_true(in_array('stream-scan', $stats['modes'] ?? [], true), "{$label} {$term} should exercise the no-extension-compatible stream path");
+            assert_true(in_array('block-index', $stats['modes'] ?? [], true), "{$label} {$term} should exercise the required indexed path");
             assert_true((float) ($lookups[$term]['elapsed_seconds'] ?? INF) <= 1.0, "{$label} {$term} lookup should finish within one second");
             $totalFilesOpened += (int) ($stats['files_opened'] ?? 0);
             $totalDecodedBytes += (int) ($stats['bytes_loaded'] ?? 0);
@@ -55,7 +55,7 @@ test_case('64-file lemma packs reject unsafe ranges and route every lookup to at
         assert_same(0, $miss['files_opened'] ?? null, "{$label} gap miss should not open a runtime file");
         assert_same(0, $miss['bytes_loaded'] ?? null, "{$label} gap miss should decode no runtime bytes");
         assert_same(3, $totalFilesOpened, "{$label} four distinct terms should open only the three shards containing hits");
-        assert_true($totalDecodedBytes <= 8388608, "{$label} all three hit terms together should decode no more than one per-shard byte budget");
+        assert_true($totalDecodedBytes <= 3 * WP_FTS_LemmaPackLookupIndex::MAX_BLOCK_DECODED_BYTES, "{$label} all three hit terms together should decode no more than three bounded blocks");
         assert_true((float) ($payload['elapsed_seconds'] ?? INF) <= 2.0, "{$label} complete invalid and valid 64-shard proof should finish within two seconds");
         assert_true((int) ($payload['php_peak_bytes'] ?? PHP_INT_MAX) <= 128 * 1024 * 1024, "{$label} shard-routing proof should stay below the PHP memory ceiling");
         assert_true((int) ($payload['php_peak_delta_bytes'] ?? PHP_INT_MAX) <= 32 * 1024 * 1024, "{$label} shard-routing proof should add at most 32 MiB PHP allocation");

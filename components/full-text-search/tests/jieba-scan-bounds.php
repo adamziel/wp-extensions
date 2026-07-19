@@ -5,6 +5,7 @@ require_once __DIR__ . '/../src/bootstrap.php';
 
 $wp_fts_jieba_bound_checks = 0;
 
+/** Count one containment assertion and fail with its specific invariant. */
 function wp_fts_jieba_bound_check(bool $condition, string $message): void
 {
     global $wp_fts_jieba_bound_checks;
@@ -14,6 +15,7 @@ function wp_fts_jieba_bound_check(bool $condition, string $message): void
     }
 }
 
+/** Encode one synthetic codepoint without depending on optional mbstring. */
 function wp_fts_jieba_bound_utf8(int $codepoint): string
 {
     if ($codepoint <= 0x7F) {
@@ -35,6 +37,7 @@ function wp_fts_jieba_bound_utf8(int $codepoint): string
         . chr(0x80 | ($codepoint & 0x3F));
 }
 
+/** Read the private full-scan counter used by the fixture's complexity gates. */
 function wp_fts_jieba_bound_scan_count(WP_FTS_ChineseJiebaSegmenter $segmenter): int
 {
     $property = new ReflectionProperty($segmenter, 'dictionaryScanCount');
@@ -42,6 +45,7 @@ function wp_fts_jieba_bound_scan_count(WP_FTS_ChineseJiebaSegmenter $segmenter):
     return (int) $property->getValue($segmenter);
 }
 
+/** Read one Linux RSS metric, with allocator usage as the macOS fallback. */
 function wp_fts_jieba_bound_rss_bytes(string $field): int
 {
     $lines = @file('/proc/self/status', FILE_IGNORE_NEW_LINES);
@@ -52,7 +56,10 @@ function wp_fts_jieba_bound_rss_bytes(string $field): int
                 continue;
             }
             $parts = array_values(array_filter(explode(' ', trim($value)), static fn(string $part): bool => $part !== ''));
-            if (isset($parts[0]) && ctype_digit($parts[0])) {
+            if (isset($parts[0])
+                && $parts[0] !== ''
+                && strspn($parts[0], '0123456789') === strlen($parts[0])
+            ) {
                 return (int) $parts[0] * 1024;
             }
         }
@@ -67,8 +74,26 @@ $root = sys_get_temp_dir() . '/wp-fts-jieba-bound-' . bin2hex(random_bytes(6));
 mkdir($root, 0777, true);
 $dictionary = $root . '/dict.txt';
 $overflowDictionary = $root . '/dict-overflow.txt';
+$snapshotDictionary = $root . '/dict-snapshot.txt';
 
 try {
+    $snapshotRow = "中文词 10 n\n";
+    file_put_contents($snapshotDictionary, $snapshotRow);
+    $snapshotSegmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option([
+        'source_file' => $snapshotDictionary,
+        'expected_sha256' => hash_file('sha256', $snapshotDictionary),
+        'expected_byte_size' => filesize($snapshotDictionary),
+        'fixture_only' => true,
+    ], 'zh');
+    $snapshotStat = stat($snapshotDictionary);
+    file_put_contents($snapshotDictionary, "篡改词 10 n\n");
+    touch($snapshotDictionary, (int) $snapshotStat['mtime']);
+    $snapshotTokens = $snapshotSegmenter('中文词', 'zh');
+    wp_fts_jieba_bound_check(
+        in_array('中文词', $snapshotTokens, true),
+        'a custom dictionary should scan its attested snapshot after a same-size in-place source replacement'
+    );
+
     $chars = [];
     $rows = [];
     $dictionaryWords = [];
@@ -255,6 +280,9 @@ try {
         'candidate 5,001 must reject during the same single dictionary scan'
     );
 } finally {
+    if (is_file($snapshotDictionary)) {
+        unlink($snapshotDictionary);
+    }
     if (is_file($overflowDictionary)) {
         unlink($overflowDictionary);
     }

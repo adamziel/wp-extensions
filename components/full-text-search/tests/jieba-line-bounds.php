@@ -5,6 +5,7 @@ require_once __DIR__ . '/../src/bootstrap.php';
 
 $wp_fts_jieba_line_checks = 0;
 
+/** Records one assertion and throws when a Jieba line-bound invariant fails. */
 function wp_fts_jieba_line_check(bool $condition, string $message): void
 {
     global $wp_fts_jieba_line_checks;
@@ -14,6 +15,7 @@ function wp_fts_jieba_line_check(bool $condition, string $message): void
     }
 }
 
+/** Encodes the fixture's three-byte Unicode code point as UTF-8. */
 function wp_fts_jieba_line_utf8(int $codepoint): string
 {
     return chr(0xE0 | ($codepoint >> 12))
@@ -21,6 +23,7 @@ function wp_fts_jieba_line_utf8(int $codepoint): string
         . chr(0x80 | ($codepoint & 0x3F));
 }
 
+/** Creates a fixture-only segmenter for a line-bound dictionary probe. */
 function wp_fts_jieba_line_segmenter(string $path): WP_FTS_ChineseJiebaSegmenter
 {
     $segmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option([
@@ -36,6 +39,7 @@ function wp_fts_jieba_line_segmenter(string $path): WP_FTS_ChineseJiebaSegmenter
     return $segmenter;
 }
 
+/** Returns the private dictionary-scan count for line-bound assertions. */
 function wp_fts_jieba_line_scan_count(WP_FTS_ChineseJiebaSegmenter $segmenter): int
 {
     $property = new ReflectionProperty($segmenter, 'dictionaryScanCount');

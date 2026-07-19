@@ -138,6 +138,34 @@ RUN_ID="$(php -r 'echo bin2hex(random_bytes(16));')"
 mkdir -p "${EVIDENCE_DIR}" "${BUILD_DIR}"
 chmod 0777 "${EVIDENCE_DIR}"
 
+repo_context_has_preexisting_entry() {
+    local context="${REPO_ROOT}/.context"
+    local first_entry
+
+    if [[ ! -e "${context}" && ! -L "${context}" ]]; then
+        return 1
+    fi
+    # The directory itself may be a pre-created empty evidence parent. A link,
+    # a non-directory, an unreadable directory, or anything below it is input
+    # that existed before this run and therefore invalidates a clean lane.
+    if [[ -L "${context}" || ! -d "${context}" || ! -r "${context}" ]]; then
+        return 0
+    fi
+    first_entry="$(find "${context}" -mindepth 1 -print -quit 2>/dev/null)" || return 0
+    [[ -n "${first_entry}" ]]
+}
+
+# Snapshot the caller's tree before publishing the required RUNNING envelope.
+# The output may intentionally live below the repository (as it does in CI),
+# but that harness-owned file is evidence, not an uncommitted source input.
+if [[ "${SOURCE_REF}" == "HEAD" ]] \
+    && [[ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+    SOURCE_DIRTY=1
+fi
+if repo_context_has_preexisting_entry; then
+    SOURCE_DIRTY=1
+fi
+
 publish_run_envelope() {
     local status="$1"
     local completed="$2"
@@ -437,7 +465,8 @@ trap 'publish_failure_envelope 130 || true; exit 130' INT
 trap 'publish_failure_envelope 143 || true; exit 143' TERM
 trap 'WATCHDOG_ESCALATING=1; publish_failure_envelope 124 || true; exit 124' USR1
 
-# A non-PASS object exists before Docker, Git, package, or database work starts.
+# Apart from the entry cleanliness snapshot above, a non-PASS object exists
+# before Docker, Git, package, or database work starts.
 # The internal watchdog leaves five minutes for the signal trap, raw bundle, and
 # container teardown before escalating to SIGKILL.
 publish_running_envelope
@@ -474,14 +503,9 @@ if ! capture_host SOURCE_SHA source-ref-resolve 60 git -C "${REPO_ROOT}" rev-par
     exit 1
 fi
 
-if [[ "${SOURCE_REF}" == "HEAD" ]]; then
-    if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=all)" ]]; then
-        SOURCE_DIRTY=1
-    fi
-    if (( SOURCE_DIRTY == 1 && ALLOW_DIRTY == 0 )); then
-        echo "BLOCKED: source tree is dirty; commit/stash it or use --allow-dirty for non-acceptance smoke evidence." >&2
-        exit 1
-    fi
+if (( SOURCE_DIRTY == 1 && ALLOW_DIRTY == 0 )); then
+    echo "BLOCKED: source tree is dirty; commit/stash it or use --allow-dirty for non-acceptance smoke evidence." >&2
+    exit 1
 fi
 
 # A clean acceptance lane packages an immutable detached worktree, not the live
@@ -808,7 +832,7 @@ YAML
 phase_timeout_seconds() {
     case "$1" in
         setup|indexing-prepare|reindex-drain|migration-finalize|migration-rerun|multisite-migration|drain) printf '7200\n' ;;
-        cold-prepare|dependency-lob|max-valid-setup|max-valid-search|validate|writer-aggregate|old-posting-frontier|scope-ddl-writer|scope-proof) printf '1800\n' ;;
+        cold-prepare|dependency-lob|max-valid-setup|max-valid-search|search-memory-sample|validate|writer-aggregate|old-posting-frontier|scope-ddl-writer|scope-proof) printf '1800\n' ;;
         concurrent-reader|concurrent-writer) printf '%s\n' "$((CONCURRENCY_SECONDS + 180))" ;;
         *) printf '600\n' ;;
     esac
@@ -982,7 +1006,11 @@ $effectiveCgroup = static function (string $label, string $raw, int $expectedMem
         explode(" ", trim($parts[1] ?? "")),
         static fn(string $value): bool => $value !== ""
     ));
-    $integer = static fn(?string $value): ?int => is_string($value) && ctype_digit($value) ? (int) $value : null;
+    $integer = static fn(?string $value): ?int => is_string($value)
+        && $value !== ""
+        && strspn($value, "0123456789") === strlen($value)
+            ? (int) $value
+            : null;
     $cpuQuota = $integer($cpuParts[0] ?? null);
     $cpuPeriod = $integer($cpuParts[1] ?? null);
     $memoryMax = $integer($parts[2] ?? null);
@@ -1205,7 +1233,7 @@ open_concurrency_window() {
       wordpress php -r '
 $baseline=json_decode((string)file_get_contents("/evidence/concurrency-baseline.json"),true,512,JSON_THROW_ON_ERROR);
 $runId=$baseline["concurrency_run_id"]??null;
-if(!is_string($runId)||strlen($runId)!==32||!ctype_xdigit($runId)){fwrite(STDERR,"Invalid concurrency run identity.\n");exit(1);}
+if(!is_string($runId)||strlen($runId)!==32||strspn($runId,"0123456789abcdefABCDEF")!==32){fwrite(STDERR,"Invalid concurrency run identity.\n");exit(1);}
 $minimum=(int)getenv("WP_FTS_WC_CONCURRENCY_SECONDS");
 $windowSeconds=$minimum+2;
 $start=hrtime(true)+2000000000;
@@ -1347,7 +1375,7 @@ $lines=file($argv[1],FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES);
 $samples=[];
 foreach($lines as $line){
     $parts=explode("\t",$line);
-    if(count($parts)!==4||!is_numeric($parts[0])||!is_numeric($parts[1])||!ctype_digit($parts[2])||!ctype_digit($parts[3])){fwrite(STDERR,"Malformed migration disk sample.\n");exit(1);}
+    if(count($parts)!==4||!is_numeric($parts[0])||!is_numeric($parts[1])||$parts[2]===""||strspn($parts[2],"0123456789")!==strlen($parts[2])||$parts[3]===""||strspn($parts[3],"0123456789")!==strlen($parts[3])){fwrite(STDERR,"Malformed migration disk sample.\n");exit(1);}
     $samples[]=["started_monotonic_seconds"=>(float)$parts[0],"finished_monotonic_seconds"=>(float)$parts[1],"volume_bytes"=>(int)$parts[2],"fts_bytes"=>(int)$parts[3]];
 }
 if($samples===[]){fwrite(STDERR,"No migration disk samples.\n");exit(1);}
@@ -1665,6 +1693,29 @@ run_wpcli_php_phase wpcli-adapter > "${EVIDENCE_DIR}/wpcli-adapter.log"
 run_php_phase cold-ready-request > "${EVIDENCE_DIR}/cold-ready-request.log"
 run_php_phase dependency-lob > "${EVIDENCE_DIR}/dependency-lob.log"
 run_php_phase validate > "${EVIDENCE_DIR}/validate.log"
+# Every required production search shape gets one dedicated PHP lifetime. The
+# finalizer requires the exact source/case inventory and thirteen distinct
+# /proc process identities before accepting any peak-memory gate.
+SEARCH_MEMORY_CASES=(
+    common_or
+    max_valid_or_prefix
+    rare_anchor_and
+    prefix_fanout
+    surface_rarest_exact_anchor_and
+    surface_dense_candidate_prefix_and
+    selective_prefix_anchor_and
+    hidden_dirty_head
+    impossible_and
+    all_packs
+    ambiguous_morphology_or
+    ambiguous_morphology_and
+    field_impact
+)
+for case_id in "${SEARCH_MEMORY_CASES[@]}"; do
+    run_php_phase search-memory-sample \
+      -e "WP_FTS_WC_CASE=${case_id}" \
+      > "${EVIDENCE_DIR}/search-memory-${case_id}.log"
+done
 run_php_phase writer-aggregate > "${EVIDENCE_DIR}/writer-aggregate.log"
 run_old_posting_frontier
 run_php_phase max-valid-setup > "${EVIDENCE_DIR}/max-valid-setup.log"
@@ -1681,11 +1732,7 @@ run_isolated_boundaries
 kill_uncommitted_transaction
 run_php_phase verify-transaction-crash > "${EVIDENCE_DIR}/transaction-crash-verify.log"
 
-if [[ "${PROFILE}" == "2k" ]]; then
-    COLD_SAMPLES=1
-else
-    COLD_SAMPLES=10
-fi
+COLD_SAMPLES=10
 set_run_stage "cold-cache"
 run_php_phase cold-prepare > "${EVIDENCE_DIR}/cold-prepare.log"
 for case_id in common_or max_valid_or_prefix rare_anchor_and prefix_fanout; do

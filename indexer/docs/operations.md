@@ -615,9 +615,13 @@ posts, drain the queue, or force-unlock the shared writer lock.
 
 The Health and Settings tabs also show the known search-provider advisory near
 the compatibility controls. The advisory is meant to help operators decide
-between "Prefer Language FTS" and "Keep another search provider's results"; it
-is not live certification that a detected Jetpack, SearchWP, Relevanssi, or
-ElasticPress installation has been tested end to end on the current site.
+between **Use Language FTS when providers abstain** and **Keep
+provider-integrated searches on WordPress**. The first accepts only a `null`
+handoff from an earlier provider; both modes preserve every non-null provider
+result. The stricter mode keeps a registered third-party provider query on core
+even after `null`. The advisory is not live certification that a detected
+Jetpack, SearchWP, Relevanssi, or ElasticPress installation has been tested end
+to end on the current site.
 
 Request-level diagnostics are collected only for authorized or debug-enabled
 contexts: a `manage_options` user, `WP_FTS_DEBUG`, standard `WP_DEBUG`, or the
@@ -645,14 +649,26 @@ For front-end and wp-admin Posts search replacement, diagnostics also show a
 bounded `posts_pre_query` hook pipeline around Language FTS: callback labels,
 priorities, before/same/after counts, and the FTS priority. This inspects hook
 registration state only; it does not call third-party provider APIs or include
-provider result payloads. A read-only late observer also records request-local
-final ownership for traced searches after later `posts_pre_query` callbacks run.
-It returns the incoming posts unchanged and stores only bounded status, counts,
-post ID samples, and compact hashes so operators can see whether Language FTS
-survived, a later callback changed the FTS output, the null search path was
-replaced by FTS, or coexistence mode respected an earlier provider result. This
-evidence is not persistent telemetry and does not certify Jetpack, SearchWP,
-Relevanssi, ElasticPress, or custom providers end to end.
+provider result payloads. Same-priority/later providers, SQL clause/request
+filters, and post-result membership callbacks already present at the ownership
+gate keep valid queries on core before FTS ranking, with zero FTS statements.
+If a callback first appears during relational execution, the ranked page is
+discarded and the owned query fails closed with later result filters suppressed;
+core LIKE is not run after the bounded FTS statements. The stock WordPress comment-state
+`the_posts` callback is the sole membership-neutral exception. Hook inspection
+is rechecked at replacement time, persisted on the query, and capped at 32
+callbacks/buckets.
+
+A late observer records request-local final ownership only for traced queries
+that passed that ownership gate. It normally returns incoming posts unchanged
+and stores only bounded status, counts, post ID samples, and compact hashes. If
+an adapter has already published its owned unavailable reason and suppressed
+result filters, the observer restores the empty fail-closed page after recording
+any intervening change. The guard is re-armed behind callbacks registered during
+relational execution. This is defense in depth for unexpected dynamic hook
+changes, not a workaround for post-LIMIT filtering. This evidence is not
+persistent telemetry and does not certify Jetpack, SearchWP, Relevanssi,
+ElasticPress, or custom providers end to end.
 
 The same trace includes bounded, redacted SQL query summaries only when the
 environment already collects query data in `$wpdb->queries`, such as a site with
@@ -805,18 +821,22 @@ Current storage is intentionally simple and has known scaling limits:
   postings. The request still uses only plan/rank/hydrate statements and PHP
   remains page-sized, but database work is proportional to those matches.
 - Prefix planning reads one complete indexed surface dictionary range, sums
-  its `doc_freq`, and reads no postings or completion payloads. The 20,001-term
+  its `doc_freq`, and reads no postings or completion payloads. The 20,004-term
   fixture has a 21,000-row dictionary/control ceiling. Multi-group prefix
   `AND` compares that cost with every resolved exact group and starts from the
-  cheapest. An exact anchor uses indexed point probes and intersects the
-  prefix range's actual postings without scanning unrelated per-document
-  postings or creating a candidate×dictionary product. Worst-case acceptance
-  keeps one physical 8,000–8,192-posting candidate to make that invariant
-  observable; this exact-anchor shape has 12k/175k/350k rank-row gates in the
-  constructed 2k/50k/100k lanes. Conversely, a one-document prefix against a
-  corpus-wide exact term must select the prefix anchor, avoid materializing the
-  common posting list, remain exactly three statements, and examine at most
-  2,048 rows.
+  cheapest. For an exact anchor it compares the planned prefix posting sum with
+  `anchor DF upper × 8,192`, using division so PHP integer overflow is
+  impossible. The smaller/equal prefix range drives `term_identity` to posting
+  `PRIMARY`; a larger prefix drives each candidate's capped posting envelope
+  through `post_term_impact` and classifies term IDs through dictionary
+  `PRIMARY`. Both remain one rank statement and avoid a
+  candidate×prefix-posting product. Worst-case acceptance proves range-first at
+  9,900 / 103,500 / 201,000 prefix postings and candidate-first with one
+  physical 8,000–8,192-posting candidate. Candidate-first ranking has a 32,768
+  row ceiling and the complete three-statement search a 65,536 row ceiling.
+  Conversely, a one-document prefix against a corpus-wide exact term must
+  select the prefix anchor, avoid materializing the common posting list, remain
+  exactly three statements, and examine at most 2,048 rows.
 - `optimize` never scans high-frequency posting lists. It removes at most 1,000
   indexed zero-frequency term rows with one maintenance statement.
 - Bounded document sidecars are normally small compared with postings.

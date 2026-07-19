@@ -95,6 +95,7 @@ if ($wp_fts_ldgf_direct) {
 }
 
 if (!function_exists('pll_get_post_language')) {
+    /** Model Polylang language reads and optionally expose per-post SQL fanout. */
     function pll_get_post_language(int $post_id, string $field = 'locale'): string|false
     {
         $GLOBALS['wp_fts_ldgf_polylang_post_language_calls'] = max(
@@ -124,6 +125,7 @@ if (!function_exists('pll_current_language')) {
     }
 }
 
+/** Restore every multilingual-provider fake between independent gold cases. */
 function wp_fts_ldgf_reset_multilingual_globals(): void
 {
     $GLOBALS['wp_fts_ldgf_polylang_post_languages'] = [];

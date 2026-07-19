@@ -12,8 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import",
-        "indexed-runtime-lookups"
+        "indexed-runtime-lookups",
+        "unimorph-source-import"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -24,30 +24,30 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "0bc63a7966e905c9ee146689faa8cdb00160c5bb234bd22be8f4bce31a996b97",
+                "sha256": "4ec8eb6988e94b1fe0f4269669a4799b4fb98ad8e0c9808c615a12bbcc26b0fe",
                 "rows": 100000,
                 "first_surface": "175er",
                 "last_surface": "nottaufe",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0001.tsv.gz.lookup",
-                    "sha256": "a5472b91a2c384728d5b5900ddcbc2761328fff3e7ef937c222de939807c2d89",
-                    "blocks": 49
+                    "sha256": "ab5d63a12de4942e97d1f956c55d1f617fda8018009473f78d7608d7aa2864ae",
+                    "blocks": 135
                 }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "31233772efdc40688ce960b407e431313928d7f4c30db12759f4253fcb29cc4b",
+                "sha256": "04d76cbfb61b22c7803fa5b319e3212bb64e4ececa5bd9a4f5f3a9521d7512e0",
                 "rows": 70700,
                 "first_surface": "nottaufen",
                 "last_surface": "étangs",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0002.tsv.gz.lookup",
-                    "sha256": "178da5faafda820149f019a2c7f39be262ddfa48130b1adcba3aaf55d70b0c85",
-                    "blocks": 35
+                    "sha256": "40c770a8fb0fade9f3013409c92fb5f1946e82df7b69a162afeb37623cc6d9e9",
+                    "blocks": 98
                 }
             }
         ]
@@ -77,16 +77,48 @@
         "parse_stats": {
             "source_path": "deu",
             "source_files": 1,
-            "files": [
-                "deu"
-            ],
+            "source_path_bytes": 3,
+            "source_entries": 1,
+            "source_max_depth": 0,
+            "source_physical_bytes": 18932560,
+            "source_physical_byte_limit": 67108864,
             "source_lines": 519143,
+            "source_line_limit": 8000000,
+            "source_decoded_bytes": 18932560,
+            "source_decoded_byte_limit": 536870912,
             "blank_lines": 0,
             "comment_lines": 0,
             "placeholder_rows": 27,
             "invalid_runtime_token_rows": 71712,
             "rows_with_features": 447404,
-            "accepted_rows": 447404
+            "accepted_rows": 447404,
+            "staged_tsv_bytes": 20934295,
+            "staged_row_limit": 1250000,
+            "staged_tsv_byte_limit": 67108864,
+            "accepted_source_rows": 447404,
+            "rows_with_tags": 447404,
+            "rows_with_source_notes": 447404,
+            "runtime_rows": 170700,
+            "unique_source_rows": 170700,
+            "deduplicated_rows": 276704,
+            "ambiguous_surfaces": 3345,
+            "unambiguous_surfaces": 163685,
+            "ambiguity_noop_surfaces": 0,
+            "ambiguity_noop_source_pairs": 0,
+            "chunk_files": 1,
+            "chunk_merge_outputs": 0,
+            "chunk_merge_passes": 0,
+            "max_live_chunk_files": 1,
+            "max_chunk_merge_inputs": 1,
+            "chunk_merge_fan_in_limit": 64,
+            "max_chunk_lexical_bytes": 3801399,
+            "chunk_lexical_byte_limit": 8388608,
+            "runtime_decoded_bytes": 3801399,
+            "runtime_encoded_bytes": 575387,
+            "lookup_index_bytes": 29692,
+            "lookup_blocks": 233,
+            "runtime_lookup_bytes": 605079,
+            "runtime_lookup_byte_limit": 16777216
         }
     },
     "license": {

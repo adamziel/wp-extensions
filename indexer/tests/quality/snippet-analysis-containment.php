@@ -9,10 +9,12 @@ test_case('morphology highlighting has a page-sized analyzer-call and memory cei
     $analyzer = new class($inner) {
         public int $calls = 0;
 
+        /** Retain the production analyzer behind a call-counting test decorator. */
         public function __construct(private WP_FTS_Analyzer $inner)
         {
         }
 
+        /** Prove highlighting analyzes once per query rather than once per result. */
         public function analyze_query_occurrences(string $query, array $options = []): array
         {
             $this->calls++;

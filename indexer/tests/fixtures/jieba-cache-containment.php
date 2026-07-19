@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
 
+/** Encode the controlled CJK prefix range without requiring mbstring. */
 function wp_fts_jieba_cache_fixture_utf8(int $codepoint): string
 {
     return chr(0xE0 | ($codepoint >> 12))
@@ -34,7 +35,7 @@ function wp_fts_jieba_cache_fixture_proc_status(): array
             }
             $value = trim(substr($line, $separator + 1));
             $space = strpos($value, ' ');
-            if ($space !== false && ctype_digit(substr($value, 0, $space)) && strtolower(trim(substr($value, $space + 1))) === 'kb') {
+            if ($space !== false && $space > 0 && strspn(substr($value, 0, $space), '0123456789') === $space && strtolower(trim(substr($value, $space + 1))) === 'kb') {
                 $values[$key] = (int) substr($value, 0, $space) * 1024;
             }
         }

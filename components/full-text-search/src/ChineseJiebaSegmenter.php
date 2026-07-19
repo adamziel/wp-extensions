@@ -74,6 +74,7 @@ final class WP_FTS_ChineseJiebaSegmenter
     private int $indexedRangeReadCount = 0;
 
     private string $sourceFile;
+    private ?string $attestedSourceSnapshot = null;
     private string $language;
     private string $packId;
     private string $packVersion;
@@ -194,9 +195,12 @@ final class WP_FTS_ChineseJiebaSegmenter
             'sha256' => self::SOURCE_SHA256,
             'byte_size' => self::SOURCE_BYTE_SIZE,
             'path' => $path,
-            'available' => is_file($path)
-                && filesize($path) === self::SOURCE_BYTE_SIZE
-                && hash_file('sha256', $path) === self::SOURCE_SHA256,
+            'available' => self::file_matches_digest(
+                $path,
+                self::SOURCE_BYTE_SIZE,
+                self::SOURCE_SHA256,
+                self::MAX_SOURCE_FILE_BYTES
+            ),
         ];
     }
 
@@ -214,9 +218,7 @@ final class WP_FTS_ChineseJiebaSegmenter
             'sha256' => self::LOOKUP_SHA256,
             'byte_size' => self::LOOKUP_BYTE_SIZE,
             'range_count' => self::LOOKUP_RANGE_COUNT,
-            'available' => is_file($path)
-                && filesize($path) === self::LOOKUP_BYTE_SIZE
-                && hash_file('sha256', $path) === self::LOOKUP_SHA256,
+            'available' => self::lookup_file_is_attested_static($path),
         ];
     }
 
@@ -322,29 +324,25 @@ final class WP_FTS_ChineseJiebaSegmenter
         return $this->sourceFile;
     }
 
+    /** Bind custom dictionaries to a bounded immutable snapshot before use. */
     private function verify_source_file(): void
     {
         if (!is_file($this->sourceFile)) {
             throw new RuntimeException('Jieba dictionary source file is missing.');
         }
 
-        $size = filesize($this->sourceFile);
-        if ($size !== $this->sourceByteSize) {
-            throw new RuntimeException('Jieba dictionary byte size mismatch.');
-        }
-
         // Every indexed range carries a digest anchored by the attested lookup
         // file, so the immutable bundled source is verified lazily as ranges
         // are read. Custom paths keep the eager complete hash contract.
         if ($this->lookupFile !== null) {
+            if (filesize($this->sourceFile) !== $this->sourceByteSize) {
+                throw new RuntimeException('Jieba dictionary byte size mismatch.');
+            }
             return;
         }
 
         $this->sourceHashScanCount++;
-        $hash = hash_file('sha256', $this->sourceFile);
-        if (!is_string($hash) || strtolower($hash) !== $this->sourceSha256) {
-            throw new RuntimeException('Jieba dictionary SHA-256 mismatch.');
-        }
+        $this->attestedSourceSnapshot = $this->snapshot_custom_source_file();
     }
 
     /**
@@ -372,19 +370,14 @@ final class WP_FTS_ChineseJiebaSegmenter
         return $path;
     }
 
+    /** Validate the curated lookup header from its exact bounded byte string. */
     private function lookup_file_is_attested(string $path): bool
     {
-        if (!is_file($path)
-            || filesize($path) !== self::LOOKUP_BYTE_SIZE
-            || hash_file('sha256', $path) !== self::LOOKUP_SHA256
-        ) {
+        $contents = self::attested_lookup_contents($path);
+        if ($contents === null) {
             return false;
         }
-
-        $header = file_get_contents($path, false, null, 0, self::LOOKUP_HEADER_BYTES);
-        if (!is_string($header) || strlen($header) !== self::LOOKUP_HEADER_BYTES) {
-            return false;
-        }
+        $header = substr($contents, 0, self::LOOKUP_HEADER_BYTES);
         $counts = unpack('Nsource_size/Nrange_count', substr($header, 40, 8));
         if (substr($header, 0, 8) !== self::LOOKUP_MAGIC
             || !hash_equals(hex2bin(self::SOURCE_SHA256), substr($header, 8, 32))
@@ -397,6 +390,100 @@ final class WP_FTS_ChineseJiebaSegmenter
         return true;
     }
 
+    /** Verify the curated lookup from one bounded in-memory generation. */
+    private static function lookup_file_is_attested_static(string $path): bool
+    {
+        return self::attested_lookup_contents($path) !== null;
+    }
+
+    /** Return exact curated lookup bytes only when size and digest both match. */
+    private static function attested_lookup_contents(string $path): ?string
+    {
+        if (!is_file($path)) {
+            return null;
+        }
+        $contents = file_get_contents($path, false, null, 0, self::LOOKUP_BYTE_SIZE + 1);
+        if (!is_string($contents)
+            || strlen($contents) !== self::LOOKUP_BYTE_SIZE
+            || hash('sha256', $contents) !== self::LOOKUP_SHA256
+        ) {
+            return null;
+        }
+
+        return $contents;
+    }
+
+    /** Check diagnostics evidence without hashing bytes past its declared cap. */
+    private static function file_matches_digest(string $path, int $bytes, string $sha256, int $maxBytes): bool
+    {
+        if (!is_file($path)) {
+            return false;
+        }
+        try {
+            $result = WP_FTS_LemmaPackLimits::hash_file_bounded(
+                $path,
+                $maxBytes,
+                'source_file_bytes',
+                'Jieba dictionary exceeds the 16 MiB source-file limit.'
+            );
+        } catch (Throwable) {
+            return false;
+        }
+
+        return $result['bytes'] === $bytes && hash_equals(strtolower($sha256), strtolower($result['sha256']));
+    }
+
+    /** Copy and attest a custom source once so later scans cannot race its path. */
+    private function snapshot_custom_source_file(): string
+    {
+        $snapshotPath = tempnam(sys_get_temp_dir(), 'wp-fts-jieba-source-');
+        $source = @fopen($this->sourceFile, 'rb');
+        $snapshot = is_string($snapshotPath) ? @fopen($snapshotPath, 'w+b') : false;
+        if (!is_string($snapshotPath) || !is_resource($source) || !is_resource($snapshot)) {
+            if (is_resource($source)) {
+                fclose($source);
+            }
+            if (is_resource($snapshot)) {
+                fclose($snapshot);
+            }
+            if (is_string($snapshotPath)) {
+                @unlink($snapshotPath);
+            }
+            throw new RuntimeException('Could not create an attested Jieba source snapshot.');
+        }
+
+        try {
+            $result = WP_FTS_LemmaPackLimits::hash_open_file_bounded(
+                $source,
+                self::MAX_SOURCE_FILE_BYTES,
+                'source_file_bytes',
+                'Jieba dictionary exceeds the 16 MiB source-file limit.',
+                $snapshot
+            );
+            if (!fflush($snapshot)) {
+                throw new RuntimeException('Could not flush the attested Jieba source snapshot.');
+            }
+        } catch (Throwable $error) {
+            fclose($source);
+            fclose($snapshot);
+            @unlink($snapshotPath);
+            throw $error;
+        }
+        fclose($source);
+        fclose($snapshot);
+        if ($result['bytes'] !== $this->sourceByteSize) {
+            @unlink($snapshotPath);
+            throw new RuntimeException('Jieba dictionary byte size mismatch.');
+        }
+        if (!hash_equals($this->sourceSha256, strtolower($result['sha256']))) {
+            @unlink($snapshotPath);
+            throw new RuntimeException('Jieba dictionary SHA-256 mismatch.');
+        }
+
+        return $snapshotPath;
+    }
+
+    /** Limit the committed range index to the two repository-owned source paths. */
     private function is_curated_source_path(): bool
     {
         $source = realpath($this->sourceFile);
@@ -410,6 +497,7 @@ final class WP_FTS_ChineseJiebaSegmenter
             || (is_string($checkout) && $source === $checkout);
     }
 
+    /** Close retained indexes and remove the private custom-source snapshot. */
     public function __destruct()
     {
         if (is_resource($this->lookupHandle)) {
@@ -417,6 +505,9 @@ final class WP_FTS_ChineseJiebaSegmenter
         }
         if (is_resource($this->dynamicLookupHandle)) {
             fclose($this->dynamicLookupHandle);
+        }
+        if ($this->attestedSourceSnapshot !== null) {
+            @unlink($this->attestedSourceSnapshot);
         }
     }
 
@@ -689,7 +780,7 @@ final class WP_FTS_ChineseJiebaSegmenter
             return;
         }
 
-        $handle = fopen($this->sourceFile, 'rb');
+        $handle = fopen($this->attestedSourceSnapshot ?? $this->sourceFile, 'rb');
         if (!is_resource($handle)) {
             throw new RuntimeException('Could not open the Jieba dictionary for indexed lookup.');
         }
@@ -835,7 +926,7 @@ final class WP_FTS_ChineseJiebaSegmenter
             throw $this->dynamicLookupFailure;
         }
 
-        $source = fopen($this->sourceFile, 'rb');
+        $source = fopen($this->attestedSourceSnapshot ?? $this->sourceFile, 'rb');
         $index = fopen('php://temp/maxmemory:1048576', 'w+b');
         if (!is_resource($source) || !is_resource($index)) {
             if (is_resource($source)) {
@@ -1067,6 +1158,7 @@ final class WP_FTS_ChineseJiebaSegmenter
         ];
     }
 
+    /** Decode one already-split UTF-8 character for packed lookup addressing. */
     private function utf8_codepoint(string $character): ?int
     {
         if ($character === '') {
@@ -1168,6 +1260,7 @@ final class WP_FTS_ChineseJiebaSegmenter
         $this->cachedCandidateBytes += $candidateBytes;
     }
 
+    /** Test one prefix bit in the fixed-size loaded-prefix bitmap. */
     private function prefix_is_loaded(string $prefix): bool
     {
         if ($this->loadedPrefixBits === null) {
@@ -1183,6 +1276,7 @@ final class WP_FTS_ChineseJiebaSegmenter
         return (ord($this->loadedPrefixBits[$byte]) & $bit) !== 0;
     }
 
+    /** Mark one prefix in the fixed-size loaded-prefix bitmap. */
     private function mark_prefix_loaded(string $prefix): void
     {
         $codepoint = $this->utf8_codepoint($prefix);
@@ -1197,6 +1291,7 @@ final class WP_FTS_ChineseJiebaSegmenter
         $this->loadedPrefixBits[$byte] = chr(ord($this->loadedPrefixBits[$byte]) | $bit);
     }
 
+    /** Return one complete leading UTF-8 character without optional extensions. */
     private function first_utf8_character(string $text): string
     {
         if ($text === '') {
@@ -1247,6 +1342,7 @@ final class WP_FTS_ChineseJiebaSegmenter
         return $line;
     }
 
+    /** Raise the stable typed failure shared by every dictionary read path. */
     private function throw_dictionary_line_limit(): never
     {
         throw new WP_FTS_Analysis_Limit_Exceeded(
@@ -1406,6 +1502,7 @@ final class WP_FTS_ChineseJiebaSegmenter
         $this->cachedRunBytes += $tokenBytes;
     }
 
+    /** Move one bounded run-cache entry to the most-recent position. */
     private function touch_run(string $run): void
     {
         $this->runCacheOrder = array_values(array_filter(
@@ -1415,6 +1512,7 @@ final class WP_FTS_ChineseJiebaSegmenter
         $this->runCacheOrder[] = $run;
     }
 
+    /** Evict the least-recent run and subtract its retained byte accounting. */
     private function evict_oldest_run(): void
     {
         $oldest = array_shift($this->runCacheOrder);
@@ -1573,6 +1671,7 @@ final class WP_FTS_ChineseJiebaSegmenter
         ];
     }
 
+    /** Resolve either a direct dictionary path or its repository root form. */
     private static function source_file_from_path(string $path): ?string
     {
         WP_FTS_Analyzer_Config_Limits::assert_path($path, 'Jieba dictionary path');
@@ -1586,6 +1685,7 @@ final class WP_FTS_ChineseJiebaSegmenter
         return $path;
     }
 
+    /** Parse one public numeric option while enforcing its independent hard max. */
     private static function bounded_positive_int(mixed $value, int $maximum, string $label): int
     {
         if (!is_int($value) && (!is_string($value) || preg_match('/^[1-9][0-9]*$/', $value) !== 1)) {

@@ -1336,10 +1336,12 @@ final class WP_FTS_Mutation_Proof_WPDB
     /** @var array<int,array{method:string,sql:string,elapsed_ms:float,affected_rows:int}> */
     private array $executedStatements = [];
 
+    /** Expose the minimal wpdb contract while retaining every measured statement. */
     public function __construct(public mysqli $dbh, public string $prefix)
     {
     }
 
+    /** Expand the controlled `%d`/`%s` fixture SQL before it reaches MySQL. */
     public function prepare(string $sql, mixed ...$args): string
     {
         $offset = 0;
@@ -1352,6 +1354,7 @@ final class WP_FTS_Mutation_Proof_WPDB
         }, $sql);
     }
 
+    /** Execute mutations and retain timing plus affected-row evidence. */
     public function query(string $sql): int|bool
     {
         $startedAt = hrtime(true);
@@ -1372,6 +1375,7 @@ final class WP_FTS_Mutation_Proof_WPDB
         return $affectedRows;
     }
 
+    /** Preserve scalar-read SQL in the same ordered evidence stream as writes. */
     public function get_var(string $sql): mixed
     {
         $startedAt = hrtime(true);
@@ -1408,6 +1412,7 @@ final class WP_FTS_Mutation_Proof_WPDB
         return $rows;
     }
 
+    /** Mark the stream so one concurrency boundary can be measured in isolation. */
     public function statement_marker(): int
     {
         return count($this->executedStatements);
@@ -1423,6 +1428,7 @@ final class WP_FTS_Mutation_Proof_WPDB
         return array_slice($this->executedStatements, $marker);
     }
 
+    /** Retain exact SQL until the later role, size, and count assertions run. */
     private function record_statement(string $method, string $sql, float $elapsedMs, int $affectedRows): void
     {
         $this->executedStatements[] = [
@@ -1543,11 +1549,13 @@ function wp_fts_mutation_proof_redact_sql(string $sql): string
     return $redacted;
 }
 
+/** Use an ASCII-only digit predicate so SQL redaction is byte-deterministic. */
 function wp_fts_mutation_proof_ascii_digit(string $character): bool
 {
     return $character >= '0' && $character <= '9';
 }
 
+/** Distinguish numeric literals from digits embedded in SQL identifiers. */
 function wp_fts_mutation_proof_identifier_character(string $character): bool
 {
     return ($character >= 'a' && $character <= 'z')
@@ -1604,6 +1612,7 @@ function wp_fts_mutation_proof_row(
     return $row;
 }
 
+/** Fail a concurrency invariant without bypassing the fixture's outer cleanup. */
 function wp_fts_mutation_proof_assert(bool $condition, string $message): void
 {
     if (!$condition) {

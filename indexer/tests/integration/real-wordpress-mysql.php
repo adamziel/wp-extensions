@@ -103,6 +103,7 @@ function wp_fts_real_integration_run_inside_wordpress(): void
     }
 }
 
+/** Prove dbDelta replaces an incompatible legacy table with the exact schema. */
 function wp_fts_real_integration_db_delta_migration(object $wpdb, string $prefix): void
 {
     $tables = wp_fts_real_integration_tables($prefix);
@@ -131,6 +132,7 @@ PRIMARY KEY  (term)
     echo "ok dbDelta replaced an incompatible index with the exact four-table current schema\n";
 }
 
+/** Round-trip binary term identities and maximum prepared posting payloads. */
 function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix): void
 {
     $storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
@@ -195,6 +197,7 @@ function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix
     echo "ok binary dictionary identities and bounded prepared posting writes round trip\n";
 }
 
+/** Distinguish rolled-back and committed derived writes on the real engine. */
 function wp_fts_real_integration_transactions(object $wpdb, string $prefix): void
 {
     $storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
@@ -539,6 +542,7 @@ function wp_fts_real_integration_term_state(object $wpdb, string $prefix, string
     return ['df' => (int) $termRow->doc_freq, 'postings' => $result];
 }
 
+/** Require every legacy posting-list API to reject before touching the database. */
 function wp_fts_real_integration_assert_legacy_reads_fail_closed(WP_FTS_Storage_Mysql $storage, object $wpdb, string $termKey): void
 {
     $operations = [
@@ -560,6 +564,7 @@ function wp_fts_real_integration_assert_legacy_reads_fail_closed(WP_FTS_Storage_
     }
 }
 
+/** Reproduce the bounded integer impact expected from the production writer. */
 function wp_fts_real_integration_impact(int $weightedTf): int
 {
     $tf = max(1, $weightedTf);

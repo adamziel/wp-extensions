@@ -144,71 +144,183 @@ final class WP_FTS_LanguagePipeline
         ?int $maxTerms = null
     ): array
     {
-        $language = $this->canonicalize_language($language);
-        $terms = [];
+        $batches = $this->analyze_detailed_batch([[
+            'text' => $text,
+            'language' => $language,
+            'include_surface' => $includeSurface,
+        ]], $maxTerms);
+
+        return $batches[0] ?? [];
+    }
+
+    /**
+     * Analyze several resolved text segments as one bounded lookup batch.
+     *
+     * Tokenization and output remain segment-local and ordered. Dictionary
+     * surfaces are collected across the entire call first, allowing one lemma
+     * pack to group all distinct surfaces by shard and sidecar block. This is
+     * the request boundary used by HTML and multi-field document analysis.
+     *
+     * @param array<int,array{text:string,language:string,include_surface?:bool}> $segments
+     * @return array<int,array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string,normalized_surface?:string}>>
+     */
+    public function analyze_detailed_batch(array $segments, ?int $maxTerms = null): array
+    {
+        $stream = $this->analyze_detailed_batch_stream($segments, $maxTerms);
+        unset($segments);
+        $batches = iterator_to_array($stream, false);
+
+        return $batches;
+    }
+
+    /**
+     * Yield analyzed segments after one request-wide dictionary prefetch.
+     *
+     * Preparation still sees every segment before lookup, so a lemma sidecar is
+     * opened at most once for the complete batch. Yielding one completed segment
+     * at a time prevents callers that assemble weighted occurrences from also
+     * retaining a second complete analyzed-segment tree.
+     *
+     * @param array<int,array{text:string,language:string,include_surface?:bool}> $segments
+     * @return iterable<int,array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string,normalized_surface?:string}>>
+     */
+    public function analyze_detailed_batch_stream(array $segments, ?int $maxTerms = null): iterable
+    {
+        if (count($segments) > WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES) {
+            throw new WP_FTS_Analysis_Limit_Exceeded(
+                'occurrences',
+                'FTS analysis segment count exceeds the 20,000-occurrence limit.'
+            );
+        }
         $maxTerms = $maxTerms === null
             ? WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES
             : max(0, min(WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES, $maxTerms));
 
-        foreach ($this->tokenize($text, $language, $maxTerms) as $rawToken) {
-            $normalizedSurface = $includeSurface
-                ? $this->normalizer->normalize_token($rawToken['text'], $language)
-                : '';
-            $analyses = $this->analyze_raw_token($rawToken['text'], $language, $rawToken['is_cjk']);
-            if ($analyses === []) {
-                // A lexical run can be wider than the exact dictionary key but
-                // still has representable prefixes. Preserve one surface-only
-                // occurrence so indexing does not silently lose that prefix
-                // capability merely because no stemmer shortened the token.
-                if ($normalizedSurface !== '') {
-                    if (count($terms) >= $maxTerms) {
-                        throw new WP_FTS_Analysis_Limit_Exceeded(
-                            'occurrences',
-                            "FTS analysis exceeds its {$maxTerms}-occurrence limit."
-                        );
-                    }
-                    $terms[] = [
-                        'term' => '',
-                        'lang' => $language,
-                        'surface' => $rawToken['text'],
-                        'normalized_surface' => $normalizedSurface,
-                    ];
-                }
-                continue;
-            }
-
-            $position = count($terms);
-            $isMultiAnalysis = count($analyses) > 1;
-            foreach ($analyses as $analysis) {
-                if (count($terms) >= $maxTerms) {
+        $prepared = [];
+        $totalRawTokens = 0;
+        $distinctSurfaces = [];
+        $normalizedTerms = [];
+        foreach ($segments as $segment) {
+            $language = $this->canonicalize_language((string) ($segment['language'] ?? ''));
+            $rawTokens = [];
+            foreach ($this->tokenize(
+                (string) ($segment['text'] ?? ''),
+                $language,
+                $maxTerms
+            ) as $rawToken) {
+                $totalRawTokens++;
+                if ($totalRawTokens > $maxTerms) {
                     throw new WP_FTS_Analysis_Limit_Exceeded(
                         'occurrences',
                         "FTS analysis exceeds its {$maxTerms}-occurrence limit."
                     );
                 }
-                $term = (string) $analysis['term'];
-                $row = [
-                    'term' => $this->namespaceTerms ? $this->namespace_term($language, $term) : $term,
-                    'lang' => $language,
-                ];
-                if ($includeSurface) {
-                    $row['surface'] = $rawToken['text'];
-                    // Prefix search expands what the visitor typed, not an
-                    // arbitrary lemma emitted for that token. Keep the raw
-                    // surface for explain output and carry its storage-normalized
-                    // identity separately for relational prefix materialization.
-                    $row['normalized_surface'] = $normalizedSurface;
+                $normalizationIdentity = "\0" . $language . "\0"
+                    . ($rawToken['is_cjk'] ? '1' : '0') . "\0" . $rawToken['text'];
+                if (!array_key_exists($normalizationIdentity, $normalizedTerms)) {
+                    $normalizedTerms[$normalizationIdentity] = $this->normalizer->normalize_token(
+                        $rawToken['text'],
+                        $language
+                    );
+                    WP_FTS_Analysis_Limits::assert_lexical_run_bytes(
+                        strlen($normalizedTerms[$normalizationIdentity])
+                    );
                 }
-                if ($isMultiAnalysis) {
-                    $row['position'] = $position;
-                    $row['rank'] = (int) ($analysis['rank'] ?? 0);
-                    $row['source'] = (string) ($analysis['source'] ?? 'analyzer');
+                $rawToken['normalized'] = $normalizedTerms[$normalizationIdentity];
+                $rawTokens[] = $rawToken;
+                if (!$rawToken['is_cjk']) {
+                    $normalizedSurface = $rawToken['normalized'];
+                    $distinctSurfaces["\0" . $language . "\0" . $normalizedSurface] = true;
+                    if (count($distinctSurfaces) > WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES) {
+                        throw new WP_FTS_Analysis_Limit_Exceeded(
+                            'distinct_surfaces',
+                            'FTS analysis exceeds the 4,096-distinct-surface limit.'
+                        );
+                    }
                 }
-                $terms[] = $row;
             }
+            $prepared[] = [
+                'language' => $language,
+                'include_surface' => (bool) ($segment['include_surface'] ?? false),
+                'raw_tokens' => $rawTokens,
+            ];
         }
+        unset($segments, $distinctSurfaces, $normalizedTerms);
+        $prefetchedLemmaAnalyses = $this->prefetch_lemma_analyses($prepared, $maxTerms);
 
-        return $terms;
+        $totalTerms = 0;
+        foreach ($prepared as $segmentIndex => $segment) {
+            $language = $segment['language'];
+            $includeSurface = $segment['include_surface'];
+            $terms = [];
+            foreach ($segment['raw_tokens'] as $rawToken) {
+                $normalizedSurface = $includeSurface
+                    ? $rawToken['normalized']
+                    : '';
+                $analyses = $this->analyze_raw_token(
+                    $rawToken['text'],
+                    $language,
+                    $rawToken['is_cjk'],
+                    $prefetchedLemmaAnalyses,
+                    $rawToken['normalized']
+                );
+                if ($analyses === []) {
+                    // A lexical run can be wider than the exact dictionary key but
+                    // still has representable prefixes. Preserve one surface-only
+                    // occurrence so indexing does not silently lose that prefix
+                    // capability merely because no stemmer shortened the token.
+                    if ($normalizedSurface !== '') {
+                        if ($totalTerms >= $maxTerms) {
+                            throw new WP_FTS_Analysis_Limit_Exceeded(
+                                'occurrences',
+                                "FTS analysis exceeds its {$maxTerms}-occurrence limit."
+                            );
+                        }
+                        $terms[] = [
+                            'term' => '',
+                            'lang' => $language,
+                            'surface' => $rawToken['text'],
+                            'normalized_surface' => $normalizedSurface,
+                        ];
+                        $totalTerms++;
+                    }
+                    continue;
+                }
+
+                $position = count($terms);
+                $isMultiAnalysis = count($analyses) > 1;
+                foreach ($analyses as $analysis) {
+                    if ($totalTerms >= $maxTerms) {
+                        throw new WP_FTS_Analysis_Limit_Exceeded(
+                            'occurrences',
+                            "FTS analysis exceeds its {$maxTerms}-occurrence limit."
+                        );
+                    }
+                    $term = (string) $analysis['term'];
+                    $row = [
+                        'term' => $this->namespaceTerms ? $this->namespace_term($language, $term) : $term,
+                        'lang' => $language,
+                    ];
+                    if ($includeSurface) {
+                        $row['surface'] = $rawToken['text'];
+                        // Prefix search expands what the visitor typed, not an
+                        // arbitrary lemma emitted for that token. Keep the raw
+                        // surface for explain output and carry its storage-normalized
+                        // identity separately for relational prefix materialization.
+                        $row['normalized_surface'] = $normalizedSurface;
+                    }
+                    if ($isMultiAnalysis) {
+                        $row['position'] = $position;
+                        $row['rank'] = (int) ($analysis['rank'] ?? 0);
+                        $row['source'] = (string) ($analysis['source'] ?? 'analyzer');
+                    }
+                    $terms[] = $row;
+                    $totalTerms++;
+                }
+            }
+            unset($prepared[$segmentIndex], $segment);
+            yield $segmentIndex => $terms;
+        }
     }
 
     /**
@@ -253,6 +365,25 @@ final class WP_FTS_LanguagePipeline
     public function index_signature(): string
     {
         return $this->indexSignature;
+    }
+
+    /**
+     * Expose one configured lemma pack's bounded-I/O diagnostics for acceptance
+     * tests and operational troubleshooting.
+     *
+     * @return array{digest:array{files_hashed:int,bytes_hashed:int},lookup:array<string,mixed>}|null
+     */
+    public function lemma_pack_diagnostics(string $language): ?array
+    {
+        $pack = $this->lemma_pack_for_language($language);
+        if ($pack === null) {
+            return null;
+        }
+
+        return [
+            'digest' => $pack->digest_attestation_stats(),
+            'lookup' => $pack->last_lookup_stats(),
+        ];
     }
 
     /**
@@ -307,7 +438,13 @@ final class WP_FTS_LanguagePipeline
      *
      * @return array<int,array{term:string,rank:int,source:string}>
      */
-    private function analyze_raw_token(string $rawToken, string $language, bool $isCjk = false): array
+    private function analyze_raw_token(
+        string $rawToken,
+        string $language,
+        bool $isCjk = false,
+        array $prefetchedLemmaAnalyses = [],
+        ?string $normalizedTerm = null
+    ): array
     {
         $language = $this->canonicalize_language($language);
         $cacheKey = strlen($language) <= self::MAX_CACHED_LANGUAGE_BYTES
@@ -318,7 +455,7 @@ final class WP_FTS_LanguagePipeline
             return $this->analysisCache[$cacheKey];
         }
 
-        $term = $this->normalizer->normalize_token($rawToken, $language);
+        $term = $normalizedTerm ?? $this->normalizer->normalize_token($rawToken, $language);
         $analyses = null;
 
         if ($isCjk) {
@@ -332,7 +469,9 @@ final class WP_FTS_LanguagePipeline
             } elseif ($this->enableStemming) {
                 $lemmaPack = $this->lemma_pack_for_language($language);
                 if ($lemmaPack !== null) {
-                    $analyses = $lemmaPack->analyze($term, $language);
+                    $prefetchKey = $this->lemma_prefetch_key($language, $term);
+                    $analyses = $prefetchedLemmaAnalyses[$prefetchKey]
+                        ?? $lemmaPack->analyze($term, $language);
                     if (count($analyses) > 1 && !$this->term_meets_min_length($term, $isCjk)) {
                         return $this->cache_analysis($cacheKey, []);
                     }
@@ -367,6 +506,75 @@ final class WP_FTS_LanguagePipeline
         }
 
         return $this->cache_analysis($cacheKey, $valid);
+    }
+
+    /**
+     * Resolve all dictionary surfaces before ordered analysis emits results.
+     *
+     * @param array<int,array{language:string,include_surface:bool,raw_tokens:array<int,array{text:string,is_cjk:bool}>}> $segments
+     * @return array<string,array<int,array{term:string,rank:int,source:string}>>
+     */
+    private function prefetch_lemma_analyses(array $segments, int $maxAnalyses): array
+    {
+        if (!$this->enableStemming) {
+            return [];
+        }
+
+        $groups = [];
+        foreach ($segments as $segment) {
+            $language = $segment['language'];
+            if (
+                $this->custom_stemmer_for_language($language) !== null
+                || $this->customStemmer !== null
+            ) {
+                continue;
+            }
+            $lemmaPack = $this->lemma_pack_for_language($language);
+            if ($lemmaPack === null) {
+                continue;
+            }
+            $groupKey = $lemmaPack->base_language_code() . "\0" . $lemmaPack->index_signature();
+            $groups[$groupKey]['pack'] = $lemmaPack;
+            $groups[$groupKey]['language'] = $lemmaPack->base_language_code();
+            foreach ($segment['raw_tokens'] as $rawToken) {
+                if ($rawToken['is_cjk']) {
+                    continue;
+                }
+                $term = $rawToken['normalized'];
+                $termIdentity = "\0" . $term;
+                $groups[$groupKey]['terms'][$termIdentity] = $term;
+                $groups[$groupKey]['languages'][$termIdentity][$language] = true;
+            }
+        }
+
+        $prefetched = [];
+        $remainingAnalyses = $maxAnalyses;
+        foreach ($groups as $group) {
+            $language = $group['language'];
+            $analysesByTerm = $group['pack']->analyze_many_for_pipeline(
+                array_values($group['terms'] ?? []),
+                $language,
+                $remainingAnalyses,
+                fn(string $candidate, string $_surface): bool => $this->term_passes_length_filters($candidate, false),
+                fn(string $term, int $lemmaCount): bool => $lemmaCount > 1
+                    && !$this->term_meets_min_length($term, false)
+            );
+            foreach ($analysesByTerm as $term => $analyses) {
+                $term = (string) $term;
+                foreach (array_keys($group['languages']["\0" . $term] ?? []) as $fullLanguage) {
+                    $prefetched[$this->lemma_prefetch_key((string) $fullLanguage, $term)] = $analyses;
+                }
+                $remainingAnalyses -= count($analyses);
+            }
+        }
+
+        return $prefetched;
+    }
+
+    /** Bind a prefetched result to its full storage language and normalized term. */
+    private function lemma_prefetch_key(string $language, string $term): string
+    {
+        return $language . "\0" . $term;
     }
 
     /**
@@ -747,7 +955,30 @@ final class WP_FTS_LanguagePipeline
         if (isset($options['lemma_packs_by_lang']) && is_array($options['lemma_packs_by_lang'])) {
             $maps[] = $options['lemma_packs_by_lang'];
         }
-        $packs = WP_FTS_Analyzer_Config_Limits::merge_language_maps($maps, 'Language pipeline lemma packs');
+        // Merge directly into the effective canonical map. Collapsing during
+        // the merge lets two bounded alias maps use equivalent underscore,
+        // hyphen, or case spellings without a false raw-key overflow. Later
+        // maps still win, and an explicit `PL` assignment suppresses the legacy
+        // base-Polish fallback before any manifest is touched.
+        $packs = [];
+        foreach ($maps as $map) {
+            WP_FTS_Analyzer_Config_Limits::assert_language_map($map, 'Language pipeline lemma packs');
+            foreach ($map as $language => $option) {
+                $canonicalLanguage = $this->canonicalize_language((string) $language);
+                if ($canonicalLanguage === 'und') {
+                    continue;
+                }
+                $packs[$canonicalLanguage] = $option;
+                if (count($packs) > WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES) {
+                    throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                        'configured_languages',
+                        'Language pipeline lemma packs exceeds the '
+                            . WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES
+                            . '-language limit across aliases.'
+                    );
+                }
+            }
+        }
         if (
             !array_key_exists('pl', $packs)
             && (array_key_exists('polish_lemma_pack', $options) || array_key_exists('polish_lemmatizer_pack', $options))
@@ -762,39 +993,58 @@ final class WP_FTS_LanguagePipeline
     /**
      * Normalize a language-to-lemma-pack map.
      *
-     * @param mixed $packs
+     * @param array<string,mixed> $packs Canonical effective language map.
      * @return array<string,WP_FTS_LanguageLemmaPack>
      */
-    private function normalize_lemma_packs_by_language(mixed $packs): array
+    private function normalize_lemma_packs_by_language(array $packs): array
     {
-        if (!is_array($packs)) {
-            return [];
-        }
-
         $normalized = [];
-        $runtimeFiles = 0;
-        $lookupBlocks = 0;
-        foreach ($packs as $language => $option) {
-            $canonicalLanguage = $this->canonicalize_language((string) $language);
-            if ($canonicalLanguage === 'und') {
-                continue;
-            }
-
+        $admission = new WP_FTS_ConfiguredLemmaPackAdmission();
+        $descriptors = [];
+        foreach ($packs as $canonicalLanguage => $option) {
             $defaultManifest = $this->base_language($canonicalLanguage) === 'pl'
                 ? WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest()
                 : null;
-            $pack = WP_FTS_LanguageLemmaPack::from_pack_option($option, $canonicalLanguage, $defaultManifest);
+            $manifestPath = WP_FTS_LanguageLemmaPack::manifest_path_from_option($option, $defaultManifest);
+            if ($manifestPath === null) {
+                continue;
+            }
+            $realManifestPath = realpath($manifestPath);
+            if (!is_string($realManifestPath)) {
+                continue;
+            }
+
+            try {
+                $descriptor = $admission->preflight_manifest($realManifestPath, $canonicalLanguage);
+            } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
+                throw $error;
+            } catch (Throwable) {
+                continue;
+            }
+            if ($descriptor['language_matches'] !== true) {
+                continue;
+            }
+            $descriptors[] = [$canonicalLanguage, $descriptor['manifest_path']];
+        }
+
+        $packsByManifest = [];
+        foreach ($descriptors as [$canonicalLanguage, $realManifestPath]) {
+            $manifestIdentity = $realManifestPath;
+            $reusedPack = array_key_exists($manifestIdentity, $packsByManifest);
+            $pack = $reusedPack
+                ? $packsByManifest[$manifestIdentity]
+                : WP_FTS_LanguageLemmaPack::from_pack_option(
+                    $realManifestPath,
+                    $canonicalLanguage,
+                    null,
+                    $admission
+                );
+            if (!$reusedPack) {
+                // A corrupt physical manifest also has one bounded attempt.
+                // Cache null so aliases cannot repeat its hashes or decoding.
+                $packsByManifest[$manifestIdentity] = $pack;
+            }
             if ($pack !== null) {
-                $runtimeFiles += $pack->runtime_file_count();
-                $lookupBlocks += $pack->lookup_block_count();
-                if ($runtimeFiles > WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_RUNTIME_FILES
-                    || $lookupBlocks > WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LOOKUP_BLOCKS
-                ) {
-                    throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-                        'configured_pack_metadata',
-                        'Configured lemma packs exceed the 128-file or 4,096-block metadata limit.'
-                    );
-                }
                 $normalized[$canonicalLanguage] = $pack;
             }
         }

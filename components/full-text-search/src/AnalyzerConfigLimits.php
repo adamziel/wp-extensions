@@ -4,6 +4,7 @@ declare(strict_types=1);
 /** Typed failure for analyzer configuration that exceeds a fixed envelope. */
 final class WP_FTS_Analyzer_Config_Limit_Exceeded extends InvalidArgumentException
 {
+    /** Preserve a stable machine reason beside the operator-facing message. */
     public function __construct(
         public readonly string $reason_code,
         string $message
@@ -47,9 +48,11 @@ final class WP_FTS_Analyzer_Config_Limits
     public const MAX_MANIFEST_GRAPH_DEPTH = 8;
     public const MAX_RUNTIME_FILES = 64;
     public const MAX_LOOKUP_BLOCKS_PER_FILE = 256;
-    public const MAX_LOOKUP_BLOCKS_PER_PACK = 4096;
+    public const MAX_LOOKUP_BLOCKS_PER_PACK = 8192;
+    public const MAX_RUNTIME_LOOKUP_BYTES_PER_PACK = 16777216;
     public const MAX_CONFIGURED_RUNTIME_FILES = 128;
-    public const MAX_CONFIGURED_LOOKUP_BLOCKS = 4096;
+    public const MAX_CONFIGURED_LOOKUP_BLOCKS = 16384;
+    public const MAX_CONFIGURED_RUNTIME_LOOKUP_BYTES = 33554432;
 
     /** Reject an option graph before downstream code copies or normalizes it. */
     public static function assert_option_graph(mixed $value, string $label = 'Analyzer options'): void
@@ -262,6 +265,10 @@ final class WP_FTS_Analyzer_Config_Limits
         }
     }
 
+    /**
+     * Traverse supported option values once while enforcing depth, node, and
+     * retained scalar/key byte ceilings before callbacks or iterators run.
+     */
     private static function walk_graph(
         mixed $value,
         int $depth,
@@ -340,6 +347,7 @@ final class WP_FTS_Analyzer_Config_Limits
         }
     }
 
+    /** Reject the first scalar/key byte that crosses one graph's shared cap. */
     private static function assert_graph_bytes(int $bytes, int $maxBytes, string $label, string $reasonPrefix): void
     {
         if ($bytes > $maxBytes) {

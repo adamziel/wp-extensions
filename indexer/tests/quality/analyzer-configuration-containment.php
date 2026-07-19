@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+/** Capture one expected configuration failure without hiding its exact type. */
 function acc_caught(callable $callback): ?Throwable
 {
     try {
@@ -17,12 +18,14 @@ final class WP_FTS_Analyzer_Config_Probe_Stream
     public mixed $context = null;
     public static int $filesystemCalls = 0;
 
+    /** Count an attempted stat so pre-filesystem rejection stays observable. */
     public function url_stat(string $path, int $flags): array|false
     {
         self::$filesystemCalls++;
         return false;
     }
 
+    /** Count an attempted open so oversized graphs cannot silently probe paths. */
     public function stream_open(string $path, string $mode, int $options, ?string &$openedPath): bool
     {
         self::$filesystemCalls++;
@@ -30,6 +33,7 @@ final class WP_FTS_Analyzer_Config_Probe_Stream
     }
 }
 
+/** Register the inert filesystem probe once for all configuration cases. */
 function acc_register_probe_stream(): void
 {
     $scheme = 'wpftsconfigprobe';
@@ -176,7 +180,7 @@ test_case('quality analyzer configuration bounds aliases generators captures gra
                     'pl-PL' => $fullPolish,
                 ],
             ]));
-            assert_same('configured_pack_metadata', $metadataError instanceof WP_FTS_Analyzer_Config_Limit_Exceeded ? $metadataError->reason_code : null, 'configured packs should share one 128-file and 4,096-lookup-block envelope');
+            assert_same(null, $metadataError, 'language aliases should count one physical pack once inside the 128-file, 16,384-block, and 32-MiB configured envelope');
         }
     }
 });
@@ -316,7 +320,7 @@ test_case('quality analyzer manifests bound bytes depth and runtime files before
         $lookup = $root . '/runtime.gz.lookup';
         file_put_contents(
             $lookup,
-            "WPFTSLI1" . pack('N', 65537)
+            "WPFTSLI2" . pack('N', 65537)
         );
         $headerError = acc_caught(static fn(): array => WP_FTS_LemmaPackLookupIndex::metadata(
             $lookup,

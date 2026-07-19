@@ -5,6 +5,7 @@ require_once __DIR__ . '/../src/bootstrap.php';
 
 $wp_fts_lemma_limit_checks = 0;
 
+/** Records one assertion and throws when a lemma-pack limit invariant fails. */
 function wp_fts_lemma_limit_check(bool $condition, string $message): void
 {
     global $wp_fts_lemma_limit_checks;
@@ -14,6 +15,7 @@ function wp_fts_lemma_limit_check(bool $condition, string $message): void
     }
 }
 
+/** Runs a lemma-pack limit probe and returns its exception, if any. */
 function wp_fts_lemma_limit_caught(callable $callback): ?Throwable
 {
     try {
@@ -25,6 +27,7 @@ function wp_fts_lemma_limit_caught(callable $callback): ?Throwable
     return null;
 }
 
+/** Searches an exception chain for the expected limit diagnostic. */
 function wp_fts_lemma_limit_error_contains(?Throwable $error, string $needle): bool
 {
     while ($error !== null) {
@@ -151,6 +154,7 @@ function wp_fts_lemma_limit_write_pack(
     return $path;
 }
 
+/** Removes a synthetic lemma-pack tree after a boundary test. */
 function wp_fts_lemma_limit_remove_tree(string $path): void
 {
     if (!is_dir($path)) {
@@ -246,6 +250,35 @@ try {
         'full eager-pack validation should reject the thirteenth lemma before building an in-memory lookup'
     );
 
+    $corruptRuntimeManifest = wp_fts_lemma_limit_write_pack($root . '/eager-corrupt-runtime', [
+        ['path' => '0001.tsv', 'contents' => "qaacorrupt\tqaapacklemma\n"],
+    ], true);
+    $corruptRuntimeMetadata = json_decode(
+        (string) file_get_contents($corruptRuntimeManifest),
+        true,
+        512,
+        JSON_THROW_ON_ERROR
+    );
+    $corruptRuntimePath = dirname($corruptRuntimeManifest)
+        . '/' . (string) $corruptRuntimeMetadata['runtime']['files'][0]['path'];
+    file_put_contents($corruptRuntimePath, "qaacorrupt\tqaapacklemmb\n");
+    $corruptPipeline = null;
+    $corruptPipelineError = wp_fts_lemma_limit_caught(
+        static function () use ($corruptRuntimeManifest, &$corruptPipeline): void {
+            $corruptPipeline = new WP_FTS_LanguagePipeline([
+                'lemma_packs_by_lang' => ['qaa' => $corruptRuntimeManifest],
+            ]);
+        }
+    );
+    wp_fts_lemma_limit_check(
+        $corruptPipelineError === null && $corruptPipeline instanceof WP_FTS_LanguagePipeline,
+        'a preflight-valid pack with corrupt runtime bytes should fall back instead of aborting pipeline construction'
+    );
+    wp_fts_lemma_limit_check(
+        array_column($corruptPipeline->analyze_detailed('qaacorrupt', 'qaa'), 'term') === ['qaacorrupt'],
+        'a corrupt configured pack should preserve the built-in analyzer result rather than expose unverified morphology'
+    );
+
     $detectionPipeline = new WP_FTS_LanguagePipeline([
         'lemma_packs_by_lang' => ['qaa' => $eagerManifest],
     ]);
@@ -290,55 +323,57 @@ try {
     $streamManifest = wp_fts_lemma_limit_write_pack($root . '/stream', [
         ['path' => '0001.tsv', 'contents' => $twelveRows],
     ], false);
-    $streamPack = WP_FTS_LanguageLemmaPack::from_manifest_file($streamManifest);
-    wp_fts_lemma_limit_check(
-        wp_fts_lemma_limit_analysis_terms($streamPack, 'qaasurface') === $expectedTwelve,
-        'lazy stream lookup should preserve all candidates at the twelve-lemma boundary'
+    $streamConstructionError = wp_fts_lemma_limit_caught(
+        static fn(): WP_FTS_LanguageLemmaPack => WP_FTS_LanguageLemmaPack::from_manifest_file($streamManifest)
     );
     wp_fts_lemma_limit_check(
-        $streamPack->last_lookup_stats()['lines_read'] <= 13,
-        'lazy stream lookup should inspect at most the twelve matches and one range terminator'
+        $streamConstructionError instanceof RuntimeException
+            && str_contains($streamConstructionError->getMessage(), 'requires a validated lookup sidecar'),
+        'a non-eager plain runtime must be rejected at construction instead of enabling per-token scans'
     );
-    $streamOverCapManifest = wp_fts_lemma_limit_write_pack($root . '/stream-over-cap', [
+    wp_fts_lemma_limit_check(
+        WP_FTS_LanguageLemmaPack::from_pack_option($streamManifest, 'qaa') === null,
+        'the public custom-pack option must not bypass the non-eager sidecar requirement'
+    );
+
+    $fixtureStreamManifest = wp_fts_lemma_limit_write_pack($root . '/fixture-stream', [
+        ['path' => '0001.tsv', 'contents' => $twelveRows],
+    ], true);
+    $fixtureStreamPack = WP_FTS_LanguageLemmaPack::from_manifest_file($fixtureStreamManifest);
+    wp_fts_lemma_limit_check(
+        wp_fts_lemma_limit_analysis_terms($fixtureStreamPack, 'qaasurface') === $expectedTwelve,
+        'a small fixture-only plain runtime should retain eager morphology without a sidecar'
+    );
+    $fixtureStreamOverCapManifest = wp_fts_lemma_limit_write_pack($root . '/fixture-stream-over-cap', [
         ['path' => '0001.tsv', 'contents' => $thirteenRows],
-    ], false);
-    $streamOverCapPack = WP_FTS_LanguageLemmaPack::from_manifest_file($streamOverCapManifest);
-    $streamRuntimeError = wp_fts_lemma_limit_caught(
-        static fn(): array => wp_fts_lemma_limit_analysis_terms($streamOverCapPack, 'qaasurface')
+    ], true);
+    $fixtureStreamError = wp_fts_lemma_limit_caught(
+        static fn(): WP_FTS_LanguageLemmaPack => WP_FTS_LanguageLemmaPack::from_manifest_file($fixtureStreamOverCapManifest)
     );
     wp_fts_lemma_limit_check(
-        $streamRuntimeError instanceof RuntimeException
-            && str_contains($streamRuntimeError->getMessage(), '12-lemma ambiguity limit'),
-        'lazy stream lookup should reject the thirteenth source lemma'
-    );
-    wp_fts_lemma_limit_check(
-        $streamOverCapPack->last_lookup_stats()['lines_read'] === 13,
-        'lazy stream lookup should detect an over-cap surface at the first disallowed row'
+        $fixtureStreamError instanceof RuntimeException
+            && str_contains($fixtureStreamError->getMessage(), '12-lemma ambiguity limit'),
+        'small fixture-only eager validation should still reject the thirteenth source lemma'
     );
 
     $gzipManifest = wp_fts_lemma_limit_write_pack($root . '/gzip', [
         ['path' => '0001.tsv.gz', 'contents' => $twelveRows, 'compression' => 'gzip'],
-    ], false);
+    ], true);
     $gzipPack = WP_FTS_LanguageLemmaPack::from_manifest_file($gzipManifest);
     wp_fts_lemma_limit_check(
         wp_fts_lemma_limit_analysis_terms($gzipPack, 'qaasurface') === $expectedTwelve,
-        'decoded-gzip binary lookup should preserve all twelve candidates'
-    );
-    wp_fts_lemma_limit_check(
-        in_array('gzip-binary-search', $gzipPack->last_lookup_stats()['modes'], true),
-        'compressed fixture should exercise the decoded-gzip binary path'
+        'small fixture-only gzip validation should preserve all twelve candidates eagerly'
     );
     $gzipOverCapManifest = wp_fts_lemma_limit_write_pack($root . '/gzip-over-cap', [
         ['path' => '0001.tsv.gz', 'contents' => $thirteenRows, 'compression' => 'gzip'],
-    ], false);
-    $gzipOverCapPack = WP_FTS_LanguageLemmaPack::from_manifest_file($gzipOverCapManifest);
+    ], true);
     $gzipRuntimeError = wp_fts_lemma_limit_caught(
-        static fn(): array => wp_fts_lemma_limit_analysis_terms($gzipOverCapPack, 'qaasurface')
+        static fn(): WP_FTS_LanguageLemmaPack => WP_FTS_LanguageLemmaPack::from_manifest_file($gzipOverCapManifest)
     );
     wp_fts_lemma_limit_check(
         $gzipRuntimeError instanceof RuntimeException
             && str_contains($gzipRuntimeError->getMessage(), '12-lemma ambiguity limit'),
-        'decoded-gzip binary lookup should reject the thirteenth source lemma'
+        'small fixture-only gzip validation should reject the thirteenth source lemma eagerly'
     );
 
     $indexedManifest = wp_fts_lemma_limit_write_pack($root . '/indexed', [
@@ -376,25 +411,69 @@ try {
         $largeBlockPack->last_lookup_stats()['lines_read'] <= 32,
         'indexed lookup should binary-search a full block instead of scanning all 2,048 rows'
     );
-    $indexedOverCapManifest = wp_fts_lemma_limit_write_pack($root . '/indexed-over-cap', [
-        ['path' => '0001.tsv.gz', 'contents' => $thirteenRows, 'compression' => 'gzip', 'lookup' => true],
-    ], false);
-    $indexedOverCapValidationError = wp_fts_lemma_limit_caught(
-        static fn(): array => (new WP_FTS_AnalyzerPackValidator())->validate($indexedOverCapManifest, false)
+
+    $directTerms = [];
+    for ($index = 0; $index < WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES; $index++) {
+        $directTerms[] = 'miss' . str_pad((string) $index, 4, '0', STR_PAD_LEFT);
+    }
+    $directPack = WP_FTS_LanguageLemmaPack::from_manifest_file($indexedManifest, null, 'qaa');
+    $directAnalyses = $directPack->analyze_many($directTerms, 'qaa');
+    wp_fts_lemma_limit_check(
+        count($directAnalyses) === WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES,
+        'the direct lemma-pack batch API should accept exactly 4,096 distinct surfaces'
+    );
+    $directDigestBefore = $directPack->digest_attestation_stats();
+    $directIoBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+    $directOverflowError = wp_fts_lemma_limit_caught(
+        static fn(): array => $directPack->analyze_many([...$directTerms, 'miss4096'], 'qaa')
     );
     wp_fts_lemma_limit_check(
-        $indexedOverCapValidationError instanceof RuntimeException
-            && str_contains($indexedOverCapValidationError->getMessage(), '12-lemma ambiguity limit'),
-        'full validation should reject an indexed runtime containing a thirteen-lemma surface'
-    );
-    $indexedOverCapPack = WP_FTS_LanguageLemmaPack::from_manifest_file($indexedOverCapManifest);
-    $indexedRuntimeError = wp_fts_lemma_limit_caught(
-        static fn(): array => wp_fts_lemma_limit_analysis_terms($indexedOverCapPack, 'qaasurface')
+        $directOverflowError instanceof WP_FTS_Analysis_Limit_Exceeded
+            && $directOverflowError->reason_code === 'distinct_surfaces',
+        'the direct lemma-pack batch API should reject distinct surface 4,097 with a typed limit'
     );
     wp_fts_lemma_limit_check(
-        $indexedRuntimeError instanceof RuntimeException
-            && wp_fts_lemma_limit_error_contains($indexedRuntimeError, '12-lemma ambiguity limit'),
-        'indexed gzip lookup should reject the thirteenth source lemma at runtime'
+        $directPack->digest_attestation_stats() === $directDigestBefore
+            && WP_FTS_LemmaPackLookupIndex::io_diagnostics() === $directIoBefore,
+        'direct lemma-pack surface overflow should perform zero hashes, opens, or payload reads'
+    );
+
+    $directValidation = (new WP_FTS_AnalyzerPackValidator())->validate_metadata($indexedManifest, false);
+    $directRuntime = reset($directValidation['runtime_files']);
+    if (!is_array($directRuntime) || !is_array($directRuntime['lookup'] ?? null)) {
+        throw new RuntimeException('Direct lookup boundary fixture is missing sidecar metadata.');
+    }
+    $directLookup = WP_FTS_LemmaPackLookupIndex::lookup_many($directRuntime['lookup'], $directTerms);
+    wp_fts_lemma_limit_check(
+        count($directLookup['lemmas_by_term']) === WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES,
+        'the low-level sidecar batch API should accept exactly 4,096 distinct surfaces'
+    );
+    $lookupIoBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+    $lookupOverflowError = wp_fts_lemma_limit_caught(
+        static fn(): array => WP_FTS_LemmaPackLookupIndex::lookup_many(
+            $directRuntime['lookup'],
+            [...$directTerms, 'miss4096']
+        )
+    );
+    wp_fts_lemma_limit_check(
+        $lookupOverflowError instanceof WP_FTS_Analysis_Limit_Exceeded
+            && $lookupOverflowError->reason_code === 'distinct_surfaces',
+        'the low-level sidecar batch API should reject distinct surface 4,097 with a typed limit'
+    );
+    wp_fts_lemma_limit_check(
+        WP_FTS_LemmaPackLookupIndex::io_diagnostics() === $lookupIoBefore,
+        'low-level sidecar surface overflow should perform zero opens or payload reads'
+    );
+
+    $indexedOverCapBuildError = wp_fts_lemma_limit_caught(static fn(): string => wp_fts_lemma_limit_write_pack(
+        $root . '/indexed-over-cap',
+        [['path' => '0001.tsv.gz', 'contents' => $thirteenRows, 'compression' => 'gzip', 'lookup' => true]],
+        false
+    ));
+    wp_fts_lemma_limit_check(
+        $indexedOverCapBuildError instanceof RuntimeException
+            && str_contains($indexedOverCapBuildError->getMessage(), '12-lemma ambiguity limit'),
+        'sidecar construction should reject an indexed runtime containing a thirteen-lemma surface'
     );
 
     $englishManifest = dirname(__DIR__, 3)

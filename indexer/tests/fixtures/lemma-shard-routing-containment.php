@@ -26,15 +26,32 @@ function wp_fts_lemma_shard_routing_main(): array
         for ($index = 0; $index < WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES; $index++) {
             $surface = sprintf('s%04d', $index);
             $lemma = sprintf('lemma%04d', $index);
-            $relativePath = sprintf('runtime/%04d.tsv', $index + 1);
+            $relativePath = sprintf('runtime/%04d.tsv.gz', $index + 1);
             $runtimePath = $root . '/' . $relativePath;
-            file_put_contents($runtimePath, $surface . "\t" . $lemma . "\n");
+            $encoded = gzencode($surface . "\t" . $lemma . "\n", 9, ZLIB_ENCODING_GZIP);
+            if (!is_string($encoded)) {
+                throw new RuntimeException('Could not encode shard-routing fixture.');
+            }
+            file_put_contents($runtimePath, $encoded);
+            $lookup = WP_FTS_LemmaPackLookupIndex::build(
+                $runtimePath,
+                WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+                (string) hash_file('sha256', $runtimePath),
+                $runtimePath . '.lookup'
+            );
             $runtimeFiles[] = [
                 'path' => $relativePath,
-                'sha256' => hash_file('sha256', $runtimePath),
+                'sha256' => $lookup['runtime_sha256'],
                 'rows' => 1,
                 'first_surface' => $surface,
                 'last_surface' => $surface,
+                'compression' => WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+                'lookup' => [
+                    'format' => $lookup['format'],
+                    'path' => $relativePath . '.lookup',
+                    'sha256' => $lookup['sha256'],
+                    'blocks' => $lookup['blocks'],
+                ],
             ];
         }
 
@@ -140,7 +157,7 @@ function wp_fts_lemma_shard_routing_manifest(array $runtimeFiles): array
         'version' => '1',
         'fixture_only' => false,
         'default_enabled' => false,
-        'capabilities' => ['dictionary-lemmatizer'],
+        'capabilities' => ['dictionary-lemmatizer', 'indexed-runtime-lookups'],
         'runtime' => [
             'format' => WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV,
             'ambiguity_policy' => 'ambiguous_surface_noop',
@@ -169,6 +186,7 @@ function wp_fts_lemma_shard_routing_write_manifest(string $path, array $manifest
     file_put_contents($path, json_encode($manifest, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
 }
 
+/** Remove all generated routing artifacts without following symlinks. */
 function wp_fts_lemma_shard_routing_remove_tree(string $path): void
 {
     if (!is_dir($path)) {
@@ -206,7 +224,7 @@ function wp_fts_lemma_shard_routing_proc_status(): array
         }
         $value = trim(substr($line, $separator + 1));
         $space = strpos($value, ' ');
-        if ($space !== false && ctype_digit(substr($value, 0, $space)) && strtolower(trim(substr($value, $space + 1))) === 'kb') {
+        if ($space !== false && $space > 0 && strspn(substr($value, 0, $space), '0123456789') === $space && strtolower(trim(substr($value, $space + 1))) === 'kb') {
             $values[$key] = (int) substr($value, 0, $space) * 1024;
         }
     }

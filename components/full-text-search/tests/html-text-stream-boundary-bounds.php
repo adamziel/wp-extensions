@@ -51,6 +51,7 @@ if (isset($argv[1]) && str_starts_with($argv[1], '--measure=')) {
 
 $wp_fts_html_boundary_checks = 0;
 
+/** Records one assertion and throws when an HTML-stream boundary invariant fails. */
 function wp_fts_html_boundary_check(bool $condition, string $message): void
 {
     global $wp_fts_html_boundary_checks;

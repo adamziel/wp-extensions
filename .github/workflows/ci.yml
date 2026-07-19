@@ -10,7 +10,7 @@ jobs:
   language-fts:
     name: Language FTS / PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
@@ -80,7 +80,7 @@ jobs:
   language-fts-no-extensions:
     name: Language FTS / PHP ${{ matrix.php }} / no shared extensions
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false

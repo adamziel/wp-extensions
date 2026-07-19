@@ -16,6 +16,13 @@ advanced configuration is available to PHP callers that instantiate
 `WP_FTS_Analyzer`, `WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or
 `WP_FTS_Storage_Mysql` directly.
 
+Fresh settings index `post`, `page`, and `attachment`. That complete built-in
+scope lets an ordinary unscoped `/?s=...` query use FTS without silently
+narrowing core's `post_type=any` surface. Existing saved settings remain
+authoritative: if an operator-selected scope omits any post type WordPress
+currently exposes to search, unscoped searches stay on core until that scope is
+changed and reconciled.
+
 ## Foreground Owner Guard
 
 Content pre-hooks hold one shared POSIX file lock through their durable queue
@@ -79,26 +86,41 @@ different search backend; the plugin does not attempt an unbounded scan.
 The Settings tab includes a Search provider compatibility choice for the
 front-end and wp-admin Posts search replacement surfaces.
 
-- **Prefer Language FTS** is the default. Eligible searches use Language FTS
-  even when an earlier `posts_pre_query` provider returned a non-null result.
-- **Keep another search provider's results when it has already answered**
-  preserves a non-null incoming `posts_pre_query` value and returns it
-  unchanged. If no earlier provider answered, eligible Language FTS replacement
-  can still run.
+- **Use Language FTS when providers abstain** is the default. An earlier
+  non-null `posts_pre_query` result is always returned unchanged. Language FTS
+  can run only after earlier providers return `null`, and only when no callback
+  at or after the FTS priority can later change membership.
+- **Keep provider-integrated searches on WordPress** is stricter. Any
+  registered third-party `posts_pre_query` provider keeps that query on core
+  WordPress, even when an earlier provider returns `null`.
 
 This mode is independent from the public-site and wp-admin replacement
-checkboxes. Use the compatibility mode to coexist with another provider on an
-enabled surface; use the `wp_fts_replace_frontend_search` or
+checkboxes. Neither mode overrides a provider result. Use the compatibility
+mode to choose whether `null` from an earlier provider is a safe handoff; use
+the `wp_fts_replace_frontend_search` or
 `wp_fts_replace_admin_post_search` filters to disable a replacement surface
 entirely. Request diagnostics include the effective provider compatibility mode
-plus a compact known-provider summary, and record whether Language FTS replaced
-an earlier provider response or bailed out because coexistence mode kept another
-provider's result. They also include a bounded `posts_pre_query` hook pipeline
+plus a compact known-provider summary, and record whether Language FTS accepted
+a null handoff, preserved an earlier result, or left the whole query on core.
+They also include a bounded `posts_pre_query` hook pipeline
 around the Language FTS replacement priority so operators can see callback
 labels before, at, and after Language FTS without executing those callbacks or
 including provider result payloads. Check this setting first when another search
 plugin, theme filter, or custom search code appears to win or lose on an enabled
 replacement surface.
+
+The same ownership check covers every `WP_Query` SQL clause/request filter used
+by supported WordPress versions, plus `posts_results`, non-core `the_posts`,
+`split_the_query`, and found-post filters. Those callbacks cannot be compiled
+into the relational ranking statement, so callbacks already registered before
+ranking leave valid affected searches on core with zero FTS statements. If a
+callback first appears during relational execution, the bounded page is
+discarded, `posts_results`/`the_posts` are suppressed for that query, and the
+owned boundary returns an empty page rather than starting core LIKE. The stock `_close_comments_for_old_posts`
+`the_posts` callback is the sole post-retrieval exception because it changes
+comment state, not result membership. Detection runs before query execution,
+is rechecked at replacement time, and is persisted on the query so a callback
+cannot self-remove between those boundaries.
 
 The Health and Settings tabs also show a read-only known-provider advisory for
 common search plugins such as Jetpack Search/Jetpack, SearchWP, Relevanssi, and
@@ -107,10 +129,10 @@ activation options, network-active plugin state when WordPress exposes it,
 selected provider option flags, and loaded class/function names. It does not
 call third-party provider APIs, perform network requests, scan content, or claim
 that an end-to-end integration has been certified. When a known provider is
-detected, **Prefer Language FTS** keeps Language FTS in charge of eligible
-searches, while **Keep another search provider's results when it has already
-answered** is the safer coexistence choice when the detected provider should
-answer first.
+detected, **Use Language FTS when providers abstain** permits a null handoff
+from an earlier provider. **Keep provider-integrated searches on WordPress** is
+the conservative choice when the provider needs core `WP_Query` even after it
+returns `null`.
 
 ## Word Beginning Prefix Tuning
 
@@ -510,8 +532,10 @@ Manifests with more than one runtime shard must give every shard normalized
 `first_surface` and `last_surface` values in strictly increasing,
 non-overlapping order. This structural contract lets lookup binary-select zero
 or one shard; an invalid multi-shard manifest is rejected before runtime file
-resolution instead of multiplying the per-shard scan allowance. A single-shard
-pack may omit those ranges and use the bounded scan fallback.
+resolution instead of multiplying runtime lookup work. A single-shard
+pack may omit those ranges, but every non-eager shard still requires indexed
+gzip and a validated lookup sidecar. Only `fixture_only` packs with at most
+50,000 rows and 8 MiB of decoded runtime data use the eager unindexed path.
 Stable file-generation attestations are cached; generations with current or
 future timestamps are rehashed because PHP timestamps may have one-second
 resolution. Candidate attestation or read failures throw instead of silently
@@ -545,9 +569,17 @@ graph may contain at most 2,048 nodes, 64 KiB of scalar/key data, eight nested
 array levels, and 256 entries in any array; keys are limited to 128 bytes,
 individual scalar values and local paths to 4 KiB, and one pack option to 32
 fields. A local manifest is limited to 64 KiB, the same 2,048-node/eight-level
-shape, 64 runtime files, 256 lookup blocks per file, and 4,096 lookup blocks per
-pack. All packs in one analyzer share a 128-runtime-file/4,096-lookup-block
-metadata envelope, and lookup headers stop at 64 KiB. Stored options, filters,
+shape, 64 runtime files, 256 lookup blocks per file, and 8,192 lookup blocks per
+pack. All packs in one analyzer share a 128-runtime-file/16,384-lookup-block
+metadata envelope. One pack may retain at most 16 MiB of physical runtime and
+lookup files, all configured packs share a 32 MiB physical ceiling, lookup
+headers stop at 64 KiB, and each independently compressed block decodes at
+most 16 KiB. Distinct fixture packs eligible for eager loading collectively
+declare at most 50,000 rows and decode at most 8 MiB of runtime data. The row
+aggregate and the plain-runtime byte aggregate are checked from bounded manifest
+metadata before any pack is validated into a retained PHP map; compressed
+candidates consume the same decoded-byte budget during their single bounded
+validation scan. Stored options, filters,
 direct component callers, and callback-captured signature state all use these
 limits. An over-limit value fails search readiness before FTS SQL or
 configured-file probes rather than being truncated, partially enabled, or
@@ -648,11 +680,62 @@ normalized for the target language. Each non-comment row uses
 `surface<TAB>lemma`; optional third and fourth columns may carry source tags or
 notes. The importer sorts and deduplicates rows, writes runtime shards, and
 emits `manifest.json` plus `NOTICE.txt` with source, license, attribution, and
-provenance metadata. With `--runtime-compression=gzip`, it writes the runtime as
-independent concatenated gzip members plus a digest-attested offset sidecar. The
-sidecar contains ranges and offsets, not a second dictionary copy. Runtime
-lookup inflates one bounded member instead of repeatedly scanning or
-materializing a whole gzip shard.
+provenance metadata. Non-fixture imports default to and require
+`--runtime-compression=gzip`. That mode writes the runtime as independent
+concatenated gzip members plus a digest-attested offset sidecar. The sidecar
+contains ranges and offsets, not a second dictionary copy. Runtime lookup
+inflates one bounded member instead of repeatedly scanning or materializing a
+whole gzip shard. `--runtime-compression=none` is available only for a
+`fixture_only` pack with at most 50,000 rows and 8 MiB of decoded runtime data;
+those rows are fully validated and loaded once into a bounded eager map. The
+importer refuses to publish a larger unindexed fixture and directs the operator
+to indexed gzip instead. One analyzer may retain at most 50,000 such eager rows
+totaling at most 8 MiB decoded across all distinct configured fixture manifests.
+Generated indexed packs are split before a shard would
+exceed 256 lookup blocks or its 64 KiB sidecar header. Publication also stops
+at 64 runtime files, 8,192 lookup blocks, or 16 MiB of physical runtime plus
+lookup data. Import summaries distinguish decoded runtime, encoded runtime,
+lookup, and combined physical bytes.
+
+Every normalized-TSV, CoNLL-U, UniMorph, and PoliMorf source reader admits at
+most 64 KiB before one plain or gzip line ending, so a malformed source cannot
+materialize an arbitrarily long record before parsing. Generic TSV and PoliMorf
+deduplication also flushes a sorted temporary chunk before its retained lexical
+keys exceed 8 MiB or 200,000 rows. `--chunk-rows` outside 1-200,000 rejects
+before output setup, so short strings cannot turn one chunk into an unbounded
+PHP hash table. This creates more bounded chunks rather than lowering the
+number of source rows that can be imported. Chunks are compacted online through
+a 64-input min-heap hierarchy and one import may create at most 16,384 initial
+chunk files; even `--chunk-rows=1` therefore has bounded open-file, live-file,
+and total filesystem work. Every emitted surface and lemma must fit the
+255-byte stored key after the canonical language prefix and separator are
+included.
+
+Original source input is bounded independently of useful rows: at most 64 MiB
+of physical artifacts, 512 MiB after gzip decoding, and 8,000,000 lines may
+enter one import. A generation-aware streaming SHA-256 pass reads no more than
+the preflighted 64 MiB while copying that exact opened generation to a private,
+mode-0600 temporary snapshot. Parsing reads only the attested snapshot, so a
+source-path swap and restore cannot publish rows that disagree with the source
+digest. Growth, truncation, or replacement during snapshotting fails before
+publication; source artifacts are never handed to an unbounded `hash_file()`
+call. Hash-and-copy plus snapshot parsing uses two bounded source passes rather
+than a pre-hash, path reopen, and post-parse re-hash. The pinned largest inputs
+fit these envelopes: Spanish UniMorph is 50,335,761 physical bytes / 1,196,245
+lines and stages 1,162,505 rows, while PoliMorf is 41,550,540 physical bytes /
+410,906,011 decoded bytes / 7,374,578 lines. PoliMorf retains at most 64
+metadata lines or 64 KiB for its
+generated NOTICE. Output roots may not be symlinks or overlap a source tree,
+and temporary-parent validation finishes before output setup. A bad temporary
+parent therefore leaves no partial pack; cleanup removes only the importer's
+unique child beneath a valid caller-supplied parent.
+
+Recursive CoNLL-U and UniMorph sources admit at most 256 accepted files, 8 KiB
+of aggregate relative paths, eight directory levels, and 4,096 traversed
+entries. Symlinks and canonical paths outside the selected source root are not
+read or hashed. These wrappers validate normalized tokens on their first pass
+and stage at most 1,250,000 rows or 64 MiB of decoded normalized TSV before
+delegating to the generic importer.
 
 ```sh
 php tools/import-lemma-tsv-pack.php \
@@ -665,7 +748,8 @@ php tools/import-lemma-tsv-pack.php \
   --source-url="https://example.test/source-artifact" \
   --license=CC-BY-4.0 \
   --license-url="https://creativecommons.org/licenses/by/4.0/" \
-  --attribution="Required upstream attribution text"
+  --attribution="Required upstream attribution text" \
+  --runtime-compression=gzip
 ```
 
 Validate the generated pack before configuring it:
@@ -677,7 +761,8 @@ php tools/validate-analyzer-pack.php /srv/wp-fts-packs/example-lemma-pack/manife
 Existing gzip packs created by an older importer can add the same sidecars and
 manifest entries before validation. The retrofit rewrites gzip shards into
 independent members and updates their digests, so run it on the controlled pack
-copy that will be published:
+copy that will be published. Older plain non-fixture packs must instead be
+reimported as indexed gzip; they are not activatable through a runtime scan:
 
 ```sh
 php tools/build-lemma-pack-lookup-index.php \
@@ -706,6 +791,10 @@ Universal Dependencies style corpora into the normalized lemma TSV contract, the
 uses the same analyzer-pack generation path described above. It reads `FORM` and
 `LEMMA`, skips CoNLL-U comments, blank lines, multiword token rows, empty-node
 rows, placeholder values, and values that do not normalize to one runtime token.
+The generated manifest, `SOURCE.lock.json`, and `NOTICE.txt` attest the original
+CoNLL-U artifact paths, per-file and aggregate digests, byte counts, and
+ten-column model. The temporary normalized TSV is recorded only as the
+delegated compilation phase, never misrepresented as the upstream source.
 
 Use this for reviewed treebanks or build artifacts where the exact source,
 license, source version, URL, and attribution are known. It is a pack-generation
@@ -724,7 +813,8 @@ php tools/import-conllu-lemma-pack.php \
   --license=CC-BY-SA-4.0 \
   --license-url="https://creativecommons.org/licenses/by-sa/4.0/" \
   --source-version=2026.06 \
-  --attribution="Required upstream attribution text"
+  --attribution="Required upstream attribution text" \
+  --runtime-compression=gzip
 ```
 
 The same path is available in WordPress through WP-CLI:
@@ -739,10 +829,13 @@ wp fts import-conllu-lemma-pack \
   --source-url="https://example.test/source-artifact" \
   --license=CC-BY-SA-4.0 \
   --attribution="Required upstream attribution text" \
+  --runtime-compression=gzip \
   --enable
 ```
 
-`--source` may point to one file or a directory. Directory imports recursively
+`--source` may point to one file or a directory. WP-CLI forwards
+`--runtime-compression` to the same importer, so its generated pack has the same
+activation boundary. Directory imports recursively
 read stable-sorted `.conllu` files. `--enable` stores the generated manifest in
 the runtime analyzer options; reindex existing content after enabling a new pack
 so stored index terms use the new lemmatizer.
@@ -773,7 +866,8 @@ php tools/import-unimorph-lemma-pack.php \
   --license=CC-BY-SA-4.0 \
   --license-url="https://creativecommons.org/licenses/by-sa/4.0/" \
   --source-version=2026.06 \
-  --attribution="Required upstream attribution text"
+  --attribution="Required upstream attribution text" \
+  --runtime-compression=gzip
 ```
 
 The same path is available in WordPress through WP-CLI:
@@ -788,10 +882,13 @@ wp fts import-unimorph-lemma-pack \
   --source-url="https://example.test/source-artifact" \
   --license=CC-BY-SA-4.0 \
   --attribution="Required upstream attribution text" \
+  --runtime-compression=gzip \
   --enable
 ```
 
-`--source` may point to one file or a directory. Directory imports recursively
+`--source` may point to one file or a directory. WP-CLI forwards
+`--runtime-compression` to the same importer, so its generated pack has the same
+activation boundary. Directory imports recursively
 read stable-sorted `.txt`, `.tsv`, and `.unimorph` files. `--enable` stores the
 generated manifest in the runtime analyzer options; reindex existing content
 after enabling a new pack so stored index terms use the new lemmatizer.

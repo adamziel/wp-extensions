@@ -80,6 +80,7 @@ test_case('SQL debug finalization bounds 100,000 SAVEQUERIES entries to its fixe
         public int $queryInspections = 0;
         public int $timingInspections = 0;
 
+        /** Count every attempt to inspect an entry after the capture ceiling. */
         public function __isset(string $name): bool
         {
             if ($name === 'query') {
@@ -91,6 +92,7 @@ test_case('SQL debug finalization bounds 100,000 SAVEQUERIES entries to its fixe
             return $name === 'query' || $name === 'elapsed';
         }
 
+        /** Supply valid-looking fields so only the inspection ceiling can stop reads. */
         public function __get(string $name): mixed
         {
             return match ($name) {

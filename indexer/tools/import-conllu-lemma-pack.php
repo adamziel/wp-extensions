@@ -16,11 +16,16 @@ final class WP_FTS_ConlluLemmaPackImporter
     public function import(array $options): array
     {
         $sourcePath = $this->required_source_path($options, 'source');
+        $outputPath = $this->required_output_path($options);
+        WP_FTS_LemmaSourceImportLimits::assert_source_output_separate($sourcePath, $outputPath, 'CoNLL-U');
         $language = $this->required_language($options, 'language');
         $tmpDir = $this->prepare_temp_directory($options['tmp_dir'] ?? null);
+        $packDir = null;
+        $importComplete = false;
         try {
             $normalizedTsv = $tmpDir . DIRECTORY_SEPARATOR . 'normalized-lemma.tsv';
-            $stats = $this->write_normalized_tsv($sourcePath, $normalizedTsv, $language);
+            $staging = $this->write_normalized_tsv($sourcePath, $normalizedTsv, $language);
+            $stats = $staging['stats'];
             if ((int) $stats['accepted_rows'] < 1) {
                 throw new RuntimeException('CoNLL-U source did not yield any normalized runtime rows.');
             }
@@ -29,11 +34,27 @@ final class WP_FTS_ConlluLemmaPackImporter
             $tsvOptions['source'] = $normalizedTsv;
             $tsvOptions['language'] = $language;
             $summary = (new WP_FTS_LemmaTsvPackImporter())->import($tsvOptions);
+            $manifestPath = is_string($summary['manifest'] ?? null) ? $summary['manifest'] : '';
+            if ($manifestPath !== '') {
+                $packDir = dirname($manifestPath);
+            }
+            $summary = $this->rewrite_pack_metadata_for_conllu_source(
+                $summary,
+                $options,
+                $sourcePath,
+                $language,
+                $stats,
+                $staging['source_evidence']
+            );
             $summary['conllu'] = $stats;
+            $importComplete = true;
 
             return $summary;
         } finally {
             $this->remove_tree($tmpDir);
+            if (!$importComplete && is_string($packDir)) {
+                $this->remove_tree($packDir);
+            }
         }
     }
 
@@ -57,6 +78,14 @@ final class WP_FTS_ConlluLemmaPackImporter
         }
 
         return $path;
+    }
+
+    /** @param array<string,mixed> $options */
+    private function required_output_path(array $options): string
+    {
+        return isset($options['out'])
+            ? $this->required_string($options, 'out')
+            : $this->required_string($options, 'output_dir');
     }
 
     /**
@@ -85,11 +114,13 @@ final class WP_FTS_ConlluLemmaPackImporter
     }
 
     /**
-     * @return array<string,mixed>
+     * @return array{stats:array<string,mixed>,source_evidence:array{sha256:string,bytes:int,files:array<int,array{path:string,sha256:string,byte_count:int}>}}
      */
     private function write_normalized_tsv(string $sourcePath, string $tsvPath, string $language): array
     {
-        $sources = $this->discover_source_files($sourcePath);
+        $discovery = $this->discover_source_files($sourcePath);
+        $sources = $discovery['files'];
+        $physicalEvidence = WP_FTS_LemmaSourceImportLimits::source_physical_evidence($sources, 'CoNLL-U');
         $handle = fopen($tsvPath, 'wb');
         if (!is_resource($handle)) {
             throw new RuntimeException("Could not write normalized TSV: {$tsvPath}");
@@ -100,7 +131,15 @@ final class WP_FTS_ConlluLemmaPackImporter
             'source_path' => $sourcePath,
             'source_files' => count($sources),
             'files' => array_map(fn(string $path): string => $this->source_label($path, $sourcePath), $sources),
+            'source_path_bytes' => $discovery['path_bytes'],
+            'source_entries' => $discovery['entries'],
+            'source_max_depth' => $discovery['max_depth'],
+            'source_physical_bytes' => $physicalEvidence['bytes'],
+            'source_physical_byte_limit' => WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PHYSICAL_BYTES,
             'source_lines' => 0,
+            'source_line_limit' => WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_LINES,
+            'source_decoded_bytes' => 0,
+            'source_decoded_byte_limit' => WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_DECODED_BYTES,
             'blank_lines' => 0,
             'comment_lines' => 0,
             'multiword_token_rows' => 0,
@@ -108,71 +147,90 @@ final class WP_FTS_ConlluLemmaPackImporter
             'placeholder_rows' => 0,
             'invalid_runtime_token_rows' => 0,
             'accepted_rows' => 0,
+            'staged_tsv_bytes' => 0,
+            'staged_row_limit' => WP_FTS_LemmaSourceImportLimits::MAX_STAGED_ROWS,
+            'staged_tsv_byte_limit' => WP_FTS_LemmaSourceImportLimits::MAX_STAGED_TSV_BYTES,
         ];
+        $sourceFiles = [];
 
         try {
-            foreach ($sources as $file) {
-                $this->append_source_file($file, $sourcePath, $language, $normalizer, $handle, $stats);
+            foreach ($sources as $sourceIndex => $file) {
+                $sourceSnapshot = dirname($tsvPath) . DIRECTORY_SEPARATOR
+                    . sprintf('upstream-%04d.snapshot', $sourceIndex + 1)
+                    . (str_ends_with(strtolower($file), '.gz') ? '.gz' : '');
+                $sourceFiles[] = $this->append_source_file(
+                    $file,
+                    $sourceSnapshot,
+                    $sourcePath,
+                    $language,
+                    $normalizer,
+                    $handle,
+                    $stats,
+                    $physicalEvidence['file_evidence'][$file]
+                );
             }
         } finally {
             fclose($handle);
         }
 
-        return $stats;
+        return ['stats' => $stats, 'source_evidence' => $this->source_evidence_from_files($sourceFiles)];
     }
 
     /**
-     * @return string[]
+     * @return array{files:string[],path_bytes:int,entries:int,max_depth:int}
      */
     private function discover_source_files(string $sourcePath): array
     {
-        if (is_file($sourcePath)) {
-            return [$sourcePath];
-        }
-
-        $files = [];
-        try {
-            $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($sourcePath, FilesystemIterator::SKIP_DOTS));
-            foreach ($iterator as $file) {
-                if (!$file->isFile()) {
-                    continue;
-                }
-                $path = $file->getPathname();
+        $discovery = WP_FTS_LemmaSourceImportLimits::discover_source_files(
+            $sourcePath,
+            static function (string $path): bool {
                 $lower = strtolower($path);
-                if (str_ends_with($lower, '.conllu') || str_ends_with($lower, '.conllu.gz')) {
-                    $files[] = $path;
-                }
-            }
-        } catch (UnexpectedValueException $e) {
-            throw new RuntimeException("Could not read CoNLL-U source directory: {$sourcePath}", 0, $e);
-        }
-        sort($files, SORT_STRING);
-        if ($files === []) {
+
+                return str_ends_with($lower, '.conllu') || str_ends_with($lower, '.conllu.gz');
+            },
+            'CoNLL-U'
+        );
+        if ($discovery['files'] === []) {
             throw new RuntimeException("Source directory did not contain any .conllu files: {$sourcePath}");
         }
 
-        return $files;
+        return $discovery;
     }
 
     /**
      * @param resource $tsvHandle
      * @param array<string,mixed> $stats
+     * @param array{bytes:int,device:int,inode:int,mtime:int,ctime:int} $physicalEvidence
+     * @return array{path:string,sha256:string,byte_count:int}
      */
     private function append_source_file(
         string $file,
+        string $sourceSnapshot,
         string $sourceRoot,
         string $language,
         WP_FTS_Normalizer $normalizer,
         $tsvHandle,
-        array &$stats
-    ): void {
+        array &$stats,
+        array $physicalEvidence
+    ): array {
         $label = $this->source_label($file, $sourceRoot);
-        $reader = $this->open_source($file);
+        $hashedSource = WP_FTS_LemmaSourceImportLimits::snapshot_source_artifact(
+            $file,
+            $sourceSnapshot,
+            $physicalEvidence,
+            'CoNLL-U'
+        );
+        $reader = $this->open_source($sourceSnapshot);
         $lineNumber = 0;
         try {
             while (($line = $this->read_source_line($reader)) !== false) {
                 $lineNumber++;
-                $stats['source_lines']++;
+                WP_FTS_LemmaSourceImportLimits::account_decoded_line(
+                    $line,
+                    $stats['source_lines'],
+                    $stats['source_decoded_bytes'],
+                    'CoNLL-U'
+                );
                 $line = rtrim((string) $line, "\n");
                 $line = rtrim($line, "\r");
                 if ($lineNumber === 1) {
@@ -216,7 +274,7 @@ final class WP_FTS_ConlluLemmaPackImporter
 
                 $surface = $normalizer->normalize_token($form, $language);
                 $normalizedLemma = $normalizer->normalize_token($lemma, $language);
-                if (!$this->is_single_runtime_token($surface) || !$this->is_single_runtime_token($normalizedLemma)) {
+                if (!$this->is_single_runtime_token($surface, $language) || !$this->is_single_runtime_token($normalizedLemma, $language)) {
                     $stats['invalid_runtime_token_rows']++;
                     continue;
                 }
@@ -225,17 +283,418 @@ final class WP_FTS_ConlluLemmaPackImporter
                 $tag = $tag === '_' ? '' : $this->clean_tsv_note($tag);
                 $sourceNote = $this->clean_tsv_note($label . ':' . $lineNumber . '#' . $id);
                 $row = $surface . "\t" . $normalizedLemma . "\t" . $tag . "\t" . $sourceNote . "\n";
-                if (fwrite($tsvHandle, $row) === false) {
+                if ($stats['accepted_rows'] >= WP_FTS_LemmaSourceImportLimits::MAX_STAGED_ROWS) {
+                    throw new RuntimeException(
+                        'CoNLL-U staging exceeds the '
+                        . number_format(WP_FTS_LemmaSourceImportLimits::MAX_STAGED_ROWS)
+                        . '-row limit.'
+                    );
+                }
+                if ($stats['staged_tsv_bytes'] + strlen($row) > WP_FTS_LemmaSourceImportLimits::MAX_STAGED_TSV_BYTES) {
+                    throw new RuntimeException('CoNLL-U staging exceeds the 64 MiB decoded TSV limit.');
+                }
+                if (fwrite($tsvHandle, $row) !== strlen($row)) {
                     throw new RuntimeException("Could not append normalized CoNLL-U row for {$label}:{$lineNumber}.");
                 }
                 $stats['accepted_rows']++;
+                $stats['staged_tsv_bytes'] += strlen($row);
             }
         } finally {
             $this->close_source($reader);
         }
+        return [
+            'path' => $label,
+            'sha256' => $hashedSource['sha256'],
+            'byte_count' => $physicalEvidence['bytes'],
+        ];
     }
 
-    private function is_single_runtime_token(string $token): bool
+    /**
+     * @param array<int,array{path:string,sha256:string,byte_count:int}> $sourceFiles
+     * @return array{sha256:string,bytes:int,files:array<int,array{path:string,sha256:string,byte_count:int}>}
+     */
+    private function source_evidence_from_files(array $sourceFiles): array
+    {
+        $totalBytes = 0;
+        $digest = hash_init('sha256');
+        foreach ($sourceFiles as $file) {
+            $totalBytes += $file['byte_count'];
+            hash_update(
+                $digest,
+                $file['path'] . "\0" . $file['sha256'] . "\0" . (string) $file['byte_count'] . "\n"
+            );
+        }
+        if (count($sourceFiles) === 1) {
+            return [
+                'sha256' => $sourceFiles[0]['sha256'],
+                'bytes' => $sourceFiles[0]['byte_count'],
+                'files' => $sourceFiles,
+            ];
+        }
+
+        return [
+            'sha256' => hash_final($digest),
+            'bytes' => $totalBytes,
+            'files' => $sourceFiles,
+        ];
+    }
+
+    /**
+     * Replace staged-TSV provenance with the original CoNLL-U artifacts.
+     *
+     * @param array<string,mixed> $summary
+     * @param array<string,mixed> $options
+     * @param array<string,mixed> $stats
+     * @param array{sha256:string,bytes:int,files:array<int,array{path:string,sha256:string,byte_count:int}>} $sourceEvidence
+     * @return array<string,mixed>
+     */
+    private function rewrite_pack_metadata_for_conllu_source(
+        array $summary,
+        array $options,
+        string $sourcePath,
+        string $language,
+        array $stats,
+        array $sourceEvidence
+    ): array {
+        $manifestPath = is_string($summary['manifest'] ?? null) ? $summary['manifest'] : '';
+        if ($manifestPath === '' || !is_file($manifestPath)) {
+            throw new RuntimeException('Generated CoNLL-U pack summary did not include a manifest path.');
+        }
+        $manifest = $this->read_json_file($manifestPath);
+        $sourceUrl = $this->required_string($options, 'source_url');
+        $sourceName = $this->required_string($options, 'source_name');
+        $sourceVersion = (string) ($options['source_version'] ?? $manifest['version'] ?? 'unknown');
+        $license = $this->required_string($options, 'license');
+        $licenseUrl = is_scalar($options['license_url'] ?? null) ? trim((string) $options['license_url']) : '';
+        $attribution = $this->required_string($options, 'attribution');
+        $repoUrl = is_scalar($options['source_repo_url'] ?? null) ? trim((string) $options['source_repo_url']) : '';
+        $sourceCommit = is_scalar($options['source_commit'] ?? null) ? trim((string) $options['source_commit']) : '';
+        $declaredSourceFile = is_scalar($options['source_file_path'] ?? null) ? trim((string) $options['source_file_path']) : '';
+        $publishedStats = $stats;
+        $delegatedStats = $manifest['source']['parse_stats'] ?? [];
+        if (is_array($delegatedStats)) {
+            $publishedStats += $delegatedStats;
+        }
+        // Per-file paths and digests have one authoritative representation in
+        // source.files. Repeating the full path set in parse_stats can make an
+        // otherwise valid 32-KiB discovery boundary exceed the runtime's
+        // bounded 64-KiB manifest envelope.
+        unset($publishedStats['files']);
+        if ($declaredSourceFile !== '') {
+            $publishedStats['source_path'] = $declaredSourceFile;
+        } elseif (count($sourceEvidence['files']) === 1) {
+            $publishedStats['source_path'] = $sourceEvidence['files'][0]['path'];
+        } else {
+            unset($publishedStats['source_path']);
+        }
+
+        $capabilities = is_array($manifest['capabilities'] ?? null) ? $manifest['capabilities'] : [];
+        $capabilities[] = 'conllu-source-import';
+        $manifest['capabilities'] = array_values(array_unique(array_map('strval', $capabilities)));
+        $sourceFiles = $sourceEvidence['files'];
+        $manifest['source'] = array_filter([
+            'name' => $sourceName,
+            'version' => $sourceVersion,
+            'file' => $declaredSourceFile !== '' ? $declaredSourceFile : (string) ($sourceFiles[0]['path'] ?? basename($sourcePath)),
+            'url' => $sourceUrl,
+            'repository_url' => $repoUrl !== '' ? $repoUrl : null,
+            'commit' => $sourceCommit !== '' ? $sourceCommit : null,
+            'artifact_sha256' => $sourceEvidence['sha256'],
+            'byte_count' => $sourceEvidence['bytes'],
+            'files' => $sourceFiles,
+            'column_model' => [
+                'format' => 'conllu-ten-column-v1',
+                'id_column' => 0,
+                'surface_column' => 1,
+                'lemma_column' => 2,
+                'tag_column' => 3,
+            ],
+            'parse_stats' => $publishedStats,
+        ], static fn(mixed $value): bool => $value !== null);
+        $runtimeCompression = $this->runtime_compression_from_manifest($manifest);
+        $manifest['provenance']['importer'] = 'indexer/tools/import-conllu-lemma-pack.php';
+        $manifest['provenance']['importer_command'] = $this->canonical_conllu_importer_command(
+            $language,
+            (string) $manifest['pack_id'],
+            (string) $manifest['version'],
+            $sourceUrl,
+            $license,
+            (bool) $manifest['fixture_only'],
+            $runtimeCompression
+        );
+        $manifest['provenance']['source_importer'] = 'indexer/tools/import-conllu-lemma-pack.php';
+        $manifest['provenance']['delegated_runtime_importer'] = 'indexer/tools/import-lemma-tsv-pack.php';
+        $this->write_json_file($manifestPath, $manifest);
+        $manifestSha = WP_FTS_LemmaPackLimits::hash_file_bounded(
+            $manifestPath,
+            WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES,
+            'manifest_bytes',
+            'Generated CoNLL-U analyzer-pack manifest exceeds 64 KiB.'
+        )['sha256'];
+
+        $packDir = dirname($manifestPath);
+        $noticePath = $packDir . DIRECTORY_SEPARATOR . 'NOTICE.txt';
+        $this->write_text($noticePath, $this->build_conllu_notice(
+            $sourceName,
+            $sourceVersion,
+            $sourceUrl,
+            $repoUrl,
+            $sourceCommit,
+            (string) $manifest['source']['file'],
+            $sourceEvidence['sha256'],
+            $sourceEvidence['bytes'],
+            $license,
+            $licenseUrl,
+            $attribution
+        ));
+        $sourceLockPath = $packDir . DIRECTORY_SEPARATOR . 'SOURCE.lock.json';
+        $this->write_json_file($sourceLockPath, $this->build_source_lock(
+            $manifest,
+            $manifestSha,
+            $summary,
+            $license,
+            $licenseUrl,
+            $attribution,
+            $runtimeCompression
+        ));
+
+        $summary['manifest_sha256'] = $manifestSha;
+        $summary['source_lock'] = $sourceLockPath;
+        $summary['source'] = [
+            'path' => $sourcePath,
+            'url' => $sourceUrl,
+            'repo_url' => $repoUrl,
+            'commit' => $sourceCommit,
+            'sha256' => $sourceEvidence['sha256'],
+            'bytes' => $sourceEvidence['bytes'],
+            'files' => $sourceFiles,
+        ];
+        $summary['pack_bytes'] = $this->directory_bytes($packDir);
+
+        return $summary;
+    }
+
+    /** @return array<string,mixed> */
+    private function read_json_file(string $path): array
+    {
+        $json = file_get_contents(
+            $path,
+            false,
+            null,
+            0,
+            WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES + 1
+        );
+        if (!is_string($json) || strlen($json) > WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES) {
+            throw new RuntimeException("Could not read a bounded analyzer-pack manifest: {$path}");
+        }
+        $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        if (!is_array($decoded)) {
+            throw new RuntimeException("JSON file must decode to an object: {$path}");
+        }
+
+        return $decoded;
+    }
+
+    /** @param array<string,mixed> $data */
+    private function write_json_file(string $path, array $data): void
+    {
+        $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (!is_string($json) || file_put_contents($path, $json . "\n") === false) {
+            throw new RuntimeException("Could not write JSON file: {$path}");
+        }
+    }
+
+    /** Replace generated provenance text only after complete construction. */
+    private function write_text(string $path, string $contents): void
+    {
+        if (file_put_contents($path, $contents) === false) {
+            throw new RuntimeException("Could not write file: {$path}");
+        }
+    }
+
+    /** @param array<string,mixed> $manifest */
+    private function runtime_compression_from_manifest(array $manifest): ?string
+    {
+        foreach (($manifest['runtime']['files'] ?? []) as $file) {
+            if (is_array($file) && ($file['compression'] ?? null) === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+                return WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP;
+            }
+        }
+
+        return null;
+    }
+
+    /** Record a reproducible command without embedding machine-local paths. */
+    private function canonical_conllu_importer_command(
+        string $language,
+        string $packId,
+        string $version,
+        string $sourceUrl,
+        string $license,
+        bool $fixtureOnly,
+        ?string $runtimeCompression
+    ): string {
+        $parts = [
+            'php indexer/tools/import-conllu-lemma-pack.php',
+            '--source=<conllu-source>',
+            '--out=<pack-dir>',
+            '--language=' . $language,
+            '--pack-id=' . $packId,
+            '--version=' . $version,
+            '--source-name=<approved-conllu-source-name>',
+            '--source-url=' . $sourceUrl,
+            '--license=' . $license,
+            '--attribution=<required-attribution>',
+        ];
+        if ($fixtureOnly) {
+            $parts[] = '--fixture-only=true';
+        }
+        if ($runtimeCompression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+            $parts[] = '--runtime-compression=gzip';
+        }
+
+        return implode(' ', $parts);
+    }
+
+    /** Describe the original artifact identity and required attribution. */
+    private function build_conllu_notice(
+        string $sourceName,
+        string $sourceVersion,
+        string $sourceUrl,
+        string $repoUrl,
+        string $sourceCommit,
+        string $sourceFile,
+        string $sourceSha,
+        int $sourceBytes,
+        string $license,
+        string $licenseUrl,
+        string $attribution
+    ): string {
+        $lines = [
+            "{$sourceName} {$sourceVersion}",
+            "Source URL: {$sourceUrl}",
+        ];
+        if ($repoUrl !== '') {
+            $lines[] = "Source repository: {$repoUrl}";
+        }
+        if ($sourceCommit !== '') {
+            $lines[] = "Source commit: {$sourceCommit}";
+        }
+        $lines[] = "Source file path: {$sourceFile}";
+        $lines[] = "Source artifact SHA-256: {$sourceSha}";
+        $lines[] = "Source artifact byte count: {$sourceBytes}";
+        $lines[] = "License: {$license}";
+        if ($licenseUrl !== '') {
+            $lines[] = "License URL: {$licenseUrl}";
+        }
+        $lines[] = "Attribution: {$attribution}";
+        $lines[] = '';
+        $lines[] = 'Generated from source-approved CoNLL-U FORM/LEMMA rows.';
+        $lines[] = 'The runtime analyzer performs no network access.';
+        $lines[] = '';
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @param array<string,mixed> $manifest
+     * @param array<string,mixed> $summary
+     * @return array<string,mixed>
+     */
+    private function build_source_lock(
+        array $manifest,
+        string $manifestSha,
+        array $summary,
+        string $license,
+        string $licenseUrl,
+        string $attribution,
+        ?string $runtimeCompression
+    ): array {
+        $runtime = [
+            'manifest_sha256' => $manifestSha,
+            'row_count' => $manifest['runtime']['total_rows'],
+            'file_count' => count($manifest['runtime']['files']),
+            'decoded_byte_count' => (int) ($summary['runtime']['decoded_bytes'] ?? 0),
+            'encoded_byte_count' => (int) ($summary['runtime']['encoded_bytes'] ?? $summary['runtime']['bytes'] ?? 0),
+            'digest_sha256' => $manifest['runtime']['total_sha256'],
+            'contains_third_party_data' => true,
+            'committed' => true,
+            'compression' => $runtimeCompression ?? 'none',
+        ];
+        if ((int) ($summary['lookup']['files'] ?? 0) > 0) {
+            $runtime['lookup_index_format'] = $summary['lookup']['format'] ?? null;
+            $runtime['lookup_index_file_count'] = (int) $summary['lookup']['files'];
+            $runtime['lookup_index_block_count'] = (int) ($summary['lookup']['blocks'] ?? 0);
+            $runtime['lookup_index_byte_count'] = (int) ($summary['lookup']['bytes'] ?? 0);
+        }
+
+        return [
+            'schema_version' => 'wp-fts-conllu-lemma-pack-source-lock/v1',
+            'pack' => [
+                'id' => $manifest['pack_id'],
+                'language' => $manifest['language'],
+                'kind' => 'lemmatizer',
+                'status' => ((bool) $manifest['fixture_only']) ? 'fixture' : 'production_candidate',
+                'runtime_pack_committed' => true,
+                'default_enabled' => false,
+            ],
+            'source' => [
+                'name' => $manifest['source']['name'],
+                'version' => $manifest['source']['version'],
+                'url' => $manifest['source']['url'],
+                'repository_url' => $manifest['source']['repository_url'] ?? '',
+                'commit' => $manifest['source']['commit'] ?? '',
+                'file' => $manifest['source']['file'],
+                'files' => $manifest['source']['files'],
+                'artifact_sha256' => $manifest['source']['artifact_sha256'],
+                'byte_count' => $manifest['source']['byte_count'],
+                'license' => [
+                    'spdx_id' => $license,
+                    'license_url' => $licenseUrl,
+                    'notice_path' => 'NOTICE.txt',
+                ],
+            ],
+            'columns' => $manifest['source']['column_model'],
+            'importer' => [
+                'path' => $manifest['provenance']['importer'],
+                'delegated_runtime_importer' => $manifest['provenance']['delegated_runtime_importer'],
+                'commit' => $manifest['provenance']['importer_commit'],
+                'command' => $manifest['provenance']['importer_command'],
+            ],
+            'runtime' => $runtime,
+            'behavior' => [
+                'oov_policy' => 'return_original_normalized_term',
+                'ambiguity_policy' => $manifest['runtime']['ambiguity_policy'],
+                'unsupported_language_policy' => 'return_original_normalized_term',
+            ],
+            'release' => [
+                'default_enabled' => false,
+                'claim_boundary' => 'Source-backed CoNLL-U lemmatizer evidence. Generated runtime remains default-disabled.',
+            ],
+            'attribution' => ['upstream' => $attribution],
+        ];
+    }
+
+    /** Measure final published artifacts after provenance files are written. */
+    private function directory_bytes(string $directory): int
+    {
+        $bytes = 0;
+        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS));
+        foreach ($iterator as $file) {
+            if (!$file->isFile()) {
+                continue;
+            }
+            $size = $file->getSize();
+            if ($size > 0) {
+                $bytes += $size;
+            }
+        }
+
+        return $bytes;
+    }
+
+    /** Accept one lexical token only when its namespaced key fits storage. */
+    private function is_single_runtime_token(string $token, string $language): bool
     {
         if ($token === '' || strpbrk($token, " \t\r\n") !== false || str_contains($token, WP_FTS_TermNamespace::SEPARATOR)) {
             return false;
@@ -243,19 +702,22 @@ final class WP_FTS_ConlluLemmaPackImporter
 
         $unicodeMatch = @preg_match('/^[\p{L}\p{M}\p{N}_]+$/u', $token);
         if ($unicodeMatch === 1) {
-            return true;
+            return WP_FTS_TermNamespace::term_key_fits($token, $language);
         }
         if ($unicodeMatch === 0) {
             return false;
         }
 
-        return preg_match('/^[A-Za-z0-9_]+$/', $token) === 1;
+        return preg_match('/^[A-Za-z0-9_]+$/', $token) === 1
+            && WP_FTS_TermNamespace::term_key_fits($token, $language);
     }
 
+    /** Publish a bounded in-root relative path instead of a host path. */
     private function source_label(string $file, string $sourceRoot): string
     {
         if (is_dir($sourceRoot)) {
-            $root = rtrim($sourceRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+            $canonicalRoot = realpath($sourceRoot);
+            $root = rtrim(is_string($canonicalRoot) ? $canonicalRoot : $sourceRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
             if (str_starts_with($file, $root)) {
                 return str_replace(DIRECTORY_SEPARATOR, '/', substr($file, strlen($root)));
             }
@@ -299,11 +761,7 @@ final class WP_FTS_ConlluLemmaPackImporter
      */
     private function read_source_line(array $reader): string|false
     {
-        if ($reader['type'] === 'gzip') {
-            return gzgets($reader['handle']);
-        }
-
-        return fgets($reader['handle']);
+        return WP_FTS_LemmaSourceImportLimits::read_line($reader, 'CoNLL-U source');
     }
 
     /**
@@ -346,8 +804,13 @@ final class WP_FTS_ConlluLemmaPackImporter
         throw new RuntimeException("Could not create a unique importer temporary directory under: {$parent}");
     }
 
+    /** Remove one owned tree while unlinking, never following, symlinks. */
     private function remove_tree(string $directory): void
     {
+        if (is_link($directory)) {
+            unlink($directory);
+            return;
+        }
         if (!is_dir($directory)) {
             return;
         }
@@ -356,10 +819,10 @@ final class WP_FTS_ConlluLemmaPackImporter
             RecursiveIteratorIterator::CHILD_FIRST
         );
         foreach ($iterator as $path) {
-            if ($path->isDir()) {
-                rmdir($path->getPathname());
-            } else {
+            if ($path->isLink() || !$path->isDir()) {
                 unlink($path->getPathname());
+            } else {
+                rmdir($path->getPathname());
             }
         }
         rmdir($directory);

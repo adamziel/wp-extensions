@@ -68,6 +68,7 @@ if (!function_exists('test_case')) {
     exit(wp_fts_support_snapshot_contract_direct());
 }
 
+/** Seed one deterministic operational state shared by UI and JSON snapshot checks. */
 function wp_fts_support_snapshot_seed_state(WP_FTS_Test_WPDB $fake): void
 {
     global $wpdb;

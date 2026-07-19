@@ -2,6 +2,8 @@
 declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/src/bootstrap.php';
+require_once __DIR__ . '/lemma-source-import-limits.php';
+require_once __DIR__ . '/lemma-chunk-merge.php';
 
 /**
  * Deterministically imports PoliMorf-style five-column TSV data into a local
@@ -11,6 +13,8 @@ final class WP_FTS_PolishPolimorfImporter
 {
     private const RUNTIME_FORMAT = 'wp-fts-polish-lemma-tsv-v1';
     private const SOURCE_LOCK_SCHEMA = 'wp-fts-polish-polimorf-source-lock/v1';
+    private const MAX_NOTICE_METADATA_LINES = 64;
+    private const MAX_NOTICE_METADATA_BYTES = 65536;
 
     /**
      * @param array<string,mixed> $options
@@ -18,154 +22,282 @@ final class WP_FTS_PolishPolimorfImporter
      */
     public function import(array $options): array
     {
+        if (
+            !function_exists('gzopen')
+            || !function_exists('gzwrite')
+            || !function_exists('gzclose')
+            || !function_exists('gzencode')
+            || !function_exists('gzdecode')
+        ) {
+            throw new RuntimeException('PoliMorf runtime pack generation requires PHP zlib gzip support.');
+        }
+
         $sourcePath = $this->required_path($options, 'source');
         $outDir = $this->required_string($options, 'out');
+        WP_FTS_LemmaSourceImportLimits::assert_source_output_separate($sourcePath, $outDir, 'PoliMorf');
         $packId = (string) ($options['pack_id'] ?? 'pl-polimorf-20180722-full');
         $version = (string) ($options['version'] ?? '2018.07.22-import-v1');
         $sourceUrl = (string) ($options['source_url'] ?? 'https://clarin-pl.eu/dspace/bitstream/handle/11321/577/polimorf-20180722.tab.gz?isAllowed=y&sequence=1');
         $fixtureOnly = $this->bool_option($options['fixture_only'] ?? false);
         $rowsPerFile = max(1, (int) ($options['max_rows_per_file'] ?? 100000));
-        $chunkRows = max(1, (int) ($options['chunk_rows'] ?? 200000));
+        $chunkRows = (int) ($options['chunk_rows'] ?? WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS);
+        if ($chunkRows < 1 || $chunkRows > WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS) {
+            throw new RuntimeException('PoliMorf importer chunk rows must be between 1 and 200,000.');
+        }
         $sourceName = (string) ($options['source_name'] ?? 'PoliMorf Polish morphological dictionary');
         $sourceVersion = (string) ($options['source_version'] ?? '2018.07.22');
         $retrievalNote = (string) ($options['source_retrieval_note'] ?? 'Source bytes are locked by URL, SHA-256, and byte count; retrieval timestamp is recorded outside deterministic importer output.');
         $importerCommit = (string) ($options['importer_commit'] ?? 'recorded-in-task-result');
 
-        $this->prepare_output_directory($outDir);
-        $runtimeDir = $outDir . DIRECTORY_SEPARATOR . 'runtime';
-        if (!mkdir($runtimeDir, 0777, true) && !is_dir($runtimeDir)) {
-            throw new RuntimeException("Could not create runtime directory: {$runtimeDir}");
-        }
-
         $tmpDir = $this->prepare_temp_directory($options['tmp_dir'] ?? null);
-        $sourceSha = hash_file('sha256', $sourcePath);
-        if (!is_string($sourceSha)) {
-            throw new RuntimeException('Could not hash source artifact.');
-        }
-        $sourceBytes = filesize($sourcePath);
-        if (!is_int($sourceBytes)) {
-            throw new RuntimeException('Could not measure source artifact size.');
-        }
-
-        $normalizer = new WP_FTS_Normalizer();
-        $stats = [
-            'source_lines' => 0,
-            'metadata_lines' => 0,
-            'lexical_rows' => 0,
-            'invalid_column_rows' => 0,
-            'skipped_invalid_tokens' => 0,
-            'accepted_source_rows' => 0,
-        ];
-        $noticeLines = [];
-        $chunkFiles = [];
-        $pairs = [];
-        $seenLexicalRows = false;
-
-        $reader = $this->open_source($sourcePath);
+        $importComplete = false;
+        $outputPrepared = false;
         try {
-            while (($line = $this->read_source_line($reader)) !== false) {
-                $stats['source_lines']++;
-                $line = rtrim((string) $line, "\n");
-                $line = rtrim($line, "\r");
-                $columns = explode("\t", $line);
-                if (count($columns) !== 5) {
-                    if (!$seenLexicalRows) {
-                        $stats['metadata_lines']++;
-                        $noticeLines[] = $line;
-                    } else {
-                        $stats['invalid_column_rows']++;
-                    }
-                    continue;
-                }
-
-                $seenLexicalRows = true;
-                $stats['lexical_rows']++;
-                $surface = $normalizer->normalize_token($columns[0], 'pl');
-                $lemma = $normalizer->normalize_token($columns[1], 'pl');
-                if (!$this->is_runtime_token($surface) || !$this->is_runtime_token($lemma)) {
-                    $stats['skipped_invalid_tokens']++;
-                    continue;
-                }
-
-                $pairs[$surface . "\t" . $lemma] = true;
-                $stats['accepted_source_rows']++;
-                if (count($pairs) >= $chunkRows) {
-                    $chunkFiles[] = $this->flush_chunk($pairs, $tmpDir, count($chunkFiles) + 1);
-                    $pairs = [];
-                }
+            $this->prepare_output_directory($outDir);
+            $outputPrepared = true;
+            $runtimeDir = $outDir . DIRECTORY_SEPARATOR . 'runtime';
+            if (!mkdir($runtimeDir, 0777, true) && !is_dir($runtimeDir)) {
+                throw new RuntimeException("Could not create runtime directory: {$runtimeDir}");
             }
+
+            $physicalEvidence = WP_FTS_LemmaSourceImportLimits::source_physical_evidence(
+                [$sourcePath],
+                'PoliMorf'
+            );
+            $sourceBytes = $physicalEvidence['bytes'];
+            $sourceSnapshot = $tmpDir . DIRECTORY_SEPARATOR . 'source.snapshot'
+                . (str_ends_with(strtolower($sourcePath), '.gz') ? '.gz' : '');
+            $hashedSource = WP_FTS_LemmaSourceImportLimits::snapshot_source_artifact(
+                $sourcePath,
+                $sourceSnapshot,
+                $physicalEvidence['file_evidence'][$sourcePath],
+                'PoliMorf'
+            );
+            $sourceSha = $hashedSource['sha256'];
+
+            $normalizer = new WP_FTS_Normalizer();
+            $stats = [
+                'source_lines' => 0,
+                'metadata_lines' => 0,
+                'lexical_rows' => 0,
+                'invalid_column_rows' => 0,
+                'skipped_invalid_tokens' => 0,
+                'accepted_source_rows' => 0,
+            ];
+            $sourceDecodedBytes = 0;
+            $noticeLines = [];
+            $noticeBytes = 0;
+            $chunkSet = new WP_FTS_LemmaChunkSet($tmpDir);
+            $chunkNumber = 0;
+            $pairs = [];
+            $chunkLexicalBytes = 0;
+            $maxChunkLexicalBytes = 0;
+            $seenLexicalRows = false;
+
+            $reader = $this->open_source($sourceSnapshot);
+            try {
+                while (($line = $this->read_source_line($reader)) !== false) {
+                    WP_FTS_LemmaSourceImportLimits::account_decoded_line(
+                        $line,
+                        $stats['source_lines'],
+                        $sourceDecodedBytes,
+                        'PoliMorf'
+                    );
+                    $line = rtrim((string) $line, "\n");
+                    $line = rtrim($line, "\r");
+                    $columns = explode("\t", $line);
+                    if (count($columns) !== 5) {
+                        if (!$seenLexicalRows) {
+                            $stats['metadata_lines']++;
+                            $encodedNoticeBytes = strlen($line) + 1;
+                            if (
+                                count($noticeLines) >= self::MAX_NOTICE_METADATA_LINES
+                                || $noticeBytes + $encodedNoticeBytes > self::MAX_NOTICE_METADATA_BYTES
+                            ) {
+                                throw new RuntimeException(
+                                    'PoliMorf source metadata retained for NOTICE.txt exceeds '
+                                    . '64 lines or 64 KiB.'
+                                );
+                            }
+                            $noticeLines[] = $line;
+                            $noticeBytes += $encodedNoticeBytes;
+                        } else {
+                            $stats['invalid_column_rows']++;
+                        }
+                        continue;
+                    }
+
+                    $seenLexicalRows = true;
+                    $stats['lexical_rows']++;
+                    $surface = $normalizer->normalize_token($columns[0], 'pl');
+                    $lemma = $normalizer->normalize_token($columns[1], 'pl');
+                    if (!$this->is_runtime_token($surface, 'pl') || !$this->is_runtime_token($lemma, 'pl')) {
+                        $stats['skipped_invalid_tokens']++;
+                        continue;
+                    }
+
+                    $pair = $surface . "\t" . $lemma;
+                    WP_FTS_LemmaPackLimits::assert_runtime_line_bytes(strlen($pair));
+                    if (!isset($pairs[$pair])) {
+                        $pairBytes = strlen($pair) + 1;
+                        if (
+                            $pairs !== []
+                            && $chunkLexicalBytes + $pairBytes > WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_LEXICAL_BYTES
+                        ) {
+                            $chunkSet->add($this->flush_chunk($pairs, $tmpDir, ++$chunkNumber));
+                            $pairs = [];
+                            $chunkLexicalBytes = 0;
+                        }
+                        $pairs[$pair] = true;
+                        $chunkLexicalBytes += $pairBytes;
+                        $maxChunkLexicalBytes = max($maxChunkLexicalBytes, $chunkLexicalBytes);
+                    }
+                    $stats['accepted_source_rows']++;
+                    if (count($pairs) >= $chunkRows) {
+                        $chunkSet->add($this->flush_chunk($pairs, $tmpDir, ++$chunkNumber));
+                        $pairs = [];
+                        $chunkLexicalBytes = 0;
+                    }
+                }
+            } finally {
+                $this->close_source($reader);
+            }
+            $stats['source_physical_bytes'] = $sourceBytes;
+            $stats['source_physical_byte_limit'] = WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PHYSICAL_BYTES;
+            $stats['source_decoded_bytes'] = $sourceDecodedBytes;
+            $stats['source_decoded_byte_limit'] = WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_DECODED_BYTES;
+            $stats['source_line_limit'] = WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_LINES;
+            $stats['notice_metadata_bytes'] = $noticeBytes;
+            $stats['notice_metadata_line_limit'] = self::MAX_NOTICE_METADATA_LINES;
+            $stats['notice_metadata_byte_limit'] = self::MAX_NOTICE_METADATA_BYTES;
+
+            if ($pairs !== []) {
+                $chunkSet->add($this->flush_chunk($pairs, $tmpDir, ++$chunkNumber));
+            }
+            if ($chunkNumber === 0) {
+                throw new RuntimeException('Source did not yield any normalized runtime rows.');
+            }
+            $chunkPlan = $chunkSet->finish();
+            $chunkFiles = $chunkPlan['files'];
+            $stats['chunk_files'] = $chunkPlan['initial_files'];
+            $stats['chunk_merge_outputs'] = $chunkPlan['merge_outputs'];
+            $stats['chunk_merge_passes'] = $chunkPlan['merge_passes'];
+            $stats['max_live_chunk_files'] = $chunkPlan['max_live_files'];
+            $stats['max_chunk_merge_inputs'] = $chunkPlan['max_merge_inputs'];
+            $stats['chunk_merge_fan_in_limit'] = WP_FTS_LemmaChunkSet::MAX_MERGE_INPUTS;
+            $stats['max_chunk_lexical_bytes'] = $maxChunkLexicalBytes;
+            $stats['chunk_lexical_byte_limit'] = WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_LEXICAL_BYTES;
+
+            try {
+                $merge = $this->merge_chunks($chunkFiles, $runtimeDir, $rowsPerFile);
+            } catch (Throwable $error) {
+                $this->remove_tree($runtimeDir);
+                throw $error;
+            }
+            $runtimeFiles = $merge['files'];
+            $runtimeRows = (int) $merge['rows'];
+            $runtimeDigest = (string) $merge['sha256'];
+            $runtimeDecodedBytes = (int) $merge['decoded_bytes'];
+            $runtimeBytes = (int) $merge['encoded_bytes'];
+            $lookupBytes = (int) $merge['lookup_bytes'];
+            $lookupBlocks = (int) $merge['lookup_blocks'];
+            $runtimeLookupBytes = $runtimeBytes + $lookupBytes;
+            if ($runtimeLookupBytes > WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_LOOKUP_BYTES_PER_PACK) {
+                $this->remove_tree($runtimeDir);
+                throw new RuntimeException('Generated PoliMorf runtime and lookup files exceed the 16 MiB per-pack limit.');
+            }
+            $stats['runtime_decoded_bytes'] = $runtimeDecodedBytes;
+            $stats['runtime_encoded_bytes'] = $runtimeBytes;
+            $stats['lookup_index_bytes'] = $lookupBytes;
+            $stats['lookup_blocks'] = $lookupBlocks;
+            $stats['runtime_lookup_bytes'] = $runtimeLookupBytes;
+            $stats['runtime_lookup_byte_limit'] = WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_LOOKUP_BYTES_PER_PACK;
+            $stats['ambiguous_surfaces'] = (int) $merge['ambiguous_surfaces'];
+            $stats['unambiguous_surfaces'] = (int) $merge['unambiguous_surfaces'];
+            $stats['ambiguity_noop_surfaces'] = (int) $merge['ambiguity_noop_surfaces'];
+            $stats['ambiguity_noop_source_pairs'] = (int) $merge['ambiguity_noop_source_pairs'];
+
+            $noticePath = $outDir . DIRECTORY_SEPARATOR . 'NOTICE.txt';
+            $this->write_text($noticePath, $this->build_notice($sourceName, $sourceVersion, $sourceUrl, $sourceSha, $sourceBytes, $noticeLines));
+
+            $manifest = $this->build_manifest([
+                'pack_id' => $packId,
+                'version' => $version,
+                'fixture_only' => $fixtureOnly,
+                'source_name' => $sourceName,
+                'source_version' => $sourceVersion,
+                'source_url' => $sourceUrl,
+                'source_file' => basename($sourcePath),
+                'source_sha256' => $sourceSha,
+                'source_bytes' => $sourceBytes,
+                'source_retrieval_note' => $retrievalNote,
+                'runtime_rows' => $runtimeRows,
+                'runtime_sha256' => $runtimeDigest,
+                'runtime_files' => $runtimeFiles,
+                'stats' => $stats,
+                'importer_commit' => $importerCommit,
+            ]);
+            $manifestPath = $outDir . DIRECTORY_SEPARATOR . 'manifest.json';
+            $this->write_json($manifestPath, $manifest);
+
+            $manifestSha = WP_FTS_LemmaPackLimits::hash_file_bounded(
+                $manifestPath,
+                WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES,
+                'manifest_bytes',
+                'Generated analyzer-pack manifest exceeds 64 KiB.'
+            )['sha256'];
+            $sourceLock = $this->build_source_lock(
+                $manifest,
+                $manifestSha,
+                $runtimeDecodedBytes,
+                $runtimeBytes,
+                $lookupBytes,
+                $importerCommit
+            );
+            $sourceLockPath = $outDir . DIRECTORY_SEPARATOR . 'SOURCE.lock.json';
+            $this->write_json($sourceLockPath, $sourceLock);
+
+            $packBytes = $this->directory_bytes($outDir);
+
+            $summary = [
+                'status' => 'ok',
+                'pack_id' => $packId,
+                'manifest' => $manifestPath,
+                'manifest_sha256' => $manifestSha,
+                'source_lock' => $sourceLockPath,
+                'source' => [
+                    'path' => $sourcePath,
+                    'url' => $sourceUrl,
+                    'sha256' => $sourceSha,
+                    'bytes' => $sourceBytes,
+                ],
+                'runtime' => [
+                    'rows' => $runtimeRows,
+                    'files' => count($runtimeFiles),
+                    'bytes' => $runtimeBytes,
+                    'decoded_bytes' => $runtimeDecodedBytes,
+                    'encoded_bytes' => $runtimeBytes,
+                    'sha256' => $runtimeDigest,
+                ],
+                'lookup' => [
+                    'format' => WP_FTS_LemmaPackLookupIndex::FORMAT,
+                    'files' => count($runtimeFiles),
+                    'blocks' => $lookupBlocks,
+                    'bytes' => $lookupBytes,
+                ],
+                'runtime_lookup_bytes' => $runtimeLookupBytes,
+                'pack_bytes' => $packBytes,
+                'stats' => $stats,
+            ];
+            $importComplete = true;
+
+            return $summary;
         } finally {
-            $this->close_source($reader);
+            $this->remove_tree($tmpDir);
+            if ($outputPrepared && !$importComplete) {
+                $this->remove_tree($outDir);
+            }
         }
-
-        if ($pairs !== []) {
-            $chunkFiles[] = $this->flush_chunk($pairs, $tmpDir, count($chunkFiles) + 1);
-        }
-        if ($chunkFiles === []) {
-            throw new RuntimeException('Source did not yield any normalized runtime rows.');
-        }
-
-        $merge = $this->merge_chunks($chunkFiles, $runtimeDir, $rowsPerFile);
-        $runtimeFiles = $merge['files'];
-        $runtimeRows = (int) $merge['rows'];
-        $runtimeDigest = (string) $merge['sha256'];
-        $runtimeBytes = $this->sum_file_bytes(array_map(static fn(array $file): string => $runtimeDir . DIRECTORY_SEPARATOR . basename((string) $file['path']), $runtimeFiles));
-
-        $noticePath = $outDir . DIRECTORY_SEPARATOR . 'NOTICE.txt';
-        $this->write_text($noticePath, $this->build_notice($sourceName, $sourceVersion, $sourceUrl, $sourceSha, $sourceBytes, $noticeLines));
-
-        $manifest = $this->build_manifest([
-            'pack_id' => $packId,
-            'version' => $version,
-            'fixture_only' => $fixtureOnly,
-            'source_name' => $sourceName,
-            'source_version' => $sourceVersion,
-            'source_url' => $sourceUrl,
-            'source_file' => basename($sourcePath),
-            'source_sha256' => $sourceSha,
-            'source_bytes' => $sourceBytes,
-            'source_retrieval_note' => $retrievalNote,
-            'runtime_rows' => $runtimeRows,
-            'runtime_sha256' => $runtimeDigest,
-            'runtime_files' => $runtimeFiles,
-            'stats' => $stats,
-            'importer_commit' => $importerCommit,
-        ]);
-        $manifestPath = $outDir . DIRECTORY_SEPARATOR . 'manifest.json';
-        $this->write_json($manifestPath, $manifest);
-
-        $manifestSha = hash_file('sha256', $manifestPath);
-        if (!is_string($manifestSha)) {
-            throw new RuntimeException('Could not hash generated manifest.');
-        }
-        $sourceLock = $this->build_source_lock($manifest, $manifestSha, $runtimeBytes, $importerCommit);
-        $sourceLockPath = $outDir . DIRECTORY_SEPARATOR . 'SOURCE.lock.json';
-        $this->write_json($sourceLockPath, $sourceLock);
-
-        $this->remove_tree($tmpDir);
-        $packBytes = $this->directory_bytes($outDir);
-
-        return [
-            'status' => 'ok',
-            'pack_id' => $packId,
-            'manifest' => $manifestPath,
-            'manifest_sha256' => $manifestSha,
-            'source_lock' => $sourceLockPath,
-            'source' => [
-                'path' => $sourcePath,
-                'url' => $sourceUrl,
-                'sha256' => $sourceSha,
-                'bytes' => $sourceBytes,
-            ],
-            'runtime' => [
-                'rows' => $runtimeRows,
-                'files' => count($runtimeFiles),
-                'bytes' => $runtimeBytes,
-                'sha256' => $runtimeDigest,
-            ],
-            'pack_bytes' => $packBytes,
-            'stats' => $stats,
-        ];
     }
 
     /**
@@ -236,8 +368,12 @@ final class WP_FTS_PolishPolimorfImporter
         return false;
     }
 
+    /** Refuse caller-owned files, symlink roots, and non-empty pack targets. */
     private function prepare_output_directory(string $outDir): void
     {
+        if (is_link($outDir)) {
+            throw new RuntimeException("Output path must not be a symbolic link: {$outDir}");
+        }
         if (is_file($outDir)) {
             throw new RuntimeException("Output path is a file: {$outDir}");
         }
@@ -251,21 +387,31 @@ final class WP_FTS_PolishPolimorfImporter
         }
     }
 
+    /** Create a unique owned child beneath the optional caller-owned parent. */
     private function prepare_temp_directory(mixed $requested): string
     {
+        $parent = sys_get_temp_dir();
         if (is_scalar($requested) && trim((string) $requested) !== '') {
-            $tmpDir = (string) $requested;
-        } else {
-            $tmpDir = sys_get_temp_dir() . '/wp-fts-polimorf-import-' . getmypid() . '-' . bin2hex(random_bytes(4));
+            $parent = (string) $requested;
         }
-        if (is_file($tmpDir)) {
-            throw new RuntimeException("Temporary path is a file: {$tmpDir}");
+        if (is_file($parent)) {
+            throw new RuntimeException("Temporary parent path is a file: {$parent}");
         }
-        if (!is_dir($tmpDir) && !mkdir($tmpDir, 0777, true)) {
-            throw new RuntimeException("Could not create temporary directory: {$tmpDir}");
+        if (!is_dir($parent) && !mkdir($parent, 0777, true) && !is_dir($parent)) {
+            throw new RuntimeException("Could not create temporary parent directory: {$parent}");
         }
 
-        return $tmpDir;
+        for ($attempt = 0; $attempt < 10; $attempt++) {
+            $tmpDir = $parent . DIRECTORY_SEPARATOR . 'wp-fts-polimorf-import-' . getmypid() . '-' . bin2hex(random_bytes(8));
+            if (mkdir($tmpDir, 0700)) {
+                return $tmpDir;
+            }
+            if (!file_exists($tmpDir)) {
+                throw new RuntimeException("Could not create importer temporary directory: {$tmpDir}");
+            }
+        }
+
+        throw new RuntimeException("Could not create a unique importer temporary directory under: {$parent}");
     }
 
     /**
@@ -298,11 +444,7 @@ final class WP_FTS_PolishPolimorfImporter
      */
     private function read_source_line(array $reader): string|false
     {
-        if ($reader['type'] === 'gzip') {
-            return gzgets($reader['handle']);
-        }
-
-        return fgets($reader['handle']);
+        return WP_FTS_LemmaSourceImportLimits::read_line($reader, 'PoliMorf source');
     }
 
     /**
@@ -318,13 +460,15 @@ final class WP_FTS_PolishPolimorfImporter
         fclose($reader['handle']);
     }
 
-    private function is_runtime_token(string $token): bool
+    /** Accept one lexical token only when its namespaced key fits storage. */
+    private function is_runtime_token(string $token, string $language): bool
     {
         if ($token === '' || strpbrk($token, " \t\r\n") !== false || str_contains($token, WP_FTS_TermNamespace::SEPARATOR)) {
             return false;
         }
 
-        return preg_match('/^[\p{L}\p{M}\p{N}_]+$/u', $token) === 1;
+        return preg_match('/^[\p{L}\p{M}\p{N}_]+$/u', $token) === 1
+            && WP_FTS_TermNamespace::term_key_fits($token, $language);
     }
 
     /**
@@ -340,7 +484,11 @@ final class WP_FTS_PolishPolimorfImporter
             throw new RuntimeException("Could not write chunk file: {$path}");
         }
         foreach ($lines as $line) {
-            fwrite($handle, $line . "\n");
+            $encoded = $line . "\n";
+            if (fwrite($handle, $encoded) !== strlen($encoded)) {
+                fclose($handle);
+                throw new RuntimeException("Could not write chunk file: {$path}");
+            }
         }
         fclose($handle);
 
@@ -349,35 +497,82 @@ final class WP_FTS_PolishPolimorfImporter
 
     /**
      * @param string[] $chunkFiles
-     * @return array{files:array<int,array<string,mixed>>,rows:int,sha256:string}
+     * @return array{files:array<int,array<string,mixed>>,rows:int,sha256:string,ambiguous_surfaces:int,unambiguous_surfaces:int,ambiguity_noop_surfaces:int,ambiguity_noop_source_pairs:int,decoded_bytes:int,encoded_bytes:int,lookup_bytes:int,lookup_blocks:int}
      */
     private function merge_chunks(array $chunkFiles, string $runtimeDir, int $rowsPerFile): array
     {
-        $chunks = [];
-        foreach ($chunkFiles as $path) {
-            $handle = fopen($path, 'rb');
-            if (!is_resource($handle)) {
-                throw new RuntimeException("Could not read chunk file: {$path}");
-            }
-            $line = $this->read_chunk_line($handle);
-            if ($line !== null) {
-                $chunks[] = ['path' => $path, 'handle' => $handle, 'line' => $line];
-            } else {
-                fclose($handle);
-            }
-        }
-
         $files = [];
         $runtimeDigest = hash_init('sha256');
         $previousPair = null;
         $currentSurface = null;
+        $currentSurfacePairs = [];
         $currentSurfaceLemmaCount = 0;
         $ambiguousSurfaces = 0;
         $unambiguousSurfaces = 0;
+        $ambiguityNoopSurfaces = 0;
+        $ambiguityNoopSourcePairs = 0;
         $totalRows = 0;
         $shard = null;
+        $encodedBytes = 0;
+        $lookupBytes = 0;
+        $lookupBlocks = 0;
 
-        $finishSurface = static function () use (&$currentSurface, &$currentSurfaceLemmaCount, &$ambiguousSurfaces, &$unambiguousSurfaces): void {
+        $closeShard = function () use (
+            &$files,
+            &$shard,
+            &$encodedBytes,
+            &$lookupBytes,
+            &$lookupBlocks
+        ): void {
+            if ($shard === null) {
+                return;
+            }
+
+            $file = $this->close_shard($shard);
+            $shard = null;
+            $files[] = $file;
+            $encodedBytes += (int) $file['encoded_bytes'];
+            $lookupBytes += (int) $file['lookup_bytes'];
+            $lookupBlocks += (int) $file['lookup_blocks'];
+            if (count($files) > WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES) {
+                throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                    'runtime_files',
+                    'Generated PoliMorf pack exceeds the 64-runtime-file limit.'
+                );
+            }
+            if ($lookupBlocks > WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_PACK) {
+                throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                    'lookup_blocks',
+                    'Generated PoliMorf pack exceeds the 8,192-block lookup limit.'
+                );
+            }
+            if (
+                $encodedBytes + $lookupBytes
+                > WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_LOOKUP_BYTES_PER_PACK
+            ) {
+                throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                    'runtime_lookup_bytes',
+                    'Generated PoliMorf runtime and lookup files exceed the 16 MiB per-pack limit.'
+                );
+            }
+        };
+
+        $finishSurface = function () use (
+            &$currentSurface,
+            &$currentSurfacePairs,
+            &$currentSurfaceLemmaCount,
+            &$ambiguousSurfaces,
+            &$unambiguousSurfaces,
+            &$ambiguityNoopSurfaces,
+            &$ambiguityNoopSourcePairs,
+            &$files,
+            &$shard,
+            &$runtimeDigest,
+            &$totalRows,
+            $closeShard,
+            $runtimeDir,
+            $rowsPerFile
+        ): void {
             if ($currentSurface === null) {
                 return;
             }
@@ -386,20 +581,39 @@ final class WP_FTS_PolishPolimorfImporter
             } else {
                 $ambiguousSurfaces++;
             }
+
+            if ($currentSurfaceLemmaCount > WP_FTS_LemmaPackLimits::MAX_LEMMAS_PER_SURFACE) {
+                $ambiguityNoopSurfaces++;
+                $ambiguityNoopSourcePairs += $currentSurfaceLemmaCount;
+                $currentSurfacePairs = [$currentSurface . "\t" . $currentSurface];
+            }
+
+            $surfaceRows = count($currentSurfacePairs);
+            $surfaceBytes = array_sum(array_map(
+                static fn(string $pair): int => strlen($pair) + 1,
+                $currentSurfacePairs
+            ));
+            if (
+                $shard !== null
+                && (
+                    $shard['rows'] >= $rowsPerFile
+                    || !$this->surface_fits_lookup_shard($shard, $currentSurface, $surfaceBytes)
+                )
+            ) {
+                $closeShard();
+            }
+            if ($shard === null) {
+                $shard = $this->open_shard($runtimeDir, count($files) + 1);
+            }
+            $this->start_surface_in_lookup_shard($shard, $currentSurface, $surfaceRows, $surfaceBytes);
+            foreach ($currentSurfacePairs as $pair) {
+                $this->write_pair_to_shard($shard, $pair, $currentSurface);
+                hash_update($runtimeDigest, $pair . "\n");
+                $totalRows++;
+            }
         };
 
-        try {
-            while ($chunks !== []) {
-                $minIndex = $this->min_chunk_index($chunks);
-                $pair = $chunks[$minIndex]['line'];
-                $next = $this->read_chunk_line($chunks[$minIndex]['handle']);
-                if ($next === null) {
-                    fclose($chunks[$minIndex]['handle']);
-                    array_splice($chunks, $minIndex, 1);
-                } else {
-                    $chunks[$minIndex]['line'] = $next;
-                }
-
+        foreach (WP_FTS_LemmaChunkSet::unique_lines($chunkFiles) as $pair) {
                 if ($pair === $previousPair) {
                     continue;
                 }
@@ -408,33 +622,19 @@ final class WP_FTS_PolishPolimorfImporter
                 if ($currentSurface !== $surface) {
                     $finishSurface();
                     $currentSurface = $surface;
+                    $currentSurfacePairs = [];
                     $currentSurfaceLemmaCount = 0;
-                    if ($shard !== null && $shard['rows'] >= $rowsPerFile) {
-                        $files[] = $this->close_shard($shard);
-                        $shard = null;
-                    }
                 }
                 $currentSurfaceLemmaCount++;
-
-                if ($shard === null) {
-                    $shard = $this->open_shard($runtimeDir, count($files) + 1);
+                if ($currentSurfaceLemmaCount <= WP_FTS_LemmaPackLimits::MAX_LEMMAS_PER_SURFACE) {
+                    $currentSurfacePairs[] = $pair;
+                } elseif ($currentSurfaceLemmaCount === WP_FTS_LemmaPackLimits::MAX_LEMMAS_PER_SURFACE + 1) {
+                    $currentSurfacePairs = [];
                 }
-                $this->write_pair_to_shard($shard, $pair, $surface);
-                hash_update($runtimeDigest, $pair . "\n");
-                $totalRows++;
-            }
-        } finally {
-            foreach ($chunks as $chunk) {
-                if (is_resource($chunk['handle'])) {
-                    fclose($chunk['handle']);
-                }
-            }
         }
 
         $finishSurface();
-        if ($shard !== null) {
-            $files[] = $this->close_shard($shard);
-        }
+        $closeShard();
         if ($totalRows < 1) {
             throw new RuntimeException('Chunk merge did not produce runtime rows.');
         }
@@ -447,6 +647,13 @@ final class WP_FTS_PolishPolimorfImporter
                     'rows' => $file['rows'],
                     'first_surface' => $file['first_surface'],
                     'last_surface' => $file['last_surface'],
+                    'compression' => $file['compression'],
+                    'lookup' => [
+                        'format' => $file['lookup']['format'],
+                        'path' => 'runtime/' . basename((string) $file['lookup']['path']),
+                        'sha256' => $file['lookup']['sha256'],
+                        'blocks' => $file['lookup']['blocks'],
+                    ],
                 ],
                 $files
             ),
@@ -454,49 +661,28 @@ final class WP_FTS_PolishPolimorfImporter
             'sha256' => hash_final($runtimeDigest),
             'ambiguous_surfaces' => $ambiguousSurfaces,
             'unambiguous_surfaces' => $unambiguousSurfaces,
+            'ambiguity_noop_surfaces' => $ambiguityNoopSurfaces,
+            'ambiguity_noop_source_pairs' => $ambiguityNoopSourcePairs,
+            'decoded_bytes' => array_sum(array_column($files, 'decoded_bytes')),
+            'encoded_bytes' => $encodedBytes,
+            'lookup_bytes' => $lookupBytes,
+            'lookup_blocks' => $lookupBlocks,
         ];
     }
 
     /**
-     * @param resource $handle
-     */
-    private function read_chunk_line($handle): ?string
-    {
-        $line = fgets($handle);
-        if ($line === false) {
-            return null;
-        }
-
-        return rtrim(rtrim((string) $line, "\n"), "\r");
-    }
-
-    /**
-     * @param array<int,array{line:string,handle:resource,path:string}> $chunks
-     */
-    private function min_chunk_index(array $chunks): int
-    {
-        $minIndex = 0;
-        $minLine = $chunks[0]['line'];
-        foreach ($chunks as $index => $chunk) {
-            if ($index === 0) {
-                continue;
-            }
-            if (strcmp($chunk['line'], $minLine) < 0) {
-                $minIndex = $index;
-                $minLine = $chunk['line'];
-            }
-        }
-
-        return $minIndex;
-    }
-
-    /**
-     * @return array{path:string,handle:resource,hash:HashContext,rows:int,first_surface:?string,last_surface:?string}
+     * @return array{path:string,handle:resource,rows:int,decoded_bytes:int,lookup_blocks:int,lookup_block_rows:int,lookup_block_bytes:int,lookup_header_bytes:int,lookup_block_header_bytes:int,lookup_block_first_surface:?string,first_surface:?string,last_surface:?string}
      */
     private function open_shard(string $runtimeDir, int $number): array
     {
-        $path = $runtimeDir . DIRECTORY_SEPARATOR . sprintf('%04d.tsv', $number);
-        $handle = fopen($path, 'wb');
+        if ($number > WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'runtime_files',
+                'Generated PoliMorf pack exceeds the 64-runtime-file limit.'
+            );
+        }
+        $path = $runtimeDir . DIRECTORY_SEPARATOR . sprintf('%04d.tsv.gz', $number);
+        $handle = gzopen($path, 'wb9');
         if (!is_resource($handle)) {
             throw new RuntimeException("Could not write runtime shard: {$path}");
         }
@@ -504,43 +690,167 @@ final class WP_FTS_PolishPolimorfImporter
         return [
             'path' => $path,
             'handle' => $handle,
-            'hash' => hash_init('sha256'),
             'rows' => 0,
+            'decoded_bytes' => 0,
+            'lookup_blocks' => 0,
+            'lookup_block_rows' => 0,
+            'lookup_block_bytes' => 0,
+            'lookup_header_bytes' => WP_FTS_LemmaSourceImportLimits::lookup_header_base_bytes(),
+            'lookup_block_header_bytes' => 0,
+            'lookup_block_first_surface' => null,
             'first_surface' => null,
             'last_surface' => null,
         ];
     }
 
     /**
-     * @param array{path:string,handle:resource,hash:HashContext,rows:int,first_surface:?string,last_surface:?string} $shard
+     * Keep each source surface in one lookup block, matching the sidecar builder.
+     *
+     * @param array{lookup_blocks:int,lookup_block_rows:int,lookup_block_bytes:int,lookup_header_bytes:int,lookup_block_header_bytes:int,lookup_block_first_surface:?string} $shard
+     */
+    private function surface_fits_lookup_shard(array $shard, string $surface, int $surfaceBytes): bool
+    {
+        if ($surfaceBytes > WP_FTS_LemmaPackLookupIndex::MAX_BLOCK_DECODED_BYTES) {
+            return false;
+        }
+        $startsNewBlock = $shard['lookup_block_rows'] === 0
+            || $shard['lookup_block_rows'] >= WP_FTS_LemmaPackLookupIndex::DEFAULT_BLOCK_ROWS
+            || $shard['lookup_block_bytes'] + $surfaceBytes > WP_FTS_LemmaPackLookupIndex::MAX_BLOCK_DECODED_BYTES;
+        if ($startsNewBlock && $shard['lookup_blocks'] >= WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_FILE) {
+            return false;
+        }
+        if ($startsNewBlock) {
+            $candidateHeaderBytes = $shard['lookup_header_bytes']
+                + ($shard['lookup_blocks'] > 0 ? 1 : 0)
+                + WP_FTS_LemmaSourceImportLimits::lookup_block_header_bytes($surface, $surface);
+        } else {
+            $candidateHeaderBytes = $shard['lookup_header_bytes']
+                - $shard['lookup_block_header_bytes']
+                + WP_FTS_LemmaSourceImportLimits::lookup_block_header_bytes(
+                    (string) $shard['lookup_block_first_surface'],
+                    $surface
+                );
+        }
+
+        return $candidateHeaderBytes <= WP_FTS_LemmaPackLookupIndex::MAX_HEADER_BYTES;
+    }
+
+    /**
+     * @param array{lookup_blocks:int,lookup_block_rows:int,lookup_block_bytes:int,lookup_header_bytes:int,lookup_block_header_bytes:int,lookup_block_first_surface:?string} $shard
+     */
+    private function start_surface_in_lookup_shard(array &$shard, string $surface, int $surfaceRows, int $surfaceBytes): void
+    {
+        if ($surfaceBytes > WP_FTS_LemmaPackLookupIndex::MAX_BLOCK_DECODED_BYTES) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'lookup_block_decoded_bytes',
+                'One generated PoliMorf surface exceeds the 16 KiB decoded lookup-block limit.'
+            );
+        }
+        if (
+            $shard['lookup_block_rows'] === 0
+            || $shard['lookup_block_rows'] >= WP_FTS_LemmaPackLookupIndex::DEFAULT_BLOCK_ROWS
+            || $shard['lookup_block_bytes'] + $surfaceBytes > WP_FTS_LemmaPackLookupIndex::MAX_BLOCK_DECODED_BYTES
+        ) {
+            $shard['lookup_blocks']++;
+            $shard['lookup_block_rows'] = 0;
+            $shard['lookup_block_bytes'] = 0;
+            $shard['lookup_block_first_surface'] = $surface;
+            $shard['lookup_block_header_bytes'] = WP_FTS_LemmaSourceImportLimits::lookup_block_header_bytes($surface, $surface);
+            $shard['lookup_header_bytes'] += ($shard['lookup_blocks'] > 1 ? 1 : 0)
+                + $shard['lookup_block_header_bytes'];
+        } else {
+            $updatedBlockHeaderBytes = WP_FTS_LemmaSourceImportLimits::lookup_block_header_bytes(
+                (string) $shard['lookup_block_first_surface'],
+                $surface
+            );
+            $shard['lookup_header_bytes'] += $updatedBlockHeaderBytes - $shard['lookup_block_header_bytes'];
+            $shard['lookup_block_header_bytes'] = $updatedBlockHeaderBytes;
+        }
+        if ($shard['lookup_blocks'] > WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_FILE) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'lookup_blocks',
+                'Generated PoliMorf runtime shard exceeds the 256-block lookup limit.'
+            );
+        }
+        if ($shard['lookup_header_bytes'] > WP_FTS_LemmaPackLookupIndex::MAX_HEADER_BYTES) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'lookup_header_bytes',
+                'Generated PoliMorf lookup header exceeds the 64 KiB per-file limit.'
+            );
+        }
+
+        $shard['lookup_block_rows'] += $surfaceRows;
+        $shard['lookup_block_bytes'] += $surfaceBytes;
+    }
+
+    /**
+     * @param array{path:string,handle:resource,rows:int,decoded_bytes:int,lookup_blocks:int,lookup_block_rows:int,lookup_block_bytes:int,lookup_header_bytes:int,lookup_block_header_bytes:int,lookup_block_first_surface:?string,first_surface:?string,last_surface:?string} $shard
      */
     private function write_pair_to_shard(array &$shard, string $pair, string $surface): void
     {
         $line = $pair . "\n";
-        fwrite($shard['handle'], $line);
-        hash_update($shard['hash'], $line);
+        if (gzwrite($shard['handle'], $line) !== strlen($line)) {
+            throw new RuntimeException("Could not write compressed runtime shard: {$shard['path']}");
+        }
         $shard['rows']++;
+        $shard['decoded_bytes'] += strlen($line);
         $shard['first_surface'] ??= $surface;
         $shard['last_surface'] = $surface;
     }
 
     /**
-     * @param array{path:string,handle:resource,hash:HashContext,rows:int,first_surface:?string,last_surface:?string} $shard
-     * @return array{path:string,sha256:string,rows:int,first_surface:string,last_surface:string}
+     * @param array{path:string,handle:resource,rows:int,decoded_bytes:int,lookup_blocks:int,lookup_block_rows:int,lookup_block_bytes:int,lookup_header_bytes:int,lookup_block_header_bytes:int,lookup_block_first_surface:?string,first_surface:?string,last_surface:?string} $shard
+     * @return array{path:string,sha256:string,rows:int,decoded_bytes:int,encoded_bytes:int,lookup_bytes:int,lookup_blocks:int,first_surface:string,last_surface:string,compression:string,lookup:array{format:string,path:string,sha256:string,blocks:int}}
      */
     private function close_shard(array $shard): array
     {
-        fclose($shard['handle']);
+        gzclose($shard['handle']);
         if (!is_string($shard['first_surface']) || !is_string($shard['last_surface'])) {
             throw new RuntimeException('Cannot close an empty runtime shard.');
         }
 
+        $runtimeSha256 = WP_FTS_LemmaPackLimits::hash_file_bounded(
+            $shard['path'],
+            WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_LOOKUP_BYTES_PER_PACK,
+            'runtime_lookup_bytes',
+            'Generated analyzer-pack runtime exceeds the 16 MiB physical pack limit.'
+        )['sha256'];
+        $lookupPath = $shard['path'] . '.lookup';
+        $lookup = WP_FTS_LemmaPackLookupIndex::build(
+            $shard['path'],
+            WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+            $runtimeSha256,
+            $lookupPath
+        );
+        if ((int) $lookup['rows'] !== (int) $shard['rows']) {
+            throw new RuntimeException("Indexed runtime row count changed for {$shard['path']}.");
+        }
+        if ((int) $lookup['blocks'] !== $shard['lookup_blocks']) {
+            throw new RuntimeException("Lookup block planning changed for {$shard['path']}.");
+        }
+        $encodedBytes = filesize($shard['path']);
+        $lookupBytes = filesize($lookupPath);
+        if (!is_int($encodedBytes) || !is_int($lookupBytes)) {
+            throw new RuntimeException("Could not measure indexed runtime files for {$shard['path']}.");
+        }
+
         return [
             'path' => $shard['path'],
-            'sha256' => hash_final($shard['hash']),
+            'sha256' => $lookup['runtime_sha256'],
             'rows' => $shard['rows'],
+            'decoded_bytes' => $shard['decoded_bytes'],
+            'encoded_bytes' => $encodedBytes,
+            'lookup_bytes' => $lookupBytes,
+            'lookup_blocks' => (int) $lookup['blocks'],
             'first_surface' => $shard['first_surface'],
             'last_surface' => $shard['last_surface'],
+            'compression' => WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+            'lookup' => [
+                'format' => $lookup['format'],
+                'path' => $lookupPath,
+                'sha256' => $lookup['sha256'],
+                'blocks' => $lookup['blocks'],
+            ],
         ];
     }
 
@@ -562,6 +872,8 @@ final class WP_FTS_PolishPolimorfImporter
                 'ambiguous-form-noop',
                 'normalized-runtime-rows',
                 'sharded-runtime-files',
+                'compressed-runtime-files',
+                'indexed-runtime-lookups',
             ],
             'runtime' => [
                 'format' => self::RUNTIME_FORMAT,
@@ -603,6 +915,7 @@ final class WP_FTS_PolishPolimorfImporter
                 'importer' => 'indexer/tools/import-polish-polimorf-lemmatizer.php',
                 'importer_commit' => $data['importer_commit'],
                 'importer_command' => $this->canonical_importer_command((string) $data['pack_id'], (string) $data['version'], (string) $data['source_url'], (bool) $data['fixture_only']),
+                'runtime_compression' => WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
                 'no_runtime_network_access' => true,
                 'no_full_third_party_dictionary_dump' => (bool) $data['fixture_only'],
                 'full_third_party_dictionary_dump_generated' => !(bool) $data['fixture_only'],
@@ -615,7 +928,14 @@ final class WP_FTS_PolishPolimorfImporter
      * @param array<string,mixed> $manifest
      * @return array<string,mixed>
      */
-    private function build_source_lock(array $manifest, string $manifestSha, int $runtimeBytes, string $importerCommit): array
+    private function build_source_lock(
+        array $manifest,
+        string $manifestSha,
+        int $runtimeDecodedBytes,
+        int $runtimeBytes,
+        int $lookupBytes,
+        string $importerCommit
+    ): array
     {
         return [
             'schema_version' => self::SOURCE_LOCK_SCHEMA,
@@ -648,6 +968,14 @@ final class WP_FTS_PolishPolimorfImporter
                 'row_count' => $manifest['runtime']['total_rows'],
                 'file_count' => count($manifest['runtime']['files']),
                 'byte_count' => $runtimeBytes,
+                'decoded_byte_count' => $runtimeDecodedBytes,
+                'encoded_byte_count' => $runtimeBytes,
+                'compressed_byte_count' => $runtimeBytes,
+                'lookup_index_format' => WP_FTS_LemmaPackLookupIndex::FORMAT,
+                'lookup_index_file_count' => count($manifest['runtime']['files']),
+                'lookup_index_byte_count' => $lookupBytes,
+                'runtime_lookup_byte_count' => $runtimeBytes + $lookupBytes,
+                'runtime_lookup_byte_limit' => WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_LOOKUP_BYTES_PER_PACK,
                 'digest_sha256' => $manifest['runtime']['total_sha256'],
                 'contains_third_party_data' => true,
                 'committed' => false,
@@ -754,8 +1082,13 @@ final class WP_FTS_PolishPolimorfImporter
         return $bytes;
     }
 
+    /** Remove one owned tree while unlinking, never following, symlinks. */
     private function remove_tree(string $directory): void
     {
+        if (is_link($directory)) {
+            unlink($directory);
+            return;
+        }
         if (!is_dir($directory)) {
             return;
         }
@@ -764,10 +1097,10 @@ final class WP_FTS_PolishPolimorfImporter
             RecursiveIteratorIterator::CHILD_FIRST
         );
         foreach ($iterator as $path) {
-            if ($path->isDir()) {
-                rmdir($path->getPathname());
-            } else {
+            if ($path->isLink() || !$path->isDir()) {
                 unlink($path->getPathname());
+            } else {
+                rmdir($path->getPathname());
             }
         }
         rmdir($directory);

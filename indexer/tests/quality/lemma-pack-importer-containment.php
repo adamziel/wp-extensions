@@ -13,11 +13,13 @@ if ($wp_fts_lpic_direct) {
     $GLOBALS['wp_fts_lpic_tests'] = [];
     $GLOBALS['wp_fts_lpic_checks'] = 0;
 
+    /** Register one assertion closure when this quality file runs standalone. */
     function test_case(string $name, callable $fn): void
     {
         $GLOBALS['wp_fts_lpic_tests'][] = ['name' => $name, 'fn' => $fn];
     }
 
+    /** Count one standalone check and fail with its invariant description. */
     function assert_true(bool $condition, string $message): void
     {
         $GLOBALS['wp_fts_lpic_checks']++;
@@ -26,6 +28,7 @@ if ($wp_fts_lpic_direct) {
         }
     }
 
+    /** Count one strict standalone equality check and report both values. */
     function assert_same(mixed $expected, mixed $actual, string $message): void
     {
         $GLOBALS['wp_fts_lpic_checks']++;
@@ -39,6 +42,7 @@ if ($wp_fts_lpic_direct) {
 
 require_once dirname(__DIR__, 2) . '/tools/import-lemma-tsv-pack.php';
 require_once dirname(__DIR__, 2) . '/tools/import-unimorph-lemma-pack.php';
+require_once dirname(__DIR__, 2) . '/tools/import-polish-polimorf-lemmatizer.php';
 
 /** @return array<string,mixed> */
 function wp_fts_lpic_options(string $source, string $out, string $packId): array
@@ -97,6 +101,7 @@ function wp_fts_lpic_manifest(string $path): array
     return $manifest;
 }
 
+/** Remove one isolated importer-test fixture tree after its assertions finish. */
 function wp_fts_lpic_remove_tree(string $path): void
 {
     if (!is_dir($path)) {
@@ -201,6 +206,41 @@ test_case('UniMorph provenance retains delegated ambiguity no-op counts', functi
         (new WP_FTS_AnalyzerPackValidator())->validate($out . '/manifest.json', false);
         $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($out . '/manifest.json');
         assert_same(['qaaoverflow'], array_column($pack->analyze('qaaoverflow', 'qaa'), 'term'), 'delegated UniMorph runtime behavior should match the declared ambiguity no-op');
+    } finally {
+        wp_fts_lpic_remove_tree($root);
+    }
+});
+
+test_case('PoliMorf compiler deterministically no-ops a thirteenth lemma', function (): void {
+    $root = sys_get_temp_dir() . '/wp-fts-polimorf-importer-cap-' . bin2hex(random_bytes(6));
+    $source = $root . '/source.tab';
+    $out = $root . '/pack';
+    mkdir($root, 0777, true);
+    try {
+        $rows = [];
+        for ($number = 1; $number <= 13; $number++) {
+            $rows[] = sprintf("powierzchnia\tlemat%02d\ttag\t\t", $number);
+        }
+        file_put_contents($source, implode("\n", $rows) . "\n");
+        $summary = (new WP_FTS_PolishPolimorfImporter())->import([
+            'source' => $source,
+            'out' => $out,
+            'pack_id' => 'pl-polimorf-bounded-ambiguity',
+            'version' => 'ambiguity-boundary-v1',
+            'source_url' => 'urn:wp-fts:test:polimorf-bounded-ambiguity',
+            'source_name' => 'Project-owned PoliMorf ambiguity fixture',
+            'source_version' => 'ambiguity-boundary-v1',
+            'fixture_only' => true,
+            'chunk_rows' => 4,
+            'max_rows_per_file' => 5,
+            'importer_commit' => 'test',
+        ]);
+
+        assert_same(1, $summary['runtime']['rows'] ?? null, 'the PoliMorf over-cap surface should compile to one identity row');
+        assert_same(1, $summary['stats']['ambiguity_noop_surfaces'] ?? null, 'PoliMorf provenance should identify the compiled no-op surface');
+        assert_same(13, $summary['stats']['ambiguity_noop_source_pairs'] ?? null, 'PoliMorf provenance should account for all replaced source pairs');
+        $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($out . '/manifest.json');
+        assert_same(['powierzchnia'], array_column($pack->analyze('powierzchnia', 'pl'), 'term'), 'PoliMorf analysis should not expose a lexical first-twelve subset');
     } finally {
         wp_fts_lpic_remove_tree($root);
     }

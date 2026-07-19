@@ -568,16 +568,44 @@ final class WP_FTS_Indexer
         $nextAlternativeGroup = 0;
         $indexSurfaces = is_callable([$this->storage, 'indexes_surface_postings'])
             && $this->storage->indexes_surface_postings() === true;
-        foreach ($fields as $field) {
+        $batchedFieldOccurrences = null;
+        if (is_callable([$this->analyzer, 'analyze_document_fields'])) {
+            $fieldOpts = $opts;
+            $fieldOpts['_max_document_occurrences'] = WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES;
+            if ($indexSurfaces) {
+                $fieldOpts['_include_document_surface'] = true;
+            }
+            $batchedFieldOccurrences = $this->analyzer->analyze_document_fields(
+                $fields,
+                $this->analysis_options($fieldOpts, $primaryLang)
+            );
+            if (count($batchedFieldOccurrences) !== count($fields)) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'occurrence_shape',
+                    'Batched field analysis must return one occurrence list per field.'
+                );
+            }
+        }
+        foreach ($fields as $fieldIndex => $field) {
             $fieldOpts = $opts;
             $fieldOpts['field_name'] = $field['name'];
             $fieldOpts['_max_document_occurrences'] = WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES - count($occurrences);
             if ($indexSurfaces) {
                 $fieldOpts['_include_document_surface'] = true;
             }
-            $fieldOccurrences = isset($field['html'])
-                ? $this->analyze_content((string) $field['html'], $fieldOpts, $primaryLang)
-                : $this->analyze_plain_content((string) $field['text'], $fieldOpts, $primaryLang);
+            if ($batchedFieldOccurrences !== null) {
+                $fieldOccurrences = $batchedFieldOccurrences[$fieldIndex];
+                if (!is_array($fieldOccurrences)) {
+                    throw new WP_FTS_Analysis_Limit_Exceeded(
+                        'occurrence_shape',
+                        'Batched field analysis occurrence lists must be arrays.'
+                    );
+                }
+            } else {
+                $fieldOccurrences = isset($field['html'])
+                    ? $this->analyze_content((string) $field['html'], $fieldOpts, $primaryLang)
+                    : $this->analyze_plain_content((string) $field['text'], $fieldOpts, $primaryLang);
+            }
             if (count($fieldOccurrences) > $fieldOpts['_max_document_occurrences']) {
                 throw new WP_FTS_Analysis_Limit_Exceeded(
                     'occurrences',

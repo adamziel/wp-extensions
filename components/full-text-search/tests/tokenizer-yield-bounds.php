@@ -7,12 +7,14 @@ final class WP_FTS_Tokenizer_Yield_Bounds_Probe
 {
     public int $yields = 0;
 
+    /** Configures the yielded value and optional finite yield ceiling. */
     public function __construct(
         private mixed $value,
         private ?int $yieldLimit = null,
     ) {
     }
 
+    /** Yields fixture values until the consumer or configured ceiling stops it. */
     public function __invoke(string $run, string $language): Generator
     {
         while ($this->yieldLimit === null || $this->yields < $this->yieldLimit) {
@@ -24,6 +26,7 @@ final class WP_FTS_Tokenizer_Yield_Bounds_Probe
 
 $wp_fts_tokenizer_yield_checks = 0;
 
+/** Records one assertion and throws when a tokenizer-yield invariant fails. */
 function wp_fts_tokenizer_yield_check(bool $condition, string $message): void
 {
     global $wp_fts_tokenizer_yield_checks;

@@ -5,6 +5,7 @@ require_once __DIR__ . '/../src/bootstrap.php';
 
 $wp_fts_jieba_cache_checks = 0;
 
+/** Records one assertion and throws when a Jieba cache invariant fails. */
 function wp_fts_jieba_cache_check(bool $condition, string $message): void
 {
     global $wp_fts_jieba_cache_checks;
@@ -14,6 +15,7 @@ function wp_fts_jieba_cache_check(bool $condition, string $message): void
     }
 }
 
+/** Encodes the fixture's three-byte Unicode code point as UTF-8. */
 function wp_fts_jieba_cache_utf8(int $codepoint): string
 {
     return chr(0xE0 | ($codepoint >> 12))
@@ -21,6 +23,7 @@ function wp_fts_jieba_cache_utf8(int $codepoint): string
         . chr(0x80 | ($codepoint & 0x3F));
 }
 
+/** Creates a fixture-only Jieba segmenter for the supplied dictionary. */
 function wp_fts_jieba_cache_segmenter(string $path): WP_FTS_ChineseJiebaSegmenter
 {
     $segmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option([
@@ -36,11 +39,13 @@ function wp_fts_jieba_cache_segmenter(string $path): WP_FTS_ChineseJiebaSegmente
     return $segmenter;
 }
 
+/** Reads private segmenter state needed to assert cache containment. */
 function wp_fts_jieba_cache_property(WP_FTS_ChineseJiebaSegmenter $segmenter, string $name): mixed
 {
     return (new ReflectionProperty($segmenter, $name))->getValue($segmenter);
 }
 
+/** Writes a deterministic high-fanout dictionary with the requested byte size. */
 function wp_fts_jieba_cache_write_byte_dictionary(
     string $path,
     string $prefix,

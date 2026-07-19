@@ -34,6 +34,7 @@ final class WP_FTS_Schema_Repair_SQLite_WPDB
     /** @var string[] */
     public array $queries = [];
 
+    /** Create the in-memory translated schema target with strict PDO failures. */
     public function __construct()
     {
         $this->dbh = new PDO('sqlite::memory:');
@@ -51,6 +52,7 @@ final class WP_FTS_Schema_Repair_SQLite_WPDB
         return $result === false ? [] : $result->fetchAll(PDO::FETCH_OBJ);
     }
 
+    /** Mirror wpdb's false-plus-last_error contract around SQLite execution. */
     public function query(mixed $statement): int|false
     {
         $sql = (string) $statement;
@@ -84,6 +86,7 @@ function wp_fts_schema_repair_schema(): array
     ];
 }
 
+/** Install the translated current schema without destructive replacement. */
 function wp_fts_schema_repair_apply_schema(WP_FTS_Schema_Repair_SQLite_WPDB $wpdb): void
 {
     foreach (wp_fts_schema_repair_schema() as $statement) {
@@ -91,6 +94,7 @@ function wp_fts_schema_repair_apply_schema(WP_FTS_Schema_Repair_SQLite_WPDB $wpd
     }
 }
 
+/** Seed rows whose survival distinguishes repair from table recreation. */
 function wp_fts_schema_repair_seed(WP_FTS_Schema_Repair_SQLite_WPDB $wpdb): void
 {
     $insert = $wpdb->dbh->prepare('INSERT INTO wp_fts_terms(term_id,lang,kind,term,doc_freq) VALUES(1,?,?,?,1)');

@@ -142,6 +142,7 @@ function wp_fts_cursor_score_payload(string $cursor): array
     return is_array($payload) ? $payload : [];
 }
 
+/** Build a valid cursor whose score encoding can exercise portability boundaries. */
 function wp_fts_cursor_score_signed_cursor(
     WP_FTS_Storage_Mysql $storage,
     mixed $score,

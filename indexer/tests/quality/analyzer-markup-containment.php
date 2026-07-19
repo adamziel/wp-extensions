@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+/** Capture the typed limit failure without obscuring an unexpected exception. */
 function wp_fts_markup_caught(callable $callback): ?Throwable
 {
     try {
@@ -82,6 +83,59 @@ test_case('HTML syntax boundaries accept their exact limits and reject the next 
     assert_same('html_attributes_per_tag', $attributeCountError instanceof WP_FTS_Analysis_Limit_Exceeded ? $attributeCountError->reason_code : null, 'attribute 129 should reject before either HTML parser');
 });
 
+test_case('HTML raw-text contents cannot invent markup depth or tokens', function (): void {
+    $analyzer = new WP_FTS_Analyzer([
+        'auto_detect_language' => false,
+        'enable_stemming' => false,
+        'default_lang' => 'en',
+    ]);
+    $tagLookingText = str_repeat('<div>', WP_FTS_Analysis_Limits::MAX_HTML_MARKUP_TOKENS + 1);
+
+    foreach (['script', 'style'] as $rawTextTag) {
+        $html = "<{$rawTextTag}>{$tagLookingText}</{$rawTextTag}><p>visibleword</p>";
+        $error = wp_fts_markup_caught(static fn(): array => $analyzer->analyze_content($html));
+        assert_same(null, $error, strtoupper($rawTextTag) . ' data should not be parsed as nested markup');
+        assert_same('visibleword', WP_FTS_Html_Text_Stream::visible_text($html), strtoupper($rawTextTag) . ' data should remain hidden while later visible text survives');
+    }
+
+    $exactRawTextTokens = str_repeat('<script><div></script><style><div></style>', 5000);
+    assert_same(null, wp_fts_markup_caught(static function () use ($exactRawTextTokens): void {
+        WP_FTS_Html_Text_Stream::assert_analysis_markup_limits($exactRawTextTokens);
+    }), '10,000 raw-text elements should retain their exact 20,000 real markup tokens');
+    $rawTextTokenError = wp_fts_markup_caught(static function () use ($exactRawTextTokens): void {
+        WP_FTS_Html_Text_Stream::assert_analysis_markup_limits($exactRawTextTokens . '<script></script>');
+    });
+    assert_same('html_markup_tokens', $rawTextTokenError instanceof WP_FTS_Analysis_Limit_Exceeded ? $rawTextTokenError->reason_code : null, 'the first real raw-text tag above the 20,000-token envelope should reject');
+
+    $rawTextDepthError = wp_fts_markup_caught(static function (): void {
+        WP_FTS_Html_Text_Stream::assert_analysis_markup_limits(
+            str_repeat('<div>', WP_FTS_Analysis_Limits::MAX_HTML_ELEMENT_DEPTH)
+            . '<script></script>'
+            . str_repeat('</div>', WP_FTS_Analysis_Limits::MAX_HTML_ELEMENT_DEPTH)
+        );
+    });
+    assert_same('html_element_depth', $rawTextDepthError instanceof WP_FTS_Analysis_Limit_Exceeded ? $rawTextDepthError->reason_code : null, 'a SCRIPT child at real element depth 257 should reject before its opaque contents are skipped');
+
+    $doubleEscapedScript = '<script><!--<script></script>'
+        . str_repeat(' hiddenword', WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES + 1)
+        . '--></script><p>visibleword</p>';
+    assert_same('visibleword', WP_FTS_Html_Text_Stream::visible_text($doubleEscapedScript), 'double-escaped SCRIPT data should remain hidden until its actual end tag');
+    assert_same(['visibleword'], array_column($analyzer->analyze_content($doubleEscapedScript), 'term'), '20,001 hidden SCRIPT words should not consume the document occurrence budget');
+
+    $doubleEscapedDashDashScript = '<script><!--<script>-->'
+        . str_repeat(' hiddenword', WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES + 1)
+        . '</script>stillhidden</script><p>visibleword</p>';
+    assert_same('visibleword', WP_FTS_Html_Text_Stream::visible_text($doubleEscapedDashDashScript), 'double-escaped dash-dash SCRIPT data should not close the outer element');
+    assert_same(['visibleword'], array_column($analyzer->analyze_content($doubleEscapedDashDashScript), 'term'), '20,001 words after double-escaped dash-dash should remain outside the occurrence budget');
+
+    $nestedError = wp_fts_markup_caught(static fn(): array => $analyzer->analyze_content(
+        str_repeat('<div>', WP_FTS_Analysis_Limits::MAX_HTML_ELEMENT_DEPTH + 1)
+        . 'visibleword'
+        . str_repeat('</div>', WP_FTS_Analysis_Limits::MAX_HTML_ELEMENT_DEPTH + 1)
+    ));
+    assert_same('html_element_depth', $nestedError instanceof WP_FTS_Analysis_Limit_Exceeded ? $nestedError->reason_code : null, 'real nested markup must still reject at the existing depth boundary');
+});
+
 test_case('custom HTML processor tokens accept the exact envelope and contain one-over or infinite providers', function (): void {
     $processorLimit = (WP_FTS_Analysis_Limits::MAX_HTML_MARKUP_TOKENS * 2) + 1;
 
@@ -89,10 +143,12 @@ test_case('custom HTML processor tokens accept the exact envelope and contain on
         $processor = new class ($providedTokens) {
             public int $calls = 0;
 
+            /** Use null to model a provider that never reports exhaustion. */
             public function __construct(private ?int $providedTokens)
             {
             }
 
+            /** Count the exact call on which the analyzer enforces its stop. */
             public function next_token(): bool
             {
                 $this->calls++;
@@ -100,36 +156,43 @@ test_case('custom HTML processor tokens accept the exact envelope and contain on
                 return $this->providedTokens === null || $this->calls <= $this->providedTokens;
             }
 
+            /** Supply no retained ancestry; this case isolates token cardinality. */
             public function get_breadcrumbs(): array
             {
                 return [];
             }
 
+            /** Keep structural depth out of the token-count boundary. */
             public function get_current_depth(): int
             {
                 return 0;
             }
 
+            /** Use a zero-output token so source bytes cannot become the limiter. */
             public function get_token_type(): string
             {
                 return '#comment';
             }
 
+            /** Comments have no element name. */
             public function get_tag(): ?string
             {
                 return null;
             }
 
+            /** Comments never mutate the element stack as closers. */
             public function is_tag_closer(): bool
             {
                 return false;
             }
 
+            /** Match the processor method surface without creating a tag event. */
             public function expects_closer(): bool
             {
                 return true;
             }
 
+            /** Return no text so only provider calls are measured. */
             public function get_modifiable_text(): string
             {
                 return '';
@@ -161,6 +224,7 @@ test_case('custom HTML processor absolute depth rejects before allocating state 
     $processor = new class {
         private bool $available = true;
 
+        /** Emit one token whose reported absolute depth is already invalid. */
         public function next_token(): bool
         {
             if (!$this->available) {
@@ -171,31 +235,37 @@ test_case('custom HTML processor absolute depth rejects before allocating state 
             return true;
         }
 
+        /** Cross the hard depth limit before the analyzer can allocate stack rows. */
         public function get_current_depth(): int
         {
             return WP_FTS_Analysis_Limits::MAX_HTML_ELEMENT_DEPTH + 4;
         }
 
+        /** Make the sole token otherwise valid visible text. */
         public function get_token_type(): string
         {
             return '#text';
         }
 
+        /** Text events carry no element name. */
         public function get_tag(): ?string
         {
             return null;
         }
 
+        /** Text cannot close structural state. */
         public function is_tag_closer(): bool
         {
             return false;
         }
 
+        /** Text cannot open structural state. */
         public function expects_closer(): bool
         {
             return false;
         }
 
+        /** Provide valid content that must remain unread after depth rejection. */
         public function get_modifiable_text(): string
         {
             return 'boundedword';
@@ -215,10 +285,12 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
             public int $textCalls = 0;
             private int $cursor = -1;
 
+            /** Retain the exact chunks used to cross the aggregate output limit. */
             public function __construct(private array $chunks)
             {
             }
 
+            /** Advance once per supplied text chunk and then exhaust normally. */
             public function next_token(): bool
             {
                 $this->cursor++;
@@ -226,36 +298,43 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
                 return array_key_exists($this->cursor, $this->chunks);
             }
 
+            /** Keep ancestry empty because only aggregate text bytes are under test. */
             public function get_breadcrumbs(): array
             {
                 return [];
             }
 
+            /** Keep structural accounting at zero for the byte-boundary proof. */
             public function get_current_depth(): int
             {
                 return 0;
             }
 
+            /** Expose every supplied chunk as processor text. */
             public function get_token_type(): string
             {
                 return '#text';
             }
 
+            /** Text events carry no tag output. */
             public function get_tag(): ?string
             {
                 return null;
             }
 
+            /** Text events cannot close elements. */
             public function is_tag_closer(): bool
             {
                 return false;
             }
 
+            /** Satisfy the complete processor contract without changing byte work. */
             public function expects_closer(): bool
             {
                 return true;
             }
 
+            /** Count extraction so rejection is proven to occur on the excess chunk. */
             public function get_modifiable_text(): string
             {
                 $this->textCalls++;
@@ -291,10 +370,12 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
         $processor = new class ($tagBytes, $languageBytes) {
             private bool $available = true;
 
+            /** Configure independent tag-name and language-attribute adversaries. */
             public function __construct(private int $tagBytes, private int $languageBytes)
             {
             }
 
+            /** Emit exactly one element event. */
             public function next_token(): bool
             {
                 if (!$this->available) {
@@ -305,41 +386,49 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
                 return true;
             }
 
+            /** Avoid ancestry retention; the returned field bytes are the boundary. */
             public function get_breadcrumbs(): array
             {
                 return [];
             }
 
+            /** Report one valid open element level. */
             public function get_current_depth(): int
             {
                 return 1;
             }
 
+            /** Route the event through tag and language accessors. */
             public function get_token_type(): string
             {
                 return '#tag';
             }
 
+            /** Exercise an opening tag, not a pop operation. */
             public function is_tag_closer(): bool
             {
                 return false;
             }
 
+            /** Keep the opening event structurally realistic. */
             public function expects_closer(): bool
             {
                 return true;
             }
 
+            /** Element events contribute no visible text. */
             public function get_modifiable_text(): string
             {
                 return '';
             }
 
+            /** Return the exact tag byte count before uppercase or trim copies. */
             public function get_tag(): string
             {
                 return str_repeat('p', $this->tagBytes);
             }
 
+            /** Return hostile bytes only for the language attribute the analyzer reads. */
             public function get_attribute(string $attribute): ?string
             {
                 return $attribute === 'lang' ? str_repeat('e', $this->languageBytes) : null;
@@ -364,10 +453,12 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
         $processor = new class ($tagBytes, $providedTokens) {
             public int $calls = 0;
 
+            /** Configure enough maximum-size tag outputs to test aggregate work. */
             public function __construct(private int $tagBytes, private int $providedTokens)
             {
             }
 
+            /** Count the first provider call beyond the accepted output envelope. */
             public function next_token(): bool
             {
                 $this->calls++;
@@ -375,36 +466,43 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
                 return $this->calls <= $this->providedTokens;
             }
 
+            /** Fail if analysis regresses from event state to retained ancestry. */
             public function get_breadcrumbs(): array
             {
                 throw new RuntimeException('the event-stream analyzer must never request breadcrumbs');
             }
 
+            /** Hold depth constant so repeated tags cannot trigger another limit. */
             public function get_current_depth(): int
             {
                 return 1;
             }
 
+            /** Route every provider item through tag-output accounting. */
             public function get_token_type(): string
             {
                 return '#tag';
             }
 
+            /** Produce the configured maximum-size tag on demand. */
             public function get_tag(): string
             {
                 return str_repeat('p', $this->tagBytes);
             }
 
+            /** Avoid close-event state changes during aggregate byte measurement. */
             public function is_tag_closer(): bool
             {
                 return false;
             }
 
+            /** Avoid growing the stack while still exercising tag output. */
             public function expects_closer(): bool
             {
                 return false;
             }
 
+            /** Keep visible-text accounting out of the repeated-tag case. */
             public function get_modifiable_text(): string
             {
                 return '';
@@ -439,41 +537,49 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
         $processor = new class ($tokenType, $providedTokens) {
             public int $calls = 0;
 
+            /** Configure exact or over-limit token-type output cardinality. */
             public function __construct(private string $tokenType, private int $providedTokens)
             {
             }
 
+            /** Observe normal exhaustion or the first aggregate excess token. */
             public function next_token(): bool
             {
                 $this->calls++;
                 return $this->calls <= $this->providedTokens;
             }
 
+            /** Remove depth from the token-type output boundary. */
             public function get_current_depth(): int
             {
                 return 0;
             }
 
+            /** Return the hostile processor-controlled token type verbatim. */
             public function get_token_type(): string
             {
                 return $this->tokenType;
             }
 
+            /** Non-tag token types expose no element name. */
             public function get_tag(): ?string
             {
                 return null;
             }
 
+            /** Non-tag tokens never close elements. */
             public function is_tag_closer(): bool
             {
                 return false;
             }
 
+            /** Non-tag tokens never grow structural state. */
             public function expects_closer(): bool
             {
                 return false;
             }
 
+            /** Return no content so token-type bytes are the only output work. */
             public function get_modifiable_text(): string
             {
                 return '';
@@ -503,57 +609,68 @@ test_case('processor event state does not leak atomic tags and treats BR as a le
         $processor = new class ($tokens) {
             private int $offset = -1;
 
+            /** Replay explicit processor events to verify stack-transition semantics. */
             public function __construct(private array $tokens)
             {
             }
 
+            /** Advance through the exact synthetic event sequence. */
             public function next_token(): bool
             {
                 $this->offset++;
                 return isset($this->tokens[$this->offset]);
             }
 
+            /** Report each event's absolute processor depth. */
             public function get_current_depth(): int
             {
                 return (int) ($this->current()['depth'] ?? 0);
             }
 
+            /** Return the current synthetic event kind. */
             public function get_token_type(): string
             {
                 return (string) ($this->current()['type'] ?? '');
             }
 
+            /** Preserve absence of a tag on text events. */
             public function get_tag(): ?string
             {
                 $tag = $this->current()['tag'] ?? null;
                 return is_string($tag) ? $tag : null;
             }
 
+            /** Drive pops only for events marked as closers. */
             public function is_tag_closer(): bool
             {
                 return (bool) ($this->current()['closer'] ?? false);
             }
 
+            /** Model atomic tags separately from ordinary opening elements. */
             public function expects_closer(): bool
             {
                 return (bool) ($this->current()['expects_closer'] ?? false);
             }
 
+            /** Expose current visible text without deriving it from the source. */
             public function get_modifiable_text(): string
             {
                 return (string) ($this->current()['text'] ?? '');
             }
 
+            /** Return only attributes attached to the current synthetic event. */
             public function get_attribute(string $name): mixed
             {
                 return ($this->current()['attributes'] ?? [])[$name] ?? null;
             }
 
+            /** Fail if the event-stream path starts materializing breadcrumbs again. */
             public function get_breadcrumbs(): array
             {
                 throw new RuntimeException('the event-stream analyzer must never request breadcrumbs');
             }
 
+            /** Centralize the current event so every accessor observes one state. */
             private function current(): array
             {
                 return $this->tokens[$this->offset] ?? [];
@@ -603,6 +720,7 @@ test_case('processors without the WordPress 6.6 depth event contract use the fal
     $processor = new class {
         public int $calls = 0;
 
+        /** Fail if capability detection consumes an incomplete processor. */
         public function next_token(): bool
         {
             $this->calls++;
@@ -687,17 +805,20 @@ test_case('post extraction and field preparation reject markup before either vis
     $analyzer = new class {
         public int $calls = 0;
 
+        /** Give field preparation a stable signature without invoking real analysis. */
         public function index_signature(): string
         {
             return 'markup-prevalidation-probe';
         }
 
+        /** Record any forbidden HTML analysis after markup prevalidation should fail. */
         public function analyze_content(string $_html, array $_options = []): array
         {
             $this->calls++;
             return [];
         }
 
+        /** Record any forbidden plain analysis after markup prevalidation should fail. */
         public function analyze_plain_content(string $_text, array $_options = []): array
         {
             $this->calls++;
@@ -749,8 +870,16 @@ test_case('encoded metadata extraction stays bounded until the analyzer rejects 
 
 test_case('maximum HTML depth times maximum markup tokens stays linear under 128 MiB', function (): void {
     $variants = [
-        'a' => ['source_bytes' => 89490, 'occurrences' => 0],
-        'aa' => ['source_bytes' => 99235, 'occurrences' => 9745],
+        'a' => [
+            'source_bytes' => 89490,
+            'occurrences' => 0,
+            'occurrences_sha256' => 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        ],
+        'aa' => [
+            'source_bytes' => 99235,
+            'occurrences' => 9745,
+            'occurrences_sha256' => '5c49b23ca75ba14d8df9a727368bbc849c02d8dfccf709e0fa63fec7513011e3',
+        ],
     ];
 
     foreach ($variants as $word => $expected) {
@@ -769,6 +898,7 @@ test_case('maximum HTML depth times maximum markup tokens stays linear under 128
         assert_same(20000, $payload['markup_tokens'] ?? null, "the {$word} fixture should reach the exact markup-token ceiling");
         assert_same(256, $payload['max_element_depth'] ?? null, "the {$word} fixture should reach the exact element-depth ceiling");
         assert_same($expected['occurrences'], $payload['occurrences'] ?? null, "the {$word} fixture should preserve its complete occurrence output");
+        assert_same($expected['occurrences_sha256'], $payload['occurrences_sha256'] ?? null, "the {$word} fixture should preserve every ordered term, weight, and language");
         assert_true(
             (float) ($payload['elapsed_seconds'] ?? INF) <= 2.0,
             "the {$word} depth-by-token analysis should complete within two seconds"

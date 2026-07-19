@@ -247,22 +247,18 @@ test_case('provider compatibility certification respects earlier providers in co
             's' => 'providercertstanddownneedle',
             'posts_per_page' => 10,
         ]);
+        $queriesBeforeProvider = $wpdb->num_queries;
         $posts = apply_filters('posts_pre_query', null, $query);
         assert_same([901, 902], wp_fts_provider_certification_post_ids($posts), 'coexistence mode should return the earlier provider result unchanged');
+        assert_same($queriesBeforeProvider, $wpdb->num_queries, 'coexistence mode should issue zero FTS statements for a registered provider');
 
         $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
         assert_same('bailed', $trace['status'] ?? null, 'coexistence trace should report a stand-down bailout');
         $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
-        assert_same(2, (int) ($counts['incoming_provider_results'] ?? 0), 'coexistence diagnostics should count incoming provider results');
-        assert_same(0, (int) ($counts['prior_provider_responses_replaced'] ?? 0), 'coexistence diagnostics should not claim a replacement');
+        assert_same(0, (int) ($counts['incoming_provider_results'] ?? 0), 'coexistence diagnostics should not inspect provider result payloads');
+        assert_true(!array_key_exists('prior_provider_responses_replaced', $counts), 'provider diagnostics should not expose an impossible replacement counter');
         $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
-        assert_same('earlier_provider_respected', $ownership['status'] ?? null, 'final ownership should report the respected earlier provider');
-        assert_same('earlier_provider', $ownership['owner'] ?? null, 'final ownership should attribute the result to the earlier provider');
-        assert_same(true, $ownership['observed'] ?? null, 'final ownership should record that the observer ran');
-        assert_same(2, (int) ($ownership['expected_count'] ?? 0), 'final ownership should expose bounded expected count evidence');
-        assert_same(2, (int) ($ownership['final_count'] ?? 0), 'final ownership should expose bounded final count evidence');
-        assert_same([901, 902], $ownership['expected_post_ids'] ?? null, 'final ownership should expose bounded expected post IDs');
-        assert_same([901, 902], $ownership['final_post_ids'] ?? null, 'final ownership should expose bounded final post IDs');
+        assert_same('unavailable', $ownership['status'] ?? null, 'FTS final ownership should be unavailable because FTS never produced rows');
 
         $pipeline = is_array($trace['search_hook_pipeline'] ?? null) ? $trace['search_hook_pipeline'] : [];
         $pipelineCounts = is_array($pipeline['counts'] ?? null) ? $pipeline['counts'] : [];
@@ -288,7 +284,7 @@ test_case('provider compatibility certification respects earlier providers in co
     }
 });
 
-test_case('provider compatibility certification lets FTS replace earlier providers in prefer mode', function (): void {
+test_case('provider compatibility certification preserves earlier providers in prefer mode', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -318,12 +314,6 @@ test_case('provider compatibility certification lets FTS replace earlier provide
                     'accepted_args' => 2,
                 ],
             ],
-            1200 => [
-                'later_no_result_provider' => [
-                    'function' => static fn(mixed $posts, mixed $query = null): mixed => $posts,
-                    'accepted_args' => 2,
-                ],
-            ],
             WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY => [
                 'final_observer' => [
                     'function' => [WP_FTS_Plugin::class, 'observe_final_search_posts'],
@@ -336,24 +326,23 @@ test_case('provider compatibility certification lets FTS replace earlier provide
             's' => 'providercertreplaceneedle',
             'posts_per_page' => 10,
         ]);
+        $queriesBeforeProvider = $wpdb->num_queries;
         $posts = apply_filters('posts_pre_query', null, $query);
-        assert_same([912], wp_fts_provider_certification_post_ids($posts), 'prefer mode should replace earlier provider posts with FTS posts');
+        assert_same([910, 911], wp_fts_provider_certification_post_ids($posts), 'prefer mode should preserve an earlier non-null provider result');
+        assert_same($queriesBeforeProvider, $wpdb->num_queries, 'prefer-mode provider preservation should issue zero FTS statements');
 
         $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
-        assert_same('ran', $trace['status'] ?? null, 'prefer-mode replacement trace should report a completed FTS run');
+        assert_same('bailed', $trace['status'] ?? null, 'prefer-mode preservation trace should report a stand-down bailout');
         $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
         assert_same(2, (int) ($counts['incoming_provider_results'] ?? 0), 'prefer-mode diagnostics should count incoming provider results');
-        assert_same(1, (int) ($counts['prior_provider_responses_replaced'] ?? 0), 'prefer-mode diagnostics should count the replaced provider response');
+        assert_true(!array_key_exists('prior_provider_responses_replaced', $counts), 'prefer-mode diagnostics should not expose an impossible replacement counter');
         $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
-        assert_same('language_fts_survived', $ownership['status'] ?? null, 'final ownership should report FTS survival after a no-result later callback');
-        assert_same('language_fts', $ownership['owner'] ?? null, 'final ownership should attribute the surviving result to FTS');
-        assert_same('language_fts_replaced_prior_provider', $ownership['origin'] ?? null, 'final ownership should remember that FTS replaced a prior provider');
-        assert_same(1, (int) ($ownership['expected_count'] ?? 0), 'FTS final ownership should expose expected result count');
-        assert_same(1, (int) ($ownership['final_count'] ?? 0), 'FTS final ownership should expose final result count');
-        assert_same([912], $ownership['expected_post_ids'] ?? null, 'FTS final ownership should expose bounded expected IDs');
-        assert_same([912], $ownership['final_post_ids'] ?? null, 'FTS final ownership should expose bounded final IDs');
-        assert_true(is_string($ownership['expected_hash'] ?? null) && strlen((string) $ownership['expected_hash']) === 16, 'FTS final ownership should expose a compact expected hash');
-        assert_true(is_string($ownership['final_hash'] ?? null) && strlen((string) $ownership['final_hash']) === 16, 'FTS final ownership should expose a compact final hash');
+        assert_same('earlier_provider_respected', $ownership['status'] ?? null, 'final ownership should report the preserved earlier provider');
+        assert_same('earlier_provider', $ownership['owner'] ?? null, 'final ownership should attribute the result to the earlier provider');
+        assert_same(2, (int) ($ownership['expected_count'] ?? 0), 'provider final ownership should expose expected result count');
+        assert_same(2, (int) ($ownership['final_count'] ?? 0), 'provider final ownership should expose final result count');
+        assert_same([910, 911], $ownership['expected_post_ids'] ?? null, 'provider final ownership should expose bounded expected IDs');
+        assert_same([910, 911], $ownership['final_post_ids'] ?? null, 'provider final ownership should expose bounded final IDs');
 
         wp_fts_provider_certification_assert_redacted(
             wp_fts_provider_certification_trace_json($trace),
@@ -365,7 +354,7 @@ test_case('provider compatibility certification lets FTS replace earlier provide
     }
 });
 
-test_case('provider compatibility certification reports later provider changes without payload leakage', function (): void {
+test_case('provider compatibility certification leaves later providers on core without payload leakage', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -412,18 +401,16 @@ test_case('provider compatibility certification reports later provider changes w
             's' => 'providercertlaterchangeneedle',
             'posts_per_page' => 10,
         ]);
+        $queriesBeforeProvider = $wpdb->num_queries;
         $posts = apply_filters('posts_pre_query', null, $query);
-        assert_same([922, 923], wp_fts_provider_certification_post_ids($posts), 'a later provider should remain able to change the final posts_pre_query result');
+        assert_same([922, 923], wp_fts_provider_certification_post_ids($posts), 'a later provider should own the posts_pre_query result without an FTS page first');
+        assert_same($queriesBeforeProvider, $wpdb->num_queries, 'a later provider should force zero FTS statements');
 
         $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
         $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
-        assert_same('later_provider_changed_fts', $ownership['status'] ?? null, 'final ownership should report the later provider change');
-        assert_same('later_provider', $ownership['owner'] ?? null, 'final ownership should attribute changed results to a later provider');
-        assert_same(true, $ownership['observed'] ?? null, 'final ownership should record the observer run');
-        assert_same([921], $ownership['expected_post_ids'] ?? null, 'later-change diagnostics should expose expected FTS IDs only');
-        assert_same([922, 923], $ownership['final_post_ids'] ?? null, 'later-change diagnostics should expose final provider IDs only');
-        assert_same(1, (int) ($ownership['expected_count'] ?? 0), 'later-change diagnostics should expose expected count');
-        assert_same(2, (int) ($ownership['final_count'] ?? 0), 'later-change diagnostics should expose final count');
+        assert_same('bailed', $trace['status'] ?? null, 'later-provider trace should report an FTS bailout');
+        assert_contains('registered posts_pre_query callbacks', (string) ($trace['bailout_reason'] ?? ''), 'later-provider trace should identify the core ownership boundary');
+        assert_same('unavailable', $ownership['status'] ?? null, 'FTS final ownership should be unavailable because FTS never produced rows');
 
         wp_fts_provider_certification_assert_redacted(
             wp_fts_provider_certification_trace_json($trace),
@@ -619,24 +606,26 @@ test_case('provider compatibility certification matrix evidence is structured an
             'simulated_signal_labels' => ['repo-owned SearchWP-shaped posts_pre_query callback'],
             'compatibility_mode' => 'prefer_fts',
         ],
-        [(object) ['ID' => 912, 'post_title' => 'FTS result title']],
         [
-            'status' => 'ran',
+            (object) ['ID' => 700003, 'post_title' => 'Provider result title A'],
+            (object) ['ID' => 700005, 'post_title' => 'Provider result title B'],
+        ],
+        [
+            'status' => 'bailed',
             'counts' => [
                 'incoming_provider_results' => 2,
-                'prior_provider_responses_replaced' => 1,
             ],
             'settings' => [
                 'raw_provider_payload' => 'provider-secret-must-not-leak',
             ],
             'search_final_ownership' => [
-                'status' => 'language_fts_survived',
-                'owner' => 'language_fts',
-                'origin' => 'language_fts_replaced_prior_provider',
-                'expected_count' => 1,
-                'final_count' => 1,
-                'expected_post_ids' => [912],
-                'final_post_ids' => [912],
+                'status' => 'earlier_provider_respected',
+                'owner' => 'earlier_provider',
+                'origin' => 'earlier_provider_respected',
+                'expected_count' => 2,
+                'final_count' => 2,
+                'expected_post_ids' => [700003, 700005],
+                'final_post_ids' => [700003, 700005],
                 'expected_hash' => '1234567890abcdef',
                 'final_hash' => '1234567890abcdef',
                 'raw' => '-----BEGIN PRIVATE KEY-----',
@@ -650,17 +639,18 @@ test_case('provider compatibility certification matrix evidence is structured an
     assert_same('prefer_fts', $searchwp['compatibility_mode'] ?? null, 'matrix evidence should expose compatibility mode');
     $trace = is_array($searchwp['trace'] ?? null) ? $searchwp['trace'] : [];
     assert_same(2, (int) ($trace['incoming_provider_results'] ?? 0), 'matrix evidence should expose incoming provider result count');
-    assert_same(1, (int) ($trace['prior_provider_responses_replaced'] ?? 0), 'matrix evidence should expose prior replacement count');
+    assert_true(!array_key_exists('prior_provider_responses_replaced', $trace), 'matrix evidence should not expose an impossible replacement counter');
     assert_same(false, $trace['known_provider_discovery_present'] ?? null, 'ordinary matrix traces should not perform provider discovery');
     assert_same(false, $searchwp['provider_advisory']['performed'] ?? null, 'ordinary matrix scenarios should not run the explicit provider advisory');
     $ownership = is_array($searchwp['final_ownership'] ?? null) ? $searchwp['final_ownership'] : [];
-    assert_same('language_fts_survived', $ownership['status'] ?? null, 'matrix evidence should expose final ownership status');
-    assert_same([912], $ownership['final_post_ids'] ?? null, 'matrix evidence should expose bounded final IDs');
+    assert_same('earlier_provider_respected', $ownership['status'] ?? null, 'matrix evidence should expose final ownership status');
+    assert_same([700003, 700005], $ownership['final_post_ids'] ?? null, 'matrix evidence should expose bounded final IDs');
 
     wp_fts_provider_certification_assert_redacted(
         json_encode($searchwp, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
         [
-            'FTS result title',
+            'Provider result title A',
+            'Provider result title B',
             'raw_provider_payload',
             'provider-secret-must-not-leak',
             'BEGIN PRIVATE KEY',
@@ -680,7 +670,6 @@ test_case('provider compatibility certification matrix evidence is structured an
             'status' => 'ran',
             'counts' => [
                 'incoming_provider_results' => 0,
-                'prior_provider_responses_replaced' => 0,
             ],
             'settings' => [],
             'search_final_ownership' => [

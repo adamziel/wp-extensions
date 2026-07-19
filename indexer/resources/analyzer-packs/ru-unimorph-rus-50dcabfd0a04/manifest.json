@@ -12,8 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import",
-        "indexed-runtime-lookups"
+        "indexed-runtime-lookups",
+        "unimorph-source-import"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -24,58 +24,58 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "23687df30598a93c52de90380ca9e47a847dce48490e5696c33bcbc176e315c1",
+                "sha256": "0e3d4555a3e85ac433f0fcc2d4ecc0232c3e11976668e559008f36ff73e9c36c",
                 "rows": 100000,
                 "first_surface": "аак",
                 "last_surface": "кастетам",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0001.tsv.gz.lookup",
-                    "sha256": "b82181a425ebead5b1ca9d389f5e83794eadd5140356fa099ddf4edf846c1724",
-                    "blocks": 49
+                    "sha256": "65f41f95a65d5868fed681e8a5912ddcb9c05aca4feb702bd763b52abf35c719",
+                    "blocks": 236
                 }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "7bd71545f5347c7d34b01d0b6836ad40b7833286ea5a916c6905dc2760eef563",
+                "sha256": "9221a8acf1ff28640a0255e2dd5f8f2857bb77156baf938f43567f8e27c0711a",
                 "rows": 100001,
                 "first_surface": "кастетами",
                 "last_surface": "полумесяцах",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0002.tsv.gz.lookup",
-                    "sha256": "ccfab7748a7a2c91c7f910104f4672c4b05a418975d2df7135082bab1d54b93f",
-                    "blocks": 49
+                    "sha256": "6f37eaf4503350e5a264ef330180c7d783e833c301cbe4f4e335dbd207aad715",
+                    "blocks": 240
                 }
             },
             {
                 "path": "runtime/0003.tsv.gz",
-                "sha256": "f907119d2d70e63842a253fbd95626cd438fcd6690a0f0c5f6bd85e476975ff3",
+                "sha256": "f31b68aa19a973ec54b10df481120834396c2c0882a0de2eb3a16effa2555a5e",
                 "rows": 100000,
                 "first_surface": "полумесяце",
                 "last_surface": "фиксировала",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0003.tsv.gz.lookup",
-                    "sha256": "15bb2da4376d749f947fbf6df23fa049d5dc6f287592232b3ca8a1c414e75b53",
-                    "blocks": 49
+                    "sha256": "8e204cb05a1c2f6c8b9524b69ef12ef9692ec30f36a624f267796cb0fe6a183e",
+                    "blocks": 244
                 }
             },
             {
                 "path": "runtime/0004.tsv.gz",
-                "sha256": "cc55974eafb24a3a7da0261c73c0d57aec79e32412430c79333b378376472fbd",
+                "sha256": "ae88deecd9018ee457454dad7fc9002f5a7220df92076d32c090b28d003b6181",
                 "rows": 18766,
                 "first_surface": "фиксировалась",
                 "last_surface": "ётуны",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0004.tsv.gz.lookup",
-                    "sha256": "5b6fe99cdd0840b022a1936f10cf5b78ba4ec92330970f13ccec472968fc5de3",
-                    "blocks": 10
+                    "sha256": "bd0c78ffff66cefa008e3eebb7d87be12c0f6cd2b0dae3903778d710375af08b",
+                    "blocks": 41
                 }
             }
         ]
@@ -105,16 +105,48 @@
         "parse_stats": {
             "source_path": "rus",
             "source_files": 1,
-            "files": [
-                "rus"
-            ],
+            "source_path_bytes": 3,
+            "source_entries": 1,
+            "source_max_depth": 0,
+            "source_physical_bytes": 25151401,
+            "source_physical_byte_limit": 67108864,
             "source_lines": 473482,
+            "source_line_limit": 8000000,
+            "source_decoded_bytes": 25151401,
+            "source_decoded_byte_limit": 536870912,
             "blank_lines": 1,
             "comment_lines": 0,
             "placeholder_rows": 0,
             "invalid_runtime_token_rows": 39709,
             "rows_with_features": 433772,
-            "accepted_rows": 433772
+            "accepted_rows": 433772,
+            "staged_tsv_bytes": 27044859,
+            "staged_row_limit": 1250000,
+            "staged_tsv_byte_limit": 67108864,
+            "accepted_source_rows": 433772,
+            "rows_with_tags": 433772,
+            "rows_with_source_notes": 433772,
+            "runtime_rows": 318767,
+            "unique_source_rows": 318767,
+            "deduplicated_rows": 115005,
+            "ambiguous_surfaces": 1743,
+            "unambiguous_surfaces": 315259,
+            "ambiguity_noop_surfaces": 0,
+            "ambiguity_noop_source_pairs": 0,
+            "chunk_files": 2,
+            "chunk_merge_outputs": 0,
+            "chunk_merge_passes": 0,
+            "max_live_chunk_files": 2,
+            "max_chunk_merge_inputs": 2,
+            "chunk_merge_fan_in_limit": 64,
+            "max_chunk_lexical_bytes": 7777750,
+            "chunk_lexical_byte_limit": 8388608,
+            "runtime_decoded_bytes": 12420284,
+            "runtime_encoded_bytes": 1259547,
+            "lookup_index_bytes": 109352,
+            "lookup_blocks": 761,
+            "runtime_lookup_bytes": 1368899,
+            "runtime_lookup_byte_limit": 16777216
         }
     },
     "license": {

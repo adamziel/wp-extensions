@@ -31,7 +31,7 @@ function wp_fts_inline_run_proc_status(): array
                 continue;
             }
             $kilobytes = substr($value, 0, $space);
-            if (ctype_digit($kilobytes) && strtolower(trim(substr($value, $space + 1))) === 'kb') {
+            if ($kilobytes !== '' && strspn($kilobytes, '0123456789') === strlen($kilobytes) && strtolower(trim(substr($value, $space + 1))) === 'kb') {
                 $values[$key] = (int) $kilobytes * 1024;
             }
         }
@@ -57,10 +57,12 @@ try {
     $processor = new class ($providedTokens) {
         public int $calls = 0;
 
+        /** Fix the exact event count at either admitted or rejected boundary. */
         public function __construct(private int $providedTokens)
         {
         }
 
+        /** Stream one tiny text event per call without retaining prior events. */
         public function next_token(): bool
         {
             $this->calls++;
@@ -68,36 +70,43 @@ try {
             return $this->calls <= $this->providedTokens;
         }
 
+        /** Fail if the streaming analyzer requests an unbounded ancestor snapshot. */
         public function get_breadcrumbs(): array
         {
             throw new RuntimeException('the event-stream analyzer must never request breadcrumbs');
         }
 
+        /** Keep every synthetic text event at the root depth. */
         public function get_current_depth(): int
         {
             return 0;
         }
 
+        /** Present every event as text so one lexical run spans all tokens. */
         public function get_token_type(): string
         {
             return '#text';
         }
 
+        /** Grow the lexical run one byte without growing each event. */
         public function get_modifiable_text(): string
         {
             return 'a';
         }
 
+        /** Keep tag-specific analyzer branches out of the lexical-run fixture. */
         public function get_tag(): ?string
         {
             return null;
         }
 
+        /** Model text events rather than synthetic closing tags. */
         public function is_tag_closer(): bool
         {
             return false;
         }
 
+        /** Prevent stack growth unrelated to the lexical-run boundary. */
         public function expects_closer(): bool
         {
             return false;

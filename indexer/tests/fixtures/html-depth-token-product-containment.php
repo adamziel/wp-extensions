@@ -31,7 +31,7 @@ function wp_fts_html_product_proc_status(): array
                 continue;
             }
             $kilobytes = substr($value, 0, $space);
-            if (ctype_digit($kilobytes) && strtolower(trim(substr($value, $space + 1))) === 'kb') {
+            if ($kilobytes !== '' && strspn($kilobytes, '0123456789') === strlen($kilobytes) && strtolower(trim(substr($value, $space + 1))) === 'kb') {
                 $values[$key] = (int) $kilobytes * 1024;
             }
         }
@@ -67,6 +67,13 @@ try {
     ]);
     $terms = $analyzer->analyze_content($html, ['lang' => 'en']);
     $peakAfter = memory_get_peak_usage(true);
+    $termsDigest = hash_init('sha256');
+    foreach ($terms as $term) {
+        hash_update(
+            $termsDigest,
+            json_encode($term, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n"
+        );
+    }
 
     echo json_encode([
         'variant' => $word,
@@ -74,6 +81,7 @@ try {
         'markup_tokens' => 20000,
         'max_element_depth' => 256,
         'occurrences' => count($terms),
+        'occurrences_sha256' => hash_final($termsDigest),
         'elapsed_seconds' => microtime(true) - $started,
         'php_peak_bytes' => $peakAfter,
         'php_peak_delta_bytes' => max(0, $peakAfter - $peakBefore),

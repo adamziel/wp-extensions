@@ -66,6 +66,7 @@ namespace {
         $GLOBALS['wp_fts_quality_cli_format_items'] = [];
     }
 
+    /** Establish the schema-ready precondition shared by isolated reindex cases. */
     function wp_fts_quality_prepare_reindex(): void
     {
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
@@ -91,6 +92,7 @@ namespace {
         return is_array($decoded) ? $decoded : [];
     }
 
+    /** Swap the global database adapter for one case and restore it even on failure. */
     function wp_fts_quality_with_wpdb(object $wpdb, callable $callback): mixed
     {
         $hadWpdb = array_key_exists('wpdb', $GLOBALS);
@@ -121,6 +123,7 @@ namespace {
         ];
     }
 
+    /** Mirror the production bounded term-frequency impact in fixture expectations. */
     function wp_fts_quality_impact(int $weightedTf): int
     {
         $tf = max(1, $weightedTf);
@@ -1043,6 +1046,9 @@ namespace {
             assert_true(in_array("@subcommand {$subcommand}", $tags, true), "{$method} should publish the documented {$subcommand} command");
             assert_true(in_array("@alias {$method}", $tags, true), "{$subcommand} should retain the former underscore spelling as a compatibility alias");
         }
+
+        $resetComment = (string) (new ReflectionMethod(WP_FTS_WPCLI_Command::class, 'reset_index'))->getDocComment();
+        assert_contains('* [--yes]', $resetComment, 'reset-index should declare --yes with valid WP-CLI optional-flag syntax while enforcing confirmation at runtime');
     });
 
     test_case('quality wp cli register is explicit and plugin runtime hooks are WordPress scoped', function (): void {

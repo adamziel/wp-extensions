@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+/** Invoke the private normalization boundary so malformed inputs fail before SQL. */
 function qric_private(string $method, mixed ...$args): mixed
 {
     $reflection = new ReflectionMethod(WP_FTS_Plugin::class, $method);
@@ -9,6 +10,7 @@ function qric_private(string $method, mixed ...$args): mixed
     return $reflection->invoke(null, ...$args);
 }
 
+/** Capture a boundary rejection for assertions without weakening its exception path. */
 function qric_caught(callable $callback): ?Throwable
 {
     try {
@@ -45,7 +47,7 @@ test_case('quality relational input containment rejects raw query bytes before n
         WP_FTS_Plugin::prepare_frontend_search_query($query);
         assert_true(!empty($query->query_vars['wp_fts_search_candidate']), 'an oversized supported WordPress search should remain owned by the fail-closed adapter');
         assert_same([], WP_FTS_Plugin::replace_frontend_search_posts(null, $query), 'an oversized WordPress query should fail closed instead of reaching core LIKE search');
-        assert_same('runtime_failure', $query->query_vars['wp_fts_search_unavailable'] ?? null, 'the WordPress adapter should expose its fail-closed result marker');
+        assert_same('unavailable_or_unbounded_page', $query->query_vars['wp_fts_search_unavailable'] ?? null, 'the WordPress adapter should expose its pre-execution fail-closed result marker');
         assert_same($before, $wpdb->num_queries, 'the oversized WordPress search should execute no SQL');
     } finally {
         $wpdb = $oldWpdb;

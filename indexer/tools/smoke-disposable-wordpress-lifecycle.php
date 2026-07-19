@@ -132,6 +132,7 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
         return $options;
     }
 
+    /** Keep destructive prerequisites visible in the CLI's own help output. */
     public static function usage(): string
     {
         return implode("\n", [
@@ -685,6 +686,7 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
         return rtrim($real, DIRECTORY_SEPARATOR);
     }
 
+    /** Resolve only a readable artifact so reinstall never falls back to source. */
     private function validated_reinstall_zip(): ?string
     {
         $raw = trim($this->env_value(self::REINSTALL_ZIP_ENV));
@@ -748,6 +750,7 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
         return $command;
     }
 
+    /** Require an explicit truthy opt-in before mutating a multisite network. */
     private function network_activation_requested(): bool
     {
         return in_array(
@@ -757,6 +760,7 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
         );
     }
 
+    /** Derive the disposable subsite target from the wrapper-bound network URL. */
     private function multisite_subsite_url(string $slug): string
     {
         $rootUrl = rtrim(trim($this->env_value(self::WP_URL_ENV)), '/');
@@ -1326,6 +1330,7 @@ echo wp_json_encode(\$payload);
 PHP;
     }
 
+    /** Generate a suffix-allowlisted fault so schema repair is exercised safely. */
     private static function drop_fts_table_eval_code(string $suffix): string
     {
         if (!in_array($suffix, self::CURRENT_FTS_TABLE_SUFFIXES, true)) {
@@ -1345,6 +1350,7 @@ echo wp_json_encode(['dropped_table_suffix' => \$suffix, 'table_exists_after_dro
 PHP;
     }
 
+    /** Seed every retired/reset-generation table that uninstall must remove. */
     private static function seed_legacy_tables_eval_code(): string
     {
         $suffixesLiteral = var_export(self::LEGACY_FTS_TABLE_SUFFIXES, true);

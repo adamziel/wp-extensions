@@ -4,6 +4,7 @@ declare(strict_types=1);
 /** A document cannot be analyzed safely inside the supported host envelope. */
 final class WP_FTS_Analysis_Limit_Exceeded extends LengthException
 {
+    /** Preserve a stable reason code so callers can classify rejected input. */
     public function __construct(public readonly string $reason_code, string $message)
     {
         parent::__construct($message);
@@ -26,11 +27,13 @@ final class WP_FTS_Analysis_Limits
     public const MAX_HTML_LANGUAGE_ATTRIBUTE_BYTES = 64;
     public const MAX_LANGUAGE_SUBTAGS = 8;
 
+    /** Reject source strings before any parser or tokenizer can amplify them. */
     public static function assert_source_bytes(string $source): void
     {
         self::assert_document_source_bytes(strlen($source));
     }
 
+    /** Apply the source ceiling to a byte count already measured by a stream. */
     public static function assert_document_source_bytes(int $bytes): void
     {
         if ($bytes > self::MAX_SOURCE_BYTES) {
@@ -41,6 +44,7 @@ final class WP_FTS_Analysis_Limits
         }
     }
 
+    /** Bound one uninterrupted lexical run before language-specific analysis. */
     public static function assert_lexical_run_bytes(int $bytes): void
     {
         if ($bytes > self::MAX_LEXICAL_RUN_BYTES) {
@@ -51,6 +55,7 @@ final class WP_FTS_Analysis_Limits
         }
     }
 
+    /** Bound total markup-token work independently of the source byte ceiling. */
     public static function assert_html_markup_tokens(int $tokens): void
     {
         if ($tokens > self::MAX_HTML_MARKUP_TOKENS) {
@@ -61,6 +66,7 @@ final class WP_FTS_Analysis_Limits
         }
     }
 
+    /** Bound parser stack growth caused by adversarial element nesting. */
     public static function assert_html_element_depth(int $depth): void
     {
         if ($depth > self::MAX_HTML_ELEMENT_DEPTH) {
@@ -71,6 +77,7 @@ final class WP_FTS_Analysis_Limits
         }
     }
 
+    /** Bound the temporary token retained while one start or end tag is parsed. */
     public static function assert_html_tag_bytes(int $bytes): void
     {
         if ($bytes > self::MAX_HTML_TAG_BYTES) {
@@ -81,6 +88,7 @@ final class WP_FTS_Analysis_Limits
         }
     }
 
+    /** Bound per-tag attribute iteration even when every attribute is tiny. */
     public static function assert_html_attributes_per_tag(int $attributes): void
     {
         if ($attributes > self::MAX_HTML_ATTRIBUTES_PER_TAG) {
@@ -91,6 +99,7 @@ final class WP_FTS_Analysis_Limits
         }
     }
 
+    /** Bound one decoded attribute before it enters normalization. */
     public static function assert_html_attribute_bytes(int $bytes): void
     {
         if ($bytes > self::MAX_HTML_ATTRIBUTE_BYTES) {
@@ -101,6 +110,7 @@ final class WP_FTS_Analysis_Limits
         }
     }
 
+    /** Bound both bytes and structural subtags in one HTML language value. */
     public static function assert_html_language_attribute(string $value): void
     {
         self::assert_html_language_attribute_bytes(strlen($value));
@@ -129,6 +139,7 @@ final class WP_FTS_Analysis_Limits
         }
     }
 
+    /** Reject oversized language values before entity decoding allocates output. */
     public static function assert_html_language_attribute_bytes(int $bytes): void
     {
         if ($bytes > self::MAX_HTML_LANGUAGE_ATTRIBUTE_BYTES) {

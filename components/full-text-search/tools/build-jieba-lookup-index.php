@@ -33,6 +33,7 @@ function wp_fts_jieba_index_finish_range(
     ];
 }
 
+/** Decodes the first non-whitespace UTF-8 code point in a dictionary line. */
 function wp_fts_jieba_index_codepoint(string $line): int
 {
     $length = strlen($line);
@@ -176,6 +177,7 @@ function wp_fts_build_jieba_lookup_index(string $sourcePath, string $outputPath)
     ];
 }
 
+/** Compares two generated lookup indexes with bounded streaming reads. */
 function wp_fts_jieba_index_files_equal(string $firstPath, string $secondPath): bool
 {
     if (filesize($firstPath) !== filesize($secondPath)) {

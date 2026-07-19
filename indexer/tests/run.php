@@ -59,6 +59,7 @@ final class WP_FTS_Fake_HTML_Processor
         return $this->current()['breadcrumbs'] ?? [];
     }
 
+    /** Reports the current nesting depth for the fake HTML processor. */
     public function get_current_depth(): int
     {
         return max(0, count($this->current()['breadcrumbs'] ?? []) - ($this->is_tag_closer() ? 1 : 0));
@@ -81,6 +82,7 @@ final class WP_FTS_Fake_HTML_Processor
         return (bool) ($this->current()['closing'] ?? false);
     }
 
+    /** Mirrors the HTML processor close-tag expectation for void elements. */
     public function expects_closer(): bool
     {
         return !$this->is_tag_closer()
@@ -161,6 +163,18 @@ function minimum_check_count(): int
     return (int) $raw;
 }
 
+/** Accepts only a nonempty sequence of ASCII decimal digits. */
+function wp_fts_test_is_ascii_digits(string $value): bool
+{
+    return $value !== '' && strspn($value, '0123456789') === strlen($value);
+}
+
+/** Accepts only a nonempty sequence of ASCII hexadecimal digits. */
+function wp_fts_test_is_ascii_hex(string $value): bool
+{
+    return $value !== '' && strspn($value, '0123456789abcdefABCDEF') === strlen($value);
+}
+
 function assert_true(bool $condition, string $message): void
 {
     record_check($message);
@@ -207,6 +221,7 @@ function assert_or_pending(bool $condition, string $message, string $pendingReas
     }
 }
 
+/** Applies the optional filter, runs registered tests, and exits with their result. */
 function wp_fts_run_registered_tests_and_exit(): void
 {
     global $tests;
@@ -946,12 +961,14 @@ function copy_directory_tree(string $source, string $destination): void
     }
 }
 
+/** Build either a streamed validator fixture or an indexed runtime-activatable pack. */
 function write_synthetic_full_analyzer_pack(
     string $directory,
     int $rows,
     int $shards,
     string $language = 'pl',
-    string $packId = 'pl-polimorf-synthetic-full-streaming-fixture'
+    string $packId = 'pl-polimorf-synthetic-full-streaming-fixture',
+    bool $indexedRuntime = false
 ): string
 {
     if ($rows < 1 || $shards < 1) {
@@ -964,6 +981,9 @@ function write_synthetic_full_analyzer_pack(
     if (!mkdir($directory . '/runtime', 0777, true) && !is_dir($directory . '/runtime')) {
         throw new WP_FTS_TestFailure("Could not create synthetic analyzer runtime directory: {$directory}");
     }
+    if ($indexedRuntime && (!function_exists('gzopen') || !function_exists('gzwrite') || !function_exists('gzencode') || !function_exists('gzdecode'))) {
+        throw new WP_FTS_TestFailure('Indexed synthetic analyzer packs require PHP gzip support.');
+    }
 
     file_put_contents($directory . '/NOTICE.txt', "Synthetic BSD-2-Clause analyzer pack fixture for tests.\n");
 
@@ -974,9 +994,9 @@ function write_synthetic_full_analyzer_pack(
         $remainingRows = $rows - $nextRow;
         $remainingShards = $shards - $shard + 1;
         $rowsInShard = intdiv($remainingRows + $remainingShards - 1, $remainingShards);
-        $relativePath = sprintf('runtime/%04d.tsv', $shard);
+        $relativePath = sprintf($indexedRuntime ? 'runtime/%04d.tsv.gz' : 'runtime/%04d.tsv', $shard);
         $path = $directory . '/' . $relativePath;
-        $handle = fopen($path, 'wb');
+        $handle = $indexedRuntime ? gzopen($path, 'wb9') : fopen($path, 'wb');
         if (!is_resource($handle)) {
             throw new WP_FTS_TestFailure("Could not write synthetic analyzer runtime shard: {$path}");
         }
@@ -987,27 +1007,54 @@ function write_synthetic_full_analyzer_pack(
             $surface = sprintf('surface%08d', $nextRow);
             $lemma = sprintf('lemma%08d', $nextRow);
             $line = $surface . "\t" . $lemma . "\n";
-            if (fwrite($handle, $line) === false) {
-                fclose($handle);
+            $written = $indexedRuntime ? gzwrite($handle, $line) : fwrite($handle, $line);
+            if ($written !== strlen($line)) {
+                if ($indexedRuntime) {
+                    gzclose($handle);
+                } else {
+                    fclose($handle);
+                }
                 throw new WP_FTS_TestFailure("Could not write synthetic analyzer runtime row: {$path}");
             }
             hash_update($runtimeDigest, $line);
             $firstSurface ??= $surface;
             $lastSurface = $surface;
         }
-        fclose($handle);
+        if ($indexedRuntime) {
+            gzclose($handle);
+        } else {
+            fclose($handle);
+        }
 
         $sha = hash_file('sha256', $path);
         if (!is_string($sha) || !is_string($firstSurface) || !is_string($lastSurface)) {
             throw new WP_FTS_TestFailure("Could not finalize synthetic analyzer runtime shard: {$path}");
         }
-        $runtimeFiles[] = [
+        $runtimeFile = [
             'path' => $relativePath,
             'sha256' => $sha,
             'rows' => $rowsInShard,
             'first_surface' => $firstSurface,
             'last_surface' => $lastSurface,
         ];
+        if ($indexedRuntime) {
+            $lookupRelativePath = $relativePath . '.lookup';
+            $lookup = WP_FTS_LemmaPackLookupIndex::build(
+                $path,
+                WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+                $sha,
+                $directory . '/' . $lookupRelativePath
+            );
+            $runtimeFile['sha256'] = $lookup['runtime_sha256'];
+            $runtimeFile['compression'] = WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP;
+            $runtimeFile['lookup'] = [
+                'format' => $lookup['format'],
+                'path' => $lookupRelativePath,
+                'sha256' => $lookup['sha256'],
+                'blocks' => $lookup['blocks'],
+            ];
+        }
+        $runtimeFiles[] = $runtimeFile;
     }
 
     $manifest = [
@@ -1411,6 +1458,7 @@ final class WP_FTS_Test_Forbidden_Jieba_Stream
     public $context;
     public static int $accesses = 0;
 
+    /** Records and rejects a forbidden attempt to open the synthetic stream. */
     public function stream_open(string $path, string $mode, int $options, ?string &$opened_path): bool
     {
         self::$accesses++;
@@ -1418,6 +1466,7 @@ final class WP_FTS_Test_Forbidden_Jieba_Stream
         return false;
     }
 
+    /** Records and rejects a forbidden metadata lookup on the synthetic stream. */
     public function url_stat(string $path, int $flags): array|false
     {
         self::$accesses++;
@@ -1609,6 +1658,7 @@ function synthetic_qaa_lemma_tsv_wpcli_assoc_args(string $source): array
         'source-url' => 'urn:wp-fts:test:synthetic-qaa-lemma-tsv',
         'license' => 'CC0-1.0',
         'license-url' => 'urn:wp-fts:test:synthetic-qaa-license',
+        'runtime-compression' => 'gzip',
         'fixture-only' => true,
         'max-rows-per-file' => '2',
         'chunk-rows' => '2',
@@ -1630,6 +1680,7 @@ function synthetic_qaa_conllu_wpcli_assoc_args(string $source): array
         'source-url' => 'urn:wp-fts:test:synthetic-qaa-conllu',
         'license' => 'CC0-1.0',
         'license-url' => 'urn:wp-fts:test:synthetic-qaa-license',
+        'runtime-compression' => 'gzip',
         'fixture-only' => true,
         'max-rows-per-file' => '2',
         'chunk-rows' => '2',
@@ -1651,6 +1702,7 @@ function synthetic_qaa_unimorph_wpcli_assoc_args(string $source): array
         'source-url' => 'urn:wp-fts:test:synthetic-qaa-unimorph',
         'license' => 'CC0-1.0',
         'license-url' => 'urn:wp-fts:test:synthetic-qaa-license',
+        'runtime-compression' => 'gzip',
         'fixture-only' => true,
         'max-rows-per-file' => '2',
         'chunk-rows' => '2',
@@ -2278,6 +2330,7 @@ final class WP_FTS_Test_WPDB
         return $blog_id <= 1 ? $this->base_prefix : $this->base_prefix . $blog_id . '_';
     }
 
+    /** Emulates scalar wpdb reads while recording their statement cost. */
     public function get_var(mixed $statement, int $x = 0, int $y = 0): mixed
     {
         [$sql, $args] = $this->statement_parts($statement);
@@ -2536,6 +2589,7 @@ final class WP_FTS_Test_WPDB
         return null;
     }
 
+    /** Applies a mutating SQL statement to the in-memory wpdb fixture. */
     public function query(mixed $statement): int|bool
     {
         [$sql, $args] = $this->statement_parts($statement);
@@ -3331,9 +3385,9 @@ final class WP_FTS_Test_WPDB
                 $kind = trim($columns[2]);
                 $term = $this->v4_binary_literal_value($columns[3]);
                 if (
-                    !ctype_digit($ordinal)
+                    !wp_fts_test_is_ascii_digits($ordinal)
                     || $lang === null
-                    || !ctype_digit($kind)
+                    || !wp_fts_test_is_ascii_digits($kind)
                     || $term === null
                 ) {
                     break;
@@ -3383,7 +3437,7 @@ final class WP_FTS_Test_WPDB
                 } else {
                     $decoded = $encoded !== ''
                         && (strlen($encoded) % 2) === 0
-                        && ctype_xdigit($encoded)
+                        && wp_fts_test_is_ascii_hex($encoded)
                             ? hex2bin($encoded)
                             : false;
                 }
@@ -3409,7 +3463,7 @@ final class WP_FTS_Test_WPDB
             $kindToken = ltrim((string) ($columns[2] ?? '0'));
             $kindDigits = strspn($kindToken, '0123456789');
             yield [
-                'ordinal' => ctype_digit($ordinalToken) ? (int) $ordinalToken : 0,
+                'ordinal' => wp_fts_test_is_ascii_digits($ordinalToken) ? (int) $ordinalToken : 0,
                 'lang' => $binaryValues[0],
                 'kind' => $kindDigits > 0 ? (int) substr($kindToken, 0, $kindDigits) : 0,
                 'term' => $binaryValues[1],
@@ -3478,8 +3532,8 @@ final class WP_FTS_Test_WPDB
             if (
                 $lang === null
                 || $term === null
-                || !ctype_digit($kind)
-                || !ctype_digit($docFreq)
+                || !wp_fts_test_is_ascii_digits($kind)
+                || !wp_fts_test_is_ascii_digits($docFreq)
             ) {
                 return;
             }
@@ -3514,7 +3568,7 @@ final class WP_FTS_Test_WPDB
             } else {
                 $decoded = $encoded !== ''
                     && (strlen($encoded) % 2) === 0
-                    && ctype_xdigit($encoded)
+                    && wp_fts_test_is_ascii_hex($encoded)
                         ? hex2bin($encoded)
                         : false;
             }
@@ -3525,6 +3579,7 @@ final class WP_FTS_Test_WPDB
         return null;
     }
 
+    /** Applies relational-v4 writer statements to the in-memory storage model. */
     private function query_v4_storage(string $sql, array $args): int|bool|null
     {
         if (
@@ -4931,6 +4986,7 @@ final class WP_FTS_Test_WPDB
         return true;
     }
 
+    /** Returns the stable synthetic ID assigned to one storage term key. */
     private function ensure_term_id(string $key): int
     {
         if (isset($this->termIdsByKey[$key])) {
@@ -4942,6 +4998,7 @@ final class WP_FTS_Test_WPDB
         return $id;
     }
 
+    /** Backfills term-ID maps for directly seeded fixture terms and postings. */
     private function ensure_term_identity_maps(): void
     {
         foreach (array_unique([...array_keys($this->ftsTerms), ...array_keys($this->postings)]) as $key) {
@@ -4949,6 +5006,7 @@ final class WP_FTS_Test_WPDB
         }
     }
 
+    /** Materializes one relational-v4 dictionary row from fixture state. */
     private function v4_term_row(string $key, string $rowKind = 'new'): object
     {
         $id = $this->ensure_term_id($key);
@@ -4966,6 +5024,7 @@ final class WP_FTS_Test_WPDB
         ];
     }
 
+    /** Encodes language, term kind, and term into the fixture storage key. */
     private function v4_storage_term_key(string $lang, string $term, int $kind): string
     {
         $canonical = WP_FTS_TermNamespace::namespace_term($lang, $term);
@@ -5009,6 +5068,7 @@ final class WP_FTS_Test_WPDB
         ];
     }
 
+    /** Decodes text placeholders when the production statement uses base64 transport. */
     private function decode_v4_text_argument(string $value, string $sql): string
     {
         if (!str_contains($sql, 'FROM_BASE64(%s)')) {
@@ -5018,6 +5078,7 @@ final class WP_FTS_Test_WPDB
         return is_string($decoded) ? $decoded : '';
     }
 
+    /** Keeps compatibility metadata aligned with a relational-v4 document write. */
     private function sync_v4_doc_metadata(int $postId, string $snippet): void
     {
         $post = $this->v4_post_row($postId);
@@ -5035,6 +5096,7 @@ final class WP_FTS_Test_WPDB
         ksort($this->docMeta, SORT_NUMERIC);
     }
 
+    /** Finds or synthesizes the canonical WordPress row for a fixture post. */
     private function v4_post_row(int $postId): object
     {
         $global = $GLOBALS['wp_fts_test_posts'][$postId] ?? null;
@@ -5064,7 +5126,7 @@ final class WP_FTS_Test_WPDB
     {
         $ids = [];
         foreach ($args as $value) {
-            if (!is_int($value) && !(is_string($value) && ctype_digit($value))) {
+            if (!is_int($value) && !(is_string($value) && wp_fts_test_is_ascii_digits($value))) {
                 continue;
             }
             $postId = (int) $value;
@@ -5077,6 +5139,7 @@ final class WP_FTS_Test_WPDB
         return $ids;
     }
 
+    /** Finds a canonical fixture post for dependency-source emulation. */
     private function dependency_fixture_post(int $postId): ?object
     {
         $post = $GLOBALS['wp_fts_test_posts'][$postId] ?? null;
@@ -5099,6 +5162,7 @@ final class WP_FTS_Test_WPDB
         return is_array($values) ? array_values($values) : [$values];
     }
 
+    /** Returns a stable synthetic ID for one indexed dependency occurrence. */
     private function dependency_source_id(string $kind, int $postId, string $key, int $occurrence): int
     {
         $identity = $kind . ':' . $postId . ':' . $key . ':' . $occurrence;
@@ -5118,6 +5182,7 @@ final class WP_FTS_Test_WPDB
         return $sourceId;
     }
 
+    /** Reports a dependency value’s real or deliberately virtual byte size. */
     private function dependency_fixture_value_bytes(
         string $kind,
         int $postId,
@@ -5206,6 +5271,7 @@ final class WP_FTS_Test_WPDB
         return $requests;
     }
 
+    /** Orders the mixed-key queue deterministically like the production contract. */
     private function sort_v4_queue(): void
     {
         uksort($this->queue, static function (int|string $left, int|string $right): int {
@@ -5253,6 +5319,7 @@ final class WP_FTS_Test_WPDB
         array_splice($args, $offset, 2);
     }
 
+    /** Captures the first valid incarnation inserted for the search epoch. */
     private function capture_search_epoch_incarnation(string $candidate): void
     {
         if ($this->searchEpochIncarnation === '' && preg_match('/^[a-f0-9]{32}$/D', $candidate) === 1) {
@@ -5260,6 +5327,7 @@ final class WP_FTS_Test_WPDB
         }
     }
 
+    /** Maps a durable job key to its in-memory queue key when present. */
     private function v4_queue_key_for_job(string $jobKey): int|string|null
     {
         if (str_starts_with($jobKey, 'post:')) {
@@ -5329,6 +5397,7 @@ final class WP_FTS_Test_WPDB
         return array_slice($keys, 0, $limit);
     }
 
+    /** Applies a worker lease to one in-memory queue row. */
     private function lease_v4_queue_row(int|string $rowKey, string $token, int $expiresAt): void
     {
         $this->queue[$rowKey]['state'] = 'leased';
@@ -5337,6 +5406,7 @@ final class WP_FTS_Test_WPDB
         $this->queue[$rowKey]['claim_expires_at'] = $expiresAt;
     }
 
+    /** Clears a worker lease and optionally returns its row to ready state. */
     private function release_v4_queue_row(int|string $rowKey, int $availableAt, bool $setReady = true): void
     {
         if ($setReady) {
@@ -5348,6 +5418,7 @@ final class WP_FTS_Test_WPDB
         $this->queue[$rowKey]['claim_expires_at'] = 0;
     }
 
+    /** Checks that an in-memory row still belongs to the expected lease generation. */
     private function v4_queue_claim_matches(
         int|string|null $rowKey,
         string $token,
@@ -7671,6 +7742,7 @@ final class WP_FTS_Test_WPDB
         ]];
     }
 
+    /** Measures the canonical WordPress columns loaded for one fixture post. */
     private function v4_canonical_post_bytes(object $post): int
     {
         $bytes = 0;
@@ -7683,6 +7755,7 @@ final class WP_FTS_Test_WPDB
         return $bytes;
     }
 
+    /** Evaluates the production recency expression in the relational-v4 fake. */
     private function v4_recency_score(int $score, string $date, string $sql): int
     {
         $marker = 'ranked.score * (1000000 + ';
@@ -7725,6 +7798,7 @@ final class WP_FTS_Test_WPDB
         return (int) round($score * (1000000 + $strength * $halfLife / ($halfLife + $age)) / 1000000);
     }
 
+    /** Emulates single-row wpdb reads against the in-memory relational model. */
     public function get_row(mixed $statement): ?object
     {
         [$sql, $args] = $this->statement_parts($statement);
@@ -7962,6 +8036,7 @@ final class WP_FTS_Test_WPDB
         return [];
     }
 
+    /** Restores the expected relational-v4 columns and indexes for one fake table. */
     private function restore_schema_contract(string $table): void
     {
         foreach (['fts_terms', 'fts_postings', 'fts_documents', 'fts_work'] as $suffix) {
@@ -8056,6 +8131,7 @@ final class WP_FTS_Test_WPDB
         return [(string) $statement, []];
     }
 
+    /** Records one simulated read statement and notifies its observer. */
     private function record_read_query(string $sql): void
     {
         $this->num_queries++;
@@ -8102,7 +8178,7 @@ final class WP_FTS_Test_WPDB
             }
 
             $hex = substr($sql, $start + 2, $end - $start - 2);
-            if (strlen($hex) % 2 === 0 && strspn($hex, '0123456789abcdefABCDEF') === strlen($hex)) {
+            if ($hex !== '' && strlen($hex) % 2 === 0 && strspn($hex, '0123456789abcdefABCDEF') === strlen($hex)) {
                 $value = hex2bin($hex);
                 if ($value !== false) {
                     $values[] = $value;
@@ -8556,17 +8632,22 @@ final class WP_FTS_Test_Query
 {
     /** @var array<string,mixed> */
     public array $query_vars;
+    /** @var array<string,mixed> Original arguments retained across parse_query normalization. */
+    public array $query;
     public int $found_posts = 0;
     public int $max_num_pages = 0;
 
     /**
      * @param array<string,mixed> $query_vars
+     * @param array<string,bool> $route_flags
      */
     public function __construct(
         array $query_vars,
         private bool $search = true,
         private bool $main = true,
+        private array $route_flags = [],
     ) {
+        $this->query = $query_vars;
         $this->query_vars = $query_vars;
     }
 
@@ -8580,6 +8661,54 @@ final class WP_FTS_Test_Query
         return $this->main;
     }
 
+    /** Reports whether this fake query models a feed route. */
+    public function is_feed(): bool
+    {
+        return !empty($this->route_flags['feed']);
+    }
+
+    /** Reports whether this fake query models a comment-feed route. */
+    public function is_comment_feed(): bool
+    {
+        return !empty($this->route_flags['comment_feed']);
+    }
+
+    /** Reports whether this fake query models an embed route. */
+    public function is_embed(): bool
+    {
+        return !empty($this->route_flags['embed']);
+    }
+
+    /** Reports whether this fake query models a preview route. */
+    public function is_preview(): bool
+    {
+        return !empty($this->route_flags['preview']);
+    }
+
+    /** Reports whether this fake query models a trackback route. */
+    public function is_trackback(): bool
+    {
+        return !empty($this->route_flags['trackback']);
+    }
+
+    /** Reports whether this fake query models a singular route. */
+    public function is_singular(): bool
+    {
+        return !empty($this->route_flags['singular']);
+    }
+
+    /** Reports whether this fake query models the robots route. */
+    public function is_robots(): bool
+    {
+        return !empty($this->route_flags['robots']);
+    }
+
+    /** Reports whether this fake query models the favicon route. */
+    public function is_favicon(): bool
+    {
+        return !empty($this->route_flags['favicon']);
+    }
+
     public function get(string $key, mixed $default = null): mixed
     {
         return array_key_exists($key, $this->query_vars) ? $this->query_vars[$key] : $default;
@@ -8589,6 +8718,39 @@ final class WP_FTS_Test_Query
     {
         $this->query_vars[$key] = $value;
     }
+}
+
+/**
+ * Mirrors core's parse, pre_get_posts, strlen, and posts_pre_query ordering.
+ *
+ * @return array{search_length:int,posts:mixed}
+ */
+function wp_fts_test_run_source_faithful_search_boundary(WP_FTS_Test_Query $query, bool $admin): array
+{
+    $raw = $query->query['s'] ?? null;
+    if (
+        $raw !== null
+        && (!is_scalar($raw) || (is_string($raw) && strlen($raw) > 1600))
+    ) {
+        // WP_Query::parse_query() normalizes malformed and >1600-byte values
+        // but retains the raw original for the pre_get_posts ownership decision.
+        $query->query_vars['s'] = '';
+    }
+
+    if ($admin) {
+        WP_FTS_Plugin::prepare_admin_post_search_query($query);
+    } else {
+        WP_FTS_Plugin::prepare_frontend_search_query($query);
+    }
+
+    // WP_Query::get_posts() reaches this strlen before posts_pre_query.
+    $searchLength = strlen($query->query_vars['s']);
+    $query->query_vars['s'] = stripslashes($query->query_vars['s']);
+    $posts = $admin
+        ? WP_FTS_Plugin::replace_admin_post_search_posts(null, $query)
+        : WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+
+    return ['search_length' => $searchLength, 'posts' => $posts];
 }
 
 final class WP_FTS_Test_Search_Provider_Callback
@@ -8655,6 +8817,7 @@ function wp_fts_test_end_frontend_search_loop(mixed $query): void
     }
 }
 
+/** Computes and caches the accepted profile hash used by default fixtures. */
 function wp_fts_test_default_index_profile_hash(): string
 {
     static $hash = null;
@@ -8675,6 +8838,7 @@ function wp_fts_test_default_index_profile_hash(): string
     return $hash;
 }
 
+/** Resets all shared WordPress fakes to an activated, ready plugin state. */
 function wp_fts_test_reset_wordpress_fakes(): void
 {
     $readinessIncarnation = '0123456789abcdef0123456789abcdef';
@@ -8738,6 +8902,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_dependency_virtual_value_bytes'] = [];
     unset($GLOBALS['wp_fts_test_dependency_after_measurement']);
     $GLOBALS['wp_fts_test_filters'] = [];
+    $GLOBALS['wp_fts_test_priority_filter_hooks'] = [];
     $GLOBALS['wp_fts_test_upload_dir'] = null;
     $GLOBALS['wp_fts_test_upload_error'] = false;
     $GLOBALS['wp_fts_test_redirects'] = [];
@@ -8786,6 +8951,16 @@ function wp_fts_test_reset_wordpress_fakes(): void
                 'edit_others_posts' => 'edit_others_pages',
                 'edit_published_posts' => 'edit_published_pages',
                 'read_private_posts' => 'read_private_pages',
+            ],
+        ],
+        'attachment' => (object) [
+            'public' => true,
+            'exclude_from_search' => false,
+            'query_var' => false,
+            'cap' => (object) [
+                'edit_others_posts' => 'edit_others_posts',
+                'edit_published_posts' => 'edit_published_posts',
+                'read_private_posts' => 'read_private_posts',
             ],
         ],
         'secret' => (object) [
@@ -8925,6 +9100,7 @@ if (!function_exists('add_action')) {
 }
 
 if (!function_exists('add_filter')) {
+    /** Registers one callback in the flat and priority-aware WordPress fakes. */
     function add_filter(string $hook_name, mixed $callback, int $priority = 10, int $accepted_args = 1): bool
     {
         $entry = [
@@ -8954,12 +9130,56 @@ if (!function_exists('add_filter')) {
         if (!isset($GLOBALS['wp_filter'][$hook_name]->callbacks[$priority]) || !is_array($GLOBALS['wp_filter'][$hook_name]->callbacks[$priority])) {
             $GLOBALS['wp_filter'][$hook_name]->callbacks[$priority] = [];
         }
-        $GLOBALS['wp_filter'][$hook_name]->callbacks[$priority]['wp_fts_test_' . count($GLOBALS['wp_filter'][$hook_name]->callbacks[$priority])] = [
+        $callback_id = count($GLOBALS['wp_filter'][$hook_name]->callbacks[$priority]);
+        while (isset($GLOBALS['wp_filter'][$hook_name]->callbacks[$priority]['wp_fts_test_' . $callback_id])) {
+            $callback_id++;
+        }
+        $GLOBALS['wp_filter'][$hook_name]->callbacks[$priority]['wp_fts_test_' . $callback_id] = [
             'function' => $callback,
             'accepted_args' => $accepted_args,
         ];
 
         return true;
+    }
+}
+
+if (!function_exists('remove_filter')) {
+    /** Removes the exact callback from the flat and priority-aware fakes. */
+    function remove_filter(string $hook_name, mixed $callback, int $priority = 10): bool
+    {
+        $removed = false;
+        $hook = $GLOBALS['wp_filter'][$hook_name] ?? null;
+        if (is_object($hook) && isset($hook->callbacks[$priority]) && is_array($hook->callbacks[$priority])) {
+            foreach ($hook->callbacks[$priority] as $callback_id => $entry) {
+                if (is_array($entry) && ($entry['function'] ?? null) === $callback) {
+                    unset($hook->callbacks[$priority][$callback_id]);
+                    $removed = true;
+                }
+            }
+            if ($hook->callbacks[$priority] === []) {
+                unset($hook->callbacks[$priority]);
+            }
+        }
+
+        $registered = $GLOBALS['wp_fts_test_filters'][$hook_name] ?? null;
+        if (is_callable($registered)) {
+            if ($registered === $callback) {
+                unset($GLOBALS['wp_fts_test_filters'][$hook_name]);
+                $removed = true;
+            }
+        } elseif (is_array($registered)) {
+            $remaining = [];
+            foreach ($registered as $registered_callback) {
+                if ($registered_callback === $callback) {
+                    $removed = true;
+                    continue;
+                }
+                $remaining[] = $registered_callback;
+            }
+            $GLOBALS['wp_fts_test_filters'][$hook_name] = $remaining;
+        }
+
+        return $removed;
     }
 }
 
@@ -9039,9 +9259,11 @@ if (!function_exists('get_sites')) {
     }
 }
 
+/** Installs blog-switching fakes on test runs that do not already provide them. */
 function wp_fts_test_install_multisite_switch_functions(): void
 {
     if (!function_exists('switch_to_blog')) {
+        /** Switches the fixture’s option and table context to another site. */
         function switch_to_blog(int $blog_id): bool
         {
             global $wpdb;
@@ -9098,6 +9320,7 @@ function wp_fts_test_install_multisite_switch_functions(): void
     }
 
     if (!function_exists('restore_current_blog')) {
+        /** Restores the fixture’s previous option and table context. */
         function restore_current_blog(): bool
         {
             global $wpdb;
@@ -9127,6 +9350,7 @@ function wp_fts_test_install_multisite_switch_functions(): void
 }
 
 if (!function_exists('get_option')) {
+    /** Reads one option from the current fake site and runs its observation hook. */
     function get_option(string $name, mixed $default = false): mixed
     {
         $store =& wp_fts_test_option_store();
@@ -9172,6 +9396,7 @@ if (!function_exists('set_transient')) {
 }
 
 if (!function_exists('get_site_option')) {
+    /** Reads one option from the fake network-wide option store. */
     function get_site_option(string $name, mixed $default = false, bool $deprecated = true): mixed
     {
         $GLOBALS['wp_fts_test_get_site_option_calls'][] = $name;
@@ -9191,6 +9416,7 @@ if (!function_exists('get_network_option')) {
 }
 
 if (!function_exists('update_site_option')) {
+    /** Writes one value to the fake network-wide option store. */
     function update_site_option(string $name, mixed $value): bool
     {
         $old = $GLOBALS['wp_fts_test_network_options'][$name] ?? null;
@@ -9201,6 +9427,7 @@ if (!function_exists('update_site_option')) {
 }
 
 if (!function_exists('delete_site_option')) {
+    /** Deletes one fake network option and reports whether it existed. */
     function delete_site_option(string $name): bool
     {
         $existed = array_key_exists($name, $GLOBALS['wp_fts_test_network_options']);
@@ -9224,6 +9451,7 @@ if (!function_exists('is_plugin_active_for_network')) {
 }
 
 if (!function_exists('update_option')) {
+    /** Writes one option in the current fake site and records the mutation. */
     function update_option(string $name, mixed $value, ?bool $autoload = null): bool
     {
         $store =& wp_fts_test_option_store();
@@ -9241,6 +9469,7 @@ if (!function_exists('update_option')) {
 }
 
 if (!function_exists('maybe_serialize')) {
+    /** Matches WordPress option serialization for arrays and objects. */
     function maybe_serialize(mixed $value): mixed
     {
         return is_array($value) || is_object($value) ? serialize($value) : $value;
@@ -9267,6 +9496,7 @@ if (!function_exists('add_option')) {
 }
 
 if (!function_exists('delete_option')) {
+    /** Deletes one option in the current fake site and runs lifecycle observers. */
     function delete_option(string $name): bool
     {
         $beforeDelete = $GLOBALS['wp_fts_test_before_delete_option'] ?? null;
@@ -9361,6 +9591,7 @@ if (!function_exists('_get_cron_array')) {
 }
 
 if (!function_exists('_set_cron_array')) {
+    /** Persists the fake cron array when the configured write boundary allows it. */
     function _set_cron_array(array $crons, bool $wp_error = false): bool
     {
         $GLOBALS['wp_fts_test_cron_write_count']++;
@@ -9402,6 +9633,7 @@ if (!function_exists('_set_cron_array')) {
 }
 
 if (!function_exists('wp_schedule_single_event')) {
+    /** Adds one event through the fake cron read-modify-write boundary. */
     function wp_schedule_single_event(int $timestamp, string $hook, array $args = []): bool
     {
         $GLOBALS['wp_fts_test_schedule_calls'][] = [
@@ -9424,6 +9656,7 @@ if (!function_exists('wp_schedule_single_event')) {
 }
 
 if (!function_exists('wp_clear_scheduled_hook')) {
+    /** Removes all fake cron events registered for one hook. */
     function wp_clear_scheduled_hook(string $hook): int
     {
         $GLOBALS['wp_fts_test_cleared_hooks'][] = $hook;
@@ -9654,6 +9887,7 @@ if (!function_exists('get_the_title')) {
 }
 
 if (!function_exists('get_posts')) {
+    /** Filters the canonical fixture posts using the supported WP_Query arguments. */
     function get_posts(array $args = []): array
     {
         $GLOBALS['wp_fts_test_get_posts_calls'][] = $args;
@@ -9746,6 +9980,7 @@ if (!function_exists('wp_insert_post')) {
 }
 
 if (!function_exists('wp_trash_post')) {
+    /** Moves a fixture post to trash and invokes the production save lifecycle. */
     function wp_trash_post(int $post_id): object|false|null
     {
         $post = get_post($post_id);
@@ -9937,8 +10172,13 @@ if (!function_exists('has_filter')) {
 }
 
 if (!function_exists('apply_filters')) {
+    /** Applies either the ordinary flat fake or an explicitly priority-aware hook. */
     function apply_filters(string $hook_name, mixed $value, mixed ...$args): mixed
     {
+        if (!empty($GLOBALS['wp_fts_test_priority_filter_hooks'][$hook_name])) {
+            return wp_fts_test_apply_priority_filter($hook_name, $value, $args);
+        }
+
         $filter = $GLOBALS['wp_fts_test_filters'][$hook_name] ?? null;
         if (is_callable($filter)) {
             return $filter($value, ...$args);
@@ -9953,6 +10193,51 @@ if (!function_exists('apply_filters')) {
         }
 
         return $value;
+    }
+}
+
+/**
+ * Apply one opt-in hook with WordPress priority and bucket snapshot semantics.
+ *
+ * @param mixed[] $args
+ */
+function wp_fts_test_apply_priority_filter(string $hook_name, mixed $value, array $args): mixed
+{
+    $hook = $GLOBALS['wp_filter'][$hook_name] ?? null;
+    if (!is_object($hook) || !isset($hook->callbacks) || !is_array($hook->callbacks)) {
+        return $value;
+    }
+
+    $last_priority = null;
+    while (true) {
+        $priorities = array_keys($hook->callbacks);
+        sort($priorities, SORT_NUMERIC);
+        $priority = null;
+        foreach ($priorities as $candidate) {
+            if ($last_priority === null || (int) $candidate > $last_priority) {
+                $priority = (int) $candidate;
+                break;
+            }
+        }
+        if ($priority === null) {
+            return $value;
+        }
+
+        // WP_Hook snapshots a priority bucket when foreach begins. Callbacks
+        // added to a future bucket are visible when that bucket is reached.
+        $callbacks = $hook->callbacks[$priority] ?? [];
+        foreach ($callbacks as $entry) {
+            $callback = is_array($entry) ? ($entry['function'] ?? null) : null;
+            if (!is_callable($callback)) {
+                continue;
+            }
+            $accepted_args = is_array($entry) ? max(0, (int) ($entry['accepted_args'] ?? 1)) : 1;
+            $callback_args = array_merge([$value], $args);
+            $value = $accepted_args === 0
+                ? $callback()
+                : $callback(...array_slice($callback_args, 0, $accepted_args));
+        }
+        $last_priority = $priority;
     }
 }
 
@@ -10343,6 +10628,7 @@ function wp_fts_test_seed_indexed_posts(WP_FTS_Test_WPDB $wpdb, int $count, int 
     ksort($GLOBALS['wp_fts_test_posts'], SORT_NUMERIC);
 }
 
+/** Runs the save, foreground flush, and one worker pass for a fixture post. */
 function wp_fts_test_index_saved_post(int $post_id, object $post, mixed ...$unused): void
 {
     WP_FTS_Plugin::handle_post_save($post_id, $post, ...$unused);
@@ -10355,6 +10641,7 @@ function wp_fts_test_index_saved_post(int $post_id, object $post, mixed ...$unus
     }
 }
 
+/** Marks the current fake index ready for the active profile and incarnation. */
 function wp_fts_test_mark_search_takeover_ready(): void
 {
     global $wpdb;
@@ -10422,6 +10709,7 @@ function wp_fts_test_ensure_fake_search_epoch_control(): void
     }
 }
 
+/** Saves a title-boost change and returns the resulting reconciliation health. */
 function wp_fts_test_enqueue_field_boost_reconciliation(float $title_boost = 8.0): array
 {
     $oldPost = $_POST;
@@ -10675,7 +10963,7 @@ PHP;
         'observe_final_search_posts' => ['hook' => 'posts_pre_query', 'priority' => WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY, 'accepted_args' => 2],
         'replace_admin_post_search_posts' => ['hook' => 'posts_pre_query', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
         'replace_frontend_search_posts' => ['hook' => 'posts_pre_query', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
-    ], $searchFilterPriorities, 'search replacement filters should run late enough to override normal posts_pre_query providers and observe final ownership');
+    ], $searchFilterPriorities, 'search replacement filters should run late enough to preserve earlier provider ownership and observe final ownership');
     assert_same([], WP_CLI::$commands, 'web bootstrap should not register WP-CLI unless WP_CLI is active');
 });
 
@@ -10724,7 +11012,7 @@ test_case('admin menu registration exposes Settings Full-Text Search page and op
     assert_same([WP_FTS_Plugin::class, 'render_admin_settings_page'], $page['callback'] ?? null, 'admin page should render through the settings callback');
     assert_same('wp_fts_settings', $setting['option_group'] ?? null, 'settings should use the wp_fts_settings group');
     assert_same(WP_FTS_Plugin::SETTINGS_OPTION, $setting['option_name'] ?? null, 'settings should register the wp_fts_settings option');
-    assert_same(['post', 'page'], WP_FTS_Plugin::default_settings()['index_post_types'], 'default settings should index both posts and pages');
+    assert_same(['post', 'page', 'attachment'], WP_FTS_Plugin::default_settings()['index_post_types'], 'fresh default settings should cover the complete stock unscoped search post-type surface');
     assert_same([
         'title' => 5.0,
         'content' => 1.0,
@@ -11045,7 +11333,7 @@ test_case('post language meta box defaults to automatic detection and stores ove
         WP_FTS_Plugin::register_language_meta_box();
         $screens = array_column($GLOBALS['wp_fts_test_meta_boxes'], 'screen');
         sort($screens, SORT_STRING);
-        assert_same(['page', 'post'], $screens, 'language meta box should register for public searchable post types');
+        assert_same(['attachment', 'page', 'post'], $screens, 'language meta box should register for public searchable post types');
 
         ob_start();
         WP_FTS_Plugin::render_language_meta_box($post);
@@ -11139,8 +11427,8 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_contains('type="checkbox" name="wp_fts_settings[replace_admin_post_search]" value="1" checked="checked"', $settingsHtml, 'wp-admin replacement checkbox should be checked by default');
     assert_true(!str_contains($settingsHtml, 'name="wp_fts_settings[replace_search_scope]"'), 'settings replacement behavior should no longer render the legacy scope radio group');
     assert_contains('Search provider compatibility', $settingsHtml, 'settings replacement behavior should expose provider compatibility');
-    assert_contains('Prefer Language FTS', $settingsHtml, 'settings provider compatibility should expose the default precedence mode');
-    assert_contains('Keep another search provider', $settingsHtml, 'settings provider compatibility should expose the coexistence mode');
+    assert_contains('Use Language FTS when providers abstain', $settingsHtml, 'settings provider compatibility should expose the default null-handoff mode');
+    assert_contains('Keep provider-integrated searches on WordPress', $settingsHtml, 'settings provider compatibility should expose the core-ownership mode');
     assert_contains('value="prefer_fts" checked="checked"', $settingsHtml, 'settings provider compatibility should default to preferring FTS');
     assert_contains('Search result excerpt length', $settingsHtml, 'settings should use clearer excerpt length copy');
     assert_contains('short piece of post text shown around a matching word', $settingsHtml, 'settings should explain search result excerpts in plain language');
@@ -11269,7 +11557,7 @@ test_case('known search provider advisory renders neutral Health and Settings ou
     assert_contains('<th scope="row">Known search providers</th><td>No known search provider detected</td>', $healthHtml, 'Health should render a neutral known-provider advisory when none are detected');
     assert_contains('Known search providers', $settingsHtml, 'Settings should render the known-provider advisory near provider compatibility');
     assert_contains('No known search provider detected', $settingsHtml, 'Settings should clearly state when no known provider was detected');
-    assert_contains('Current mode: Prefer Language FTS. No compatibility action is recommended from this advisory.', $settingsHtml, 'Settings neutral advisory should include the current mode and no-action recommendation');
+    assert_contains('Current mode: Use Language FTS when providers abstain. No compatibility action is recommended from this advisory.', $settingsHtml, 'Settings neutral advisory should include the current mode and no-action recommendation');
     assert_contains('not an end-to-end integration certification', $settingsHtml, 'Settings advisory should state the advisory-only certification boundary');
 });
 
@@ -11338,8 +11626,8 @@ test_case('known search provider recommendations differ by compatibility mode', 
     );
     $respect = $method->invoke(null, $respectSettings);
 
-    assert_contains('switch to Keep another search provider', (string) ($prefer['recommendation'] ?? ''), 'Prefer mode recommendation should point operators to coexistence mode when another provider should answer first');
-    assert_contains('use Prefer Language FTS only', (string) ($respect['recommendation'] ?? ''), 'Respect-existing mode recommendation should point operators back to FTS precedence only when desired');
+    assert_contains('runs FTS only after an earlier provider returns null', (string) ($prefer['recommendation'] ?? ''), 'null-handoff mode recommendation should describe its exact ownership rule');
+    assert_contains('retain the whole query, including null handoffs', (string) ($respect['recommendation'] ?? ''), 'core-ownership mode recommendation should describe its exact ownership rule');
     assert_true((string) ($prefer['recommendation'] ?? '') !== (string) ($respect['recommendation'] ?? ''), 'provider recommendations should differ between compatibility modes');
 });
 
@@ -11504,7 +11792,7 @@ test_case('health dashboard displays bounded search state without adding success
         [
             'replace_frontend_search' => true,
             'replace_admin_post_search' => false,
-            'index_post_types' => ['post', 'page'],
+            'index_post_types' => ['post', 'page', 'attachment'],
         ]
     );
     $fake->postRows = [
@@ -11552,10 +11840,10 @@ test_case('health dashboard displays bounded search state without adding success
     assert_true(!str_contains($html, 'health-lock-token-must-not-render'), 'health dashboard should not expose lock tokens');
     assert_contains('<th scope="row">Public site search</th><td>Enabled</td>', $html, 'health dashboard should show public search replacement state');
     assert_contains('<th scope="row">wp-admin Posts search</th><td>Disabled</td>', $html, 'health dashboard should show admin search replacement state');
-    assert_contains('<th scope="row">Search provider compatibility</th><td>Prefer Language FTS</td>', $html, 'health dashboard should show effective provider compatibility mode');
+    assert_contains('<th scope="row">Search provider compatibility</th><td>Use Language FTS when providers abstain</td>', $html, 'health dashboard should show effective provider compatibility mode');
     assert_contains('<th scope="row">Field ranking weights</th><td>title=5, content=1, excerpt=2, terms=2, custom_fields=1, rendered=1</td>', $html, 'health dashboard should summarize effective field boost settings');
     assert_contains('<th scope="row">Recency ranking boost</th><td>Disabled</td>', $html, 'health dashboard should summarize the default-off recency boost');
-    assert_contains('<th scope="row">Indexed post types</th><td>page, post</td>', $html, 'health dashboard should show configured indexed post types');
+    assert_contains('<th scope="row">Indexed post types</th><td>attachment, page, post</td>', $html, 'health dashboard should show configured indexed post types');
     assert_contains('<th scope="row">Eligible content</th><td>Not scanned in normal Health view</td>', $html, 'normal Health rendering must not count the entire eligible corpus');
     assert_contains('<th scope="row">Indexed</th><td>Not scanned in normal Health view</td>', $html, 'normal Health rendering must not count the entire index');
     assert_contains('<th scope="row">Waiting in the update queue</th><td>0</td>', $html, 'stale-schema health rendering should fail closed instead of querying the physical queue');
@@ -12551,10 +12839,15 @@ test_case('admin analyzer pack status matrix summarizes current language and blo
 });
 
 test_case('settings page explains en-US support through active base English analyzer pack', function (): void {
+    if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_true(true, 'gzip is unavailable, so indexed runtime English pack coverage is skipped.');
+        return;
+    }
+
     $packDir = temp_directory_path('admin_en_base_pack');
 
     try {
-        $manifest = write_synthetic_full_analyzer_pack($packDir, 3, 1, 'en', 'en-synthetic-full-status');
+        $manifest = write_synthetic_full_analyzer_pack($packDir, 3, 1, 'en', 'en-synthetic-full-status', true);
 
         wp_fts_test_reset_wordpress_fakes();
         $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
@@ -13155,9 +13448,9 @@ test_case('runtime analyzer is constructed once per request and invalidated by o
     );
     $afterOptionChange = WP_FTS_Plugin::runtime_analyzer();
     assert_true($afterOptionChange !== $first, 'persisting analyzer options should invalidate the request cache before later work');
-    assert_same(2, $filterCalls, 'the first analyzer read after an option mutation should construct exactly one replacement');
+    assert_same(3, $filterCalls, 'option preflight and the first analyzer read after mutation should each validate the effective filtered configuration once');
     assert_true($afterOptionChange === WP_FTS_Plugin::runtime_analyzer(), 'the replacement analyzer should remain shared for the rest of the request');
-    assert_same(2, $filterCalls, 'reusing the replacement analyzer should perform no additional pack-option reads');
+    assert_same(3, $filterCalls, 'reusing the replacement analyzer should perform no additional pack-option reads');
 });
 
 test_case('runtime analyzer cache follows same-request multisite switches and restoration', function (): void {
@@ -14445,9 +14738,8 @@ test_case('search takeover waits for a complete initial corpus and usable physic
         assert_same('initial_index_pending', $pending['reason'] ?? null, 'activation should expose the initial corpus as pending');
         assert_same(false, $pending['physical_schema_checked'] ?? null, 'pending readiness should avoid a physical probe on each search request');
 
-        $incoming = [(object) ['ID' => 9001, 'post_title' => 'Native WordPress result']];
         $query = new WP_FTS_Test_Query(['s' => 'batchindexneedle', 'posts_per_page' => 10, 'post_type' => 'post']);
-        assert_same([], WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query), 'an FTS-owned search must fail closed while the initial index is pending instead of falling through to an unbounded LIKE query');
+        assert_same([], WP_FTS_Plugin::replace_frontend_search_posts(null, $query), 'an FTS-owned search must fail closed while the initial index is pending instead of falling through to an unbounded LIKE query');
         $GLOBALS['wp_fts_test_is_admin'] = true;
         $GLOBALS['pagenow'] = 'edit.php';
         $adminQuery = new WP_FTS_Test_Query([
@@ -14456,7 +14748,7 @@ test_case('search takeover waits for a complete initial corpus and usable physic
             'post_type' => 'post',
             'post_status' => 'publish',
         ]);
-        assert_same([], WP_FTS_Plugin::replace_admin_post_search_posts($incoming, $adminQuery), 'an FTS-owned wp-admin search must fail closed while the initial index is pending instead of falling through to an unbounded LIKE query');
+        assert_same([], WP_FTS_Plugin::replace_admin_post_search_posts(null, $adminQuery), 'an FTS-owned wp-admin search must fail closed while the initial index is pending instead of falling through to an unbounded LIKE query');
         $GLOBALS['wp_fts_test_is_admin'] = false;
         unset($GLOBALS['pagenow']);
 
@@ -14514,7 +14806,7 @@ test_case('search takeover waits for a complete initial corpus and usable physic
         ));
         assert_same(true, $logicallyReady['ready'] ?? null, 'visitor readiness should remain option-only until a real search detects storage failure');
         $unusableQuery = new WP_FTS_Test_Query(['s' => 'batchindexneedle', 'posts_per_page' => 10, 'post_type' => 'post']);
-        assert_same([], WP_FTS_Plugin::replace_frontend_search_posts($incoming, $unusableQuery), 'physical index failure should fail closed without handing the same query to core LIKE search');
+        assert_same([], WP_FTS_Plugin::replace_frontend_search_posts(null, $unusableQuery), 'physical index failure should fail closed without handing the same query to core LIKE search');
         WP_FTS_Plugin::reset_request_caches();
         $unusable = WP_FTS_Plugin::search_takeover_status();
         assert_same(false, $unusable['ready'] ?? null, 'a failed search should mark the index unhealthy before the next takeover decision');
@@ -15191,7 +15483,34 @@ test_case('failed network blog switch retries the same bounded keyset page', fun
     }
 });
 
-test_case('multisite site deletion table discovery appends per-site FTS tables and de-dupes', function (): void {
+/** @return string[] */
+function wp_fts_test_owned_site_table_names(string $prefix): array
+{
+    $suffixes = [
+        'fts_terms',
+        'fts_postings',
+        'fts_documents',
+        'fts_work',
+        'fts_docs',
+        'fts_doc_lengths',
+        'fts_docmeta',
+        'fts_meta',
+        'fts_queue',
+        'fts_legacy_terms',
+        'fts_legacy_postings',
+        'fts_legacy_docs',
+        'fts_legacy_doc_lengths',
+        'fts_legacy_docmeta',
+        'fts_legacy_meta',
+        'fts_legacy_queue',
+    ];
+    $tables = array_map(static fn(string $suffix): string => $prefix . $suffix, $suffixes);
+    $nameSource = new WP_FTS_Storage_Mysql((object) ['prefix' => $prefix], $prefix);
+
+    return array_merge($tables, $nameSource->reset_generation_table_names());
+}
+
+test_case('multisite site deletion table discovery appends the exact owned inventory and de-dupes', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -15212,21 +15531,18 @@ test_case('multisite site deletion table discovery appends per-site FTS tables a
         $wpdb = $oldWpdb;
     }
 
-    assert_same([
+    assert_same(array_values(array_unique(array_merge([
         'wp_7_posts',
         'wp_7_fts_terms',
         'custom_audit_table',
-        'wp_7_fts_postings',
-        'wp_7_fts_documents',
-        'wp_7_fts_work',
-    ], $tables, 'site deletion table filter should preserve existing tables, append the four target-prefix FTS tables, and de-dupe');
-    assert_same([
+        'wp_7_fts_terms',
+    ], wp_fts_test_owned_site_table_names('wp_7_')))), $tables, 'site deletion table filter should preserve existing tables, append every exactly owned target-prefix table, and de-dupe');
+    assert_same(array_merge([
         'wp_8_posts',
-        'wp_8_fts_terms',
-        'wp_8_fts_postings',
-        'wp_8_fts_documents',
-        'wp_8_fts_work',
-    ], $objectTables, 'site deletion table filter should accept WP_Site-like objects with id');
+    ], wp_fts_test_owned_site_table_names('wp_8_')), $objectTables, 'site deletion table filter should accept WP_Site-like objects and append the exact 24-table lifecycle inventory');
+    assert_same(24, count(wp_fts_test_owned_site_table_names('wp_8_')), 'the exact deletion inventory should remain four current, twelve legacy, and eight reset-generation tables');
+    assert_true(!in_array('wp_8_fts_legacy_surprise', $objectTables, true), 'site deletion must not claim an arbitrary legacy-looking suffix');
+    assert_true(!in_array('wp_8_fts_terms_rn_arbitrary', $objectTables, true), 'site deletion must not claim an arbitrary reset-looking suffix');
     assert_same(['wp_posts'], WP_FTS_Plugin::filter_site_deletion_tables(['wp_posts', 'wp_posts'], 0), 'site deletion table filter should de-dupe and fail safe when site id is invalid');
     assert_true(!str_contains(implode("\n", $fake->queries), 'DROP TABLE'), 'site deletion table discovery should not execute destructive SQL');
 });
@@ -15261,7 +15577,7 @@ test_case('operator status ranking tuning reports default settings', function ()
     assert_same(30.0, $recency['half_life_days'] ?? null, 'ranking tuning should expose the default recency half-life');
     assert_same('Disabled', $recency['summary'] ?? null, 'ranking tuning should summarize default recency as disabled');
     assert_true(!array_key_exists('language_fallback_enabled', $ranking), 'ranking tuning should not expose removed language fanout state');
-    assert_same(['post', 'page'], $ranking['indexed_post_types'] ?? null, 'ranking tuning should expose default indexed post types');
+    assert_same(['post', 'page', 'attachment'], $ranking['indexed_post_types'] ?? null, 'ranking tuning should expose default indexed post types');
     assert_same(10, $ranking['result_limit'] ?? null, 'ranking tuning should expose default result limit');
     assert_same(180, $ranking['snippet_length'] ?? null, 'ranking tuning should expose default snippet length');
     assert_same(true, $ranking['highlight_enabled'] ?? null, 'ranking tuning should expose default highlight state');
@@ -15747,7 +16063,7 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     $compatibility = $payload['search_provider_compatibility'] ?? null;
     assert_true(is_array($compatibility), 'status JSON should expose search provider compatibility as a bounded object');
     assert_same('respect_existing', $compatibility['mode'] ?? null, 'status JSON should expose the effective provider compatibility mode');
-    assert_same('Keep another search provider\'s results', $compatibility['mode_label'] ?? null, 'status JSON should expose the human provider compatibility label');
+    assert_same('Keep provider-integrated searches on WordPress', $compatibility['mode_label'] ?? null, 'status JSON should expose the human provider compatibility label');
     assert_same('respect_existing_provider', $compatibility['mode_debug_value'] ?? null, 'status JSON should expose the debug provider compatibility value');
     assert_same('disabled', $compatibility['public_site_replacement'] ?? null, 'status JSON should expose public-site replacement state');
     assert_same(false, $compatibility['public_site_replacement_enabled'] ?? null, 'status JSON should expose public-site replacement boolean');
@@ -15756,7 +16072,7 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_same(2, $compatibility['known_provider_count'] ?? null, 'status JSON should expose detected known-provider count');
     assert_same(['Jetpack Search / Jetpack', 'SearchWP'], $compatibility['known_provider_names'] ?? null, 'status JSON should expose bounded known-provider family names');
     assert_same('Jetpack Search / Jetpack, SearchWP', $compatibility['known_provider_summary'] ?? null, 'status JSON should expose a known-provider summary without basenames');
-    assert_contains('Keep another search provider\'s results is appropriate', (string) ($compatibility['recommendation'] ?? ''), 'status JSON should expose mode-specific provider recommendation');
+    assert_contains('Keep provider-integrated searches on WordPress is appropriate', (string) ($compatibility['recommendation'] ?? ''), 'status JSON should expose mode-specific provider recommendation');
     assert_contains('not an end-to-end integration certification', (string) ($compatibility['detection_note'] ?? ''), 'status JSON should expose the advisory-only detection boundary');
     assert_contains('Jetpack Search / Jetpack, SearchWP', (string) ($compatibility['advisory'] ?? ''), 'status JSON should expose concise provider advisory text');
     $compatibilityJson = json_encode($compatibility, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
@@ -15824,12 +16140,12 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_contains("cron_runner\t", $human, 'default status output should include cron runner diagnostics');
     assert_contains("search_provider_compatibility\t", $human, 'default status output should preserve the nested provider compatibility row');
     assert_contains("search_provider_compatibility_mode\trespect_existing", $human, 'default status output should expose provider compatibility mode');
-    assert_contains("search_provider_compatibility_label\tKeep another search provider's results", $human, 'default status output should expose provider compatibility label');
+    assert_contains("search_provider_compatibility_label\tKeep provider-integrated searches on WordPress", $human, 'default status output should expose provider compatibility label');
     assert_contains("search_provider_compatibility_public_site_replacement\tdisabled", $human, 'default status output should expose public-site replacement state');
     assert_contains("search_provider_compatibility_admin_posts_replacement\tenabled", $human, 'default status output should expose admin Posts replacement state');
     assert_contains("search_provider_compatibility_known_provider_count\t2", $human, 'default status output should expose known-provider count');
     assert_contains("search_provider_compatibility_known_provider_names\tJetpack Search / Jetpack, SearchWP", $human, 'default status output should expose bounded known-provider names');
-    assert_contains("search_provider_compatibility_recommendation\tKeep another search provider's results is appropriate", $human, 'default status output should expose provider compatibility recommendation');
+    assert_contains("search_provider_compatibility_recommendation\tKeep provider-integrated searches on WordPress is appropriate", $human, 'default status output should expose provider compatibility recommendation');
     assert_true(!str_contains($human, 'searchwp/index.php'), 'default status output should not expose raw plugin basenames');
     assert_true(!str_contains($human, 'secret-basename.php'), 'default status output should not expose unknown active plugin basenames');
     assert_true(!str_contains($human, 'raw-provider-payload-must-not-render'), 'default status output should not expose arbitrary provider option payloads');
@@ -15905,10 +16221,15 @@ test_case('operator status reports unsupported language pack fallback without mu
 test_case('wp-cli status reports language pack base locale coverage through active runtime pack', function (): void {
     global $wpdb;
 
+    if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_true(true, 'gzip is unavailable, so indexed runtime English pack status is skipped.');
+        return;
+    }
+
     $packDir = temp_directory_path('status_en_base_pack');
 
     try {
-        $manifest = write_synthetic_full_analyzer_pack($packDir, 3, 1, 'en', 'en-synthetic-status-pack');
+        $manifest = write_synthetic_full_analyzer_pack($packDir, 3, 1, 'en', 'en-synthetic-status-pack', true);
         $oldWpdb = $wpdb ?? null;
         $fake = new WP_FTS_Test_WPDB();
         $wpdb = $fake;
@@ -17119,6 +17440,7 @@ test_case('automatic reset reconciliation completes the only path back to search
         });
         $payload = wp_fts_test_decode_cli_json_object($raw);
         $summary = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 100]);
+        $finalizerScheduled = isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK]);
         $afterScope = WP_FTS_Plugin::search_health();
         WP_FTS_Plugin::run_scheduled_schema_upgrade();
         $ready = WP_FTS_Plugin::search_health();
@@ -17128,6 +17450,7 @@ test_case('automatic reset reconciliation completes the only path back to search
         assert_same(true, $summary['scope_completed_global'] ?? null, 'the automatic reset scope must be classified as complete-corpus work');
         assert_true(($afterScope['reconciliation_scope_completed_at'] ?? '') !== '', 'global scope completion should persist the readiness proof');
         assert_same('pending', $afterScope['initial_index_status'] ?? null, 'worker completion alone should not bypass physical-schema verification');
+        assert_same(true, $finalizerScheduled, 'completed reset reconciliation should schedule its dedicated readiness finalizer');
         assert_same('ready', $ready['initial_index_status'] ?? null, 'maintenance should promote takeover after the exact global scope and schema proof');
         assert_same(0, $ready['pending_queue_count'] ?? null, 'ready takeover should have no residual reset work');
     } finally {
@@ -17749,21 +18072,25 @@ if (!class_exists('WP_FTS_Test_Malicious_Serialized_Meta', false)) {
         public static int $destructs = 0;
         public static int $magicReads = 0;
 
+        /** Records any forbidden object wakeup during hostile metadata decoding. */
         public function __wakeup(): void
         {
             self::$wakeups++;
         }
 
+        /** Records any forbidden object unserialization during hostile metadata decoding. */
         public function __unserialize(array $data): void
         {
             self::$unserializes++;
         }
 
+        /** Records destruction of an object that hostile metadata must never instantiate. */
         public function __destruct()
         {
             self::$destructs++;
         }
 
+        /** Records a forbidden magic read on hostile serialized metadata. */
         public function __get(string $name): mixed
         {
             self::$magicReads++;
@@ -20255,16 +20582,12 @@ function wp_fts_test_assert_uninstall_drop(array $queries, string $prefix, strin
     assert_same(1, count($queries), "{$label} should issue one idempotent DROP statement");
     $sql = $queries[0] ?? '';
     assert_true(str_starts_with($sql, 'DROP TABLE IF EXISTS '), "{$label} should tolerate missing tables");
-    foreach (['fts_terms', 'fts_postings', 'fts_documents', 'fts_work'] as $suffix) {
-        assert_contains($prefix . $suffix, $sql, "{$label} should remove current {$suffix}");
-    }
-    foreach (['fts_docs', 'fts_doc_lengths', 'fts_docmeta', 'fts_meta', 'fts_queue', 'fts_legacy_terms', 'fts_legacy_postings', 'fts_legacy_docs', 'fts_legacy_doc_lengths', 'fts_legacy_docmeta', 'fts_legacy_meta', 'fts_legacy_queue'] as $suffix) {
-        assert_contains($prefix . $suffix, $sql, "{$label} should remove recoverable legacy {$suffix}");
-    }
-    $nameSource = new WP_FTS_Storage_Mysql((object) ['prefix' => $prefix], $prefix);
-    foreach ($nameSource->reset_generation_table_names() as $table) {
-        assert_contains($table, $sql, "{$label} should remove failed-reset generation {$table}");
-    }
+    $actualTables = explode(', ', substr($sql, strlen('DROP TABLE IF EXISTS ')));
+    $expectedTables = array_map(
+        static fn(string $table): string => "`{$table}`",
+        wp_fts_test_owned_site_table_names($prefix)
+    );
+    assert_same($expectedTables, $actualTables, "{$label} should remove only the exact 24-table lifecycle inventory");
 }
 
 test_case('ready no-op request performs zero uninstall fence probes or plugin SQL', function (): void {
@@ -20938,14 +21261,18 @@ test_case('multisite uninstall discovers 205 sites in bounded pages and remains 
         assert_same([], $fake->docs, 'multisite uninstall should remove derived documents');
         assert_same([], $fake->ftsTerms, 'multisite uninstall should remove derived terms');
 
-        assert_same(6, count($GLOBALS['wp_fts_test_get_sites_calls']), 'two 205-site uninstall runs should use exactly three discovery pages each');
-        $expectedOffsets = [0, 100, 200, 0, 100, 200];
-        foreach ($GLOBALS['wp_fts_test_get_sites_calls'] as $index => $args) {
-            assert_true(is_array($args), 'multisite uninstall discovery should use structured query arguments');
-            assert_same(100, $args['number'] ?? null, 'multisite uninstall must hold at most 100 site IDs per discovery page');
-            assert_same($expectedOffsets[$index], $args['offset'] ?? null, 'multisite uninstall should advance only by the completed page size');
-            assert_same('ids', $args['fields'] ?? null, 'multisite uninstall should fetch IDs rather than site objects');
+        $siteQueries = array_values(array_filter(
+            $fake->prepared,
+            static fn(array $query): bool => str_starts_with($query['sql'] ?? '', 'SELECT blog_id FROM `wp_blogs`')
+        ));
+        assert_same(6, count($siteQueries), 'two 205-site uninstall runs should use exactly three keyset discovery pages each');
+        $expectedHighWaterMarks = [0, 100, 200, 0, 100, 200];
+        foreach ($siteQueries as $index => $query) {
+            assert_same([$expectedHighWaterMarks[$index], 100], $query['args'] ?? null, 'multisite uninstall should bind only its completed high-water mark and 100-site page limit');
+            assert_contains('WHERE blog_id > %d ORDER BY blog_id ASC LIMIT %d', $query['sql'] ?? '', 'multisite uninstall discovery should use stable site-ID keyset order');
+            assert_true(!str_contains($query['sql'] ?? '', 'OFFSET'), 'multisite uninstall must never use a mutable row offset');
         }
+        assert_same([], $GLOBALS['wp_fts_test_get_sites_calls'], 'multisite uninstall should not use mutable WP_Site_Query offset pages');
 
         $dropQueries = array_values(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'DROP TABLE IF EXISTS ')));
         assert_same(410, count($dropQueries), 'two 205-site uninstall runs should issue exactly one DROP statement per site and no per-table statements');
@@ -20955,6 +21282,64 @@ test_case('multisite uninstall discovers 205 sites in bounded pages and remains 
         assert_same([], $GLOBALS['wp_fts_test_posts'], 'multisite uninstall should not create content posts');
         assert_same([], $GLOBALS['wp_fts_test_trashed_posts'], 'multisite uninstall should not delete or trash canonical content posts');
         assert_true(!str_contains(implode("\n", $fake->queries), 'TRUNCATE TABLE'), 'multisite uninstall should not run a separate table scan or truncate');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('multisite uninstall keyset pages do not skip a boundary site after concurrent deletion', function (): void {
+    global $wpdb;
+
+    wp_fts_test_install_multisite_switch_functions();
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $operationalOptions = wp_fts_test_uninstall_operational_option_names();
+    $siteIds = range(1, 201);
+    $siteReadCount = 0;
+
+    try {
+        $GLOBALS['wp_fts_test_is_multisite'] = true;
+        $GLOBALS['wp_fts_test_sites'] = $siteIds;
+        $GLOBALS['wp_fts_test_use_blog_option_store'] = true;
+        $GLOBALS['wp_fts_test_current_blog_id'] = 1;
+        $fake->prefix = $fake->get_blog_prefix(1);
+        $fake->posts = $fake->prefix . 'posts';
+        $GLOBALS['wp_fts_test_site_options'][101] = wp_fts_test_uninstall_seeded_options($operationalOptions, 101);
+        $fake->readQueryObserver = static function (string $sql) use (&$siteReadCount): void {
+            if (!str_starts_with($sql, 'SELECT blog_id FROM `wp_blogs`')) {
+                return;
+            }
+            $siteReadCount++;
+            if ($siteReadCount === 2) {
+                // Deleting an already-consumed row shifts every later OFFSET
+                // page left. A keyset page after blog 100 must still start at 101.
+                $GLOBALS['wp_fts_test_sites'] = array_values(array_filter(
+                    $GLOBALS['wp_fts_test_sites'],
+                    static fn(int $siteId): bool => $siteId !== 50
+                ));
+            }
+        };
+
+        WP_FTS_Plugin::uninstall();
+
+        assert_same(3, $siteReadCount, '201 sites should require exactly 100, 100, and 1-row discovery pages');
+        assert_same(range(2, 201), $GLOBALS['wp_fts_test_switch_log'], 'deleting blog 50 between pages must not skip boundary blog 101 or any later survivor');
+        foreach ($operationalOptions as $optionName) {
+            assert_true(!isset($GLOBALS['wp_fts_test_site_options'][101][$optionName]), "boundary blog 101 should delete {$optionName}");
+        }
+        wp_fts_test_assert_uninstall_fence($GLOBALS['wp_fts_test_site_options'][101], 'boundary blog 101');
+        $siteQueries = array_values(array_filter(
+            $fake->prepared,
+            static fn(array $query): bool => str_starts_with($query['sql'] ?? '', 'SELECT blog_id FROM `wp_blogs`')
+        ));
+        assert_same([[0, 100], [100, 100], [200, 100]], array_column($siteQueries, 'args'), 'concurrent deletion must not change the monotonic site-ID high-water marks');
+        assert_same([], $GLOBALS['wp_fts_test_get_sites_calls'], 'concurrent deletion coverage must exercise direct keyset discovery, not the offset fake');
+        assert_same(201, count(array_filter(
+            $fake->queries,
+            static fn(string $sql): bool => str_starts_with($sql, 'DROP TABLE IF EXISTS ')
+        )), 'worst-case traversal should retain one bounded DROP statement per visited site');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -22781,6 +23166,7 @@ test_case('password-protected published posts are reconciled out and never expos
     }
 });
 
+/** Runs a callback against a ready public/private REST-explain fixture. */
 function wp_fts_test_with_rest_explain_index(callable $callback): void
 {
     global $wpdb;
@@ -23540,9 +23926,8 @@ test_case('search integration boundaries fail closed and sanitize REST failures'
     $reset_boundary();
 
     try {
-        $incoming = [(object) ['ID' => 7001, 'post_title' => 'Native fallback result']];
         $frontendQuery = new WP_FTS_Test_Query(['s' => 'boundaryneedle', 'posts_per_page' => 10, 'post_type' => 'post']);
-        assert_same([], WP_FTS_Plugin::replace_frontend_search_posts($incoming, $frontendQuery), 'an owned frontend FTS failure must not fall through to an unbounded core LIKE search');
+        assert_same([], WP_FTS_Plugin::replace_frontend_search_posts(null, $frontendQuery), 'an owned frontend FTS failure must not fall through to an unbounded core LIKE search');
         assert_same(0, $frontendQuery->found_posts, 'frontend failure should not install FTS pagination state');
         $frontendTrace = WP_FTS_Plugin::debug_traces()[0] ?? [];
         assert_same('failed', $frontendTrace['status'] ?? null, 'frontend diagnostics should record the bounded integration failure');
@@ -23560,7 +23945,7 @@ test_case('search integration boundaries fail closed and sanitize REST failures'
             'post_type' => 'post',
             'post_status' => 'publish',
         ]);
-        assert_same([], WP_FTS_Plugin::replace_admin_post_search_posts($incoming, $adminQuery), 'an owned wp-admin FTS failure must not fall through to an unbounded core LIKE search');
+        assert_same([], WP_FTS_Plugin::replace_admin_post_search_posts(null, $adminQuery), 'an owned wp-admin FTS failure must not fall through to an unbounded core LIKE search');
         assert_same(0, $adminQuery->found_posts, 'wp-admin failure should not install FTS pagination state');
         assert_same('failed', WP_FTS_Plugin::debug_traces()[0]['status'] ?? null, 'wp-admin diagnostics should record the bounded integration failure');
 
@@ -24024,15 +24409,18 @@ test_case('SQL diagnostics never inspect overflow query text beyond the eight-en
     $overflow = new class(str_repeat(' ', 4 * 1024 * 1024)) {
         public int $sqlReads = 0;
 
+        /** Stores an oversized SQL payload whose reads the diagnostic cap must avoid. */
         public function __construct(private string $sql)
         {
         }
 
+        /** Advertises only the synthetic query and elapsed fields to the diagnostic reader. */
         public function __isset(string $name): bool
         {
             return in_array($name, ['query', 'elapsed'], true);
         }
 
+        /** Counts access to the oversized SQL payload and exposes synthetic timing. */
         public function __get(string $name): mixed
         {
             if ($name === 'query') {
@@ -24208,6 +24596,7 @@ test_case('frontend empty-scope bailout without storage timing reports unavailab
     $oldPostTypes = array_map(static fn(object $postType): object => clone $postType, $GLOBALS['wp_fts_test_post_types']);
     $GLOBALS['wp_fts_test_post_types']['post']->exclude_from_search = true;
     $GLOBALS['wp_fts_test_post_types']['page']->exclude_from_search = true;
+    $GLOBALS['wp_fts_test_post_types']['attachment']->exclude_from_search = true;
     wp_fts_test_mark_search_takeover_ready();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
 
@@ -24365,7 +24754,7 @@ test_case('front-end search reports a bounded cursor-page lower bound without re
     }
 });
 
-test_case('front-end search replacement accepts adjacent cursors and declines numeric offsets', function (): void {
+test_case('front-end search replacement accepts adjacent cursors and leaves numeric offsets to core', function (): void {
     global $wpdb, $wp_query;
 
     $oldWpdb = $wpdb ?? null;
@@ -24461,7 +24850,7 @@ test_case('front-end search replacement accepts adjacent cursors and declines nu
             'offset' => 1,
         ]);
         $offsetPosts = WP_FTS_Plugin::replace_frontend_search_posts(null, $offsetQuery);
-        assert_same([], $offsetPosts, 'an owned arbitrary numeric offset should fail closed instead of running an unbounded core LIKE search');
+        assert_same(null, $offsetPosts, 'an ordinary numeric offset should stay on core WordPress search');
         assert_same($rankQueriesBeforeOffset, count(array_filter(
             $fake->prepared,
             static fn(array $query): bool => str_starts_with((string) ($query['sql'] ?? ''), '/* wp_fts:rank */')
@@ -24521,7 +24910,7 @@ test_case('deep front-end cursor pages disable non-adjacent numeric pagination l
     }
 });
 
-test_case('front-end search replacement overrides earlier posts_pre_query providers only when eligible', function (): void {
+test_case('front-end search replacement preserves earlier posts_pre_query providers and runs FTS only from null', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -24559,10 +24948,12 @@ test_case('front-end search replacement overrides earlier posts_pre_query provid
             's' => 'precedenceneedle',
             'posts_per_page' => 10,
         ]);
+        $queriesBeforeProvider = $fake->num_queries;
         $posts = WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query);
 
-        assert_same([822, 821], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'eligible front-end replacement should override earlier posts_pre_query results with FTS-ranked posts');
-        assert_same(2, $query->found_posts, 'front-end precedence replacement should expose the FTS visible total');
+        assert_same($incoming, $posts, 'an earlier non-null posts_pre_query result should retain membership ownership even in the default mode');
+        assert_same(0, $query->found_posts, 'provider preservation should not write FTS totals');
+        assert_same($queriesBeforeProvider, $fake->num_queries, 'provider preservation should issue zero FTS statements');
 
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
             WP_FTS_Plugin::default_settings(),
@@ -24581,6 +24972,23 @@ test_case('front-end search replacement overrides earlier posts_pre_query provid
         $respectNullPosts = WP_FTS_Plugin::replace_frontend_search_posts(null, $respectNullQuery);
         assert_same([822, 821], array_map(static fn(object $post): int => (int) $post->ID, $respectNullPosts), 'front-end coexistence mode should still run FTS when no earlier provider answered');
         assert_same(2, $respectNullQuery->found_posts, 'front-end coexistence mode should write FTS totals when it runs after a null provider result');
+
+        wp_fts_test_set_posts_pre_query_hook_state([
+            20 => [
+                'registered_provider' => [
+                    'function' => 'wp_fts_test_prior_posts_pre_query_provider',
+                    'accepted_args' => 2,
+                ],
+            ],
+        ]);
+        $respectRegisteredQuery = new WP_FTS_Test_Query([
+            's' => 'precedenceneedle',
+            'posts_per_page' => 10,
+        ]);
+        $queriesBeforeRegisteredProvider = $fake->num_queries;
+        assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $respectRegisteredQuery), 'core-ownership mode should keep a registered provider integration on WordPress even after a null handoff');
+        assert_same($queriesBeforeRegisteredProvider, $fake->num_queries, 'core-ownership mode null handoff should issue zero FTS statements');
+        $GLOBALS['wp_filter'] = [];
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = WP_FTS_Plugin::default_settings();
 
         $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::FRONTEND_SEARCH_REPLACEMENT_FILTER] = static fn(mixed $replace, mixed $filterQuery): bool => false;
@@ -24596,7 +25004,1714 @@ test_case('front-end search replacement overrides earlier posts_pre_query provid
             'posts_per_page' => 10,
             'cat' => 5,
         ]);
-        assert_same([], WP_FTS_Plugin::replace_frontend_search_posts($incoming, $constrained), 'enabled constrained front-end searches should fail closed instead of preserving a prior provider or reaching core LIKE search');
+        assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $constrained), 'a constrained front-end search should preserve the incoming provider result because FTS does not own that shape');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('uncompiled WordPress membership hooks stay on core with zero FTS statements', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $plugin = new ReflectionClass(WP_FTS_Plugin::class);
+    $hookConstant = $plugin->getReflectionConstant('CORE_SEARCH_CALLBACK_HOOKS');
+    assert_true($hookConstant !== false, 'the core-search callback boundary should be reflectable for drift coverage');
+    $hooks = $hookConstant !== false ? $hookConstant->getValue() : [];
+    assert_same([
+        'post_search_columns',
+        'wp_query_search_exclusion_prefix',
+        'wp_search_stopwords',
+        'wp_allow_query_attachment_by_filename',
+        'posts_search',
+        'posts_search_orderby',
+        'posts_where',
+        'posts_join',
+        'posts_where_paged',
+        'posts_join_paged',
+        'posts_groupby',
+        'posts_orderby',
+        'posts_distinct',
+        'post_limits',
+        'post_limits_request',
+        'posts_fields',
+        'posts_fields_request',
+        'posts_where_request',
+        'posts_groupby_request',
+        'posts_join_request',
+        'posts_orderby_request',
+        'posts_distinct_request',
+        'posts_clauses',
+        'posts_clauses_request',
+        'posts_request',
+        'posts_request_ids',
+        'posts_results',
+        'the_posts',
+        'split_the_query',
+        'found_posts_query',
+        'found_posts',
+    ], $hooks, 'the core-search callback boundary should cover SQL shaping and post-LIMIT membership hooks');
+
+    try {
+        $GLOBALS['wp_filter'] = [
+            'posts_pre_query' => (object) [
+                'callbacks' => [
+                    WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY => [
+                        'frontend_fts' => [
+                            'function' => [WP_FTS_Plugin::class, 'replace_frontend_search_posts'],
+                            'accepted_args' => 2,
+                        ],
+                        'admin_fts' => [
+                            'function' => [WP_FTS_Plugin::class, 'replace_admin_post_search_posts'],
+                            'accepted_args' => 2,
+                        ],
+                    ],
+                    WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY => [
+                        'fts_observer' => [
+                            'function' => [WP_FTS_Plugin::class, 'observe_final_search_posts'],
+                            'accepted_args' => 2,
+                        ],
+                    ],
+                ],
+            ],
+            'found_posts' => (object) [
+                'callbacks' => [
+                    WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY => [
+                        'frontend_fts' => [
+                            'function' => [WP_FTS_Plugin::class, 'filter_frontend_search_found_posts'],
+                            'accepted_args' => 2,
+                        ],
+                        'admin_fts' => [
+                            'function' => [WP_FTS_Plugin::class, 'filter_admin_post_search_found_posts'],
+                            'accepted_args' => 2,
+                        ],
+                    ],
+                ],
+            ],
+            'the_posts' => (object) [
+                'callbacks' => [
+                    10 => [
+                        '_close_comments_for_old_posts' => [
+                            'function' => '_close_comments_for_old_posts',
+                            'accepted_args' => 2,
+                        ],
+                    ],
+                ],
+            ],
+        ];
+        $stockQuery = new WP_FTS_Test_Query([
+            's' => 'stockhookownershipneedle',
+            'posts_per_page' => 10,
+        ]);
+        $queriesBeforeStockHook = $fake->num_queries;
+        WP_FTS_Plugin::prepare_frontend_search_query($stockQuery);
+        assert_same(true, $stockQuery->get('wp_fts_search_candidate', false), 'the stock comment-state callback should not disable FTS on every WordPress install');
+        assert_same('', $stockQuery->get('wp_fts_core_search_callback_hook', ''), 'the stock comment-state callback should not mark query membership as core-owned');
+        assert_same($queriesBeforeStockHook, $fake->num_queries, 'stock hook inspection should issue zero SQL statements');
+
+        $GLOBALS['wp_filter']['the_posts']->callbacks[10]['foreign_neighbor'] = [
+            'function' => static fn(mixed $posts): mixed => $posts,
+            'accepted_args' => 2,
+        ];
+        $foreignNeighborQuery = new WP_FTS_Test_Query([
+            's' => 'foreignneighborownershipneedle',
+            'posts_per_page' => 10,
+        ]);
+        WP_FTS_Plugin::prepare_frontend_search_query($foreignNeighborQuery);
+        assert_same(null, $foreignNeighborQuery->get('wp_fts_search_candidate', null), 'a foreign the_posts callback beside the stock callback should keep membership on core');
+        assert_same('the_posts', $foreignNeighborQuery->get('wp_fts_core_search_callback_hook', ''), 'the foreign callback should persist the core-ownership reason');
+
+        $limitConstant = $plugin->getReflectionConstant('MAX_SEARCH_CALLBACKS_INSPECTED');
+        assert_true($limitConstant !== false, 'the hot callback-inspection limit should be reflectable for boundary coverage');
+        $callbackLimit = $limitConstant !== false ? (int) $limitConstant->getValue() : 0;
+        assert_same(32, $callbackLimit, 'the hot callback-inspection limit should remain small and explicit');
+        $boundedPriorCallbacks = [];
+        for ($i = 0; $i < $callbackLimit; $i++) {
+            $boundedPriorCallbacks['prior_' . $i] = [
+                'function' => 'wp_fts_test_prior_posts_pre_query_provider',
+                'accepted_args' => 2,
+            ];
+        }
+        $GLOBALS['wp_filter'] = [
+            'posts_pre_query' => (object) [
+                'callbacks' => [20 => $boundedPriorCallbacks],
+            ],
+        ];
+        $boundedCallbacksQuery = new WP_FTS_Test_Query([
+            's' => 'boundedcallbackscan',
+            'posts_per_page' => 10,
+        ]);
+        WP_FTS_Plugin::prepare_frontend_search_query($boundedCallbacksQuery);
+        assert_same(true, $boundedCallbacksQuery->get('wp_fts_search_candidate', false), 'exactly the callback-inspection limit should remain classifiable without fallback');
+
+        $GLOBALS['wp_filter']['posts_pre_query']->callbacks[20]['one_over'] = [
+            'function' => 'wp_fts_test_prior_posts_pre_query_provider',
+            'accepted_args' => 2,
+        ];
+        $oneOverCallbacksQuery = new WP_FTS_Test_Query([
+            's' => 'oneovercallbackscan',
+            'posts_per_page' => 10,
+        ]);
+        $queriesBeforeOneOver = $fake->num_queries;
+        WP_FTS_Plugin::prepare_frontend_search_query($oneOverCallbacksQuery);
+        assert_same(null, $oneOverCallbacksQuery->get('wp_fts_search_candidate', null), 'one callback over the inspection limit should fail safely to core');
+        assert_same('posts_pre_query', $oneOverCallbacksQuery->get('wp_fts_core_search_callback_hook', ''), 'one-over callback state should persist the core-ownership reason');
+        assert_same($queriesBeforeOneOver, $fake->num_queries, 'one-over callback fallback should issue zero SQL statements');
+
+        foreach (array_merge(['posts_pre_query'], $hooks) as $hook) {
+            WP_FTS_Plugin::reset_request_caches();
+            $priority = $hook === 'posts_pre_query' ? 1200 : 10;
+            $GLOBALS['wp_filter'] = [
+                $hook => (object) [
+                    'callbacks' => [
+                        $priority => [
+                            'foreign_callback' => [
+                                'function' => static fn(mixed $value): mixed => $value,
+                                'accepted_args' => 2,
+                            ],
+                        ],
+                    ],
+                ],
+            ];
+            $query = new WP_FTS_Test_Query([
+                's' => 'hookownershipneedle',
+                'posts_per_page' => 10,
+            ]);
+            $queriesBefore = $fake->num_queries;
+
+            WP_FTS_Plugin::prepare_frontend_search_query($query);
+            assert_same(null, $query->get('wp_fts_search_candidate', null), "{$hook} should prevent frontend FTS candidacy");
+            assert_same($hook, $query->get('wp_fts_core_search_callback_hook', ''), "{$hook} should persist the core-ownership reason on the query");
+
+            // A callback may remove itself after pre_get_posts. The persisted
+            // decision must still prevent a later posts_pre_query takeover.
+            $GLOBALS['wp_filter'] = [];
+            assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), "{$hook} should leave the query on core after callback removal");
+            assert_same($queriesBefore, $fake->num_queries, "{$hook} core fallback should issue zero FTS statements");
+        }
+
+        WP_FTS_Plugin::reset_request_caches();
+        $GLOBALS['wp_filter'] = [];
+        $lateQuery = new WP_FTS_Test_Query([
+            's' => 'latehookownershipneedle',
+            'posts_per_page' => 10,
+        ]);
+        WP_FTS_Plugin::prepare_frontend_search_query($lateQuery);
+        assert_same(true, $lateQuery->get('wp_fts_search_candidate', false), 'a clean pre_get_posts boundary should initially permit FTS candidacy');
+        $GLOBALS['wp_filter'] = [
+            'posts_results' => (object) [
+                'callbacks' => [
+                    10 => [
+                        'late_membership_callback' => [
+                            'function' => static fn(mixed $posts): mixed => $posts,
+                            'accepted_args' => 2,
+                        ],
+                    ],
+                ],
+            ],
+        ];
+        $queriesBeforeLateRegistration = $fake->num_queries;
+        assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $lateQuery), 'a post-retrieval callback registered after pre_get_posts should still keep the query on core');
+        assert_same('posts_results', $lateQuery->get('wp_fts_core_search_callback_hook', ''), 'replacement-time inspection should persist a late callback reason');
+        assert_same($queriesBeforeLateRegistration, $fake->num_queries, 'replacement-time callback detection should issue zero FTS statements');
+
+        WP_FTS_Plugin::reset_request_caches();
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['pagenow'] = 'edit.php';
+        foreach (array_merge(['posts_pre_query'], $hooks) as $hook) {
+            $priority = $hook === 'posts_pre_query' ? WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY : 10;
+            $GLOBALS['wp_filter'] = [
+                $hook => (object) [
+                    'callbacks' => [
+                        $priority => [
+                            'foreign_callback' => [
+                                'function' => static fn(mixed $value): mixed => $value,
+                                'accepted_args' => 2,
+                            ],
+                        ],
+                    ],
+                ],
+            ];
+            $query = new WP_FTS_Test_Query([
+                's' => 'adminhookownershipneedle',
+                'posts_per_page' => 10,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+            ]);
+            $queriesBefore = $fake->num_queries;
+
+            WP_FTS_Plugin::prepare_admin_post_search_query($query);
+            assert_same(null, $query->get('wp_fts_admin_post_search_candidate', null), "{$hook} should prevent admin FTS candidacy");
+            $GLOBALS['wp_filter'] = [];
+            assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $query), "{$hook} should leave admin membership on core after callback removal");
+            assert_same($queriesBefore, $fake->num_queries, "{$hook} admin fallback should issue zero FTS statements");
+        }
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('invalid original WP_Query search input is neutralized early and fails closed', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        $frontendQuery = new WP_FTS_Test_Query([
+            's' => ['malformed', 'search'],
+            'posts_per_page' => 10,
+        ], false);
+        $queriesBeforeFrontend = $fake->num_queries;
+        $frontend = wp_fts_test_run_source_faithful_search_boundary($frontendQuery, false);
+
+        assert_same(0, $frontend['search_length'], 'pre_get_posts should neutralize malformed frontend search text before core strlen');
+        assert_same([], $frontend['posts'], 'the retained malformed frontend marker should fail closed at posts_pre_query');
+        assert_same(['malformed', 'search'], $frontendQuery->query['s'] ?? null, 'frontend ownership should inspect the raw query value retained by WP_Query');
+        assert_same('', $frontendQuery->get('s'), 'the frontend adapter should leave core a scalar search value');
+        assert_same(true, $frontendQuery->get('wp_fts_invalid_search_input'), 'the frontend adapter should persist malformed ownership after normalization');
+        assert_same(true, $frontendQuery->get('wp_fts_search_candidate'), 'the malformed supported frontend route should remain an FTS-owned candidate');
+        assert_same($queriesBeforeFrontend, $fake->num_queries, 'malformed frontend input should execute zero FTS or core SQL statements');
+
+        foreach ([1601, 4097] as $rawBytes) {
+            $oversizedQuery = new WP_FTS_Test_Query([
+                's' => str_repeat('x', $rawBytes),
+                'posts_per_page' => 10,
+            ], false);
+            $queriesBeforeOversized = $fake->num_queries;
+            $oversized = wp_fts_test_run_source_faithful_search_boundary($oversizedQuery, false);
+
+            assert_same(0, $oversized['search_length'], "{$rawBytes}-byte raw WP_Query search should remain scalar-safe at core strlen");
+            assert_same([], $oversized['posts'], "{$rawBytes}-byte raw WP_Query search should fail closed even after parse_query clears is_search text");
+            assert_same(true, $oversizedQuery->get('wp_fts_invalid_search_input'), "{$rawBytes}-byte raw WP_Query search should retain its owned-invalid marker");
+            assert_same(true, $oversizedQuery->get('wp_fts_search_candidate'), "{$rawBytes}-byte raw WP_Query search should be recognized before the normalized is_search flag");
+            assert_same($queriesBeforeOversized, $fake->num_queries, "{$rawBytes}-byte raw WP_Query search should execute zero FTS or core SQL statements");
+        }
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['pagenow'] = 'edit.php';
+        $adminQuery = new WP_FTS_Test_Query([
+            's' => ['malformed', 'admin', 'search'],
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ], false);
+        $queriesBeforeAdmin = $fake->num_queries;
+        $admin = wp_fts_test_run_source_faithful_search_boundary($adminQuery, true);
+
+        assert_same(0, $admin['search_length'], 'pre_get_posts should neutralize malformed admin search text before core strlen');
+        assert_same([], $admin['posts'], 'the retained malformed admin marker should fail closed at posts_pre_query');
+        assert_same(['malformed', 'admin', 'search'], $adminQuery->query['s'] ?? null, 'admin ownership should inspect the raw query value retained by WP_Query');
+        assert_same('', $adminQuery->get('s'), 'the admin adapter should leave core a scalar search value');
+        assert_same(true, $adminQuery->get('wp_fts_invalid_search_input'), 'the admin adapter should persist malformed ownership after normalization');
+        assert_same(true, $adminQuery->get('wp_fts_admin_post_search_candidate'), 'the malformed supported admin route should remain an FTS-owned candidate');
+        assert_same($queriesBeforeAdmin, $fake->num_queries, 'malformed admin input should execute zero FTS or core SQL statements');
+
+        $oversizedAdminQuery = new WP_FTS_Test_Query([
+            's' => str_repeat('y', 1601),
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ], false);
+        $queriesBeforeOversizedAdmin = $fake->num_queries;
+        $oversizedAdmin = wp_fts_test_run_source_faithful_search_boundary($oversizedAdminQuery, true);
+        assert_same(0, $oversizedAdmin['search_length'], 'oversized raw admin search should remain scalar-safe at core strlen');
+        assert_same([], $oversizedAdmin['posts'], 'oversized raw admin search should fail closed after parse_query normalization');
+        assert_same(true, $oversizedAdminQuery->get('wp_fts_admin_post_search_candidate'), 'oversized raw admin search should be recognized before the normalized is_search flag');
+        assert_same($queriesBeforeOversizedAdmin, $fake->num_queries, 'oversized raw admin search should execute zero FTS or core SQL statements');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('malformed or oversized auxiliary adapter values fail closed only on FTS-owned queries', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $longCursor = str_repeat('c', 2049);
+    $longNumber = str_repeat('9', 65);
+    $invalidAdapterCases = [
+        'oversized offset' => ['offset' => $longNumber],
+        'oversized paged' => ['paged' => $longNumber],
+        'oversized page' => ['page' => $longNumber],
+        'oversized posts per page' => ['posts_per_page' => $longNumber],
+        'array offset' => ['offset' => ['10']],
+        'object offset' => ['offset' => (object) ['value' => 10]],
+        'array paged' => ['paged' => ['2']],
+        'object paged' => ['paged' => (object) ['value' => 2]],
+        'array page' => ['page' => ['2']],
+        'object page' => ['page' => (object) ['value' => 2]],
+        'array posts per page' => ['posts_per_page' => ['10']],
+        'object posts per page' => ['posts_per_page' => (object) ['value' => 10]],
+        'oversized cursor' => ['wp_fts_cursor' => $longCursor],
+        'non-scalar cursor' => ['wp_fts_cursor' => ['bad-cursor']],
+        'array language' => ['wp_fts_lang' => ['en']],
+        'object language' => ['wp_fts_lang' => (object) ['value' => 'en']],
+        'oversized language' => ['wp_fts_lang' => str_repeat('l', 65)],
+        'invalid cursor direction' => ['wp_fts_cursor_direction' => 'sideways'],
+        'oversized cursor direction' => ['wp_fts_cursor_direction' => str_repeat('d', 65)],
+        'array cursor direction' => ['wp_fts_cursor_direction' => ['before']],
+        'object cursor direction' => ['wp_fts_cursor_direction' => (object) ['value' => 'before']],
+    ];
+
+    try {
+        $cases = [
+            'unsupported membership plus cursor' => new WP_FTS_Test_Query([
+                's' => 'retainedmetasearch',
+                'posts_per_page' => 10,
+                'meta_key' => 'featured',
+                'wp_fts_cursor' => $longCursor,
+            ]),
+            'unsupported membership plus numeric offset' => new WP_FTS_Test_Query([
+                's' => 'retainedmetanumericsearch',
+                'posts_per_page' => 10,
+                'meta_key' => 'featured',
+                'offset' => $longNumber,
+            ]),
+            'secondary search' => new WP_FTS_Test_Query([
+                's' => 'retainedsecondarysearch',
+                'posts_per_page' => 10,
+                'wp_fts_cursor' => $longCursor,
+            ], true, false),
+        ];
+
+        foreach ($cases as $label => $query) {
+            $originalSearch = $query->get('s');
+            $queriesBefore = $fake->num_queries;
+            WP_FTS_Plugin::prepare_frontend_search_query($query);
+
+            assert_same($originalSearch, $query->get('s'), "{$label} should retain core search text during pre_get_posts");
+            assert_same(null, $query->get('wp_fts_search_candidate'), "{$label} should remain core-owned");
+            assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), "{$label} should retain core membership");
+            assert_same($queriesBefore, $fake->num_queries, "{$label} should execute zero FTS statements");
+        }
+
+        foreach ([false, true] as $admin) {
+            foreach ($invalidAdapterCases as $label => $invalidVars) {
+                wp_fts_test_reset_wordpress_fakes();
+                $GLOBALS['wp_fts_test_is_admin'] = $admin;
+                if ($admin) {
+                    $GLOBALS['pagenow'] = 'edit.php';
+                }
+                $queryVars = array_replace([
+                    's' => 'retainedcoreownedsearch',
+                    'posts_per_page' => 10,
+                    'meta_key' => 'featured',
+                ], $invalidVars);
+                if ($admin) {
+                    $queryVars += ['post_type' => 'post', 'post_status' => 'publish'];
+                }
+                $query = new WP_FTS_Test_Query($queryVars);
+                $queriesBefore = $fake->num_queries;
+                if ($admin) {
+                    WP_FTS_Plugin::prepare_admin_post_search_query($query);
+                } else {
+                    WP_FTS_Plugin::prepare_frontend_search_query($query);
+                }
+
+                $context = $admin ? 'admin' : 'frontend';
+                assert_same('retainedcoreownedsearch', $query->get('s'), "core-owned {$context} {$label} should retain search text");
+                assert_same(null, $query->get($admin ? 'wp_fts_admin_post_search_candidate' : 'wp_fts_search_candidate'), "core-owned {$context} {$label} should not become an FTS candidate");
+                $posts = $admin
+                    ? WP_FTS_Plugin::replace_admin_post_search_posts(null, $query)
+                    : WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+                assert_same(null, $posts, "core-owned {$context} {$label} should retain core membership");
+                assert_same($queriesBefore, $fake->num_queries, "core-owned {$context} {$label} should execute zero FTS statements");
+            }
+        }
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_is_rest'] = true;
+        $restQuery = new WP_FTS_Test_Query([
+            's' => 'retainedrestsearch',
+            'posts_per_page' => 10,
+            'wp_fts_cursor' => $longCursor,
+        ]);
+        $queriesBeforeRest = $fake->num_queries;
+        WP_FTS_Plugin::prepare_frontend_search_query($restQuery);
+        assert_same('retainedrestsearch', $restQuery->get('s'), 'REST-owned search should never be destructively normalized by the frontend adapter');
+        assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $restQuery), 'REST-owned search should remain outside frontend replacement');
+        assert_same($queriesBeforeRest, $fake->num_queries, 'REST-owned oversized cursor should execute zero FTS statements');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::FRONTEND_SEARCH_REPLACEMENT_FILTER] = static fn(): bool => false;
+        $policyDisabledQuery = new WP_FTS_Test_Query([
+            's' => 'retainedpolicydisabledsearch',
+            'posts_per_page' => 10,
+            'wp_fts_cursor' => $longCursor,
+        ]);
+        $queriesBeforePolicyDisabled = $fake->num_queries;
+        WP_FTS_Plugin::prepare_frontend_search_query($policyDisabledQuery);
+        assert_same('retainedpolicydisabledsearch', $policyDisabledQuery->get('s'), 'policy-disabled search should retain valid text during preparation');
+        assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $policyDisabledQuery), 'policy-disabled oversized cursor should remain outside FTS ownership');
+        assert_same($queriesBeforePolicyDisabled, $fake->num_queries, 'policy-disabled oversized cursor should execute zero FTS statements');
+
+        foreach ([false, true] as $admin) {
+            foreach ($invalidAdapterCases as $label => $invalidVars) {
+                wp_fts_test_reset_wordpress_fakes();
+                $GLOBALS['wp_fts_test_is_admin'] = $admin;
+                if ($admin) {
+                    $GLOBALS['pagenow'] = 'edit.php';
+                }
+                $queryVars = array_replace([
+                    's' => 'ownedinvalidadaptersearch',
+                    'posts_per_page' => 10,
+                ], $invalidVars);
+                if ($admin) {
+                    $queryVars += ['post_type' => 'post', 'post_status' => 'publish'];
+                }
+                $supportedQuery = new WP_FTS_Test_Query($queryVars);
+                $queriesBeforeSupported = $fake->num_queries;
+                if ($admin) {
+                    WP_FTS_Plugin::prepare_admin_post_search_query($supportedQuery);
+                } else {
+                    WP_FTS_Plugin::prepare_frontend_search_query($supportedQuery);
+                }
+
+                assert_same('ownedinvalidadaptersearch', $supportedQuery->get('s'), ($admin ? 'admin' : 'frontend') . " {$label} should fail closed without erasing valid search text");
+                assert_same(true, $supportedQuery->get($admin ? 'wp_fts_admin_post_search_candidate' : 'wp_fts_search_candidate'), ($admin ? 'admin' : 'frontend') . " {$label} should remain on the owned fail-closed boundary");
+                $posts = $admin
+                    ? WP_FTS_Plugin::replace_admin_post_search_posts(null, $supportedQuery)
+                    : WP_FTS_Plugin::replace_frontend_search_posts(null, $supportedQuery);
+                assert_same([], $posts, ($admin ? 'admin' : 'frontend') . " {$label} should fail closed before core LIKE");
+                assert_same($queriesBeforeSupported, $fake->num_queries, ($admin ? 'admin' : 'frontend') . " {$label} should execute zero FTS statements");
+            }
+        }
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('search policy ownership is evaluated once and latched through unavailable and catch paths', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        foreach ([false, true] as $admin) {
+            wp_fts_test_reset_wordpress_fakes();
+            $GLOBALS['wp_fts_test_is_admin'] = $admin;
+            if ($admin) {
+                $GLOBALS['pagenow'] = 'edit.php';
+            }
+            $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 0;
+            WP_FTS_Plugin::reset_request_caches();
+            $calls = 0;
+            $policyHook = $admin
+                ? WP_FTS_Plugin::ADMIN_POST_SEARCH_REPLACEMENT_FILTER
+                : WP_FTS_Plugin::FRONTEND_SEARCH_REPLACEMENT_FILTER;
+            $GLOBALS['wp_fts_test_filters'][$policyHook] = static function (mixed $enabled, mixed $query) use (&$calls): bool {
+                $calls++;
+
+                return $calls === 1;
+            };
+            $queryVars = ['s' => 'latchedunavailableneedle', 'posts_per_page' => 10];
+            if ($admin) {
+                $queryVars += ['post_type' => 'post', 'post_status' => 'publish'];
+            }
+            $query = new WP_FTS_Test_Query($queryVars);
+            $queriesBefore = $fake->num_queries;
+            if ($admin) {
+                WP_FTS_Plugin::prepare_admin_post_search_query($query);
+            } else {
+                WP_FTS_Plugin::prepare_frontend_search_query($query);
+            }
+            assert_same(0, $calls, ($admin ? 'admin' : 'frontend') . ' pre_get_posts preparation should not evaluate replacement policy');
+            $posts = $admin
+                ? WP_FTS_Plugin::replace_admin_post_search_posts(null, $query)
+                : WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+
+            assert_same([], $posts, ($admin ? 'admin' : 'frontend') . ' ownership should remain fail closed when readiness is unavailable');
+            assert_same(1, $calls, ($admin ? 'admin' : 'frontend') . ' policy should be evaluated exactly once before unavailable fallback');
+            assert_same($queriesBefore, $fake->num_queries, ($admin ? 'admin' : 'frontend') . ' unavailable fallback should execute zero search SQL');
+
+            wp_fts_test_reset_wordpress_fakes();
+            $GLOBALS['wp_fts_test_is_admin'] = $admin;
+            if ($admin) {
+                $GLOBALS['pagenow'] = 'edit.php';
+            }
+            $calls = 0;
+            $GLOBALS['wp_fts_test_filters'][$policyHook] = static function (mixed $enabled, mixed $query) use (&$calls): bool {
+                $calls++;
+                if ($calls > 1) {
+                    throw new RuntimeException('search policy was evaluated after ownership');
+                }
+
+                return true;
+            };
+            $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static function (): never {
+                throw new RuntimeException('post-ownership diagnostic failure');
+            };
+            $query = new WP_FTS_Test_Query($queryVars);
+            $queriesBefore = $fake->num_queries;
+            if ($admin) {
+                WP_FTS_Plugin::prepare_admin_post_search_query($query);
+            } else {
+                WP_FTS_Plugin::prepare_frontend_search_query($query);
+            }
+            assert_same(0, $calls, ($admin ? 'admin' : 'frontend') . ' pre_get_posts preparation should leave throwing policy unevaluated');
+            $posts = $admin
+                ? WP_FTS_Plugin::replace_admin_post_search_posts(null, $query)
+                : WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+
+            assert_same([], $posts, ($admin ? 'admin' : 'frontend') . ' catch path should use the latched owned decision and fail closed');
+            assert_same(1, $calls, ($admin ? 'admin' : 'frontend') . ' catch path must never reevaluate arbitrary policy');
+            assert_same($queriesBefore, $fake->num_queries, ($admin ? 'admin' : 'frontend') . ' post-ownership exception should fail closed before SQL');
+            assert_same('runtime_failure', $query->get('wp_fts_search_unavailable'), ($admin ? 'admin' : 'frontend') . ' catch path should expose the runtime fail-closed marker');
+        }
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 0;
+        WP_FTS_Plugin::reset_request_caches();
+        $calls = 0;
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::FRONTEND_SEARCH_REPLACEMENT_FILTER] = static function (mixed $enabled, mixed $query) use (&$calls): bool {
+            $calls++;
+
+            return $calls === 1;
+        };
+        $incoming = [(object) ['ID' => 874, 'post_title' => 'Earlier provider remains authoritative']];
+        $query = new WP_FTS_Test_Query(['s' => 'latchedproviderneedle', 'posts_per_page' => 10]);
+        $queriesBefore = $fake->num_queries;
+
+        assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query), 'latched ownership should still preserve every non-null earlier provider result');
+        assert_same(1, $calls, 'provider preservation should not reevaluate the frontend policy');
+        assert_same($queriesBefore, $fake->num_queries, 'provider preservation under unavailable ownership should execute zero SQL');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('large provider ownership diagnostics use one bounded streaming signature window', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    WP_FTS_Plugin::search_takeover_status();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    $probe = new class() {
+        public int $issetReads = 0;
+        public int $valueReads = 0;
+
+        /** Counts bounded ID-presence inspection without storing an ID property. */
+        public function __isset(string $name): bool
+        {
+            if ($name === 'ID') {
+                $this->issetReads++;
+                return true;
+            }
+
+            return false;
+        }
+
+        /** Counts bounded ID reads without exposing any provider payload. */
+        public function __get(string $name): mixed
+        {
+            if ($name === 'ID') {
+                $this->valueReads++;
+                return 875;
+            }
+
+            return null;
+        }
+    };
+    $incoming = array_fill(0, 100000, $probe);
+
+    try {
+        $plugin = new ReflectionClass(WP_FTS_Plugin::class);
+        $limitConstant = $plugin->getReflectionConstant('DEBUG_SEARCH_RESULT_SIGNATURE_MAX_ITEMS');
+        assert_true($limitConstant !== false, 'the provider signature item limit should be reflectable for boundary coverage');
+        $itemLimit = $limitConstant !== false ? (int) $limitConstant->getValue() : 0;
+        assert_same(64, $itemLimit, 'provider ownership signatures should inspect at most one 64-item window');
+
+        $query = new WP_FTS_Test_Query(['s' => 'largeproviderdiagnosticneedle', 'posts_per_page' => 10]);
+        $queriesBefore = $fake->num_queries;
+        $memoryBefore = memory_get_usage();
+        $preserved = WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query);
+        $observed = WP_FTS_Plugin::observe_final_search_posts($preserved, $query);
+        $memoryGrowth = memory_get_usage() - $memoryBefore;
+
+        assert_same(100000, count($observed), 'large provider preservation should retain the exact result count without copying it');
+        assert_true(($observed[0] ?? null) === $probe && ($observed[99999] ?? null) === $probe, 'large provider preservation should retain the original boundary objects');
+        assert_true($probe->issetReads > 0 && $probe->issetReads <= 2 * $itemLimit, 'expected and final signatures should inspect no more than two bounded item windows');
+        assert_true($probe->valueReads > 0 && $probe->valueReads <= 2 * $itemLimit, 'expected and final signatures should read no more than two bounded item windows');
+        assert_true($memoryGrowth <= 2 * 1024 * 1024, "large provider diagnostics should add at most 2 MiB after input allocation; observed {$memoryGrowth}");
+        assert_same($queriesBefore, $fake->num_queries, 'large provider preservation diagnostics should execute zero FTS statements');
+
+        $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
+        assert_same('unavailable', $ownership['status'] ?? null, 'a provider result beyond the signature window should make comparison explicitly unavailable');
+        assert_contains('truncated', strtolower((string) ($ownership['reason'] ?? '')), 'large-provider ownership diagnostics should explain that comparison was truncated');
+        assert_same(100000, $ownership['expected_count'] ?? null, 'large-provider diagnostics should retain the O(1) exact array count');
+        assert_same($itemLimit, $ownership['expected_inspected_count'] ?? null, 'large-provider diagnostics should report only the bounded expected inspection window');
+        assert_same(true, $ownership['expected_truncated'] ?? null, 'large-provider diagnostics should flag the expected signature as truncated');
+        assert_same($itemLimit, $ownership['final_inspected_count'] ?? null, 'large-provider diagnostics should report only the bounded final inspection window');
+        assert_same(true, $ownership['final_truncated'] ?? null, 'large-provider diagnostics should flag the final signature as truncated');
+        assert_same('', $ownership['expected_hash'] ?? null, 'a truncated provider signature should not expose a misleading partial hash');
+
+        WP_FTS_Plugin::reset_request_caches();
+        $small = [(object) ['ID' => 876], (object) ['ID' => 877]];
+        $smallQuery = new WP_FTS_Test_Query(['s' => 'smallproviderdiagnosticneedle', 'posts_per_page' => 10]);
+        $smallPreserved = WP_FTS_Plugin::replace_frontend_search_posts($small, $smallQuery);
+        WP_FTS_Plugin::observe_final_search_posts($smallPreserved, $smallQuery);
+        $smallTrace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        $smallOwnership = is_array($smallTrace['search_final_ownership'] ?? null) ? $smallTrace['search_final_ownership'] : [];
+        assert_same('earlier_provider_respected', $smallOwnership['status'] ?? null, 'small provider results should retain exact final ownership comparison semantics');
+        assert_same(false, $smallOwnership['expected_truncated'] ?? null, 'small expected provider signatures should remain complete');
+        assert_same(false, $smallOwnership['final_truncated'] ?? null, 'small final provider signatures should remain complete');
+        assert_same(2, $smallOwnership['expected_inspected_count'] ?? null, 'small provider diagnostics should inspect every expected item');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('policy callbacks registering core search hooks stand down before FTS SQL', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        $frontendRegistrations = 0;
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::FRONTEND_SEARCH_REPLACEMENT_FILTER] = static function (mixed $enabled, mixed $query) use (&$frontendRegistrations): bool {
+            if ($frontendRegistrations === 0) {
+                add_filter('posts_results', static fn(mixed $posts): mixed => $posts, 10, 2);
+                $frontendRegistrations++;
+            }
+
+            return true;
+        };
+        $frontendQuery = new WP_FTS_Test_Query([
+            's' => 'policyregistrationneedle',
+            'posts_per_page' => 10,
+        ]);
+        $queriesBeforeFrontend = $fake->num_queries;
+
+        assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $frontendQuery), 'a frontend policy callback that registers a post-result hook should return membership to core');
+        assert_same(1, $frontendRegistrations, 'the frontend policy callback should register its post-result hook once');
+        assert_same('posts_results', $frontendQuery->get('wp_fts_core_search_callback_hook', ''), 'the post-policy ownership recheck should persist the frontend callback boundary');
+        assert_same($queriesBeforeFrontend, $fake->num_queries, 'the frontend post-policy ownership recheck should run before every FTS statement');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['pagenow'] = 'edit.php';
+        $adminRegistrations = 0;
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ADMIN_POST_SEARCH_REPLACEMENT_FILTER] = static function (mixed $enabled, mixed $query) use (&$adminRegistrations): bool {
+            if ($adminRegistrations === 0) {
+                add_filter('the_posts', static fn(mixed $posts): mixed => $posts, 20, 2);
+                $adminRegistrations++;
+            }
+
+            return true;
+        };
+        $adminQuery = new WP_FTS_Test_Query([
+            's' => 'adminpolicyregistrationneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ]);
+        $queriesBeforeAdmin = $fake->num_queries;
+
+        assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $adminQuery), 'an admin policy callback that registers a post-result hook should return membership to core');
+        assert_same(1, $adminRegistrations, 'the admin policy callback should register its post-result hook once');
+        assert_same('the_posts', $adminQuery->get('wp_fts_core_search_callback_hook', ''), 'the post-policy ownership recheck should persist the admin callback boundary');
+        assert_same($queriesBeforeAdmin, $fake->num_queries, 'the admin post-policy ownership recheck should run before every FTS statement');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('post-result hooks registered during FTS discard the bounded page and fail closed', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $post = (object) [
+        'ID' => 873,
+        'post_title' => 'Late callback registration',
+        'post_content' => '<p>latecallbackneedle appears in indexed content.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-14 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][873] = $post;
+
+    try {
+        wp_fts_test_index_saved_post(873, $post, true);
+
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+        $frontendRegistrations = 0;
+        $GLOBALS['wp_fts_test_filters']['wp_fts_search_results'] = static function (mixed $rows, string $query, array $options) use (&$frontendRegistrations): mixed {
+            if ($frontendRegistrations === 0) {
+                add_filter('posts_results', static function (mixed $posts): array {
+                    $posts = is_array($posts) ? $posts : [];
+                    $posts[] = (object) ['ID' => 9871, 'post_title' => 'Late frontend callback injection'];
+
+                    return $posts;
+                }, 10, 2);
+                $frontendRegistrations++;
+            }
+
+            return $rows;
+        };
+        $frontendQuery = new WP_FTS_Test_Query([
+            's' => 'latecallbackneedle',
+            'posts_per_page' => 10,
+        ]);
+        $queriesBeforeFrontend = $fake->num_queries;
+        $frontendPosts = WP_FTS_Plugin::replace_frontend_search_posts(null, $frontendQuery);
+        $frontendStatements = $fake->num_queries - $queriesBeforeFrontend;
+
+        assert_same([], $frontendPosts, 'a post-result hook registered by an FTS extension should discard the frontend ranked page and keep the owned query fail closed');
+        assert_same(1, $frontendRegistrations, 'the frontend FTS extension should register its post-result hook during execution');
+        assert_true($frontendStatements > 0, 'the frontend late-registration fixture should reach relational execution before standing down');
+        assert_true($frontendStatements <= 3, 'frontend late-registration fallback should remain inside the three-statement search ceiling');
+        assert_same('posts_results', $frontendQuery->get('wp_fts_core_search_callback_hook', ''), 'the final frontend ownership recheck should persist the late callback boundary');
+        assert_same('late_callback_registration', $frontendQuery->get('wp_fts_search_unavailable'), 'late frontend callback registration should expose the fail-closed ownership marker');
+        assert_same(true, $frontendQuery->get('suppress_filters'), 'late frontend callback registration should suppress result filters that could repopulate the owned empty page');
+        $frontendInjected = apply_filters('posts_results', [], $frontendQuery);
+        assert_same([9871], array_map(static fn(object $post): int => (int) $post->ID, $frontendInjected), 'the late frontend fixture should prove that its callback would admit a row if core applied it');
+        $frontendLifecyclePosts = $frontendQuery->get('suppress_filters')
+            ? $frontendPosts
+            : apply_filters('posts_results', $frontendPosts, $frontendQuery);
+        assert_same([], $frontendLifecyclePosts, 'the WordPress result-filter boundary should retain the owned empty frontend page');
+        assert_same(0, WP_FTS_Plugin::filter_frontend_search_found_posts(997, $frontendQuery), 'discarding the frontend page should publish the owned empty-page total');
+        $frontendTrace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        assert_same('bailed', $frontendTrace['status'] ?? null, 'the discarded frontend page should finish its trace as a bailout');
+        assert_contains('Registered posts_results callbacks appeared during Language FTS execution', (string) ($frontendTrace['bailout_reason'] ?? ''), 'the frontend trace should identify the callback registered during execution');
+        $frontendNotes = is_array($frontendTrace['notes'] ?? null) ? $frontendTrace['notes'] : [];
+        assert_true(in_array('Late WordPress search callback appeared during Language FTS; ranked results were discarded, result filters suppressed, and the owned query failed closed.', $frontendNotes, true), 'the frontend trace should state that its ranked page was discarded without core fallback');
+
+        WP_FTS_Plugin::reset_request_caches();
+        $GLOBALS['wp_filter'] = [];
+        $GLOBALS['wp_fts_test_filters'] = [];
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['pagenow'] = 'edit.php';
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+        $adminRegistrations = 0;
+        $GLOBALS['wp_fts_test_filters']['wp_fts_search_results'] = static function (mixed $rows, string $query, array $options) use (&$adminRegistrations): mixed {
+            if ($adminRegistrations === 0) {
+                add_filter('the_posts', static function (mixed $posts): array {
+                    $posts = is_array($posts) ? $posts : [];
+                    $posts[] = (object) ['ID' => 9872, 'post_title' => 'Late admin callback injection'];
+
+                    return $posts;
+                }, 20, 2);
+                $adminRegistrations++;
+            }
+
+            return $rows;
+        };
+        $adminQuery = new WP_FTS_Test_Query([
+            's' => 'latecallbackneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ]);
+        $queriesBeforeAdmin = $fake->num_queries;
+        $adminPosts = WP_FTS_Plugin::replace_admin_post_search_posts(null, $adminQuery);
+        $adminStatements = $fake->num_queries - $queriesBeforeAdmin;
+
+        assert_same([], $adminPosts, 'a post-result hook registered by an FTS extension should discard the admin ranked page and keep the owned query fail closed');
+        assert_same(1, $adminRegistrations, 'the admin FTS extension should register its post-result hook during execution');
+        assert_true($adminStatements > 0, 'the admin late-registration fixture should reach relational execution before standing down');
+        assert_true($adminStatements <= 3, 'admin late-registration fallback should remain inside the three-statement search ceiling');
+        assert_same('the_posts', $adminQuery->get('wp_fts_core_search_callback_hook', ''), 'the final admin ownership recheck should persist the late callback boundary');
+        assert_same('late_callback_registration', $adminQuery->get('wp_fts_search_unavailable'), 'late admin callback registration should expose the fail-closed ownership marker');
+        assert_same(true, $adminQuery->get('suppress_filters'), 'late admin callback registration should suppress result filters that could repopulate the owned empty page');
+        $adminInjected = apply_filters('the_posts', [], $adminQuery);
+        assert_same([9872], array_map(static fn(object $post): int => (int) $post->ID, $adminInjected), 'the late admin fixture should prove that its callback would admit a row if core applied it');
+        $adminLifecyclePosts = $adminQuery->get('suppress_filters')
+            ? $adminPosts
+            : apply_filters('the_posts', $adminPosts, $adminQuery);
+        assert_same([], $adminLifecyclePosts, 'the WordPress result-filter boundary should retain the owned empty admin page');
+        assert_same(0, WP_FTS_Plugin::filter_admin_post_search_found_posts(998, $adminQuery), 'discarding the admin page should publish the owned empty-page total');
+        $adminTrace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        assert_same('bailed', $adminTrace['status'] ?? null, 'the discarded admin page should finish its trace as a bailout');
+        assert_contains('Registered the_posts callbacks appeared during Language FTS execution', (string) ($adminTrace['bailout_reason'] ?? ''), 'the admin trace should identify the callback registered during execution');
+        $adminNotes = is_array($adminTrace['notes'] ?? null) ? $adminTrace['notes'] : [];
+        assert_true(in_array('Late WordPress search callback appeared during Language FTS; ranked results were discarded, result filters suppressed, and the owned query failed closed.', $adminNotes, true), 'the admin trace should state that its ranked page was discarded without core fallback');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('owned runtime failures suppress result filters registered before the throw', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $post = (object) [
+        'ID' => 879,
+        'post_title' => 'Throwing result extension source',
+        'post_content' => '<p>throwingresultfilterneedle appears in indexed content.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-14 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][879] = $post;
+
+    try {
+        wp_fts_test_index_saved_post(879, $post, true);
+
+        foreach ([false, true] as $admin) {
+            WP_FTS_Plugin::reset_request_caches();
+            $GLOBALS['wp_filter'] = [];
+            $GLOBALS['wp_fts_test_filters'] = [];
+            $GLOBALS['wp_fts_test_is_admin'] = $admin;
+            if ($admin) {
+                $GLOBALS['pagenow'] = 'edit.php';
+            } else {
+                unset($GLOBALS['pagenow']);
+            }
+            $resultHook = $admin ? 'the_posts' : 'posts_results';
+            $injectedId = $admin ? 9874 : 9873;
+            $GLOBALS['wp_fts_test_filters']['wp_fts_search_results'] = static function (mixed $rows, string $query, array $options) use ($resultHook, $injectedId): never {
+                add_filter($resultHook, static function (mixed $posts) use ($injectedId): array {
+                    $posts = is_array($posts) ? $posts : [];
+                    $posts[] = (object) ['ID' => $injectedId, 'post_title' => 'Runtime failure injection'];
+
+                    return $posts;
+                }, 20, 2);
+                throw new RuntimeException('result callback registered immediately before failure');
+            };
+            $queryVars = [
+                's' => 'throwingresultfilterneedle',
+                'posts_per_page' => 10,
+            ];
+            if ($admin) {
+                $queryVars += ['post_type' => 'post', 'post_status' => 'publish'];
+            }
+            $query = new WP_FTS_Test_Query($queryVars);
+            $queriesBefore = $fake->num_queries;
+            $posts = $admin
+                ? WP_FTS_Plugin::replace_admin_post_search_posts(null, $query)
+                : WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+            $statements = $fake->num_queries - $queriesBefore;
+
+            assert_same([], $posts, ($admin ? 'admin' : 'frontend') . ' runtime failure should return the owned empty page');
+            assert_same('runtime_failure', $query->get('wp_fts_search_unavailable'), ($admin ? 'admin' : 'frontend') . ' runtime failure should expose its fail-closed marker');
+            assert_same(true, $query->get('suppress_filters'), ($admin ? 'admin' : 'frontend') . ' runtime failure should suppress a result filter registered before the throw');
+            $injected = apply_filters($resultHook, [], $query);
+            assert_same([$injectedId], array_map(static fn(object $result): int => (int) $result->ID, $injected), ($admin ? 'admin' : 'frontend') . ' fixture should prove the throwing extension registered an injecting result filter');
+            $lifecyclePosts = $query->get('suppress_filters')
+                ? $posts
+                : apply_filters($resultHook, $posts, $query);
+            assert_same([], $lifecyclePosts, ($admin ? 'admin' : 'frontend') . ' WordPress result boundary should not repopulate the owned empty page');
+            assert_true($statements > 0 && $statements <= 3, ($admin ? 'admin' : 'frontend') . ' runtime failure should stay inside the bounded relational statement ceiling');
+        }
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('final posts_pre_query guard restores owned empty pages after callbacks registered during FTS', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $post = (object) [
+        'ID' => 881,
+        'post_title' => 'Dynamic posts pre query source',
+        'post_content' => '<p>dynamicpostsprequeryneedle appears in indexed content.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-14 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][881] = $post;
+
+    try {
+        wp_fts_test_index_saved_post(881, $post, true);
+
+        foreach ([false, true] as $admin) {
+            foreach ([false, true] as $runtime_failure) {
+                WP_FTS_Plugin::reset_request_caches();
+                $GLOBALS['wp_filter'] = [];
+                $GLOBALS['wp_fts_test_filters'] = [];
+                $GLOBALS['wp_fts_test_filter_registrations'] = [];
+                $GLOBALS['wp_fts_test_priority_filter_hooks'] = ['posts_pre_query' => true];
+                $GLOBALS['wp_fts_test_is_admin'] = $admin;
+                if ($admin) {
+                    $GLOBALS['pagenow'] = 'edit.php';
+                } else {
+                    unset($GLOBALS['pagenow']);
+                }
+
+                $context = ($admin ? 'admin' : 'frontend') . ($runtime_failure ? ' runtime failure' : ' late registration');
+                $injected_id = $admin
+                    ? ($runtime_failure ? 9894 : 9892)
+                    : ($runtime_failure ? 9893 : 9891);
+                $throwing_diagnostic = !$admin && !$runtime_failure;
+                $clear_suppression = !$admin && $runtime_failure;
+                $throwing_probe = $throwing_diagnostic
+                    ? new class() {
+                        /** Rejects diagnostic property inspection without affecting membership. */
+                        public function __isset(string $name): bool
+                        {
+                            if ($name === 'ID') {
+                                throw new RuntimeException('magic ID read');
+                            }
+
+                            return false;
+                        }
+                    }
+                    : null;
+                $injection_calls = 0;
+                $post_result_injection_calls = 0;
+                $result_extension_calls = 0;
+                $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $trace_context): bool => true;
+                $GLOBALS['wp_fts_test_filters']['wp_fts_search_results'] = static function (mixed $rows, string $query_text, array $options) use (&$injection_calls, &$post_result_injection_calls, &$result_extension_calls, $injected_id, $runtime_failure, $throwing_probe, $clear_suppression): mixed {
+                    $result_extension_calls++;
+                    add_filter('posts_pre_query', static function (mixed $posts, mixed $query = null) use (&$injection_calls, &$post_result_injection_calls, $injected_id, $throwing_probe, $clear_suppression): array {
+                        $injection_calls++;
+                        if ($clear_suppression && is_object($query) && is_callable([$query, 'set'])) {
+                            $query->set('suppress_filters', false);
+                            add_filter('posts_results', static function (mixed $results) use (&$post_result_injection_calls, $injected_id): array {
+                                $post_result_injection_calls++;
+                                $results = is_array($results) ? $results : [];
+                                $results[] = (object) ['ID' => $injected_id, 'post_title' => 'Suppression-clear injection'];
+
+                                return $results;
+                            }, PHP_INT_MAX, 2);
+                        }
+                        $posts = is_array($posts) ? $posts : [];
+                        $posts[] = is_object($throwing_probe)
+                            ? $throwing_probe
+                            : (object) ['ID' => $injected_id, 'post_title' => 'Dynamic posts_pre_query injection'];
+
+                        return $posts;
+                    }, PHP_INT_MAX, 2);
+                    if ($runtime_failure) {
+                        throw new RuntimeException('posts_pre_query callback registered immediately before failure');
+                    }
+
+                    return $rows;
+                };
+
+                add_filter(
+                    'posts_pre_query',
+                    $admin
+                        ? [WP_FTS_Plugin::class, 'replace_admin_post_search_posts']
+                        : [WP_FTS_Plugin::class, 'replace_frontend_search_posts'],
+                    WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY,
+                    2
+                );
+                add_filter(
+                    'posts_pre_query',
+                    [WP_FTS_Plugin::class, 'observe_final_search_posts'],
+                    WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY,
+                    2
+                );
+
+                $query_vars = [
+                    's' => 'dynamicpostsprequeryneedle',
+                    'posts_per_page' => 10,
+                ];
+                if ($admin) {
+                    $query_vars += ['post_type' => 'post', 'post_status' => 'publish'];
+                }
+                $query = new WP_FTS_Test_Query($query_vars);
+                $queries_before = $fake->num_queries;
+                $posts = apply_filters('posts_pre_query', null, $query);
+                $statements = $fake->num_queries - $queries_before;
+
+                assert_same([], $posts, "{$context} guard should restore the owned empty page after the injecting callback runs");
+                assert_same(1, $result_extension_calls, "{$context} should execute the FTS result extension once");
+                assert_same(1, $injection_calls, "{$context} should prove the dynamically registered posts_pre_query callback actually ran");
+                assert_true($statements > 0 && $statements <= 3, "{$context} should spend relational SQL before failing closed without core fallback");
+                assert_same(
+                    $runtime_failure ? 'runtime_failure' : 'late_callback_registration',
+                    $query->get('wp_fts_search_unavailable'),
+                    "{$context} should retain the owned fail-closed reason"
+                );
+                assert_same(true, $query->get('suppress_filters'), "{$context} should suppress post-result filters");
+                assert_same('dynamicpostsprequeryneedle', $query->get('s'), "{$context} should retain search text instead of handing membership to core LIKE");
+
+                if ($clear_suppression) {
+                    $lifecycle_posts = $query->get('suppress_filters')
+                        ? $posts
+                        : apply_filters('posts_results', $posts, $query);
+                    assert_same([], $lifecycle_posts, "{$context} observer should reassert suppression after a late callback clears it");
+                    assert_same(0, $post_result_injection_calls, "{$context} should prevent the later post-result injector from running");
+                    $would_inject = apply_filters('posts_results', [], $query);
+                    assert_same([$injected_id], array_map(static fn(object $item): int => (int) $item->ID, $would_inject), "{$context} fixture should prove the suppressed post-result callback would repopulate membership");
+                }
+
+                if (!$runtime_failure && !$throwing_diagnostic) {
+                    $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+                    $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
+                    assert_same('later_provider_changed_fts', $ownership['status'] ?? null, "{$context} diagnostics should record the value seen before the guard restored empty");
+                    assert_same([$injected_id], $ownership['final_post_ids'] ?? null, "{$context} diagnostics should retain only the bounded injected ID sample");
+                } elseif ($throwing_diagnostic) {
+                    $ownership_state = new ReflectionProperty(WP_FTS_Plugin::class, 'search_final_ownership_state');
+                    $ownership_state->setAccessible(true);
+                    $remaining_state = $ownership_state->getValue();
+                    assert_true(
+                        is_array($remaining_state) && !array_key_exists(spl_object_id($query), $remaining_state),
+                        "{$context} should discard failed diagnostic state after still enforcing the empty page"
+                    );
+                }
+            }
+        }
+
+        WP_FTS_Plugin::reset_request_caches();
+        $GLOBALS['wp_filter'] = [];
+        $GLOBALS['wp_fts_test_filters'] = [];
+        $GLOBALS['wp_fts_test_priority_filter_hooks'] = ['posts_pre_query' => true];
+        add_filter(
+            'posts_pre_query',
+            [WP_FTS_Plugin::class, 'observe_final_search_posts'],
+            WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY,
+            2
+        );
+        $unowned_query = new WP_FTS_Test_Query([
+            's' => 'coreownedneedle',
+            'suppress_filters' => true,
+        ]);
+        $provider_posts = [(object) ['ID' => 9895, 'post_title' => 'Earlier provider row']];
+        assert_same($provider_posts, apply_filters('posts_pre_query', $provider_posts, $unowned_query), 'the final guard must preserve earlier provider membership without a plugin fail-closed marker');
+        assert_same(null, apply_filters('posts_pre_query', null, $unowned_query), 'the final guard must preserve the core-owned null path without a plugin fail-closed marker');
+
+        $spoofed_unowned_query = new WP_FTS_Test_Query([
+            's' => 'spoofedcoreownedneedle',
+            'suppress_filters' => true,
+            'wp_fts_search_unavailable' => 'programmatic',
+        ]);
+        assert_same(
+            $provider_posts,
+            apply_filters('posts_pre_query', $provider_posts, $spoofed_unowned_query),
+            'public-looking query vars must not create the private fail-closed ownership capability'
+        );
+    } finally {
+        WP_FTS_Plugin::reset_request_caches();
+        wp_fts_test_reset_wordpress_fakes();
+        unset($GLOBALS['pagenow']);
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('final posts_pre_query ownership survives a distinct nested FTS query', function (): void {
+    global $wpdb;
+
+    $old_wpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $post = (object) [
+        'ID' => 882,
+        'post_title' => 'Nested ownership source',
+        'post_content' => '<p>nestedownershipneedle appears in indexed content.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-14 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][882] = $post;
+
+    try {
+        wp_fts_test_index_saved_post(882, $post, true);
+        $GLOBALS['wp_filter'] = [];
+        $GLOBALS['wp_fts_test_filters'] = [];
+        $GLOBALS['wp_fts_test_filter_registrations'] = [];
+        $GLOBALS['wp_fts_test_priority_filter_hooks'] = ['posts_pre_query' => true];
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+        $inside_nested = false;
+        $extension_calls = 0;
+        $injector_calls = 0;
+        $nested_ids = [];
+        $GLOBALS['wp_fts_test_filters']['wp_fts_search_results'] = static function (mixed $rows, string $query_text, array $options) use (&$inside_nested, &$extension_calls, &$injector_calls, &$nested_ids): mixed {
+            $extension_calls++;
+            if ($inside_nested || $extension_calls !== 1) {
+                return $rows;
+            }
+
+            add_filter('posts_pre_query', static function (mixed $posts, mixed $outer_query = null) use (&$inside_nested, &$injector_calls, &$nested_ids): array {
+                $injector_calls++;
+                $outer_hook = $GLOBALS['wp_filter']['posts_pre_query'] ?? null;
+                $GLOBALS['wp_filter']['posts_pre_query'] = (object) [
+                    'callbacks' => [
+                        WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY => [
+                            'nested_replacement' => [
+                                'function' => [WP_FTS_Plugin::class, 'replace_frontend_search_posts'],
+                                'accepted_args' => 2,
+                            ],
+                        ],
+                        WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY => [
+                            'nested_observer' => [
+                                'function' => [WP_FTS_Plugin::class, 'observe_final_search_posts'],
+                                'accepted_args' => 2,
+                            ],
+                        ],
+                    ],
+                ];
+                $inside_nested = true;
+                try {
+                    $nested_query = new WP_FTS_Test_Query([
+                        's' => 'nestedownershipneedle',
+                        'posts_per_page' => 10,
+                    ]);
+                    $nested_posts = apply_filters('posts_pre_query', null, $nested_query);
+                    $nested_ids = array_map(
+                        static fn(object $nested_post): int => (int) $nested_post->ID,
+                        is_array($nested_posts) ? $nested_posts : []
+                    );
+                } finally {
+                    $inside_nested = false;
+                    if ($outer_hook !== null) {
+                        $GLOBALS['wp_filter']['posts_pre_query'] = $outer_hook;
+                    } else {
+                        unset($GLOBALS['wp_filter']['posts_pre_query']);
+                    }
+                }
+
+                $posts = is_array($posts) ? $posts : [];
+                $posts[] = (object) ['ID' => 9896, 'post_title' => 'Outer row must not survive'];
+
+                return $posts;
+            }, PHP_INT_MAX, 2);
+
+            return $rows;
+        };
+
+        add_filter(
+            'posts_pre_query',
+            [WP_FTS_Plugin::class, 'replace_frontend_search_posts'],
+            WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY,
+            2
+        );
+        add_filter(
+            'posts_pre_query',
+            [WP_FTS_Plugin::class, 'observe_final_search_posts'],
+            WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY,
+            2
+        );
+
+        $outer_query = new WP_FTS_Test_Query([
+            's' => 'nestedownershipneedle',
+            'posts_per_page' => 10,
+        ]);
+        $queries_before = $fake->num_queries;
+        $outer_posts = apply_filters('posts_pre_query', null, $outer_query);
+        $statements = $fake->num_queries - $queries_before;
+
+        assert_same([], $outer_posts, 'a distinct nested FTS query must not erase the outer final empty-page capability');
+        assert_same([882], $nested_ids, 'the late injector should execute one independently owned nested FTS query');
+        assert_same(1, $injector_calls, 'the outer late membership injector should execute exactly once');
+        assert_same(2, $extension_calls, 'the outer and nested relational searches should each reach result extensions once');
+        assert_true($statements > 0 && $statements <= 6, 'two nested relational searches should remain within two three-statement ceilings');
+        assert_same('late_callback_registration', $outer_query->get('wp_fts_search_unavailable'), 'the outer query should retain its fail-closed reason across the nested query');
+
+        $pending = new ReflectionProperty(WP_FTS_Plugin::class, 'pending_search_fail_closed_queries');
+        $pending->setAccessible(true);
+        $pending_queries = $pending->getValue();
+        assert_true($pending_queries instanceof WeakMap, 'the final guard should retain exact live query identities');
+        assert_same(0, count($pending_queries), 'both final observers should consume every pending query capability');
+    } finally {
+        WP_FTS_Plugin::reset_request_caches();
+        wp_fts_test_reset_wordpress_fakes();
+        unset($GLOBALS['pagenow']);
+        $wpdb = $old_wpdb;
+    }
+});
+
+test_case('WP_Query membership constraints omitted by the relational plan stay on core', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $constraints = [
+        ['title zero', 'title', '0'],
+        ['name zero', 'name', '0'],
+        ['page name zero', 'pagename', '0'],
+        ['attachment slug zero', 'attachment', '0'],
+        ['subpost slug zero', 'subpost', '0'],
+        ['author slug zero', 'author_name', '0'],
+        ['menu order zero', 'menu_order', 0],
+        ['comment count zero', 'comment_count', 0],
+        ['comment count array zero', 'comment_count', ['value' => 0]],
+        ['comment status', 'comment_status', 'closed'],
+        ['ping status', 'ping_status', 'closed'],
+        ['has password false', 'has_password', false],
+        ['post password empty', 'post_password', ''],
+        ['post password zero', 'post_password', '0'],
+        ['post MIME type zero', 'post_mime_type', '0'],
+        ['post parent zero', 'post_parent', 0],
+        ['numeric offset zero', 'offset', 0],
+        ['negative numeric offset', 'offset', -1],
+        ['hour zero', 'hour', 0],
+        ['minute zero', 'minute', 0],
+        ['second zero', 'second', 0],
+        ['legacy page size', 'showposts', 5],
+        ['archive page size', 'posts_per_archive_page', 5],
+        ['meta key comparison', 'meta_compare_key', 'LIKE'],
+        ['meta value type', 'meta_type', 'NUMERIC'],
+        ['meta key type', 'meta_type_key', 'BINARY'],
+        ['meta value string zero', 'meta_value', '0'],
+        ['meta value integer zero', 'meta_value', 0],
+        ['subpost alias', 'subpost', 'child-slug'],
+        ['subpost ID alias', 'subpost_id', 9],
+        ['term ID alias', 'term_id', 9],
+        ['date array containing zero', 'date_query', [['hour' => 0]]],
+        ['meta array containing zero', 'meta_query', [['value' => 0]]],
+        ['taxonomy array containing zero', 'tax_query', [['terms' => [0]]]],
+        ['included post zero', 'post__in', [0]],
+        ['included parent zero', 'post_parent__in', [0]],
+        ['included author zero', 'author__in', [0]],
+        ['included tag zero', 'tag__in', [0]],
+    ];
+
+    try {
+        $ordinaryDefaults = [
+            's' => 'ordinarydefaultsneedle',
+            'posts_per_page' => 10,
+            'p' => 0,
+            'page_id' => 0,
+            'year' => 0,
+            'monthnum' => 0,
+            'day' => 0,
+            'w' => 0,
+            'hour' => '',
+            'minute' => '',
+            'second' => '',
+            'menu_order' => '',
+            'post_parent' => '',
+            'offset' => '',
+            'title' => '',
+            'name' => '',
+            'pagename' => '',
+            'attachment' => '',
+            'subpost' => '',
+            'author_name' => '',
+            'meta_value' => '',
+            'post_mime_type' => '',
+            'exact' => false,
+            'sentence' => false,
+            'no_found_rows' => false,
+            'nopaging' => false,
+            'search_columns' => [],
+            'post__in' => [],
+            'post__not_in' => [],
+            'date_query' => [],
+            'meta_query' => [],
+            'tax_query' => [],
+        ];
+        $ordinaryFrontend = new WP_FTS_Test_Query([
+            's' => 'ordinarydefaultsneedle',
+            'posts_per_page' => 10,
+        ]);
+        $ordinaryFrontend->query_vars = array_replace($ordinaryFrontend->query_vars, $ordinaryDefaults);
+        WP_FTS_Plugin::prepare_frontend_search_query($ordinaryFrontend);
+        assert_same(true, $ordinaryFrontend->get('wp_fts_search_candidate'), 'normalized ordinary WP_Query defaults should remain eligible for frontend FTS');
+
+        foreach ($constraints as [$label, $key, $value]) {
+            $query = new WP_FTS_Test_Query([
+                's' => 'membershipconstraintneedle',
+                'posts_per_page' => 10,
+                $key => $value,
+            ]);
+            $queriesBefore = $fake->num_queries;
+            WP_FTS_Plugin::prepare_frontend_search_query($query);
+
+            assert_same(null, $query->get('wp_fts_search_candidate'), "{$label} should prevent frontend FTS candidacy");
+            assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), "{$label} should retain frontend core membership");
+            assert_same($queriesBefore, $fake->num_queries, "{$label} frontend fallback should execute zero FTS statements");
+        }
+
+        $frontendPerm = new WP_FTS_Test_Query([
+            's' => 'frontendpermneedle',
+            'posts_per_page' => 10,
+            'perm' => 'readable',
+        ]);
+        $queriesBeforePerm = $fake->num_queries;
+        WP_FTS_Plugin::prepare_frontend_search_query($frontendPerm);
+        assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $frontendPerm), 'frontend perm membership should stay on core');
+        assert_same($queriesBeforePerm, $fake->num_queries, 'frontend perm fallback should execute zero FTS statements');
+
+        $GLOBALS['wp_fts_test_post_types']['book'] = (object) [
+            'public' => true,
+            'exclude_from_search' => false,
+            'query_var' => 'book',
+            'hierarchical' => false,
+            'cap' => (object) [
+                'edit_others_posts' => 'edit_others_books',
+                'edit_published_posts' => 'edit_published_books',
+                'read_private_posts' => 'read_private_books',
+            ],
+        ];
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+            WP_FTS_Plugin::default_settings(),
+            ['index_post_types' => ['post', 'page', 'book']]
+        );
+        WP_FTS_Plugin::reset_request_caches();
+        $bookQuery = new WP_FTS_Test_Query([
+            's' => 'customqueryvarneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'book',
+            'book' => 'one-book',
+        ]);
+        $queriesBeforeBook = $fake->num_queries;
+        WP_FTS_Plugin::prepare_frontend_search_query($bookQuery);
+        assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $bookQuery), 'a requested custom post-type query var should stay on core before core maps it to name');
+        assert_same($queriesBeforeBook, $fake->num_queries, 'custom post-type query-var fallback should execute zero FTS statements');
+
+        $offsetCursorQuery = new WP_FTS_Test_Query([
+            's' => 'offsetcursorneedle',
+            'posts_per_page' => 10,
+            'paged' => 2,
+            'offset' => 0,
+            'wp_fts_cursor' => 'cursor-is-not-consumed-when-offset-is-explicit',
+        ]);
+        $queriesBeforeOffsetCursor = $fake->num_queries;
+        WP_FTS_Plugin::prepare_frontend_search_query($offsetCursorQuery);
+        assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $offsetCursorQuery), 'an explicit zero offset should keep paged cursor search on core because core lets offset override paged');
+        assert_same($queriesBeforeOffsetCursor, $fake->num_queries, 'explicit zero offset with paged cursor should execute zero FTS statements');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['pagenow'] = 'edit.php';
+        $ordinaryAdmin = new WP_FTS_Test_Query([
+            's' => 'ordinarydefaultsneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ]);
+        $ordinaryAdmin->query_vars = array_replace($ordinaryAdmin->query_vars, $ordinaryDefaults);
+        WP_FTS_Plugin::prepare_admin_post_search_query($ordinaryAdmin);
+        assert_same(true, $ordinaryAdmin->get('wp_fts_admin_post_search_candidate'), 'normalized ordinary WP_Query defaults should remain eligible for admin FTS');
+
+        foreach ($constraints as [$label, $key, $value]) {
+            $query = new WP_FTS_Test_Query([
+                's' => 'adminmembershipconstraintneedle',
+                'posts_per_page' => 10,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                $key => $value,
+            ]);
+            $queriesBefore = $fake->num_queries;
+            WP_FTS_Plugin::prepare_admin_post_search_query($query);
+
+            assert_same(null, $query->get('wp_fts_admin_post_search_candidate'), "{$label} should prevent admin FTS candidacy");
+            assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $query), "{$label} should retain admin core membership");
+            assert_same($queriesBefore, $fake->num_queries, "{$label} admin fallback should execute zero FTS statements");
+        }
+
+        $GLOBALS['wp_fts_test_post_types']['post']->query_var = 'entry';
+        $adminCustomVar = new WP_FTS_Test_Query([
+            's' => 'admincustomqueryvarneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'entry' => 'one-entry',
+        ]);
+        $queriesBeforeAdminCustomVar = $fake->num_queries;
+        WP_FTS_Plugin::prepare_admin_post_search_query($adminCustomVar);
+        assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $adminCustomVar), 'an admin post-type query var should stay on core before core maps it to name');
+        assert_same($queriesBeforeAdminCustomVar, $fake->num_queries, 'admin custom post-type query-var fallback should execute zero FTS statements');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('audited unsupported WP_Query inventory rejects every explicitly supplied key', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    // Audited against the WP_Query 7.0 membership inputs. Pagination,
+    // projection, ordering, post_type/status, perm, s, and suppress_filters
+    // have dedicated gates outside this shared unsupported-key inventory.
+    $expected = [
+        'attachment',
+        'attachment_id',
+        'author',
+        'author__in',
+        'author__not_in',
+        'author_name',
+        'cat',
+        'category__and',
+        'category__in',
+        'category__not_in',
+        'category_name',
+        'comment_count',
+        'comment_status',
+        'date_query',
+        'day',
+        'exact',
+        'has_password',
+        'hour',
+        'm',
+        'meta_compare',
+        'meta_compare_key',
+        'meta_key',
+        'meta_query',
+        'meta_type',
+        'meta_type_key',
+        'meta_value',
+        'meta_value_num',
+        'menu_order',
+        'minute',
+        'monthnum',
+        'name',
+        'p',
+        'page_id',
+        'pagename',
+        'ping_status',
+        'post__in',
+        'post__not_in',
+        'post_mime_type',
+        'post_name__in',
+        'post_parent',
+        'post_parent__in',
+        'post_parent__not_in',
+        'post_password',
+        'posts_per_archive_page',
+        'sentence',
+        'second',
+        'search_columns',
+        'showposts',
+        'subpost',
+        'subpost_id',
+        'tag',
+        'tag__and',
+        'tag__in',
+        'tag__not_in',
+        'tag_id',
+        'tag_slug__and',
+        'tag_slug__in',
+        'tax_query',
+        'taxonomy',
+        'term',
+        'term_id',
+        'title',
+        'w',
+        'year',
+    ];
+
+    try {
+        $plugin = new ReflectionClass(WP_FTS_Plugin::class);
+        $method = $plugin->getMethod('frontend_search_unsupported_constraint_vars');
+        $actual = $method->invoke(null);
+        sort($expected, SORT_STRING);
+        sort($actual, SORT_STRING);
+        assert_same($expected, $actual, 'the production unsupported-key inventory should stay aligned with the audited WP_Query membership fixture');
+
+        foreach ($actual as $key) {
+            $query = new WP_FTS_Test_Query([
+                's' => 'explicitinventoryneedle',
+                'posts_per_page' => 10,
+                $key => false,
+            ]);
+            $queriesBefore = $fake->num_queries;
+            WP_FTS_Plugin::prepare_frontend_search_query($query);
+
+            assert_same(null, $query->get('wp_fts_search_candidate'), "explicit {$key}=false should stay on core rather than depend on coercion semantics");
+            assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), "explicit {$key}=false should not enter relational membership");
+            assert_same($queriesBefore, $fake->num_queries, "explicit {$key}=false should execute zero FTS statements");
+        }
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('fresh default scope owns stock unscoped frontend search', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $post = (object) [
+        'ID' => 878,
+        'post_title' => 'Stock unscoped frontend result',
+        'post_content' => '<p>stockunscopedneedle is indexed by the fresh default scope.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-15 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][878] = $post;
+
+    try {
+        assert_same(['post', 'page', 'attachment'], WP_FTS_Plugin::default_settings()['index_post_types'], 'fresh settings should index every built-in type in stock post_type=any search scope');
+        wp_fts_test_index_saved_post(878, $post, true);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'stockunscopedneedle',
+            'posts_per_page' => 10,
+        ]);
+        assert_same(false, array_key_exists('post_type', $query->query), 'the stock frontend fixture should not hide scope behavior behind an explicit post_type');
+        WP_FTS_Plugin::prepare_frontend_search_query($query);
+        assert_same(true, $query->get('wp_fts_search_candidate'), 'fresh defaults should own a stock unscoped frontend query');
+
+        $queriesBefore = $fake->num_queries;
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+        $searchStatements = $fake->num_queries - $queriesBefore;
+
+        assert_same([878], array_map(static fn(object $result): int => (int) $result->ID, $posts), 'stock unscoped search should return the relational result instead of falling through to core LIKE');
+        assert_true($searchStatements > 0 && $searchStatements <= 3, 'stock unscoped search should execute only its bounded relational page');
+        assert_same(null, $query->get('post_type', null), 'the adapter should not rewrite the stock query into a narrower explicit post type');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('core phrase and exclusion search syntax stays on WordPress without FTS SQL', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        foreach (['apple -banana', '\\-banana', "apple\v-banana", "apple\f-banana", 'alpha + -beta', '"bar baz"', 'alpha "bar baz"'] as $searchText) {
+            $query = new WP_FTS_Test_Query(['s' => $searchText, 'posts_per_page' => 10]);
+            $queriesBefore = $fake->num_queries;
+            $boundary = wp_fts_test_run_source_faithful_search_boundary($query, false);
+            assert_same(null, $query->get('wp_fts_search_candidate'), "{$searchText} should prevent frontend FTS candidacy");
+            assert_same(null, $boundary['posts'], "{$searchText} should retain frontend core syntax semantics");
+            assert_same($queriesBefore, $fake->num_queries, "{$searchText} frontend fallback should execute zero FTS statements");
+        }
+
+        foreach (['e-mail', 'state-of-the-art', implode(' ', array_map(static fn(int $index): string => 'term' . $index, range(1, 10)))] as $searchText) {
+            $query = new WP_FTS_Test_Query(['s' => $searchText, 'posts_per_page' => 10]);
+            WP_FTS_Plugin::prepare_frontend_search_query($query);
+            assert_same(true, $query->get('wp_fts_search_candidate'), "{$searchText} should remain eligible for intentional relational token semantics");
+        }
+
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['pagenow'] = 'edit.php';
+        foreach (['apple -banana', '"bar baz"'] as $searchText) {
+            $query = new WP_FTS_Test_Query([
+                's' => $searchText,
+                'posts_per_page' => 10,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+            ]);
+            $queriesBefore = $fake->num_queries;
+            $boundary = wp_fts_test_run_source_faithful_search_boundary($query, true);
+            assert_same(null, $query->get('wp_fts_admin_post_search_candidate'), "{$searchText} should prevent admin FTS candidacy");
+            assert_same(null, $boundary['posts'], "{$searchText} should retain admin core syntax semantics");
+            assert_same($queriesBefore, $fake->num_queries, "{$searchText} admin fallback should execute zero FTS statements");
+        }
+
+        $adminHyphen = new WP_FTS_Test_Query([
+            's' => 'e-mail',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ]);
+        WP_FTS_Plugin::prepare_admin_post_search_query($adminHyphen);
+        assert_same(true, $adminHyphen->get('wp_fts_admin_post_search_candidate'), 'an ordinary internal hyphen should remain eligible for admin FTS');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $doubleEscaped = new WP_FTS_Test_Query(['s' => '\\\\-banana', 'posts_per_page' => 10]);
+        $doubleEscapedBoundary = wp_fts_test_run_source_faithful_search_boundary($doubleEscaped, false);
+        assert_same(true, $doubleEscaped->get('wp_fts_search_candidate'), 'a double-escaped minus should remain eligible because core strips only one escape layer');
+        assert_same([], $doubleEscapedBoundary['posts'], 'the posts_pre_query syntax recheck should not apply stripslashes a second time');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('non-archive search routes stay on core with zero FTS statements', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        foreach (['feed', 'comment_feed', 'embed', 'preview', 'trackback', 'singular', 'robots', 'favicon'] as $route) {
+            $query = new WP_FTS_Test_Query(
+                ['s' => 'routeshapeneedle', 'posts_per_page' => 10],
+                true,
+                true,
+                [$route => true]
+            );
+            $queriesBefore = $fake->num_queries;
+            WP_FTS_Plugin::prepare_frontend_search_query($query);
+            assert_same(null, $query->get('wp_fts_search_candidate', null), "{$route} conditional should prevent frontend FTS candidacy");
+            assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), "{$route} conditional should retain core WordPress ownership");
+            assert_same($queriesBefore, $fake->num_queries, "{$route} conditional fallback should issue zero FTS statements");
+        }
+
+        foreach ([
+            'feed' => 'rss2',
+            'embed' => true,
+            'preview' => true,
+            'tb' => 1,
+            'robots' => true,
+            'favicon' => true,
+        ] as $queryVar => $value) {
+            $query = new WP_FTS_Test_Query([
+                's' => 'routevarneedle',
+                'posts_per_page' => 10,
+                $queryVar => $value,
+            ]);
+            $queriesBefore = $fake->num_queries;
+            WP_FTS_Plugin::prepare_frontend_search_query($query);
+            assert_same(null, $query->get('wp_fts_search_candidate', null), "{$queryVar} query var should prevent frontend FTS candidacy");
+            assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), "{$queryVar} query var should retain core WordPress ownership");
+            assert_same($queriesBefore, $fake->num_queries, "{$queryVar} query-var fallback should issue zero FTS statements");
+        }
+
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['pagenow'] = 'edit.php';
+        $adminFeed = new WP_FTS_Test_Query(
+            [
+                's' => 'adminroutevarneedle',
+                'posts_per_page' => 10,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+            ],
+            true,
+            true,
+            ['feed' => true]
+        );
+        $queriesBeforeAdmin = $fake->num_queries;
+        WP_FTS_Plugin::prepare_admin_post_search_query($adminFeed);
+        assert_same(null, $adminFeed->get('wp_fts_admin_post_search_candidate', null), 'admin feed conditional should prevent FTS candidacy');
+        assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $adminFeed), 'admin feed conditional should retain core WordPress ownership');
+        assert_same($queriesBeforeAdmin, $fake->num_queries, 'admin feed fallback should issue zero FTS statements');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -24649,7 +26764,7 @@ test_case('enabled diagnostics record search provider compatibility stand-down',
     assert_same('respect_existing_provider', $adminSettings['provider_compatibility'] ?? null, 'admin provider compatibility trace should expose the effective mode');
 });
 
-test_case('provider stand-down diagnostics include bounded posts_pre_query hook pipeline', function (): void {
+test_case('unsafe posts_pre_query bailout diagnostics include the bounded hook pipeline', function (): void {
     wp_fts_test_reset_wordpress_fakes();
     wp_fts_test_mark_search_takeover_ready();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
@@ -24693,9 +26808,11 @@ test_case('provider stand-down diagnostics include bounded posts_pre_query hook 
     assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query), 'stand-down diagnostics should not change the prior provider result');
     $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
     $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
-    assert_same(1, (int) ($counts['incoming_provider_results'] ?? 0), 'stand-down diagnostics should count incoming provider results without logging payloads');
+    assert_same(0, (int) ($counts['incoming_provider_results'] ?? 0), 'unsafe callback bailout should not inspect incoming provider payloads');
     $notes = is_array($trace['notes'] ?? null) ? $trace['notes'] : [];
-    assert_true(in_array('Compatibility mode kept an earlier non-null posts_pre_query result from another search provider.', $notes, true), 'stand-down diagnostics should explain that compatibility mode kept the provider response');
+    assert_true(!in_array('Language FTS kept an earlier non-null posts_pre_query result because that provider already owns membership.', $notes, true), 'unsafe callback bailout should happen before provider-result inspection');
+    assert_same('bailed', $trace['status'] ?? null, 'unsafe callback bailout should be recorded as bailed');
+    assert_contains('registered posts_pre_query callbacks', (string) ($trace['bailout_reason'] ?? ''), 'unsafe callback bailout should identify the ownership boundary');
 
     $pipeline = is_array($trace['search_hook_pipeline'] ?? null) ? $trace['search_hook_pipeline'] : [];
     assert_same('posts_pre_query', $pipeline['hook'] ?? null, 'hook pipeline diagnostics should identify posts_pre_query');
@@ -24832,6 +26949,55 @@ test_case('search hook pipeline callback labels are bounded and redacted', funct
     assert_true(!str_contains($traceJson, 'provider_payload'), 'hook pipeline should not include provider payload keys');
 });
 
+test_case('search hook pipeline diagnostics bound hostile callback and priority cardinality', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    $oversizedCallback = array_fill(0, 200000, 'must-not-be-read');
+    $entry = ['function' => $oversizedCallback];
+    $largeBucket = array_fill(0, 200000, $entry);
+    wp_fts_test_set_posts_pre_query_hook_state([5 => $largeBucket]);
+    $query = new WP_FTS_Test_Query(['s' => 'hostilehookbucketneedle', 'posts_per_page' => 10]);
+    $memoryBefore = memory_get_usage();
+    $peakBefore = memory_get_peak_usage();
+    WP_FTS_Plugin::replace_frontend_search_posts([(object) ['ID' => 9881]], $query);
+    $bucketMemoryGrowth = memory_get_usage() - $memoryBefore;
+    $bucketPeakGrowth = memory_get_peak_usage() - $peakBefore;
+
+    $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+    $pipeline = is_array($trace['search_hook_pipeline'] ?? null) ? $trace['search_hook_pipeline'] : [];
+    assert_same(32, $pipeline['total_callbacks'] ?? null, 'hostile callback bucket diagnostics should inspect only one 32-entry lower-bound window');
+    assert_same('at_least', $pipeline['total_relation'] ?? null, 'truncated callback totals should be labeled as lower bounds');
+    assert_same(1, $pipeline['inspected_priority_buckets'] ?? null, 'one hostile callback bucket should require one bounded priority visit');
+    assert_same(true, $pipeline['truncated'] ?? null, 'hostile callback bucket diagnostics should expose truncation');
+    assert_same(true, $pipeline['more'] ?? null, 'hostile callback bucket diagnostics should report omitted entries');
+    assert_same(8, $pipeline['shown_count'] ?? null, 'hostile callback bucket diagnostics should retain the eight-row display cap');
+    assert_true($bucketMemoryGrowth <= 2 * 1024 * 1024, "hostile callback bucket diagnostics should not copy the 200,000-entry bucket; observed {$bucketMemoryGrowth} bytes");
+    assert_true($bucketPeakGrowth <= 2 * 1024 * 1024, "hostile callback labels should reject a 200,000-part descriptor without array_values copying; observed {$bucketPeakGrowth} bytes");
+    assert_contains('lower bounds', (string) ($pipeline['reason'] ?? ''), 'hostile callback bucket diagnostics should explain bounded lower-bound counts');
+
+    unset($largeBucket, $oversizedCallback, $entry);
+    WP_FTS_Plugin::reset_request_caches();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+    $priorityBuckets = [];
+    for ($priority = 1; $priority <= 50000; $priority++) {
+        $priorityBuckets[$priority] = [];
+    }
+    wp_fts_test_set_posts_pre_query_hook_state($priorityBuckets);
+    $query = new WP_FTS_Test_Query(['s' => 'hostilehookprioritiesneedle', 'posts_per_page' => 10]);
+    $memoryBefore = memory_get_usage();
+    WP_FTS_Plugin::replace_frontend_search_posts([(object) ['ID' => 9882]], $query);
+    $priorityMemoryGrowth = memory_get_usage() - $memoryBefore;
+
+    $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+    $pipeline = is_array($trace['search_hook_pipeline'] ?? null) ? $trace['search_hook_pipeline'] : [];
+    assert_same(0, $pipeline['total_callbacks'] ?? null, 'hostile empty priority map should not invent callback entries');
+    assert_same(32, $pipeline['inspected_priority_buckets'] ?? null, 'hostile priority diagnostics should inspect only 32 buckets');
+    assert_same('at_least', $pipeline['total_relation'] ?? null, 'priority truncation should make callback completeness a lower-bound claim');
+    assert_same(true, $pipeline['truncated'] ?? null, 'hostile priority diagnostics should expose truncation');
+    assert_true($priorityMemoryGrowth <= 2 * 1024 * 1024, "hostile priority diagnostics should not materialize or sort 50,000 buckets; observed {$priorityMemoryGrowth} bytes");
+});
+
 test_case('per-search diagnostics leave provider discovery to operator surfaces', function (): void {
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
@@ -24876,7 +27042,7 @@ test_case('per-search diagnostics leave provider discovery to operator surfaces'
     assert_true(!str_contains($traceJson, 'provider_payload'), 'known-provider diagnostics should not include provider payload keys');
 });
 
-test_case('enabled diagnostics record search provider compatibility overrides', function (): void {
+test_case('enabled diagnostics record unconditional prior-provider preservation', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -24921,27 +27087,29 @@ test_case('enabled diagnostics record search provider compatibility overrides', 
             's' => 'provideroverrideneedle',
             'posts_per_page' => 10,
         ]);
+        $queriesBeforeProvider = $fake->num_queries;
         $posts = WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query);
 
-        assert_same([842], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $posts), 'frontend FTS-wins mode should replace earlier provider posts with FTS posts');
+        assert_same($incoming, $posts, 'frontend search should preserve an earlier non-null provider result in every mode');
+        assert_same($queriesBeforeProvider, $fake->num_queries, 'frontend provider preservation should issue zero FTS statements');
         $traces = WP_FTS_Plugin::debug_traces();
-        assert_same(1, count($traces), 'frontend provider override should record one debug trace');
+        assert_same(1, count($traces), 'frontend provider preservation should record one debug trace');
         $trace = $traces[0];
-        assert_same('ran', $trace['status'] ?? null, 'frontend provider override trace should be marked as ran');
+        assert_same('bailed', $trace['status'] ?? null, 'frontend provider preservation trace should be marked as bailed');
         $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
-        assert_same(2, (int) ($counts['incoming_provider_results'] ?? 0), 'frontend provider override diagnostics should count incoming provider results without logging payloads');
-        assert_same(1, (int) ($counts['prior_provider_responses_replaced'] ?? 0), 'frontend provider override diagnostics should count the replaced provider response');
+        assert_same(2, (int) ($counts['incoming_provider_results'] ?? 0), 'frontend provider preservation diagnostics should count incoming provider results without logging payloads');
+        assert_true(!array_key_exists('prior_provider_responses_replaced', $counts), 'provider diagnostics should not expose an impossible replacement counter');
         $notes = is_array($trace['notes'] ?? null) ? $trace['notes'] : [];
-        assert_true(in_array('FTS replaced an earlier non-null posts_pre_query result from another search provider.', $notes, true), 'frontend provider override diagnostics should explain that FTS replaced an earlier provider response');
-        assert_true(in_array('Incoming provider result count: 2.', $notes, true), 'frontend provider override diagnostics should expose only a bounded incoming result count');
+        assert_true(in_array('Language FTS kept an earlier non-null posts_pre_query result because that provider already owns membership.', $notes, true), 'frontend provider diagnostics should explain why the earlier result was preserved');
+        assert_true(in_array('Incoming provider result count: 2.', $notes, true), 'frontend provider preservation diagnostics should expose only a bounded incoming result count');
         $settings = is_array($trace['settings'] ?? null) ? $trace['settings'] : [];
-        assert_same('prefer_language_fts', $settings['provider_compatibility'] ?? null, 'frontend provider override trace should expose the FTS-wins mode');
+        assert_same('prefer_language_fts', $settings['provider_compatibility'] ?? null, 'frontend provider trace should expose the configured advisory mode');
         $pipeline = is_array($trace['search_hook_pipeline'] ?? null) ? $trace['search_hook_pipeline'] : [];
         $pipelineCounts = is_array($pipeline['counts'] ?? null) ? $pipeline['counts'] : [];
-        assert_same(1, (int) ($pipelineCounts['before'] ?? 0), 'frontend provider override diagnostics should include the prior posts_pre_query callback');
-        assert_same(1, (int) ($pipelineCounts['same_priority'] ?? 0), 'frontend provider override diagnostics should include the FTS priority callback');
+        assert_same(1, (int) ($pipelineCounts['before'] ?? 0), 'frontend provider preservation diagnostics should include the prior posts_pre_query callback');
+        assert_same(1, (int) ($pipelineCounts['same_priority'] ?? 0), 'frontend provider preservation diagnostics should include the FTS priority callback');
         $callbackLabels = json_encode($pipeline['callbacks'] ?? [], JSON_THROW_ON_ERROR);
-        assert_contains('function: wp_fts_test_prior_posts_pre_query_provider', $callbackLabels, 'frontend provider override diagnostics should label the prior hook callback');
+        assert_contains('function: wp_fts_test_prior_posts_pre_query_provider', $callbackLabels, 'frontend provider preservation diagnostics should label the prior hook callback');
         $traceJson = json_encode($trace, JSON_THROW_ON_ERROR);
         assert_true(!str_contains($traceJson, 'Earlier provider result A'), 'frontend provider override diagnostics should not log earlier provider post titles');
         assert_true(!str_contains($traceJson, 'Earlier provider result B'), 'frontend provider override diagnostics should not log earlier provider post titles');
@@ -24956,25 +27124,27 @@ test_case('enabled diagnostics record search provider compatibility overrides', 
             'post_type' => 'post',
             'post_status' => 'publish',
         ]);
+        $queriesBeforeAdminProvider = $fake->num_queries;
         $adminPosts = WP_FTS_Plugin::replace_admin_post_search_posts($adminIncoming, $adminQuery);
 
-        assert_same([842], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $adminPosts), 'admin FTS-wins mode should replace earlier provider posts with FTS posts');
+        assert_same($adminIncoming, $adminPosts, 'admin search should preserve an earlier non-null provider result in every mode');
+        assert_same($queriesBeforeAdminProvider, $fake->num_queries, 'admin provider preservation should issue zero FTS statements');
         $adminTraces = WP_FTS_Plugin::debug_traces();
-        assert_same(1, count($adminTraces), 'admin provider override should record one debug trace');
+        assert_same(1, count($adminTraces), 'admin provider preservation should record one debug trace');
         $adminTrace = $adminTraces[0];
-        assert_same('admin post search', $adminTrace['context'] ?? null, 'admin provider override trace should record the admin context');
-        assert_same('ran', $adminTrace['status'] ?? null, 'admin provider override trace should be marked as ran');
+        assert_same('admin post search', $adminTrace['context'] ?? null, 'admin provider preservation trace should record the admin context');
+        assert_same('bailed', $adminTrace['status'] ?? null, 'admin provider preservation trace should be marked as bailed');
         $adminCounts = is_array($adminTrace['counts'] ?? null) ? $adminTrace['counts'] : [];
-        assert_same(1, (int) ($adminCounts['incoming_provider_results'] ?? 0), 'admin provider override diagnostics should count incoming provider results without logging payloads');
-        assert_same(1, (int) ($adminCounts['prior_provider_responses_replaced'] ?? 0), 'admin provider override diagnostics should count the replaced provider response');
+        assert_same(1, (int) ($adminCounts['incoming_provider_results'] ?? 0), 'admin provider preservation diagnostics should count incoming provider results without logging payloads');
+        assert_true(!array_key_exists('prior_provider_responses_replaced', $adminCounts), 'admin provider diagnostics should not expose an impossible replacement counter');
         $adminNotes = is_array($adminTrace['notes'] ?? null) ? $adminTrace['notes'] : [];
-        assert_true(in_array('FTS replaced an earlier non-null posts_pre_query result from another search provider.', $adminNotes, true), 'admin provider override diagnostics should explain that FTS replaced an earlier provider response');
+        assert_true(in_array('Language FTS kept an earlier non-null posts_pre_query result because that provider already owns membership.', $adminNotes, true), 'admin provider diagnostics should explain why the earlier result was preserved');
     } finally {
         $wpdb = $oldWpdb;
     }
 });
 
-test_case('final ownership diagnostics report later provider changes to Language FTS output', function (): void {
+test_case('later posts_pre_query providers keep the query on the core ownership boundary', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -25029,16 +27199,16 @@ test_case('final ownership diagnostics report later provider changes to Language
             's' => 'finalchangelanguageneedle',
             'posts_per_page' => 10,
         ]);
+        $queriesBeforeProvider = $fake->num_queries;
         $posts = apply_filters('posts_pre_query', null, $query);
 
-        assert_same([862], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $posts), 'later provider should remain able to replace Language FTS posts');
+        assert_same([862], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $posts), 'later provider should own membership without Language FTS first ranking a page');
+        assert_same($queriesBeforeProvider, $fake->num_queries, 'a later posts_pre_query provider should force zero FTS statements');
         $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
         $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
-        assert_same('later_provider_changed_fts', $ownership['status'] ?? null, 'final ownership should report a later provider change');
-        assert_same('later_provider', $ownership['owner'] ?? null, 'final ownership should attribute the final result to a later provider');
-        assert_same(true, $ownership['observed'] ?? null, 'final ownership should record that the late observer ran');
-        assert_same([861], $ownership['expected_post_ids'] ?? null, 'final ownership should expose only bounded expected FTS post IDs');
-        assert_same([862], $ownership['final_post_ids'] ?? null, 'final ownership should expose only bounded final post IDs');
+        assert_same('bailed', $trace['status'] ?? null, 'later-provider ownership should be recorded as an FTS bailout');
+        assert_contains('registered posts_pre_query callbacks', (string) ($trace['bailout_reason'] ?? ''), 'later-provider ownership should explain why core retained the query');
+        assert_same('unavailable', $ownership['status'] ?? null, 'FTS final ownership should remain unavailable because FTS never produced rows');
 
         $traceJson = json_encode($trace, JSON_THROW_ON_ERROR);
         assert_true(!str_contains($traceJson, 'later-provider-title-must-not-leak'), 'final ownership should not log later provider post titles');
@@ -25049,7 +27219,7 @@ test_case('final ownership diagnostics report later provider changes to Language
     }
 });
 
-test_case('final ownership diagnostics report Language FTS survival after later callbacks', function (): void {
+test_case('even preserving later callbacks keep the query on the core ownership boundary', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -25105,16 +27275,18 @@ test_case('final ownership diagnostics report Language FTS survival after later 
             's' => 'finalsurvivelanguageneedle',
             'posts_per_page' => 10,
         ]);
+        $queriesBeforeProvider = $fake->num_queries;
         $posts = apply_filters('posts_pre_query', null, $query);
 
-        assert_same([864], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $posts), 'preserving later callback should not change Language FTS posts');
+        assert_same([863], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $posts), 'an earlier provider result should survive because FTS cannot assume a later callback is membership-neutral');
+        assert_same($queriesBeforeProvider, $fake->num_queries, 'any later posts_pre_query callback should force zero FTS statements');
         $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
         $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
-        assert_same('language_fts_survived', $ownership['status'] ?? null, 'final ownership should report that Language FTS survived later callbacks');
-        assert_same('language_fts', $ownership['owner'] ?? null, 'final ownership should attribute the result to Language FTS');
-        assert_same('language_fts_replaced_prior_provider', $ownership['origin'] ?? null, 'final ownership should record that Language FTS replaced an earlier provider result');
-        assert_same([864], $ownership['expected_post_ids'] ?? null, 'final ownership should keep expected FTS post IDs bounded');
-        assert_same([864], $ownership['final_post_ids'] ?? null, 'final ownership should keep final post IDs bounded');
+        assert_same('bailed', $trace['status'] ?? null, 'a preserving later callback should still be recorded as an FTS bailout');
+        assert_contains('registered posts_pre_query callbacks', (string) ($trace['bailout_reason'] ?? ''), 'a preserving later callback should still keep the query on core');
+        assert_same('unavailable', $ownership['status'] ?? null, 'FTS final ownership should remain unavailable because FTS never produced rows');
+        $traceJson = json_encode($trace, JSON_THROW_ON_ERROR);
+        assert_true(!str_contains($traceJson, 'prior-provider-title-must-not-leak'), 'core-boundary diagnostics should not log provider post titles');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -25144,6 +27316,12 @@ test_case('final ownership diagnostics report null-path replacement and respecte
         wp_fts_test_index_saved_post(865, $post, true);
 
         wp_fts_test_set_posts_pre_query_filter_pipeline([
+            20 => [
+                'abstaining_prior_provider' => [
+                    'function' => static fn(mixed $posts, mixed $query = null): mixed => $posts,
+                    'accepted_args' => 2,
+                ],
+            ],
             WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY => [
                 'language_fts' => [
                     'function' => [WP_FTS_Plugin::class, 'replace_frontend_search_posts'],
@@ -25163,7 +27341,7 @@ test_case('final ownership diagnostics report null-path replacement and respecte
         ]);
         $posts = apply_filters('posts_pre_query', null, $query);
 
-        assert_same([865], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $posts), 'Language FTS should still replace the null search path');
+        assert_same([865], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $posts), 'Language FTS should replace the null path after an earlier provider explicitly abstains');
         $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
         $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
         assert_same('language_fts_replaced_null', $ownership['status'] ?? null, 'final ownership should report null-path replacement');
@@ -25206,20 +27384,22 @@ test_case('final ownership diagnostics report null-path replacement and respecte
             's' => 'finalnullpathneedle',
             'posts_per_page' => 10,
         ]);
+        $queriesBeforeRespectedProvider = $fake->num_queries;
         $respected = apply_filters('posts_pre_query', null, $respectQuery);
 
         assert_same([866], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $respected), 'coexistence mode should still preserve the earlier provider result');
+        assert_same($queriesBeforeRespectedProvider, $fake->num_queries, 'core-ownership mode should issue zero FTS statements for a registered provider');
         $respectTrace = WP_FTS_Plugin::debug_traces()[0] ?? [];
         $respectOwnership = is_array($respectTrace['search_final_ownership'] ?? null) ? $respectTrace['search_final_ownership'] : [];
-        assert_same('earlier_provider_respected', $respectOwnership['status'] ?? null, 'final ownership should report respected earlier providers');
-        assert_same('earlier_provider', $respectOwnership['owner'] ?? null, 'final ownership should attribute respected results to the earlier provider');
-        assert_same([866], $respectOwnership['final_post_ids'] ?? null, 'respected provider diagnostics should expose only bounded final post IDs');
+        assert_same('bailed', $respectTrace['status'] ?? null, 'core-ownership mode should record an FTS bailout before provider payload inspection');
+        assert_contains('registered posts_pre_query callbacks', (string) ($respectTrace['bailout_reason'] ?? ''), 'core-ownership mode should explain the callback ownership boundary');
+        assert_same('unavailable', $respectOwnership['status'] ?? null, 'FTS final ownership should remain unavailable because FTS never produced rows');
     } finally {
         $wpdb = $oldWpdb;
     }
 });
 
-test_case('final ownership observer is read-only hidden when diagnostics are disabled and covers admin search', function (): void {
+test_case('final ownership observer preserves unmarked results when diagnostics are disabled and covers admin search', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -25227,12 +27407,12 @@ test_case('final ownership observer is read-only hidden when diagnostics are dis
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
 
-    $incoming = [(object) ['ID' => 868, 'post_title' => 'observer read-only result']];
+    $incoming = [(object) ['ID' => 868, 'post_title' => 'observer unmarked result']];
     $query = new WP_FTS_Test_Query([
         's' => 'readonlyfinalownerneedle',
         'posts_per_page' => 10,
     ]);
-    assert_same($incoming, WP_FTS_Plugin::observe_final_search_posts($incoming, $query), 'late final ownership observer should return posts unchanged');
+    assert_same($incoming, WP_FTS_Plugin::observe_final_search_posts($incoming, $query), 'late final ownership observer should return unmarked posts unchanged');
 
     $frontPost = (object) [
         'ID' => 869,
@@ -25343,7 +27523,7 @@ test_case('final ownership request state is consumed after successful observer e
         assert_true(is_array($state) && array_key_exists($queryKey, $state), 'final ownership state should exist before the late observer runs');
 
         $returned = WP_FTS_Plugin::observe_final_search_posts($expectedPosts, $query);
-        assert_same($expectedPosts, $returned, 'late final ownership observer should return posts unchanged while consuming state');
+        assert_same($expectedPosts, $returned, 'late final ownership observer should return unmarked posts unchanged while consuming state');
 
         $state = $ownershipState->getValue();
         assert_true(is_array($state) && !array_key_exists($queryKey, $state), 'final ownership state should be removed after a successful observer run');
@@ -25391,7 +27571,7 @@ test_case('final ownership request state is removed for missing trace rows', fun
         ]);
 
         $posts = [(object) ['ID' => 903]];
-        assert_same($posts, WP_FTS_Plugin::observe_final_search_posts($posts, $query), 'missing-trace cleanup should keep the observer read-only');
+        assert_same($posts, WP_FTS_Plugin::observe_final_search_posts($posts, $query), 'missing-trace cleanup should preserve unmarked posts');
 
         $state = $ownershipState->getValue();
         assert_true(is_array($state) && !array_key_exists($queryKey, $state), 'missing-trace final ownership state should be removed');
@@ -25600,7 +27780,7 @@ test_case('admin Posts list search is replaced with FTS-ranked WP_Post results',
     }
 });
 
-test_case('admin Posts list search replacement overrides earlier posts_pre_query providers only when eligible', function (): void {
+test_case('admin Posts list search replacement preserves earlier posts_pre_query providers and runs FTS only from null', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -25642,10 +27822,12 @@ test_case('admin Posts list search replacement overrides earlier posts_pre_query
             'post_type' => 'post',
             'post_status' => 'publish',
         ]);
+        $queriesBeforeProvider = $fake->num_queries;
         $posts = WP_FTS_Plugin::replace_admin_post_search_posts($incoming, $query);
 
-        assert_same([832, 831], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'eligible admin replacement should override earlier posts_pre_query results with FTS-ranked posts');
-        assert_same(2, $query->found_posts, 'admin precedence replacement should expose the FTS visible total');
+        assert_same($incoming, $posts, 'an earlier non-null posts_pre_query result should retain admin membership ownership even in the default mode');
+        assert_same(0, $query->found_posts, 'admin provider preservation should not write FTS totals');
+        assert_same($queriesBeforeProvider, $fake->num_queries, 'admin provider preservation should issue zero FTS statements');
 
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
             WP_FTS_Plugin::default_settings(),
@@ -25685,7 +27867,7 @@ test_case('admin Posts list search replacement overrides earlier posts_pre_query
             'post_type' => 'post',
             'post_status' => 'trash',
         ]);
-        assert_same([], WP_FTS_Plugin::replace_admin_post_search_posts($incoming, $constrained), 'enabled constrained admin searches should fail closed instead of preserving a prior provider or reaching core LIKE search');
+        assert_same($incoming, WP_FTS_Plugin::replace_admin_post_search_posts($incoming, $constrained), 'a constrained admin search should preserve the incoming provider result because FTS does not own that shape');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -25801,7 +27983,7 @@ test_case('admin Posts list default search covers supported statuses and filters
         ]);
         WP_FTS_Plugin::prepare_admin_post_search_query($restrictedQuery);
         assert_same(null, $restrictedQuery->get('wp_fts_admin_post_search_candidate', null), 'default non-public admin scope should stay on WordPress without type-wide capabilities');
-        assert_same([], WP_FTS_Plugin::replace_admin_post_search_posts(null, $restrictedQuery), 'an enabled admin search must fail closed when its permission scope cannot be represented before LIMIT');
+        assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $restrictedQuery), 'an admin permission scope that cannot be represented before LIMIT should stay on core WordPress search');
 
         $publishedQuery = new WP_FTS_Test_Query([
             's' => 'allstatusneedle',
@@ -25840,7 +28022,7 @@ test_case('admin Posts takeover uses the registered post type capability map', f
     ]);
     WP_FTS_Plugin::prepare_admin_post_search_query($genericOnly);
     assert_same(null, $genericOnly->get('wp_fts_admin_post_search_candidate', null), 'generic post caps must not authorize the admin takeover when the registered post type maps custom primitives');
-    assert_same([], WP_FTS_Plugin::replace_admin_post_search_posts(null, $genericOnly), 'unauthorized mapped capability scope should fail closed instead of reaching native LIKE search');
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $genericOnly), 'an unauthorized mapped capability scope should stay on native WordPress search');
 
     $GLOBALS['wp_fts_test_caps']['edit_others_articles'][0] = true;
     $GLOBALS['wp_fts_test_caps']['read_private_articles'][0] = true;
@@ -25851,7 +28033,7 @@ test_case('admin Posts takeover uses the registered post type capability map', f
     ]);
     WP_FTS_Plugin::prepare_admin_post_search_query($missingPublished);
     assert_same(null, $missingPublished->get('wp_fts_admin_post_search_candidate', null), 'default admin status scope should require the mapped edit-published capability used for scheduled posts');
-    assert_same([], WP_FTS_Plugin::replace_admin_post_search_posts(null, $missingPublished), 'missing mapped edit-published capability should fail closed before native LIKE search');
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $missingPublished), 'a scope missing the mapped edit-published capability should stay on native WordPress search');
 
     unset($GLOBALS['wp_fts_test_caps']['read_private_articles']);
     $GLOBALS['wp_fts_test_caps']['edit_published_articles'][0] = true;
@@ -25862,7 +28044,7 @@ test_case('admin Posts takeover uses the registered post type capability map', f
     ]);
     WP_FTS_Plugin::prepare_admin_post_search_query($missingPrivate);
     assert_same(null, $missingPrivate->get('wp_fts_admin_post_search_candidate', null), 'default admin status scope should require its mapped private-read capability as well as mapped edit-others');
-    assert_same([], WP_FTS_Plugin::replace_admin_post_search_posts(null, $missingPrivate), 'missing mapped private-read capability should fail closed before native LIKE search');
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $missingPrivate), 'a scope missing the mapped private-read capability should stay on native WordPress search');
 
     $GLOBALS['wp_fts_test_caps']['read_private_articles'][0] = true;
     $mapped = new WP_FTS_Test_Query([
@@ -25925,7 +28107,7 @@ test_case('admin Posts list search replacement can be disabled independently', f
     }
 });
 
-test_case('admin Posts list search replacement fails closed when its post type is not indexed', function (): void {
+test_case('admin Posts list search replacement leaves unindexed post types to core', function (): void {
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_is_admin'] = true;
     $GLOBALS['pagenow'] = 'edit.php';
@@ -25942,7 +28124,7 @@ test_case('admin Posts list search replacement fails closed when its post type i
 
     WP_FTS_Plugin::prepare_admin_post_search_query($query);
     assert_same(null, $query->get('wp_fts_admin_post_search_candidate', null), 'admin Posts list search should not be marked for FTS replacement when post indexing is disabled');
-    assert_same([], WP_FTS_Plugin::replace_admin_post_search_posts(null, $query), 'enabled admin replacement must not fall back to native WordPress LIKE search when the requested type is unindexed');
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $query), 'an unindexed requested type should stay on native WordPress search');
 });
 
 test_case('admin Posts list search replacement avoids REST cron secondary sandbox and constrained queries', function (): void {
@@ -25994,13 +28176,18 @@ test_case('admin Posts list search replacement avoids REST cron secondary sandbo
         'page list' => ['post_type' => 'page'],
         'include list' => ['post__in' => [551]],
         'author id' => ['author' => 7],
+        'custom tax query' => ['tax_query' => [['taxonomy' => 'category', 'terms' => [5]]]],
+        'date query' => ['date_query' => [['after' => '2026-01-01']]],
         'custom meta query' => ['meta_query' => [['key' => 'featured', 'value' => '1']]],
+        'search columns' => ['search_columns' => ['post_title']],
         'sorted column' => ['orderby' => 'title'],
         'custom status sorted column' => ['post_status' => 'draft', 'perm' => 'readable', 'orderby' => 'title'],
         'custom status order direction' => ['post_status' => 'pending', 'perm' => 'readable', 'orderby' => 'modified', 'order' => 'DESC'],
         'permission scope' => ['perm' => 'editable'],
         'id result shape' => ['fields' => 'ids'],
         'parent result shape' => ['fields' => 'id=>parent'],
+        'numbered page' => ['paged' => 2],
+        'numeric offset' => ['offset' => 10],
         'unbounded result set' => ['posts_per_page' => -1],
         'page size above FTS ceiling' => ['posts_per_page' => 100],
         'no paging' => ['nopaging' => true],
@@ -26019,14 +28206,11 @@ test_case('admin Posts list search replacement avoids REST cron secondary sandbo
         WP_FTS_Plugin::prepare_admin_post_search_query($guarded);
         assert_same(null, $guarded->get('wp_fts_admin_post_search_candidate', null), "constrained admin {$label} search should not be marked for FTS replacement");
         $replacement = WP_FTS_Plugin::replace_admin_post_search_posts(null, $guarded);
-        $expected = $label === 'suppressed filters' ? null : [];
-        assert_same($expected, $replacement, $label === 'suppressed filters'
-            ? 'explicit suppress_filters should leave the admin query to WordPress'
-            : "enabled admin {$label} search should fail closed instead of issuing an explosive core query");
+        assert_same(null, $replacement, "unsupported admin {$label} search should stay on core WordPress search");
     }
 });
 
-test_case('front-end search replacement fails closed for constrained WP_Query searches', function (): void {
+test_case('front-end search replacement leaves constrained WP_Query searches to core', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -26059,6 +28243,7 @@ test_case('front-end search replacement fails closed for constrained WP_Query se
             'year archive' => ['year' => 2026],
             'meta key' => ['meta_key' => 'featured'],
             'custom meta query' => ['meta_query' => [['key' => 'featured', 'value' => '1']]],
+            'search columns' => ['search_columns' => ['post_title']],
             'include list' => ['post__in' => [751]],
             'exclude list' => ['post__not_in' => [752]],
             'exact post id' => ['p' => 751],
@@ -26066,6 +28251,8 @@ test_case('front-end search replacement fails closed for constrained WP_Query se
             'exact post name' => ['name' => 'constrained-front-end-result'],
             'id result shape' => ['fields' => 'ids'],
             'parent result shape' => ['fields' => 'id=>parent'],
+            'numbered page' => ['paged' => 2],
+            'numeric offset' => ['offset' => 10],
             'custom ordering' => ['orderby' => 'title'],
             'ascending relevance' => ['order' => 'ASC'],
             'unbounded result set' => ['posts_per_page' => -1],
@@ -26086,10 +28273,7 @@ test_case('front-end search replacement fails closed for constrained WP_Query se
             WP_FTS_Plugin::prepare_frontend_search_query($query);
             assert_same(null, $query->get('wp_fts_search_candidate', null), "constrained {$label} search should not be marked for FTS replacement");
             $replacement = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
-            $expected = $label === 'suppressed filters' ? null : [];
-            assert_same($expected, $replacement, $label === 'suppressed filters'
-                ? 'explicit suppress_filters should leave the front-end query to WordPress'
-                : "enabled {$label} search should fail closed instead of issuing an explosive core query");
+            assert_same(null, $replacement, "unsupported {$label} search should stay on core WordPress search");
         }
 
         $defaultShape = new WP_FTS_Test_Query([
@@ -26122,7 +28306,7 @@ test_case('front-end search replacement fails closed for constrained WP_Query se
         ]);
         WP_FTS_Plugin::prepare_frontend_search_query($broaderAnyScope);
         assert_same(null, $broaderAnyScope->get('wp_fts_search_candidate', null), 'post_type=any should not be marked as a supported FTS candidate when core scope contains an unindexed non-public type');
-        assert_same([], WP_FTS_Plugin::replace_frontend_search_posts(null, $broaderAnyScope), 'enabled post_type=any search should fail closed instead of narrowing scope or reaching core LIKE search');
+        assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $broaderAnyScope), 'post_type=any should stay on core search when its complete scope is not indexed');
     } finally {
         unset($GLOBALS['wp_fts_test_post_types']['internal-search']);
         $wpdb = $oldWpdb;
@@ -27567,6 +29751,67 @@ test_case('strict runtime lemma pack enable leaves options unchanged after integ
     }
 });
 
+test_case('runtime lemma pack aggregate overflow leaves options and readiness untouched', function (): void {
+    $root = temp_directory_path('runtime_pack_aggregate_enable');
+    $existingDirectory = $root . '/existing';
+    $candidateDirectory = $root . '/candidate';
+
+    try {
+        $existingManifest = write_synthetic_full_analyzer_pack(
+            $existingDirectory,
+            64,
+            64,
+            'qaa',
+            'qaa-aggregate-enable-fixture'
+        );
+        $candidateManifest = write_synthetic_full_analyzer_pack(
+            $candidateDirectory,
+            64,
+            64,
+            'qab',
+            'qab-aggregate-enable-fixture'
+        );
+        foreach ([$existingManifest, $candidateManifest] as $manifestPath) {
+            $manifest = json_decode((string) file_get_contents($manifestPath), true, 512, JSON_THROW_ON_ERROR);
+            $manifest['fixture_only'] = true;
+            $manifest['provenance']['no_full_third_party_dictionary_dump'] = true;
+            file_put_contents(
+                $manifestPath,
+                json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n"
+            );
+        }
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'lemmatizer_packs_by_lang' => ['qaa' => $existingManifest],
+        ];
+        $optionsBefore = $GLOBALS['wp_fts_test_options'];
+        $updatesBefore = $GLOBALS['wp_fts_test_updated_options'];
+        $scheduledBefore = $GLOBALS['wp_fts_test_scheduled'];
+        $cronWritesBefore = $GLOBALS['wp_fts_test_cron_write_count'];
+
+        $error = null;
+        try {
+            WP_FTS_Plugin::set_runtime_lemma_pack_option('qab', $candidateManifest);
+        } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $caught) {
+            $error = $caught;
+        }
+
+        assert_true($error instanceof WP_FTS_Analyzer_Config_Limit_Exceeded, 'two individually valid packs should reject when their effective runtime set exceeds the aggregate envelope');
+        assert_same('configured_pack_metadata', $error?->reason_code, 'aggregate runtime enable should retain the configured metadata reason');
+        assert_same($optionsBefore, $GLOBALS['wp_fts_test_options'], 'aggregate rejection must precede analyzer-option and readiness mutation');
+        assert_same($updatesBefore, $GLOBALS['wp_fts_test_updated_options'], 'aggregate rejection must issue no option update');
+        assert_same($scheduledBefore, $GLOBALS['wp_fts_test_scheduled'], 'aggregate rejection must schedule no recovery work');
+        assert_same($cronWritesBefore, $GLOBALS['wp_fts_test_cron_write_count'], 'aggregate rejection must issue no cron write');
+
+        $analyzer = WP_FTS_Plugin::runtime_analyzer();
+        assert_same(['lemma00000000'], $analyzer->analyze_query('surface00000000', ['lang' => 'qaa']), 'the previously valid runtime configuration should remain active after rejection');
+    } finally {
+        remove_directory_tree($root);
+        wp_fts_test_reset_wordpress_fakes();
+    }
+});
+
 test_case('analyzer pack digest attestations are reused invalidated and bounded', function (): void {
     $cache = new ReflectionProperty(WP_FTS_AnalyzerPackValidator::class, 'digestAttestations');
     $order = new ReflectionProperty(WP_FTS_AnalyzerPackValidator::class, 'digestAttestationOrder');
@@ -27578,20 +29823,41 @@ test_case('analyzer pack digest attestations are reused invalidated and bounded'
     $directory = temp_directory_path('pack_attestation_cache');
     try {
         mkdir($directory, 0777, true);
-        $validator = new WP_FTS_AnalyzerPackValidator();
-        $path = $directory . '/stable.tsv';
-        file_put_contents($path, "stable\trow\n");
-        touch($path, time() + 5);
-        $digest = hash_file('sha256', $path);
-        $method->invoke($validator, $path, $digest, 'digest mismatch');
-        $method->invoke($validator, $path, $digest, 'digest mismatch');
-        assert_same(0, count($cache->getValue()), 'current-second file generations should be rehashed instead of cached');
+        $coarseGeneration = static function (string $file): array {
+            clearstatcache(true, $file);
+            $stat = stat($file);
+            assert_true(is_array($stat), 'hot attestation fixture generation should be readable');
+            return array_intersect_key($stat, array_flip(['dev', 'ino', 'size', 'mtime', 'ctime']));
+        };
+        $validator = null;
+        $path = '';
+        $digest = '';
+        $beforeReplacement = [];
+        $afterReplacement = [];
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $path = $directory . "/stable-{$attempt}.tsv";
+            file_put_contents($path, "stable\trow\n");
+            touch($path, time() + 5);
+            $validator = new WP_FTS_AnalyzerPackValidator();
+            $digest = (string) hash_file('sha256', $path);
+            $method->invoke($validator, $path, $digest, 'digest mismatch');
+            $method->invoke($validator, $path, $digest, 'digest mismatch');
 
-        clearstatcache(true, $path);
-        $restoredMtime = filemtime($path);
-        assert_true(is_int($restoredMtime), 'hot attestation fixture mtime should be readable');
-        file_put_contents($path, "mutant\trow\n");
-        touch($path, $restoredMtime);
+            $beforeReplacement = $coarseGeneration($path);
+            file_put_contents($path, "mutant\trow\n");
+            touch($path, (int) $beforeReplacement['mtime']);
+            $afterReplacement = $coarseGeneration($path);
+            if ($beforeReplacement === $afterReplacement) {
+                break;
+            }
+            unlink($path);
+        }
+        assert_same($beforeReplacement, $afterReplacement, 'the in-place replacement should retain identical second-resolution stat fields without sleeping');
+        assert_true($validator instanceof WP_FTS_AnalyzerPackValidator, 'the hot-generation attempt should retain its validator');
+        assert_same(0, count($cache->getValue()), 'current-second file generations should not enter the process-static cache');
+        assert_same(1, $validator->digest_attestation_stats()['files_hashed'], 'one current-second generation should be hashed only once inside a lookup batch');
+
+        $validator->begin_digest_attestation_batch();
         $sameStatReplacementFailed = false;
         try {
             $method->invoke($validator, $path, $digest, 'digest mismatch');
@@ -27599,6 +29865,7 @@ test_case('analyzer pack digest attestations are reused invalidated and bounded'
             $sameStatReplacementFailed = true;
         }
         assert_true($sameStatReplacementFailed, 'same-second same-size replacements with restored mtimes should not reuse a stale attestation');
+        assert_same(2, $validator->digest_attestation_stats()['files_hashed'], 'a later lookup batch should rehash a current-second generation even when coarse stat fields are unchanged');
         assert_same(0, count($cache->getValue()), 'failed hot-generation attestation should not enter the success cache');
 
         file_put_contents($path, "stable\trow\n");
@@ -28184,6 +30451,37 @@ test_case('top-language pack audit marks generated non-fixture Spanish pack as p
         assert_same('pack_backed', $rows['es']['status'] ?? null, 'generated non-fixture Spanish manifest should count as pack-backed');
         assert_same('es-synthetic-audit-pack-backed', $rows['es']['pack_id'] ?? null, 'Spanish audit row should expose the generated pack id');
         assert_same(realpath($manifest), $rows['es']['manifest'] ?? null, 'Spanish audit row should expose the discovered manifest path');
+        $manifestData = json_decode((string) file_get_contents($manifest), true, 512, JSON_THROW_ON_ERROR);
+        foreach ($manifestData['runtime']['files'] ?? [] as $runtimeFile) {
+            assert_same('gzip', $runtimeFile['compression'] ?? null, 'non-fixture generic imports should default to indexed gzip runtime shards');
+            assert_same(WP_FTS_LemmaPackLookupIndex::FORMAT, $runtimeFile['lookup']['format'] ?? null, 'non-fixture generic imports should default to lookup sidecars');
+        }
+    } finally {
+        remove_directory_tree($root);
+    }
+});
+
+test_case('top-language pack audit rejects metadata-valid packs that cannot activate', function (): void {
+    $root = temp_directory_path('top_language_audit_unactivatable_root');
+    try {
+        if (!mkdir($root, 0777, true) && !is_dir($root)) {
+            throw new WP_FTS_TestFailure("Could not create unactivatable audit root: {$root}");
+        }
+        $manifest = write_synthetic_audit_lemma_pack('es', $root . '/es-pack', true);
+        $manifestData = json_decode((string) file_get_contents($manifest), true, 512, JSON_THROW_ON_ERROR);
+        $manifestData['fixture_only'] = false;
+        if (file_put_contents($manifest, json_encode($manifestData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n") === false) {
+            throw new WP_FTS_TestFailure('Could not write metadata-valid unactivatable audit manifest.');
+        }
+
+        $cli = run_top_language_pack_audit([
+            '--pack-root=' . $root,
+            '--json',
+        ]);
+        assert_same(0, $cli['exit'], 'unactivatable pack should be reported without failing when the required gate is off');
+        $rows = top_language_audit_rows_by_language($cli['json']);
+        assert_same('invalid_pack', $rows['es']['status'] ?? null, 'audit must not call an unindexed non-fixture manifest pack-backed');
+        assert_contains('eager or indexed lookup envelope', (string) ($rows['es']['error'] ?? ''), 'audit should expose the activation boundary that rejected the pack');
     } finally {
         remove_directory_tree($root);
     }
@@ -28315,6 +30613,9 @@ test_case('generic lemma TSV importer builds a valid synthetic pack', function (
         assert_same('qaa', $summary['language'] ?? null, 'generic importer summary should expose language');
         assert_same(5, $summary['runtime']['rows'] ?? null, 'generic importer should sort and deduplicate synthetic rows');
         assert_same(3, $summary['runtime']['files'] ?? null, 'generic importer should shard without splitting ambiguous surfaces');
+        assert_same($summary['runtime']['bytes'] ?? null, $summary['runtime']['decoded_bytes'] ?? null, 'plain fixture importer should report exact decoded bytes');
+        assert_same($summary['runtime']['bytes'] ?? null, $summary['runtime']['encoded_bytes'] ?? null, 'plain fixture importer should report exact physical bytes');
+        assert_same(0, $summary['lookup']['bytes'] ?? null, 'plain fixture importer should report no lookup bytes');
         assert_same(1, $summary['stats']['deduplicated_rows'] ?? null, 'generic importer should report duplicate source pairs');
         assert_same(3, $summary['stats']['rows_with_tags'] ?? null, 'generic importer should accept optional tag columns');
         assert_same(3, $summary['stats']['rows_with_source_notes'] ?? null, 'generic importer should accept optional source-note columns');
@@ -28508,8 +30809,17 @@ test_case('compressed lemma pack importer emits a strict seekable lookup sidecar
         write_synthetic_qaa_lemma_tsv_source($source);
         $args = synthetic_qaa_lemma_tsv_import_args($source, $out);
         $args[] = '--runtime-compression=gzip';
+        $args[] = '--fixture-only=false';
         $options = WP_FTS_LemmaTsvPackImporter::parse_cli_options($args);
-        (new WP_FTS_LemmaTsvPackImporter())->import($options);
+        $summary = (new WP_FTS_LemmaTsvPackImporter())->import($options);
+        assert_true(($summary['runtime']['decoded_bytes'] ?? 0) > 0, 'compressed importer should report decoded runtime bytes');
+        assert_same($summary['runtime']['bytes'], $summary['runtime']['encoded_bytes'] ?? null, 'compressed importer should identify encoded runtime bytes');
+        assert_true(($summary['lookup']['bytes'] ?? 0) > 0, 'compressed importer should report lookup bytes');
+        assert_same(
+            $summary['runtime']['encoded_bytes'] + $summary['lookup']['bytes'],
+            $summary['runtime_lookup_bytes'] ?? null,
+            'compressed importer should report exact runtime-plus-lookup bytes'
+        );
 
         $manifestPath = $out . '/manifest.json';
         $manifest = json_decode((string) file_get_contents($manifestPath), true, 512, JSON_THROW_ON_ERROR);
@@ -28556,6 +30866,38 @@ test_case('compressed lemma pack importer emits a strict seekable lookup sidecar
     }
 });
 
+test_case('non-fixture lemma importer rejects unindexed runtime storage', function (): void {
+    require_once __DIR__ . '/../tools/import-lemma-tsv-pack.php';
+
+    $sourceDir = temp_directory_path('lemma_tsv_unindexed_production_source');
+    $out = temp_directory_path('lemma_tsv_unindexed_production_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create non-fixture importer source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-normalized-lemma.tsv';
+        write_synthetic_qaa_lemma_tsv_source($source);
+        $options = WP_FTS_LemmaTsvPackImporter::parse_cli_options(
+            synthetic_qaa_lemma_tsv_import_args($source, $out)
+        );
+        $options['fixture_only'] = false;
+        $options['runtime_compression'] = 'none';
+
+        $failure = null;
+        try {
+            (new WP_FTS_LemmaTsvPackImporter())->import($options);
+        } catch (Throwable $error) {
+            $failure = $error;
+        }
+        assert_true($failure instanceof RuntimeException, 'non-fixture import should reject runtime storage without a lookup sidecar');
+        assert_contains('require --runtime-compression=gzip', $failure?->getMessage() ?? '', 'non-fixture rejection should identify the indexed gzip requirement');
+        assert_true(!is_dir($out), 'rejected non-fixture storage should not create a partial pack directory');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+    }
+});
+
 test_case('conllu lemma importer builds a valid synthetic pack and skips non-runtime rows', function (): void {
     $sourceDir = temp_directory_path('conllu_import_source');
     $out = temp_directory_path('conllu_import_pack');
@@ -28594,6 +30936,21 @@ test_case('conllu lemma importer builds a valid synthetic pack and skips non-run
         assert_same(WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV, $validation['manifest']['runtime']['format'], 'generated CoNLL-U pack should use lemma TSV runtime format');
         assert_same('Project-owned synthetic qaa CoNLL-U importer fixture', $validation['manifest']['source']['name'] ?? null, 'generated CoNLL-U manifest should preserve source name');
         assert_same('Project-owned synthetic qaa CoNLL-U rows for importer tests only.', $validation['manifest']['attribution']['upstream'] ?? null, 'generated CoNLL-U manifest should preserve attribution');
+        $sourceSha = hash_file('sha256', $source);
+        assert_same($sourceSha, $summary['source']['sha256'] ?? null, 'CoNLL-U summary should attest the original source bytes instead of staged normalized TSV');
+        assert_same(filesize($source), $summary['source']['bytes'] ?? null, 'CoNLL-U summary should report the original source byte count');
+        assert_same($sourceSha, $validation['manifest']['source']['artifact_sha256'] ?? null, 'CoNLL-U manifest should attest the original source digest');
+        assert_same(filesize($source), $validation['manifest']['source']['byte_count'] ?? null, 'CoNLL-U manifest should report the original source size');
+        assert_same('qaa-synthetic.conllu', $validation['manifest']['source']['file'] ?? null, 'CoNLL-U manifest should retain the original source path');
+        assert_same('conllu-ten-column-v1', $validation['manifest']['source']['column_model']['format'] ?? null, 'CoNLL-U manifest should declare the original ten-column format');
+        assert_same('indexer/tools/import-conllu-lemma-pack.php', $validation['manifest']['provenance']['importer'] ?? null, 'CoNLL-U manifest should identify the source-aware importer');
+        $sourceLock = json_decode((string) file_get_contents($out . '/SOURCE.lock.json'), true, 512, JSON_THROW_ON_ERROR);
+        assert_same($sourceSha, $sourceLock['source']['artifact_sha256'] ?? null, 'CoNLL-U source lock should attest the original source digest');
+        assert_same(filesize($source), $sourceLock['source']['byte_count'] ?? null, 'CoNLL-U source lock should report the original source byte count');
+        assert_same('conllu-ten-column-v1', $sourceLock['columns']['format'] ?? null, 'CoNLL-U source lock should declare original column semantics');
+        $notice = (string) file_get_contents($out . '/NOTICE.txt');
+        assert_contains('Source file path: qaa-synthetic.conllu', $notice, 'CoNLL-U NOTICE should identify the original source artifact');
+        assert_contains('Source artifact SHA-256: ' . $sourceSha, $notice, 'CoNLL-U NOTICE should attest the original source digest');
 
         $rowsByPair = [];
         foreach ($validation['rows'] as $row) {
@@ -28648,6 +31005,13 @@ test_case('conllu lemma importer combines directory sources in stable order', fu
         assert_same(2, $summary['runtime']['rows'] ?? null, 'CoNLL-U directory importer should combine rows from every discovered source file');
 
         $validation = (new WP_FTS_AnalyzerPackValidator())->validate($out . '/manifest.json');
+        $sourceFiles = $validation['manifest']['source']['files'] ?? [];
+        assert_same(['a.conllu', 'nested/b.conllu'], array_column($sourceFiles, 'path'), 'directory CoNLL-U provenance should retain stable original relative paths');
+        assert_same(
+            [hash_file('sha256', $sourceDir . '/a.conllu'), hash_file('sha256', $nestedDir . '/b.conllu')],
+            array_column($sourceFiles, 'sha256'),
+            'directory CoNLL-U provenance should retain each original source digest'
+        );
         $rowsByPair = [];
         foreach ($validation['rows'] as $row) {
             $rowsByPair[$row['surface'] . "\t" . $row['lemma']] = true;
@@ -29344,6 +31708,10 @@ test_case('wp cli import lemma pack uses default uploads pack directory', functi
         assert_same('qaa', $validation['manifest']['language'], 'default-directory WP-CLI import should preserve language');
         assert_same('qaa-synthetic-lemma-tsv-importer', $validation['manifest']['pack_id'], 'default-directory WP-CLI import should preserve pack id');
         assert_same(5, $validation['runtime_rows'], 'default-directory WP-CLI import should validate generated runtime rows');
+        foreach ($validation['manifest']['runtime']['files'] as $runtimeFile) {
+            assert_same('gzip', $runtimeFile['compression'] ?? null, 'WP-CLI should forward runtime-compression to the importer');
+            assert_same(WP_FTS_LemmaPackLookupIndex::FORMAT, $runtimeFile['lookup']['format'] ?? null, 'WP-CLI compressed imports should be immediately activatable through lookup sidecars');
+        }
         assert_same('Project-owned synthetic qaa lemma TSV importer fixture', $validation['manifest']['attribution']['upstream'] ?? null, 'WP-CLI import should default optional attribution to source name');
         assert_true(!array_key_exists(WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION, $GLOBALS['wp_fts_test_options']), 'WP-CLI import without --enable should not create analyzer options');
         assert_same(
@@ -29626,7 +31994,9 @@ test_case('polish compressed full playground pack validates and lazy-loads full-
         'zamkach' => 'zamek',
         'wyszukujemy' => 'wyszukiwac',
     ] as $surface => $lemma) {
+        $ioBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
         $analyses = test_analysis_terms($pack->analyze($surface, 'pl'));
+        $ioAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
         assert_true(in_array($lemma, $analyses, true), "{$surface} should still map through the compressed full Polish pack");
 
         $stats = $pack->last_lookup_stats();
@@ -29637,7 +32007,19 @@ test_case('polish compressed full playground pack validates and lazy-loads full-
         assert_true(!in_array('stream-scan', $stats['modes'], true), "{$surface} lookup should not stream-scan the full shard");
         assert_true(!in_array('gzip-binary-search', $stats['modes'], true), "{$surface} lookup should not inflate a whole gzip shard");
         assert_true($stats['lines_read'] <= WP_FTS_LemmaPackLookupIndex::DEFAULT_BLOCK_ROWS + 8, "{$surface} lookup should inspect at most one bounded sidecar block");
-        assert_true($stats['bytes_loaded'] > 0 && $stats['bytes_loaded'] <= 131072, "{$surface} lookup should inflate one small sidecar block");
+        $payloadReads = $ioAfter['runtime_payload_reads'] - $ioBefore['runtime_payload_reads'];
+        $cacheHits = $ioAfter['decoded_block_cache_hits'] - $ioBefore['decoded_block_cache_hits'];
+        assert_same(1, $payloadReads + $cacheHits, "{$surface} lookup should either read or reuse exactly one sidecar block");
+        assert_same(
+            $ioAfter['decoded_payload_bytes_loaded'] - $ioBefore['decoded_payload_bytes_loaded'],
+            $stats['bytes_loaded'],
+            "{$surface} lookup stats should report the exact decoded payload delta"
+        );
+        assert_true(
+            $stats['bytes_loaded'] >= 0
+                && $stats['bytes_loaded'] <= WP_FTS_LemmaPackLookupIndex::MAX_BLOCK_DECODED_BYTES,
+            "{$surface} lookup should decode at most one 16-KiB sidecar block, with zero bytes valid on a cache hit"
+        );
     }
 });
 
@@ -29773,11 +32155,40 @@ require 'src/bootstrap.php';
 
 $mode = $argv[1] ?? '';
 $storage = new WP_FTS_Storage_InMemory();
-$analyzer = new WP_FTS_Analyzer([
-    'default_lang' => $mode === 'cjk' ? 'zh' : 'en',
-    'enable_stemming' => false,
-    'auto_detect_language' => false,
-]);
+$analyzer = $mode === 'term-overflow'
+    ? new class {
+        /** Keep the custom overflow analyzer stable in document content hashes. */
+        public function index_signature(): string
+        {
+            return 'distinct-term-overflow-probe';
+        }
+
+        /** Emit one valid baseline or 4,097 bounded, distinct analyzed terms. */
+        public function analyze_document_fields(array $fields, array $_options = []): array
+        {
+            if (($fields[0]['text'] ?? '') === 'stable baseline') {
+                return [[['term' => 'stable', 'lang' => 'en']]];
+            }
+
+            $terms = [];
+            for ($index = 0; $index <= WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS; $index++) {
+                $terms[] = [
+                    'term' => 'analyzedterm' . str_pad((string) $index, 4, '0', STR_PAD_LEFT),
+                    'lang' => 'en',
+                ];
+            }
+
+            return [$terms];
+        }
+    }
+    : new WP_FTS_Analyzer([
+        'default_lang' => $mode === 'cjk' ? 'zh' : 'en',
+        'enable_stemming' => $mode === 'distinct-surface-overflow',
+        'auto_detect_language' => false,
+        'lemma_packs_by_lang' => $mode === 'distinct-surface-overflow'
+            ? ['en' => 'resources/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/manifest.json']
+            : [],
+    ]);
 $indexer = new WP_FTS_Indexer($storage, $analyzer);
 
 if ($mode === 'boundary') {
@@ -29797,9 +32208,9 @@ if ($mode === 'boundary') {
     exit(0);
 }
 
-if ($mode === 'distinct-boundary' || $mode === 'distinct-overflow') {
+if ($mode === 'distinct-boundary' || $mode === 'distinct-surface-overflow') {
     $count = WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS
-        + ($mode === 'distinct-overflow' ? 1 : 0);
+        + ($mode === 'distinct-surface-overflow' ? 1 : 0);
     $tokens = [];
     for ($index = 0; $index < $count; $index++) {
         $tokens[] = 'uniqueterm' . str_pad((string) $index, 4, '0', STR_PAD_LEFT);
@@ -29822,9 +32233,11 @@ if ($mode === 'distinct-boundary' || $mode === 'distinct-overflow') {
         'terms' => $storage->all_terms(),
         'doc' => $storage->get_doc(7),
     ];
+    $ioBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+    $digestBefore = $analyzer->lemma_pack_diagnostics('en')['digest'] ?? null;
     try {
         $indexer->index_document_fields(8, [['name' => 'content', 'text' => $text]], ['lang' => 'en']);
-        fwrite(STDERR, 'Distinct-term overflow was accepted.');
+        fwrite(STDERR, 'Distinct-surface overflow was accepted.');
         exit(21);
     } catch (WP_FTS_Analysis_Limit_Exceeded $error) {
         $after = [
@@ -29836,6 +32249,8 @@ if ($mode === 'distinct-boundary' || $mode === 'distinct-overflow') {
             'mode' => $mode,
             'reason' => $error->reason_code,
             'storage_unchanged' => $before === $after,
+            'lookup_io_unchanged' => WP_FTS_LemmaPackLookupIndex::io_diagnostics() === $ioBefore,
+            'digest_io_unchanged' => ($analyzer->lemma_pack_diagnostics('en')['digest'] ?? null) === $digestBefore,
             'peak_bytes' => memory_get_peak_usage(true),
         ], JSON_THROW_ON_ERROR), "\n";
         exit(0);
@@ -29850,9 +32265,11 @@ $before = [
 ];
 $text = $mode === 'cjk'
     ? str_repeat('甲乙丙丁', 75000)
-    : ($mode === 'aggregate'
-        ? str_repeat('a', 1100000)
-        : str_repeat('aa ', 349525));
+    : ($mode === 'term-overflow'
+        ? 'trigger analyzed term overflow'
+        : ($mode === 'aggregate'
+            ? str_repeat('a', 1100000)
+            : str_repeat('aa ', 349525)));
 $fields = $mode === 'aggregate'
     ? [
         ['name' => 'title', 'text' => $text],
@@ -29887,7 +32304,7 @@ try {
 PHP;
 
     $results = [];
-    foreach (['latin', 'cjk', 'aggregate', 'boundary', 'distinct-boundary', 'distinct-overflow'] as $mode) {
+    foreach (['latin', 'cjk', 'aggregate', 'boundary', 'distinct-boundary', 'distinct-surface-overflow', 'term-overflow'] as $mode) {
         $cli = test_run_subprocess(
             [PHP_BINARY, '-d', 'memory_limit=128M', '-r', $code, $mode],
             dirname(__DIR__)
@@ -29936,8 +32353,12 @@ PHP;
         $results['distinct-boundary']['doc']['doc_len'] ?? null,
         'the distinct-term boundary should preserve every source occurrence'
     );
-    assert_same('distinct_terms', $results['distinct-overflow']['reason'] ?? null, 'the 4,097th distinct term should use the typed permanent rejection');
-    assert_same(true, $results['distinct-overflow']['storage_unchanged'] ?? null, 'distinct-term overflow must be detected before any storage mutation');
+    assert_same('distinct_surfaces', $results['distinct-surface-overflow']['reason'] ?? null, 'the 4,097th normalized surface should reject before dictionary lookup');
+    assert_same(true, $results['distinct-surface-overflow']['lookup_io_unchanged'] ?? null, 'surface overflow must perform zero sidecar opens or payload reads');
+    assert_same(true, $results['distinct-surface-overflow']['digest_io_unchanged'] ?? null, 'surface overflow must perform zero runtime integrity hashing');
+    assert_same(true, $results['distinct-surface-overflow']['storage_unchanged'] ?? null, 'surface overflow must be detected before any storage mutation');
+    assert_same('distinct_terms', $results['term-overflow']['reason'] ?? null, 'the writer should independently reject analyzed term 4,097');
+    assert_same(true, $results['term-overflow']['storage_unchanged'] ?? null, 'distinct-term overflow must be detected before any storage mutation');
 });
 
 test_case('language pipeline streams exact-2MiB and custom-tokenizer adversaries under 128M', function (): void {
@@ -30431,6 +32852,16 @@ test_case('polish PoliMorf importer deterministically generates sharded full-pac
 
         assert_same(6, $summaryA['runtime']['rows'], 'importer should normalize and deduplicate accepted surface lemma rows');
         assert_same(3, $summaryA['runtime']['files'], 'importer should shard runtime rows without splitting an ambiguous surface');
+        assert_same(3, $summaryA['lookup']['files'] ?? null, 'importer should emit one lookup sidecar per runtime shard');
+        assert_true(($summaryA['lookup']['blocks'] ?? 0) >= 3, 'importer should report at least one lookup block per runtime shard');
+        assert_true(($summaryA['lookup']['bytes'] ?? 0) > 0, 'importer should report lookup-sidecar bytes');
+        assert_true(($summaryA['runtime']['decoded_bytes'] ?? 0) > 0, 'importer should report decoded runtime bytes');
+        assert_same($summaryA['runtime']['bytes'], $summaryA['runtime']['encoded_bytes'] ?? null, 'importer should distinguish encoded runtime bytes');
+        assert_same(
+            $summaryA['runtime']['encoded_bytes'] + $summaryA['lookup']['bytes'],
+            $summaryA['runtime_lookup_bytes'] ?? null,
+            'importer should report exact runtime-plus-lookup physical bytes'
+        );
         assert_same(1, $summaryA['stats']['skipped_invalid_tokens'], 'importer should skip multi-token source rows');
         assert_same($summaryA['runtime']['sha256'], $summaryB['runtime']['sha256'], 'second import should produce the same runtime digest');
         assert_same(
@@ -30449,6 +32880,16 @@ test_case('polish PoliMorf importer deterministically generates sharded full-pac
         assert_true($validation['manifest']['fixture_only'] === false, 'generated importer manifest should support full-pack shape');
         assert_same(6, $validation['manifest']['runtime']['total_rows'], 'generated manifest should record runtime rows');
         assert_same($summaryA['runtime']['sha256'], $validation['manifest']['runtime']['total_sha256'], 'generated manifest should record runtime digest');
+        foreach ($validation['manifest']['runtime']['files'] as $runtimeFile) {
+            assert_same('gzip', $runtimeFile['compression'] ?? null, 'PoliMorf runtime shards should use indexed gzip storage');
+            assert_same(WP_FTS_LemmaPackLookupIndex::FORMAT, $runtimeFile['lookup']['format'] ?? null, 'PoliMorf runtime shards should declare their lookup sidecars');
+        }
+        $sourceLock = json_decode((string) file_get_contents($outA . '/SOURCE.lock.json'), true, 512, JSON_THROW_ON_ERROR);
+        assert_same(WP_FTS_LemmaPackLookupIndex::FORMAT, $sourceLock['runtime']['lookup_index_format'] ?? null, 'PoliMorf source lock should certify the lookup format');
+        assert_same(3, $sourceLock['runtime']['lookup_index_file_count'] ?? null, 'PoliMorf source lock should certify every lookup sidecar');
+        assert_same($summaryA['lookup']['bytes'], $sourceLock['runtime']['lookup_index_byte_count'] ?? null, 'PoliMorf source lock should certify lookup-sidecar bytes');
+        assert_same($summaryA['runtime']['decoded_bytes'], $sourceLock['runtime']['decoded_byte_count'] ?? null, 'PoliMorf source lock should certify decoded runtime bytes');
+        assert_same($summaryA['runtime_lookup_bytes'], $sourceLock['runtime']['runtime_lookup_byte_count'] ?? null, 'PoliMorf source lock should certify runtime-plus-lookup bytes');
     } finally {
         remove_directory_tree($outA);
         remove_directory_tree($outB);
@@ -33643,6 +36084,7 @@ test_case('wp cli reindex preserves language filters and limit for later bounded
     assert_contains('"lang":"pl-PL"', $enqueue[0], 'the scope should carry canonical forced language into later post work');
 });
 
+/** Runs a callback against a ready two-document CLI search fixture. */
 function wp_fts_test_with_cli_search_index(callable $callback): mixed
 {
     global $wpdb;

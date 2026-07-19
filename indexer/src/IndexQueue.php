@@ -64,6 +64,7 @@ final class WP_FTS_Index_Queue
     /** @var array<string,int> Exclusive lifecycle guards held by this PHP process. */
     private static array $foregroundOwnerExclusiveGuardPaths = [];
 
+    /** Bind queue, posts, and document tables to one WordPress site prefix. */
     public function __construct(object $wpdb, ?string $prefix = null)
     {
         $this->wpdb = $wpdb;
@@ -1352,6 +1353,7 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
         return $claims;
     }
 
+    /** Build the bounded canonical-source byte expression used during claims. */
     private function canonical_post_bytes_sql(string $alias): string
     {
         return implode(' + ', array_map(
@@ -2717,11 +2719,13 @@ WHERE job_key = %s
         ), 'release superseded FTS indexing work');
     }
 
+    /** Encode the public post id as the queue's exact direct-work identity. */
     private function post_job_key(int $post_id): string
     {
         return 'post:' . max(0, $post_id);
     }
 
+    /** Hide an arbitrarily shaped scope identity behind one fixed-width key. */
     private function scope_job_key(string $scope_key): string
     {
         return 'scope:' . hash('sha256', $scope_key);
@@ -2739,6 +2743,7 @@ WHERE job_key = %s
         return hash_equals('post:' . max(0, $post_id), $job_key);
     }
 
+    /** Reject scope identities that cannot fit the bounded queue contract. */
     private function validated_scope_key(string $scope_key): string
     {
         if (strlen($scope_key) > 1024) {
@@ -2752,6 +2757,7 @@ WHERE job_key = %s
         return $scope_key;
     }
 
+    /** Encode non-authoritative scope hints only after structural containment. */
     private function encoded_scope_payload(array $payload): string
     {
         $this->assert_bounded_payload($payload);

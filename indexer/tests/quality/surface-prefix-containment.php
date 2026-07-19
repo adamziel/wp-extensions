@@ -20,6 +20,7 @@ final class WP_FTS_Surface_Test_Analyzer
         return $this->occurrences;
     }
 
+    /** Keep surface-prefix fixture fingerprints stable across analyzer internals. */
     public function index_signature(): string
     {
         return 'surface-test-v1';
@@ -244,7 +245,7 @@ test_case('surface identities preserve Unicode numeric and long lexical runs', f
     assert_same(str_repeat('b', 252), $surfaceOnlyIdentity['term'] ?? null, 'an over-width token without an exact term must still retain every representable prefix');
 });
 
-test_case('surface SQL uses one indexed binary range and prefix-led candidate intersection', function (): void {
+test_case('surface SQL cost-selects one bounded AND-prefix driver', function (): void {
     $storage = new WP_FTS_Storage_Mysql(new WP_FTS_Test_WPDB());
     $prefix = ['group_id' => 1, 'lang' => 'en', 'term' => 'runn', 'doc_freq' => 100000];
     $range = wp_fts_surface_storage_method($storage, 'surface_range_sql', [$prefix]);
@@ -269,20 +270,42 @@ test_case('surface SQL uses one indexed binary range and prefix-led candidate in
         0 => [['term_id' => 10, 'doc_freq' => 1, 'weight' => 1000]],
         1 => [['term_id' => 11, 'doc_freq' => 100000, 'weight' => 10]],
     ];
-    $prefixLed = wp_fts_surface_storage_method($storage, 'build_rank_query', [
+    $candidateFirst = wp_fts_surface_storage_method($storage, 'build_rank_query', [
         $groups, 2, $prefix, 'AND', $options, null,
     ]);
-    $prefixSql = (string) ($prefixLed['sql'] ?? '');
-    assert_contains('STRAIGHT_JOIN wp_fts_postings po FORCE INDEX (post_term_impact) ON po.post_id = c.post_id AND po.term_id = q.term_id', $prefixSql, 'exact groups must use bounded candidate/key probes');
-    assert_contains('STRAIGHT_JOIN wp_fts_postings ppo FORCE INDEX (PRIMARY) ON ppo.term_id = pt.term_id', $prefixSql, 'the prefix arm must drive posting-primary ranges from the indexed dictionary range');
-    assert_contains('STRAIGHT_JOIN (SELECT anchor_posts.post_id', $prefixSql, 'the prefix arm must intersect actual matching postings with the rare candidate relation');
-    assert_contains('prefix_candidate ON prefix_candidate.post_id = ppo.post_id', $prefixSql, 'the candidate intersection must follow the prefix posting scan');
-    assert_same(1, substr_count($prefixSql, 'pt.term >='), 'prefix AND must contain exactly one surface range');
-    assert_same(2, substr_count($prefixSql, 'SELECT DISTINCT ap.post_id'), 'the exact and prefix arms must each perform one bounded rare-anchor scan');
-    assert_true(!str_contains($prefixSql, 'ppo FORCE INDEX (post_term_impact)'), 'prefix AND must not classify every posting in each candidate document');
-    assert_true(!str_contains($prefixSql, 'pt FORCE INDEX (PRIMARY)'), 'prefix AND must not resolve unrelated candidate term ids back through the dictionary');
-    assert_true(!str_contains($prefixSql, 'ppo.post_id = c.post_id'), 'prefix AND must not scan a post-first candidate envelope');
-    assert_contains('MAX(CAST(ppo.impact', $prefixSql, 'matching prefix surfaces must retain one per-group maximum');
+    $candidateSql = (string) ($candidateFirst['sql'] ?? '');
+    assert_same('candidate_first', $candidateFirst['prefix_strategy'] ?? null, 'a 100,000-row prefix must lose to one 8,192-posting candidate upper bound');
+    assert_contains('STRAIGHT_JOIN wp_fts_postings po FORCE INDEX (post_term_impact) ON po.post_id = c.post_id AND po.term_id = q.term_id', $candidateSql, 'exact groups must use bounded candidate/key probes');
+    assert_contains('STRAIGHT_JOIN wp_fts_postings ppo FORCE INDEX (post_term_impact) ON prefix_candidate.post_id = ppo.post_id', $candidateSql, 'a broad prefix must scan the bounded candidate posting envelope first');
+    assert_contains('STRAIGHT_JOIN wp_fts_terms pt FORCE INDEX (PRIMARY) ON pt.term_id = ppo.term_id', $candidateSql, 'candidate postings must classify their term identities by primary key');
+    assert_true(!str_contains($candidateSql, 'ppo FORCE INDEX (PRIMARY)'), 'candidate-first SQL must not scan the complete prefix posting range');
+    assert_same(1, substr_count($candidateSql, 'pt.term >='), 'candidate-first AND must contain exactly one surface predicate');
+    assert_same(2, substr_count($candidateSql, 'SELECT DISTINCT ap.post_id'), 'the exact and prefix arms must each perform one bounded rare-anchor scan');
+    assert_contains('MAX(CAST(ppo.impact', $candidateSql, 'matching prefix surfaces must retain one per-group maximum');
+
+    $smallerRange = array_replace($prefix, ['doc_freq' => 8191]);
+    $rangeFirst = wp_fts_surface_storage_method($storage, 'build_rank_query', [
+        $groups, 2, $smallerRange, 'AND', $options, null,
+    ]);
+    $rangeFirstSql = (string) ($rangeFirst['sql'] ?? '');
+    assert_same('surface_range', $rangeFirst['prefix_strategy'] ?? null, 'an 8,191-row prefix must remain cheaper than one maximum-size candidate envelope');
+    assert_contains('STRAIGHT_JOIN wp_fts_postings ppo FORCE INDEX (PRIMARY) ON ppo.term_id = pt.term_id', $rangeFirstSql, 'the smaller prefix range must drive posting-primary ranges from the indexed dictionary range');
+    assert_contains('prefix_candidate ON prefix_candidate.post_id = ppo.post_id', $rangeFirstSql, 'range-first SQL must intersect actual matching postings with rare candidates');
+    assert_true(!str_contains($rangeFirstSql, 'ppo FORCE INDEX (post_term_impact)'), 'range-first SQL must not scan unrelated candidate postings');
+    assert_true(!str_contains($rangeFirstSql, 'pt FORCE INDEX (PRIMARY)'), 'range-first SQL must not classify candidate term ids individually');
+
+    $overflowSafe = wp_fts_surface_storage_method($storage, 'build_rank_query', [
+        [
+            0 => [['term_id' => 10, 'doc_freq' => PHP_INT_MAX - 1, 'weight' => 1000]],
+            1 => [['term_id' => 11, 'doc_freq' => PHP_INT_MAX, 'weight' => 10]],
+        ],
+        2,
+        array_replace($prefix, ['doc_freq' => PHP_INT_MAX]),
+        'AND',
+        $options,
+        null,
+    ]);
+    assert_same('surface_range', $overflowSafe['prefix_strategy'] ?? null, 'saturated costs must compare without integer multiplication overflow');
 
     $selectivePrefix = array_replace($prefix, ['doc_freq' => 1]);
     $commonExact = wp_fts_surface_storage_method($storage, 'build_rank_query', [

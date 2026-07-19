@@ -230,6 +230,7 @@ function wp_fts_test_run_composed_worker_ceiling(bool $injectFailure): array
     ];
 }
 
+/** Place one visible token inside a source padded to the document-byte ceiling. */
 function wp_fts_test_composed_near_limit_source(int $number): string
 {
     $visible = '<p>composednear' . $number . '</p>';
@@ -252,6 +253,7 @@ function wp_fts_test_composed_worker_scope(WP_FTS_Test_WPDB $fake): array
     return [];
 }
 
+/** Classify every composed worker statement so no unbudgeted query can hide. */
 function wp_fts_test_composed_worker_statement_role(string $sql): string
 {
     $normalized = strtoupper(trim($sql));

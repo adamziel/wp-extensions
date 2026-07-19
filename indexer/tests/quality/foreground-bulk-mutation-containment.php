@@ -74,6 +74,7 @@ function wp_fts_foreground_bulk_work_writes(WP_FTS_Test_WPDB $fake): array
     ));
 }
 
+/** Normalize the fake wpdb's tuple-or-string query log for exact inspection. */
 function wp_fts_foreground_bulk_sql(mixed $query): string
 {
     return is_array($query) ? (string) ($query[0] ?? '') : (string) $query;
@@ -223,6 +224,7 @@ function wp_fts_foreground_stop_flock_holder(array $holder, bool $kill): void
     proc_close($holder['process']);
 }
 
+/** Probe lock recovery without waiting or stealing an active owner. */
 function wp_fts_foreground_flock_is_exclusively_available(string $path): bool
 {
     $handle = @fopen($path, 'c+');
@@ -253,21 +255,25 @@ final class WP_FTS_Foreground_Bulk_Cold_Post_Lookups implements ArrayAccess
 {
     public int $lookups = 0;
 
+    /** Count each cold classification lookup and force the uncached path. */
     public function offsetExists(mixed $offset): bool
     {
         $this->lookups++;
         return false;
     }
 
+    /** Return no cached classification if a caller reads after the miss. */
     public function offsetGet(mixed $offset): mixed
     {
         return null;
     }
 
+    /** Keep the lookup sentinel read-only for the duration of the proof. */
     public function offsetSet(mixed $offset, mixed $value): void
     {
     }
 
+    /** Ignore cleanup writes so repeated cold probes remain observable. */
     public function offsetUnset(mixed $offset): void
     {
     }
@@ -943,6 +949,7 @@ test_case('foreground bulk mutation corpus authority contains 100000 heterogeneo
     // shared harness intentionally has no WordPress term API by default.
     $GLOBALS['wp_fts_test_filters']['wp_fts_post_custom_fields'] = static fn(array $keys): array => $keys;
     if (!function_exists('get_term')) {
+        /** Count any per-term fallback lookup while returning an empty relation. */
         function get_term(int $term_id, string $taxonomy = ''): mixed
         {
             $GLOBALS['wp_fts_foreground_bulk_get_term_lookups'] =

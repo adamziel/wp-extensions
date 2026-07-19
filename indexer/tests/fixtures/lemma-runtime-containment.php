@@ -27,7 +27,7 @@ function wp_fts_lemma_runtime_proc_status(): array
             }
             $value = trim(substr($line, $separator + 1));
             $space = strpos($value, ' ');
-            if ($space !== false && ctype_digit(substr($value, 0, $space)) && strtolower(trim(substr($value, $space + 1))) === 'kb') {
+            if ($space !== false && $space > 0 && strspn(substr($value, 0, $space), '0123456789') === $space && strtolower(trim(substr($value, $space + 1))) === 'kb') {
                 $values[$key] = (int) substr($value, 0, $space) * 1024;
             }
         }
@@ -118,13 +118,13 @@ try {
     ];
     $manifestPath = $root . '/manifest.json';
     file_put_contents($manifestPath, json_encode($manifest, JSON_THROW_ON_ERROR));
-    $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifestPath, null, 'en');
 
     $peakBefore = memory_get_peak_usage(true);
     $started = microtime(true);
+    $validator = new WP_FTS_AnalyzerPackValidator();
     $error = null;
     try {
-        $pack->stem('target', 'en');
+        WP_FTS_LanguageLemmaPack::from_manifest_file($manifestPath, $validator, 'en');
     } catch (Throwable $caught) {
         $error = [
             'class' => get_class($caught),
@@ -138,6 +138,8 @@ try {
         'decoded_fixture_bytes' => strlen("target\tlemma\n") + 190 * strlen($decodedChunk),
         'compressed_fixture_bytes' => filesize($runtime),
         'error' => $error,
+        'digest_attestation' => $validator->digest_attestation_stats(),
+        'indexed_io' => WP_FTS_LemmaPackLookupIndex::io_diagnostics(),
         'elapsed_seconds' => microtime(true) - $started,
         'php_peak_bytes' => $peakAfter,
         'php_peak_delta_bytes' => max(0, $peakAfter - $peakBefore),

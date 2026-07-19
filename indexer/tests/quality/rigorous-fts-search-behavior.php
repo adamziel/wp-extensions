@@ -1087,7 +1087,7 @@ test_case('quality rigorous FTS plugin boundary requires REST opt-in and sanitiz
         'language_fallback' => 'off',
         'replace_search_scope' => 'admin',
     ]);
-    assert_same(['page', 'post'], $settings['index_post_types'], 'settings sanitizer should keep only searchable post/page types without WordPress APIs');
+    assert_same(['attachment', 'page', 'post'], $settings['index_post_types'], 'settings sanitizer should keep only the stock searchable post types');
     assert_same('AND', $settings['match_mode'], 'settings sanitizer should preserve valid AND mode');
     assert_same(WP_FTS_Plugin::MAX_SEARCH_LIMIT, $settings['result_limit'], 'settings sanitizer should clamp result limit');
     assert_same(false, $settings['highlight'], 'settings sanitizer should parse false-like highlight values');

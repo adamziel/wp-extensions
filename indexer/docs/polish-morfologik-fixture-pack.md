@@ -34,9 +34,9 @@ php -n tools/validate-analyzer-pack.php
 
 The repository also includes a package-safe external builder for the full
 CLARIN-PL PoliMorf TSV artifact. It verifies the exact approved source
-SHA-256 and byte count, checks gzip integrity when gzip tooling is available,
-runs the deterministic importer and validator, and writes the generated runtime
-pack to an operator-chosen directory outside the plugin package:
+SHA-256 and byte count, checks gzip integrity, runs the deterministic importer
+and full validator, verifies that the generated pack can be activated, and
+writes it to an operator-chosen directory outside the plugin package:
 
 ```sh
 php tools/build-polish-polimorf-external-pack.php \
@@ -57,9 +57,11 @@ php tools/build-polish-polimorf-external-pack.php \
 ```
 
 The builder writes a full-pack manifest, notice, source-lock evidence, and
-sharded runtime TSV files. The summary includes the generated manifest path,
-source-lock path, runtime row/file/byte counts, runtime digest, and
-configuration examples for `polish_lemma_pack` and `polish_lemmatizer_pack`.
+indexed-gzip runtime shards with one digest-attested lookup sidecar per shard.
+The summary includes the generated manifest path, source-lock path, runtime
+row/file/byte counts, lookup file/block/byte counts, runtime digest, activation
+result, and configuration examples for `polish_lemma_pack` and
+`polish_lemmatizer_pack`.
 Externally generated full packs remain opt-in and `default_enabled: false` until
 an operator installs and configures them.
 

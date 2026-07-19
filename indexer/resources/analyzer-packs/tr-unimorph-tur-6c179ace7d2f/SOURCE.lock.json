@@ -45,17 +45,17 @@
         "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=tr --pack-id=tr-unimorph-tur-6c179ace7d2f --version=6c179ace7d2f-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/tur/blob/6c179ace7d2f3d7f3484020e5304c1544d07bb6b/tur --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
     },
     "runtime": {
-        "manifest_sha256": "818ce86b1c01b1e5cd802801983160dbd3658a11e18b2f42cb5872d17c77cd93",
+        "manifest_sha256": "0b7f1fc81c54593af741bbcd84c6869bf687c13653dadd680ab5587d2a117ca4",
         "row_count": 223646,
         "file_count": 3,
-        "byte_count": 574082,
+        "byte_count": 580746,
         "digest_sha256": "af5f9d2e60e66e86bfef0e493c5a9f0725db2ddb94112e2a8502dfcd866dd21b",
         "contains_third_party_data": true,
         "committed": true,
         "compression": "gzip",
-        "lookup_index_format": "wp-fts-lemma-block-index-v1",
+        "lookup_index_format": "wp-fts-lemma-block-index-v2",
         "lookup_index_file_count": 3,
-        "lookup_index_byte_count": 12548
+        "lookup_index_byte_count": 40351
     },
     "behavior": {
         "oov_policy": "return_original_normalized_term",

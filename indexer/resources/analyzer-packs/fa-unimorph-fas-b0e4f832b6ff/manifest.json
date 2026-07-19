@@ -12,8 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import",
-        "indexed-runtime-lookups"
+        "indexed-runtime-lookups",
+        "unimorph-source-import"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -24,16 +24,16 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "59089a34ffa6f0ed697bc8bdf069f20f5f957aba7b543aab02ee83d4ebf9805c",
+                "sha256": "0f530cc4848a2f535514e5caaa4e0585178859b6d613daf530b6a7e9ff05d0d0",
                 "rows": 3701,
                 "first_surface": "افشارد",
                 "last_surface": "یافتین",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0001.tsv.gz.lookup",
-                    "sha256": "7eea78515b50669ff06c298d03a536a8e1bcea4bba0bf7d470ea3ba9b827a92f",
-                    "blocks": 2
+                    "sha256": "5032e7efd03ea62c8950cae2f7789eec69da42e52355a08b596bf16ad2dc2999",
+                    "blocks": 6
                 }
             }
         ]
@@ -63,16 +63,48 @@
         "parse_stats": {
             "source_path": "fas",
             "source_files": 1,
-            "files": [
-                "fas"
-            ],
+            "source_path_bytes": 3,
+            "source_entries": 1,
+            "source_max_depth": 0,
+            "source_physical_bytes": 2104724,
+            "source_physical_byte_limit": 67108864,
             "source_lines": 37129,
+            "source_line_limit": 8000000,
+            "source_decoded_bytes": 2104724,
+            "source_decoded_byte_limit": 536870912,
             "blank_lines": 1,
             "comment_lines": 0,
             "placeholder_rows": 0,
             "invalid_runtime_token_rows": 31539,
             "rows_with_features": 5589,
-            "accepted_rows": 5589
+            "accepted_rows": 5589,
+            "staged_tsv_bytes": 285066,
+            "staged_row_limit": 1250000,
+            "staged_tsv_byte_limit": 67108864,
+            "accepted_source_rows": 5589,
+            "rows_with_tags": 5589,
+            "rows_with_source_notes": 5589,
+            "runtime_rows": 3701,
+            "unique_source_rows": 3701,
+            "deduplicated_rows": 1888,
+            "ambiguous_surfaces": 157,
+            "unambiguous_surfaces": 3387,
+            "ambiguity_noop_surfaces": 0,
+            "ambiguity_noop_source_pairs": 0,
+            "chunk_files": 1,
+            "chunk_merge_outputs": 0,
+            "chunk_merge_passes": 0,
+            "max_live_chunk_files": 1,
+            "max_chunk_merge_inputs": 1,
+            "chunk_merge_fan_in_limit": 64,
+            "max_chunk_lexical_bytes": 94990,
+            "chunk_lexical_byte_limit": 8388608,
+            "runtime_decoded_bytes": 94990,
+            "runtime_encoded_bytes": 10432,
+            "lookup_index_bytes": 1017,
+            "lookup_blocks": 6,
+            "runtime_lookup_bytes": 11449,
+            "runtime_lookup_byte_limit": 16777216
         }
     },
     "license": {

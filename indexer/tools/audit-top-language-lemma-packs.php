@@ -3,6 +3,11 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/src/bootstrap.php';
 
+const WP_FTS_TOP_LANGUAGE_AUDIT_MAX_MANIFESTS = 256;
+const WP_FTS_TOP_LANGUAGE_AUDIT_MAX_DEPTH = 8;
+const WP_FTS_TOP_LANGUAGE_AUDIT_MAX_ENTRIES = 4096;
+const WP_FTS_TOP_LANGUAGE_AUDIT_MAX_PATH_BYTES = 262144;
+
 /**
  * @return array{
  *   pack_root:string,
@@ -50,6 +55,13 @@ function wp_fts_top_language_pack_audit_parse_args(array $argv): array
                 'language' => $normalizer->canonicalize_language($language),
                 'path' => substr($value, $separator + 1),
             ];
+            if (count($options['manifests']) > WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES) {
+                throw new InvalidArgumentException('Explicit audit manifests exceed the 32-language limit.');
+            }
+            WP_FTS_Analyzer_Config_Limits::assert_path(
+                (string) $options['manifests'][count($options['manifests']) - 1]['path'],
+                'Explicit audit manifest path'
+            );
             continue;
         }
 
@@ -59,6 +71,7 @@ function wp_fts_top_language_pack_audit_parse_args(array $argv): array
     if (!is_string($options['pack_root']) || trim($options['pack_root']) === '') {
         throw new InvalidArgumentException('Missing required --pack-root=/path option.');
     }
+    WP_FTS_Analyzer_Config_Limits::assert_path($options['pack_root'], 'Audit pack-root path');
     $packRoot = realpath($options['pack_root']);
     if (!is_string($packRoot) || !is_dir($packRoot)) {
         throw new InvalidArgumentException("Pack root does not exist or is not a directory: {$options['pack_root']}");
@@ -74,12 +87,12 @@ function wp_fts_top_language_pack_audit_parse_args(array $argv): array
 function wp_fts_top_language_pack_audit_load_registry(): array
 {
     $path = dirname(__DIR__) . '/config/top-language-lemma-packs.json';
-    $json = file_get_contents($path);
-    if (!is_string($json)) {
+    $json = wp_fts_top_language_pack_audit_bounded_read($path, WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES);
+    if ($json === null) {
         throw new RuntimeException("Could not read language pack registry: {$path}");
     }
 
-    $registry = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+    $registry = json_decode($json, true, WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_GRAPH_DEPTH + 2, JSON_THROW_ON_ERROR);
     if (!is_array($registry) || ($registry['schema_version'] ?? null) !== 'wp-fts-top-language-lemma-packs/v1' || !is_array($registry['languages'] ?? null)) {
         throw new RuntimeException('Top-language lemma-pack registry has an invalid shape.');
     }
@@ -103,24 +116,64 @@ function wp_fts_top_language_pack_audit_discover_manifests(string $packRoot): ar
         'vendor' => true,
     ];
 
-    $directory = new RecursiveDirectoryIterator($packRoot, FilesystemIterator::SKIP_DOTS);
-    $filter = new RecursiveCallbackFilterIterator(
-        $directory,
-        static function (SplFileInfo $file) use ($skipDirectories): bool {
-            if ($file->isDir() && isset($skipDirectories[$file->getFilename()])) {
-                return false;
-            }
-
-            return true;
-        }
-    );
-    $iterator = new RecursiveIteratorIterator($filter);
-    $paths = [];
-    foreach ($iterator as $file) {
-        if ($file->isFile() && $file->getFilename() === 'manifest.json') {
-            $paths[] = $file->getPathname();
-        }
+    $canonicalRoot = realpath($packRoot);
+    if (!is_string($canonicalRoot) || !is_dir($canonicalRoot)) {
+        throw new RuntimeException("Could not resolve analyzer-pack root: {$packRoot}");
     }
+    $rootPrefix = rtrim($canonicalRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+    $paths = [];
+    $entries = 0;
+    $pathBytes = 0;
+    $walk = function (string $directory, int $depth) use (
+        &$walk,
+        &$paths,
+        &$entries,
+        &$pathBytes,
+        $skipDirectories,
+        $rootPrefix
+    ): void {
+        try {
+            $iterator = new FilesystemIterator($directory, FilesystemIterator::SKIP_DOTS);
+        } catch (UnexpectedValueException $error) {
+            throw new RuntimeException("Could not read analyzer-pack directory: {$directory}", 0, $error);
+        }
+        foreach ($iterator as $entry) {
+            $entries++;
+            if ($entries > WP_FTS_TOP_LANGUAGE_AUDIT_MAX_ENTRIES) {
+                throw new RuntimeException('Analyzer-pack discovery exceeds the 4,096-entry limit.');
+            }
+            if ($entry->isLink()) {
+                continue;
+            }
+            $real = realpath($entry->getPathname());
+            if (!is_string($real) || !str_starts_with($real, $rootPrefix)) {
+                throw new RuntimeException('Analyzer-pack discovery encountered an entry outside its canonical root.');
+            }
+            $relative = substr($real, strlen($rootPrefix));
+            $pathBytes += strlen($relative);
+            if ($pathBytes > WP_FTS_TOP_LANGUAGE_AUDIT_MAX_PATH_BYTES) {
+                throw new RuntimeException('Analyzer-pack discovery exceeds the 256 KiB aggregate path limit.');
+            }
+            if ($entry->isDir()) {
+                if (isset($skipDirectories[$entry->getFilename()])) {
+                    continue;
+                }
+                if ($depth >= WP_FTS_TOP_LANGUAGE_AUDIT_MAX_DEPTH) {
+                    throw new RuntimeException('Analyzer-pack discovery exceeds the eight-directory depth limit.');
+                }
+                $walk($real, $depth + 1);
+                continue;
+            }
+            if (!$entry->isFile() || $entry->getFilename() !== 'manifest.json') {
+                continue;
+            }
+            $paths[] = $real;
+            if (count($paths) > WP_FTS_TOP_LANGUAGE_AUDIT_MAX_MANIFESTS) {
+                throw new RuntimeException('Analyzer-pack discovery exceeds the 256-manifest limit.');
+            }
+        }
+    };
+    $walk($canonicalRoot, 0);
     sort($paths, SORT_STRING);
 
     return $paths;
@@ -129,18 +182,43 @@ function wp_fts_top_language_pack_audit_discover_manifests(string $packRoot): ar
 /**
  * @return string|null
  */
-function wp_fts_top_language_pack_audit_loose_manifest_language(string $path): ?string
+function wp_fts_top_language_pack_audit_loose_manifest_identity(string $path): ?array
 {
-    $json = @file_get_contents($path);
-    if (!is_string($json)) {
+    $json = wp_fts_top_language_pack_audit_bounded_read($path, WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES);
+    if ($json === null) {
         return null;
     }
-    $decoded = json_decode($json, true);
+    $decoded = json_decode($json, true, WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_GRAPH_DEPTH + 2);
     if (!is_array($decoded) || !is_string($decoded['language'] ?? null)) {
         return null;
     }
 
-    return (new WP_FTS_Normalizer())->canonicalize_language((string) $decoded['language']);
+    return [
+        'language' => (new WP_FTS_Normalizer())->canonicalize_language((string) $decoded['language']),
+        'pack_id' => is_string($decoded['pack_id'] ?? null) ? $decoded['pack_id'] : null,
+        'version' => is_string($decoded['version'] ?? null) ? $decoded['version'] : null,
+        'fixture_only' => is_bool($decoded['fixture_only'] ?? null) ? $decoded['fixture_only'] : null,
+    ];
+}
+
+/** Read one manifest only when both stat and stream stay inside its byte cap. */
+function wp_fts_top_language_pack_audit_bounded_read(string $path, int $maxBytes): ?string
+{
+    $size = @filesize($path);
+    if (!is_int($size) || $size < 1 || $size > $maxBytes) {
+        return null;
+    }
+    $handle = @fopen($path, 'rb');
+    if (!is_resource($handle)) {
+        return null;
+    }
+    try {
+        $contents = stream_get_contents($handle, $maxBytes + 1);
+    } finally {
+        fclose($handle);
+    }
+
+    return is_string($contents) && strlen($contents) <= $maxBytes ? $contents : null;
 }
 
 /**
@@ -157,9 +235,23 @@ function wp_fts_top_language_pack_audit_loose_manifest_language(string $path): ?
  */
 function wp_fts_top_language_pack_audit_manifest_candidate(string $path, ?string $expectedLanguage, string $source): array
 {
+    $identity = null;
     try {
         $result = (new WP_FTS_AnalyzerPackValidator())->validate_metadata($path);
         $manifest = $result['manifest'];
+        $allIndexed = true;
+        $allPlain = true;
+        foreach ($result['runtime_files'] as $runtimeFile) {
+            $allIndexed = $allIndexed && isset($runtimeFile['lookup']);
+            $allPlain = $allPlain && !isset($runtimeFile['compression']);
+        }
+        $eagerFixture = (bool) $manifest['fixture_only']
+            && $allPlain
+            && (int) $result['runtime_rows'] <= WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_ROWS
+            && (int) $result['runtime_lookup_bytes'] <= WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_BYTES;
+        if (!$allIndexed && !$eagerFixture) {
+            throw new RuntimeException('Analyzer pack runtime storage cannot activate within the eager or indexed lookup envelope.');
+        }
         $manifestLanguage = (string) $manifest['language'];
         $status = ((bool) $manifest['fixture_only']) ? 'fixture_only' : 'pack_backed';
         if ($expectedLanguage !== null && $manifestLanguage !== $expectedLanguage) {
@@ -177,10 +269,11 @@ function wp_fts_top_language_pack_audit_manifest_candidate(string $path, ?string
         ];
     } catch (Throwable $e) {
         $real = realpath($path);
+        $identity = wp_fts_top_language_pack_audit_loose_manifest_identity($path);
 
         return [
             'expected_language' => $expectedLanguage,
-            'manifest_language' => $expectedLanguage ?? wp_fts_top_language_pack_audit_loose_manifest_language($path),
+            'manifest_language' => $expectedLanguage ?? ($identity['language'] ?? null),
             'status' => 'invalid_pack',
             'pack_id' => null,
             'version' => null,

@@ -126,8 +126,8 @@ a posting for recall, but the source token contributes only once to document
 length. Search selects the best-ranked, strongest BM25 candidate inside each
 logical query-token group instead of adding every ambiguous interpretation to
 the score. A pack may contain at most 12 lemmas for one surface across all of
-its shards. Manifest validation, streamed lookup, gzip lookup, and indexed
-lookup all reject candidate 13; runtime lookup never truncates an invalid pack.
+its shards. Full validation, eager fixture loading, and indexed runtime lookup
+all reject candidate 13; runtime lookup never truncates an invalid pack.
 
 HTML is preflighted in one byte-streaming pass before either WordPress HTML
 processor or the component fallback parser runs. One document may contain at
@@ -157,16 +157,25 @@ Analyzer construction is bounded before it resolves pack paths: 32 configured
 languages, 2,048 option nodes, 64 KiB of scalar/key data, eight array levels,
 256 entries per array, 128-byte keys, 4 KiB scalar/path values, and 32 fields in
 one pack option. Local manifests are limited to 64 KiB, 2,048 nodes, eight
-levels, 64 runtime files, 256 lookup blocks per file, and 4,096 lookup blocks
+levels, 64 runtime files, 256 lookup blocks per file, and 8,192 lookup blocks
 per pack. Configured packs collectively retain at most 128 runtime files and
-4,096 lookup blocks; lookup headers stop at 64 KiB. Runtime rows/comments stop
-at 4 KiB. Every multi-shard pack must declare complete normalized surface
+16,384 lookup blocks; lookup headers stop at 64 KiB. One pack may retain at
+most 16 MiB of physical runtime-plus-lookup files; all configured packs share
+a 32 MiB physical ceiling. Distinct fixture packs that are eligible for eager
+loading also share one 50,000-declared-row and 8-MiB decoded-runtime ceiling.
+Plain-runtime bytes are checked from their manifests before any eager map is
+constructed; compressed candidates consume the same decoded budget during
+their bounded validation scan. Indexed blocks decode at most 16 KiB, namespaced
+term keys stop at 255 bytes, and runtime rows/comments stop at 4 KiB. Every
+multi-shard pack must declare complete normalized surface
 ranges that are strictly ordered and non-overlapping; validation rejects unsafe
 ranges before runtime files are read, and lookup binary-selects at most one
-shard. A single-shard pack may omit ranges and retain the bounded fallback. A
-shard without a seek sidecar may decode or stream at most 8 MiB for one lookup,
-so larger custom packs must ship the validated block index instead of relying
-on whole-gzip decoding or a linear scan. Over-limit arrays,
+shard. A single-shard pack may omit ranges. Only a `fixture_only` pack with at
+most 50,000 rows and 8 MiB of decoded runtime data may omit lookup sidecars; it
+is fully validated and loaded once into a bounded eager map. Every other shard
+must be indexed gzip with a validated lookup sidecar, and runtime lookup inflates
+only the selected bounded block.
+There is no non-fixture whole-gzip or linear-scan fallback. Over-limit arrays,
 language-map iterators, paths, compressed expansions, and callback captures throw
 `WP_FTS_Analyzer_Config_Limit_Exceeded`; they are not partially loaded or
 silently truncated.

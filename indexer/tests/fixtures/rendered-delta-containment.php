@@ -38,7 +38,7 @@ function wp_fts_rendered_delta_proc_status(): array
             explode(' ', trim(substr($line, $separator + 1))),
             static fn(string $part): bool => $part !== ''
         ));
-        if (count($parts) >= 2 && ctype_digit($parts[0]) && strtolower($parts[1]) === 'kb') {
+        if (count($parts) >= 2 && $parts[0] !== '' && strspn($parts[0], '0123456789') === strlen($parts[0]) && strtolower($parts[1]) === 'kb') {
             $values[$key] = (int) $parts[0] * 1024;
         }
     }

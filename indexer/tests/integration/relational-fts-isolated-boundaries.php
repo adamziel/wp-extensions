@@ -30,6 +30,7 @@ final class WP_FTS_IB_Query_Capture
     private array $queries = [];
     private bool $active = false;
 
+    /** Install the late query filter so the proof observes executed SQL unchanged. */
     public function start(): void
     {
         if ($this->active) {
@@ -43,6 +44,7 @@ final class WP_FTS_IB_Query_Capture
         add_filter('query', [$this, 'record'], PHP_INT_MAX, 1);
     }
 
+    /** Retain the exact statement while preserving WordPress's filter value. */
     public function record(string $query): string
     {
         $this->queries[] = $query;
@@ -71,6 +73,7 @@ final class WP_FTS_IB_Infinite_Cjk_Tokenizer
     public int $calls = 0;
     public int $yields = 0;
 
+    /** Never terminate on its own; only the analyzer's occurrence guard may stop it. */
     public function __invoke(string $run, string $language): Generator
     {
         $this->calls++;
@@ -87,6 +90,7 @@ final class WP_FTS_IB_Distinct_Term_Analyzer
     public int $calls = 0;
     public ?int $requested_max_occurrences = null;
 
+    /** Configure the exact accepted or rejected distinct-term boundary. */
     public function __construct(
         private int $term_count,
         private string $term_prefix,
@@ -105,6 +109,7 @@ final class WP_FTS_IB_Distinct_Term_Analyzer
         return $this->occurrences($options);
     }
 
+    /** Keep fixture output deterministic across the isolated boundary cases. */
     public function index_signature(): string
     {
         return 'wp-fts-isolated-distinct-term-analyzer-v1';
@@ -201,6 +206,19 @@ function wp_fts_ib_base_evidence(): array
     ];
 }
 
+/** Accepts only a nonempty sequence of ASCII decimal digits. */
+function wp_fts_ib_is_ascii_digits(string $value): bool
+{
+    return $value !== '' && strspn($value, '0123456789') === strlen($value);
+}
+
+/** Accepts only a nonempty sequence of ASCII hexadecimal digits. */
+function wp_fts_ib_is_ascii_hex(string $value): bool
+{
+    return $value !== '' && strspn($value, '0123456789abcdefABCDEF') === strlen($value);
+}
+
+/** Bootstrap only from the disposable installation named by the wrapper. */
 function wp_fts_ib_bootstrap_wordpress(): void
 {
     if (defined('ABSPATH') && function_exists('get_option')) {
@@ -245,9 +263,9 @@ function wp_fts_ib_preflight(): array
     $zip_sha = wp_fts_ib_required_env('WP_FTS_ZIP_SHA256');
     $harness_sha = wp_fts_ib_required_env('WP_FTS_HARNESS_SHA256');
     $source_dirty = wp_fts_ib_required_env('WP_FTS_SOURCE_DIRTY');
-    wp_fts_ib_assert(strlen($source_sha) === 40 && ctype_xdigit($source_sha), 'WP_FTS_SOURCE_SHA must be a full Git SHA.');
-    wp_fts_ib_assert(strlen($zip_sha) === 64 && ctype_xdigit($zip_sha), 'WP_FTS_ZIP_SHA256 must be a SHA-256 digest.');
-    wp_fts_ib_assert(strlen($harness_sha) === 64 && ctype_xdigit($harness_sha), 'WP_FTS_HARNESS_SHA256 must be a SHA-256 digest.');
+    wp_fts_ib_assert(strlen($source_sha) === 40 && wp_fts_ib_is_ascii_hex($source_sha), 'WP_FTS_SOURCE_SHA must be a full Git SHA.');
+    wp_fts_ib_assert(strlen($zip_sha) === 64 && wp_fts_ib_is_ascii_hex($zip_sha), 'WP_FTS_ZIP_SHA256 must be a SHA-256 digest.');
+    wp_fts_ib_assert(strlen($harness_sha) === 64 && wp_fts_ib_is_ascii_hex($harness_sha), 'WP_FTS_HARNESS_SHA256 must be a SHA-256 digest.');
     wp_fts_ib_assert(hash_equals(strtolower($harness_sha), hash_file('sha256', __FILE__)), 'Mounted isolated-boundary harness does not match its source digest.');
     wp_fts_ib_assert(in_array($source_dirty, ['0', '1'], true), 'WP_FTS_SOURCE_DIRTY must be 0 or 1.');
     if ($source_dirty === '1' && getenv('WP_FTS_WC_ALLOW_DIRTY') !== '1') {
@@ -1202,6 +1220,7 @@ function wp_fts_ib_empty_sql_summary(): array
     ];
 }
 
+/** Extract the plugin statement tag without accepting an unterminated comment. */
 function wp_fts_ib_sql_tag(string $sql): string
 {
     $start = strpos($sql, '/* wp_fts:');
@@ -1216,6 +1235,7 @@ function wp_fts_ib_sql_tag(string $sql): string
     return trim(substr($sql, $start + 3, $end - ($start + 3)));
 }
 
+/** Classify SQL after leading comments so tagged statements retain their real role. */
 function wp_fts_ib_sql_type(string $sql): string
 {
     $remaining = ltrim($sql);
@@ -1466,7 +1486,7 @@ function wp_fts_ib_proc_status(bool $required): array
             continue;
         }
         $parts = array_values(array_filter(explode(' ', trim(substr($line, $separator + 1))), static fn(string $part): bool => $part !== ''));
-        if (count($parts) < 2 || !ctype_digit($parts[0]) || strtolower($parts[1]) !== 'kb') {
+        if (count($parts) < 2 || !wp_fts_ib_is_ascii_digits($parts[0]) || strtolower($parts[1]) !== 'kb') {
             throw new RuntimeException("Malformed {$key} row in /proc/self/status.");
         }
         $values[$key] = (int) $parts[0] * 1024;
@@ -1481,6 +1501,7 @@ function wp_fts_ib_proc_status(bool $required): array
     return ['VmHWM_bytes' => $values['VmHWM'], 'VmRSS_bytes' => $values['VmRSS']];
 }
 
+/** Convert the shorthand used by php.ini into the evidence schema's byte count. */
 function wp_fts_ib_ini_bytes(string $value): int
 {
     $value = trim($value);
@@ -1538,11 +1559,13 @@ function wp_fts_ib_emit_evidence(array $evidence): bool
     return true;
 }
 
+/** Namespace disposable terms by source revision to prevent cross-run collisions. */
 function wp_fts_ib_term_prefix(string $source_sha): string
 {
     return 'wpftsib' . strtolower(substr($source_sha, 0, 10));
 }
 
+/** Reject missing wrapper bindings instead of silently weakening the proof. */
 function wp_fts_ib_required_env(string $name): string
 {
     $value = getenv($name);
@@ -1553,6 +1576,7 @@ function wp_fts_ib_required_env(string $name): string
     return trim($value);
 }
 
+/** Preserve optional pre-bootstrap bindings as null in failure evidence. */
 function wp_fts_ib_env_or_null(string $name): ?string
 {
     $value = getenv($name);
@@ -1560,6 +1584,7 @@ function wp_fts_ib_env_or_null(string $name): ?string
     return is_string($value) && trim($value) !== '' ? trim($value) : null;
 }
 
+/** Turn a failed proof invariant into the enclosing evidence failure path. */
 function wp_fts_ib_assert(bool $condition, string $message): void
 {
     if (!$condition) {
@@ -1567,6 +1592,7 @@ function wp_fts_ib_assert(bool $condition, string $message): void
     }
 }
 
+/** Bound diagnostic text without changing the bytes used by measured SQL. */
 function wp_fts_ib_truncate(string $value, int $bytes): string
 {
     if (strlen($value) <= $bytes) {
@@ -1576,6 +1602,7 @@ function wp_fts_ib_truncate(string $value, int $bytes): string
     return substr($value, 0, $bytes);
 }
 
+/** Encode evidence with stable object-key order for its self-attesting digest. */
 function wp_fts_ib_canonical_json(mixed $value): string
 {
     return json_encode(
@@ -1584,6 +1611,7 @@ function wp_fts_ib_canonical_json(mixed $value): string
     );
 }
 
+/** Sort associative evidence recursively while preserving list order. */
 function wp_fts_ib_canonical_value(mixed $value): mixed
 {
     if (!is_array($value)) {

@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+/** Capture the boundary failure while letting assertions inspect its typed reason. */
 function psic_caught(callable $callback): ?Throwable
 {
     try {
@@ -12,6 +13,7 @@ function psic_caught(callable $callback): ?Throwable
     return null;
 }
 
+/** Invoke one plugin boundary directly without bootstrapping an HTTP request. */
 function psic_plugin_private(string $method, mixed ...$args): mixed
 {
     $reflection = new ReflectionMethod(WP_FTS_Plugin::class, $method);
@@ -20,6 +22,7 @@ function psic_plugin_private(string $method, mixed ...$args): mixed
     return $reflection->invoke(null, ...$args);
 }
 
+/** Invoke one CLI normalization boundary without changing its production visibility. */
 function psic_cli_private(WP_FTS_WPCLI_Command $command, string $method, mixed ...$args): mixed
 {
     $reflection = new ReflectionMethod(WP_FTS_WPCLI_Command::class, $method);
@@ -28,6 +31,7 @@ function psic_cli_private(WP_FTS_WPCLI_Command $command, string $method, mixed .
     return $reflection->invoke($command, ...$args);
 }
 
+/** Reach presentation helpers directly so hostile inputs cannot be hidden by search. */
 function psic_searcher_private(WP_FTS_Searcher $searcher, string $method, mixed ...$args): mixed
 {
     $reflection = new ReflectionMethod(WP_FTS_Searcher::class, $method);
@@ -36,6 +40,7 @@ function psic_searcher_private(WP_FTS_Searcher $searcher, string $method, mixed 
     return $reflection->invoke($searcher, ...$args);
 }
 
+/** Exercise storage input fences before any public wrapper can sanitize them. */
 function psic_mysql_private(WP_FTS_Storage_Mysql $storage, string $method, mixed ...$args): mixed
 {
     $reflection = new ReflectionMethod(WP_FTS_Storage_Mysql::class, $method);
@@ -104,18 +109,21 @@ test_case('quality direct indexer and metadata inputs are fenced before analysis
         /** @var array<int,array<string,mixed>|string> */
         public array $output = [];
 
+        /** Return caller-controlled rows and count any analysis that escaped preflight. */
         public function analyze_content(string $source, array $options = []): array
         {
             $this->calls++;
             return $this->output;
         }
 
+        /** Share the hostile output across HTML and plain-field paths. */
         public function analyze_plain_content(string $source, array $options = []): array
         {
             $this->calls++;
             return $this->output;
         }
 
+        /** Keep prepared-source fingerprints stable across input-boundary cases. */
         public function index_signature(): string
         {
             return 'bounded-test-analyzer';
@@ -200,6 +208,7 @@ test_case('quality direct indexer and metadata inputs are fenced before analysis
     $extractor = new class {
         public int $calls = 0;
 
+        /** Emit twenty base keys so twenty overrides cross the shared metadata cap. */
         public function extract(object $post, array $options): array
         {
             $this->calls++;
@@ -249,6 +258,7 @@ test_case('quality direct indexer and metadata inputs are fenced before analysis
     $magicMetadata = new class {
         public int $calls = 0;
 
+        /** Fail if normalization invokes magic behavior on an untrusted object. */
         public function __get(string $name): mixed
         {
             $this->calls++;
@@ -270,18 +280,21 @@ test_case('set-oriented point mutations and dynamic rendering fail before callba
     $analyzer = new class {
         public int $calls = 0;
 
+        /** Fail if relational point-mutation fences allow analyzer callbacks. */
         public function analyze_content(string $source, array $options = []): array
         {
             $this->calls++;
             throw new RuntimeException('the analyzer must not run');
         }
 
+        /** Fail if a plain relational field bypasses the same mutation fence. */
         public function analyze_plain_content(string $source, array $options = []): array
         {
             $this->calls++;
             throw new RuntimeException('the analyzer must not run');
         }
 
+        /** Provide the signature required to construct the fenced indexer. */
         public function index_signature(): string
         {
             return 'set-oriented-fence-test';
@@ -290,6 +303,7 @@ test_case('set-oriented point mutations and dynamic rendering fail before callba
     $extractor = new class {
         public int $calls = 0;
 
+        /** Fail if authoritative-snapshot checks invoke extraction first. */
         public function extract(object $post, array $options): array
         {
             $this->calls++;
@@ -355,10 +369,12 @@ test_case('quality public search containment rejects custom analyzer expansion b
     $analyzer = new class($analysis) {
         public int $calls = 0;
 
+        /** Retain an over-wide analyzer result without regenerating it per call. */
         public function __construct(private array $analysis)
         {
         }
 
+        /** Return the hostile cardinality in one call so search must reject before SQL. */
         public function analyze_query_occurrences(string $query, array $options): array
         {
             $this->calls++;
@@ -381,10 +397,12 @@ test_case('quality public search containment rejects custom analyzer expansion b
         'position' => ['term' => 'term', 'lang' => 'en', 'position' => str_repeat('1', 65)],
     ] as $label => $occurrence) {
         $boundedAnalyzer = new class($occurrence) {
+            /** Configure one independently oversized analyzer field. */
             public function __construct(private array $occurrence)
             {
             }
 
+            /** Return one hostile row so scalar validation, not cardinality, rejects it. */
             public function analyze_query_occurrences(string $query, array $options): array
             {
                 return [$this->occurrence];
@@ -398,6 +416,7 @@ test_case('quality public search containment rejects custom analyzer expansion b
     $modeAnalyzer = new class {
         public int $calls = 0;
 
+        /** Count valid calls while producing an intentionally empty search plan. */
         public function analyze_query_occurrences(string $query, array $options): array
         {
             $this->calls++;
@@ -609,10 +628,12 @@ test_case('quality public search containment rejects custom analyzer expansion b
     $snippetAnalyzer = new class($snippetAnalysis) {
         public int $calls = 0;
 
+        /** Retain the oversized snippet analysis used by both internal and public paths. */
         public function __construct(private array $analysis)
         {
         }
 
+        /** Force highlighting to cap analyzer output before scanning source text. */
         public function analyze_query_occurrences(string $query, array $options): array
         {
             $this->calls++;
@@ -808,6 +829,7 @@ test_case('quality empty WordPress scopes authenticate cursors on facade and ada
     $oldPostTypes = array_map(static fn(object $postType): object => clone $postType, $GLOBALS['wp_fts_test_post_types']);
     $GLOBALS['wp_fts_test_post_types']['post']->exclude_from_search = true;
     $GLOBALS['wp_fts_test_post_types']['page']->exclude_from_search = true;
+    $GLOBALS['wp_fts_test_post_types']['attachment']->exclude_from_search = true;
 
     try {
         $storage = WP_FTS_Plugin::storage(false);
@@ -1086,6 +1108,7 @@ test_case('quality extractor filters share fixed metadata and field-boost envelo
     $magicCustomField = new class {
         public int $calls = 0;
 
+        /** Fail if custom-field normalization invokes magic option access. */
         public function __get(string $name): mixed
         {
             $this->calls++;

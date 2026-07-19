@@ -4,7 +4,15 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/bootstrap.php';
 
 $wp_fts_jieba_multi_run_checks = 0;
+$wp_fts_jieba_fresh_case = null;
+foreach (is_array($_SERVER['argv'] ?? null) ? $_SERVER['argv'] : [] as $argument) {
+    if (str_starts_with((string) $argument, '--fresh-process=')) {
+        $wp_fts_jieba_fresh_case = substr((string) $argument, strlen('--fresh-process='));
+        break;
+    }
+}
 
+/** Records one assertion and throws when a multi-run Jieba invariant fails. */
 function wp_fts_jieba_multi_run_check(bool $condition, string $message): void
 {
     global $wp_fts_jieba_multi_run_checks;
@@ -14,12 +22,14 @@ function wp_fts_jieba_multi_run_check(bool $condition, string $message): void
     }
 }
 
+/** Returns the private dictionary-scan count for containment assertions. */
 function wp_fts_jieba_multi_run_scan_count(WP_FTS_ChineseJiebaSegmenter $segmenter): int
 {
     return (int) (new ReflectionProperty($segmenter, 'dictionaryScanCount'))->getValue($segmenter);
 }
 
-function wp_fts_jieba_multi_run_rss_bytes(string $field): int
+/** @return array{bytes:int,source:string} */
+function wp_fts_jieba_multi_run_rss_sample(string $field): array
 {
     $lines = @file('/proc/self/status', FILE_IGNORE_NEW_LINES);
     if (is_array($lines)) {
@@ -32,15 +42,25 @@ function wp_fts_jieba_multi_run_rss_bytes(string $field): int
                 explode(' ', trim($value)),
                 static fn(string $part): bool => $part !== ''
             ));
-            if (isset($parts[0]) && ctype_digit($parts[0])) {
-                return (int) $parts[0] * 1024;
+            if (isset($parts[0])
+                && $parts[0] !== ''
+                && strspn($parts[0], '0123456789') === strlen($parts[0])
+            ) {
+                return ['bytes' => (int) $parts[0] * 1024, 'source' => 'linux_proc_status'];
             }
         }
     }
 
-    return memory_get_usage(true);
+    return ['bytes' => memory_get_usage(true), 'source' => 'php_allocator_fallback'];
 }
 
+/** Returns one resident-memory measurement in bytes. */
+function wp_fts_jieba_multi_run_rss_bytes(string $field): int
+{
+    return wp_fts_jieba_multi_run_rss_sample($field)['bytes'];
+}
+
+/** Encodes the fixture's three-byte Unicode code point as UTF-8. */
 function wp_fts_jieba_multi_run_utf8(int $codepoint): string
 {
     return chr(0xE0 | ($codepoint >> 12))
@@ -63,6 +83,7 @@ function wp_fts_jieba_multi_run_permutation(array $characters, int $ordinal): ar
     return $permutation;
 }
 
+/** Extracts the first UTF-8 character without requiring mbstring. */
 function wp_fts_jieba_multi_run_first_character(string $word): string
 {
     if ($word === '') {
@@ -168,6 +189,7 @@ function wp_fts_jieba_multi_run_high_fanout_prefixes(
  *   indexed_range_reads:int,
  *   php_peak_delta_bytes:int,
  *   rss_delta_bytes:int,
+ *   rss_peak_delta_bytes:int,
  *   rss_peak_bytes:int,
  *   run_count:int,
  *   term_count:int
@@ -175,11 +197,16 @@ function wp_fts_jieba_multi_run_high_fanout_prefixes(
  */
 function wp_fts_jieba_measure_run_batch(WP_FTS_ChineseJiebaSegmenter $segmenter, array $runs): array
 {
-    if (function_exists('memory_reset_peak_usage')) {
+    global $wp_fts_jieba_fresh_case;
+
+    $freshProcess = is_string($wp_fts_jieba_fresh_case);
+    $canResetPeak = function_exists('memory_reset_peak_usage');
+    if ($canResetPeak) {
         memory_reset_peak_usage();
     }
     $memoryBefore = memory_get_usage(true);
-    $rssBefore = wp_fts_jieba_multi_run_rss_bytes('VmRSS');
+    $memoryPeakBefore = memory_get_peak_usage(true);
+    $rssBeforeSample = wp_fts_jieba_multi_run_rss_sample('VmRSS');
     $scansBefore = wp_fts_jieba_multi_run_scan_count($segmenter);
     $rangeReadsBefore = (int) (new ReflectionProperty($segmenter, 'indexedRangeReadCount'))->getValue($segmenter);
     $termCount = 0;
@@ -188,16 +215,49 @@ function wp_fts_jieba_measure_run_batch(WP_FTS_ChineseJiebaSegmenter $segmenter,
         $termCount += count($segmenter($run, 'zh'));
     }
     $elapsed = microtime(true) - $started;
-    $rssAfter = wp_fts_jieba_multi_run_rss_bytes('VmRSS');
+    $memoryAfter = memory_get_usage(true);
+    $memoryPeakAfter = memory_get_peak_usage(true);
+    $rssAfterSample = wp_fts_jieba_multi_run_rss_sample('VmRSS');
+    $rssPeakAfterSample = wp_fts_jieba_multi_run_rss_sample('VmHWM');
+    $rssBefore = $rssBeforeSample['bytes'];
+    $rssAfter = $rssAfterSample['bytes'];
+    $rssPeakAfter = $rssPeakAfterSample['bytes'];
+    $rssSource = count(array_unique([
+        $rssBeforeSample['source'],
+        $rssAfterSample['source'],
+        $rssPeakAfterSample['source'],
+    ])) === 1 ? $rssBeforeSample['source'] : 'mixed_unusable';
+
+    // Only a resettable peak or a fresh process can attribute a peak to this
+    // workload. PHP 8.1's long-lived parent retains the best diagnostic it can
+    // provide, but acceptance comes from the conservative fresh child below.
+    $phpPeakDelta = $canResetPeak || $freshProcess
+        ? max(0, $memoryPeakAfter - $memoryBefore)
+        : max(0, $memoryAfter - $memoryBefore, $memoryPeakAfter - $memoryPeakBefore);
 
     return [
         'elapsed_seconds' => $elapsed,
         'complete_dictionary_scans' => wp_fts_jieba_multi_run_scan_count($segmenter) - $scansBefore,
         'indexed_range_reads' => (int) (new ReflectionProperty($segmenter, 'indexedRangeReadCount'))->getValue($segmenter)
             - $rangeReadsBefore,
-        'php_peak_delta_bytes' => max(0, memory_get_peak_usage(true) - $memoryBefore),
+        'php_peak_delta_bytes' => $phpPeakDelta,
+        'php_peak_delta_authoritative' => $canResetPeak || $freshProcess,
+        'php_peak_delta_source' => $canResetPeak
+            ? 'reset_peak_after_minus_usage_before'
+            : ($freshProcess
+                ? 'fresh_lifetime_peak_after_minus_usage_before'
+                : 'cumulative_parent_diagnostic'),
         'rss_delta_bytes' => max(0, $rssAfter - $rssBefore),
-        'rss_peak_bytes' => wp_fts_jieba_multi_run_rss_bytes('VmHWM'),
+        'rss_peak_delta_bytes' => max(0, $rssPeakAfter - $rssBefore),
+        'rss_peak_delta_authoritative' => $freshProcess && $rssSource === 'linux_proc_status',
+        'rss_peak_bytes' => $rssPeakAfter,
+        'rss_source' => $rssSource,
+        'input_bytes' => array_sum(array_map('strlen', $runs)),
+        'input_sha256' => hash('sha256', implode('', array_map(
+            static fn(string $run): string => strlen($run) . ':' . $run,
+            $runs
+        ))),
+        'input_unit_count' => count($runs),
         'run_count' => count($runs),
         'term_count' => $termCount,
     ];
@@ -210,6 +270,7 @@ function wp_fts_jieba_measure_run_batch(WP_FTS_ChineseJiebaSegmenter $segmenter,
  *   indexed_range_reads:int,
  *   php_peak_delta_bytes:int,
  *   rss_delta_bytes:int,
+ *   rss_peak_delta_bytes:int,
  *   rss_peak_bytes:int,
  *   term_count:int
  * }
@@ -219,22 +280,43 @@ function wp_fts_jieba_measure_multi_run(
     string $text,
     string $expectedToken
 ): array {
+    global $wp_fts_jieba_fresh_case;
+
+    $freshProcess = is_string($wp_fts_jieba_fresh_case);
     $pipeline = new WP_FTS_LanguagePipeline([
         'cjk_tokenizer' => $segmenter,
         'enable_stemming' => false,
     ]);
-    if (function_exists('memory_reset_peak_usage')) {
+    $canResetPeak = function_exists('memory_reset_peak_usage');
+    if ($canResetPeak) {
         memory_reset_peak_usage();
     }
     $memoryBefore = memory_get_usage(true);
-    $rssBefore = wp_fts_jieba_multi_run_rss_bytes('VmRSS');
+    $memoryPeakBefore = memory_get_peak_usage(true);
+    $rssBeforeSample = wp_fts_jieba_multi_run_rss_sample('VmRSS');
     $scansBefore = wp_fts_jieba_multi_run_scan_count($segmenter);
     $rangeReadsBefore = (int) (new ReflectionProperty($segmenter, 'indexedRangeReadCount'))->getValue($segmenter);
     $started = microtime(true);
     $terms = $pipeline->analyze($text, 'zh');
     $elapsed = microtime(true) - $started;
-    $rssAfter = wp_fts_jieba_multi_run_rss_bytes('VmRSS');
-    $rssPeak = wp_fts_jieba_multi_run_rss_bytes('VmHWM');
+    $memoryAfter = memory_get_usage(true);
+    $memoryPeakAfter = memory_get_peak_usage(true);
+    $rssAfterSample = wp_fts_jieba_multi_run_rss_sample('VmRSS');
+    $rssPeakAfterSample = wp_fts_jieba_multi_run_rss_sample('VmHWM');
+    $rssBefore = $rssBeforeSample['bytes'];
+    $rssAfter = $rssAfterSample['bytes'];
+    $rssPeakAfter = $rssPeakAfterSample['bytes'];
+    $rssSource = count(array_unique([
+        $rssBeforeSample['source'],
+        $rssAfterSample['source'],
+        $rssPeakAfterSample['source'],
+    ])) === 1 ? $rssBeforeSample['source'] : 'mixed_unusable';
+
+    // See wp_fts_jieba_measure_run_batch(): the fresh child is authoritative;
+    // an unresettable long-lived parent is explicitly diagnostic.
+    $phpPeakDelta = $canResetPeak || $freshProcess
+        ? max(0, $memoryPeakAfter - $memoryBefore)
+        : max(0, $memoryAfter - $memoryBefore, $memoryPeakAfter - $memoryPeakBefore);
 
     wp_fts_jieba_multi_run_check(
         in_array($expectedToken, $terms, true),
@@ -246,11 +328,280 @@ function wp_fts_jieba_measure_multi_run(
         'complete_dictionary_scans' => wp_fts_jieba_multi_run_scan_count($segmenter) - $scansBefore,
         'indexed_range_reads' => (int) (new ReflectionProperty($segmenter, 'indexedRangeReadCount'))->getValue($segmenter)
             - $rangeReadsBefore,
-        'php_peak_delta_bytes' => max(0, memory_get_peak_usage(true) - $memoryBefore),
+        'php_peak_delta_bytes' => $phpPeakDelta,
+        'php_peak_delta_authoritative' => $canResetPeak || $freshProcess,
+        'php_peak_delta_source' => $canResetPeak
+            ? 'reset_peak_after_minus_usage_before'
+            : ($freshProcess
+                ? 'fresh_lifetime_peak_after_minus_usage_before'
+                : 'cumulative_parent_diagnostic'),
         'rss_delta_bytes' => max(0, $rssAfter - $rssBefore),
-        'rss_peak_bytes' => $rssPeak,
+        'rss_peak_delta_bytes' => max(0, $rssPeakAfter - $rssBefore),
+        'rss_peak_delta_authoritative' => $freshProcess && $rssSource === 'linux_proc_status',
+        'rss_peak_bytes' => $rssPeakAfter,
+        'rss_source' => $rssSource,
+        'input_bytes' => strlen($text),
+        'input_sha256' => hash('sha256', $text),
+        'input_unit_count' => $text === '' ? 0 : substr_count($text, '，') + 1,
         'term_count' => count($terms),
     ];
+}
+
+/**
+ * @param array<string,mixed> $measurement
+ * @param array<string,mixed> $extra
+ * @return array<string,mixed>
+ */
+function wp_fts_jieba_multi_run_workload_identity(array $measurement, array $extra = []): array
+{
+    return [
+        'input_bytes' => $measurement['input_bytes'] ?? null,
+        'input_sha256' => $measurement['input_sha256'] ?? null,
+        'input_unit_count' => $measurement['input_unit_count'] ?? null,
+    ] + $extra;
+}
+
+/** @param array<string,mixed> $measurement */
+function wp_fts_jieba_parent_php_delta_within(array $measurement, int $ceiling): bool
+{
+    return ($measurement['php_peak_delta_authoritative'] ?? false) !== true
+        || (int) ($measurement['php_peak_delta_bytes'] ?? PHP_INT_MAX) <= $ceiling;
+}
+
+/** @param array<string,mixed> $measurement */
+function wp_fts_jieba_parent_rss_deltas_within(array $measurement, int $ceiling): bool
+{
+    return ($measurement['rss_peak_delta_authoritative'] ?? false) !== true
+        || (
+            (int) ($measurement['rss_delta_bytes'] ?? PHP_INT_MAX) <= $ceiling
+            && (int) ($measurement['rss_peak_delta_bytes'] ?? PHP_INT_MAX) <= $ceiling
+        );
+}
+
+if ($wp_fts_jieba_fresh_case !== null) {
+    $freshPhpDeltaCeiling = 25165824;
+    $freshRssDeltaCeiling = 25165824;
+    $freshMeasurement = null;
+    $freshSegmenter = null;
+    $freshWorkloadEvidence = [];
+    $wideCharacters = ['一', '中', '大', '三', '王', '不', '第', '马', '李', '二', '小', '金', '十', '张', '高', '阿', '无'];
+
+    switch ($wp_fts_jieba_fresh_case) {
+        case 'cold_256':
+        case 'saturated_256':
+            $runs = [];
+            for ($tail = 0; $tail < 256; $tail++) {
+                $runs[] = '大' . wp_fts_jieba_multi_run_utf8(0x4E10 + $tail);
+            }
+            $freshSegmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option(true, 'zh');
+            if ($wp_fts_jieba_fresh_case === 'saturated_256' && $freshSegmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
+                $freshSegmenter('一一', 'zh');
+            }
+            if ($freshSegmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
+                $freshMeasurement = wp_fts_jieba_measure_multi_run(
+                    $freshSegmenter,
+                    implode('，', $runs),
+                    $runs[array_key_last($runs)]
+                );
+            }
+            break;
+
+        case 'repeated_wide_cold':
+        case 'repeated_wide_saturated':
+            $wideRun = implode('', $wideCharacters);
+            $freshSegmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option(true, 'zh');
+            if ($wp_fts_jieba_fresh_case === 'repeated_wide_saturated'
+                && $freshSegmenter instanceof WP_FTS_ChineseJiebaSegmenter
+            ) {
+                $freshSegmenter('一一', 'zh');
+            }
+            if ($freshSegmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
+                $freshMeasurement = wp_fts_jieba_measure_multi_run(
+                    $freshSegmenter,
+                    implode('，', array_fill(0, 300, $wideRun)),
+                    '一中大三'
+                );
+            }
+            break;
+
+        case 'permuted_wide':
+            $permutedRuns = [];
+            for ($run = 0; $run < 300; $run++) {
+                $permutedRuns[] = implode('', wp_fts_jieba_multi_run_permutation($wideCharacters, $run));
+            }
+            $lastPermutation = wp_fts_jieba_multi_run_permutation($wideCharacters, 299);
+            $freshSegmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option(true, 'zh');
+            if ($freshSegmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
+                $freshMeasurement = wp_fts_jieba_measure_multi_run(
+                    $freshSegmenter,
+                    implode('，', $permutedRuns),
+                    implode('', array_slice($lastPermutation, 0, 4))
+                );
+            }
+            break;
+
+        case 'changing_prefix':
+            $commonCharacters = array_slice($wideCharacters, 0, 16);
+            $changingRuns = [];
+            for ($run = 0; $run < 300; $run++) {
+                $characters = $commonCharacters;
+                $characters[] = wp_fts_jieba_multi_run_utf8(0x6000 + $run);
+                $changingRuns[] = implode('', wp_fts_jieba_multi_run_permutation($characters, $run));
+            }
+            $lastCharacters = $commonCharacters;
+            $lastCharacters[] = wp_fts_jieba_multi_run_utf8(0x6000 + 299);
+            $lastCharacters = wp_fts_jieba_multi_run_permutation($lastCharacters, 299);
+            $freshSegmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option(true, 'zh');
+            if ($freshSegmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
+                $freshMeasurement = wp_fts_jieba_measure_multi_run(
+                    $freshSegmenter,
+                    implode('，', $changingRuns),
+                    implode('', array_slice($lastCharacters, 0, 4))
+                );
+            }
+            break;
+
+        case 'distinct_prefix_sets':
+            $freshPhpDeltaCeiling = 41943040;
+            $freshRssDeltaCeiling = 41943040;
+            $distinctRuns = [];
+            for ($run = 0; $run < 300; $run++) {
+                $characters = [];
+                for ($offset = 0; $offset < 17; $offset++) {
+                    $characters[] = wp_fts_jieba_multi_run_utf8(0x4E00 + ($run * 17) + $offset);
+                }
+                $distinctRuns[] = implode('', $characters);
+            }
+            $lastCharacters = [];
+            for ($offset = 0; $offset < 17; $offset++) {
+                $lastCharacters[] = wp_fts_jieba_multi_run_utf8(0x4E00 + (299 * 17) + $offset);
+            }
+            $freshSegmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option(true, 'zh');
+            if ($freshSegmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
+                $freshMeasurement = wp_fts_jieba_measure_multi_run(
+                    $freshSegmenter,
+                    implode('，', $distinctRuns),
+                    implode('', array_slice($lastCharacters, 0, 4))
+                );
+            }
+            break;
+
+        case 'maximum_distinct':
+            $maximumRuns = [];
+            for ($run = 0; $run < WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES; $run++) {
+                $maximumRuns[] = wp_fts_jieba_multi_run_utf8(0x4E00 + $run);
+            }
+            $freshSegmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option(true, 'zh');
+            if ($freshSegmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
+                $freshMeasurement = wp_fts_jieba_measure_multi_run(
+                    $freshSegmenter,
+                    implode('，', $maximumRuns),
+                    $maximumRuns[array_key_last($maximumRuns)]
+                );
+            }
+            break;
+
+        case 'maximum_fanout':
+            $freshPhpDeltaCeiling = 67108864;
+            $freshRssDeltaCeiling = 67108864;
+            $maximumFanout = wp_fts_jieba_multi_run_high_fanout_prefixes(
+                WP_FTS_ChineseJiebaSegmenter::default_source_file(),
+                1365
+            );
+            $freshWorkloadEvidence = [
+                'run_bytes' => strlen($maximumFanout['run']),
+                'prefix_count' => $maximumFanout['prefix_count'],
+                'candidate_count' => $maximumFanout['candidate_count'],
+                'candidate_bytes' => $maximumFanout['candidate_bytes'],
+            ];
+            $freshSegmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option(true, 'zh');
+            if ($freshSegmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
+                $freshMeasurement = wp_fts_jieba_measure_multi_run(
+                    $freshSegmenter,
+                    $maximumFanout['run'],
+                    substr($maximumFanout['run'], 0, 12)
+                );
+            }
+            break;
+
+        case 'complete_pinned_cache':
+            $freshPhpDeltaCeiling = 67108864;
+            $freshRssDeltaCeiling = 67108864;
+            $completePinned = wp_fts_jieba_multi_run_high_fanout_prefixes(
+                WP_FTS_ChineseJiebaSegmenter::default_source_file(),
+                PHP_INT_MAX
+            );
+            $freshWorkloadEvidence = [
+                'prefix_count' => $completePinned['prefix_count'],
+                'candidate_count' => $completePinned['candidate_count'],
+                'candidate_bytes' => $completePinned['candidate_bytes'],
+                'source_prefix_count' => $completePinned['source_prefix_count'],
+                'source_candidate_count' => $completePinned['source_candidate_count'],
+                'source_candidate_bytes' => $completePinned['source_candidate_bytes'],
+            ];
+            $completeRuns = array_map(
+                static fn(array $prefixes): string => implode('', $prefixes),
+                array_chunk($completePinned['prefixes'], 1365)
+            );
+            $freshSegmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option(true, 'zh');
+            if ($freshSegmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
+                $freshMeasurement = wp_fts_jieba_measure_run_batch($freshSegmenter, $completeRuns);
+            }
+            break;
+
+        default:
+            throw new RuntimeException('Unknown isolated Jieba memory case.');
+    }
+
+    if (!$freshSegmenter instanceof WP_FTS_ChineseJiebaSegmenter || !is_array($freshMeasurement)) {
+        throw new RuntimeException('The pinned Jieba segmenter should load for its isolated memory proof.');
+    }
+    $freshWorkloadEvidence = wp_fts_jieba_multi_run_workload_identity(
+        $freshMeasurement,
+        $freshWorkloadEvidence
+    );
+    $freshRssPeak = wp_fts_jieba_multi_run_rss_sample('VmHWM');
+    $freshProcessEvidence = [
+        'php_peak_bytes' => memory_get_peak_usage(true),
+        'rss_peak_bytes' => $freshRssPeak['bytes'],
+        'rss_source' => $freshRssPeak['source'],
+    ];
+    wp_fts_jieba_multi_run_check(
+        $freshMeasurement['php_peak_delta_bytes'] <= $freshPhpDeltaCeiling,
+        'the isolated Jieba workload should retain its PHP allocation-delta ceiling'
+    );
+    wp_fts_jieba_multi_run_check(
+        max($freshMeasurement['rss_delta_bytes'], $freshMeasurement['rss_peak_delta_bytes'])
+            <= $freshRssDeltaCeiling,
+        'the isolated Jieba workload should retain its RSS allocation-delta ceiling'
+    );
+    wp_fts_jieba_multi_run_check(
+        $freshProcessEvidence['php_peak_bytes'] <= 134217728,
+        'the isolated Jieba workload should stay within a 128 MiB PHP peak'
+    );
+    wp_fts_jieba_multi_run_check(
+        $freshProcessEvidence['rss_peak_bytes'] <= 134217728,
+        'the isolated Jieba workload should stay within a 128 MiB RSS peak'
+    );
+    if (PHP_OS_FAMILY === 'Linux') {
+        wp_fts_jieba_multi_run_check(
+            ($freshMeasurement['rss_source'] ?? null) === 'linux_proc_status'
+                && $freshProcessEvidence['rss_source'] === 'linux_proc_status',
+            'the isolated Linux RSS proof must come from /proc/self/status'
+        );
+    }
+    echo json_encode([
+        'schema' => 'jieba-isolated-memory-case-v2',
+        'status' => 'pass',
+        'case' => $wp_fts_jieba_fresh_case,
+        'memory_authority' => 'fresh_process_conservative_peak_attribution',
+        'memory_limit' => ini_get('memory_limit'),
+        'measurement' => $freshMeasurement,
+        'process' => $freshProcessEvidence,
+        'workload' => $freshWorkloadEvidence,
+    ], JSON_THROW_ON_ERROR), "\n";
+
+    return $wp_fts_jieba_multi_run_checks;
 }
 
 $sourcePath = WP_FTS_ChineseJiebaSegmenter::default_source_file();
@@ -381,16 +732,16 @@ foreach (
         "the {$name} repeated-wide-run output should stay within the occurrence boundary"
     );
     wp_fts_jieba_multi_run_check(
-        $measurement['php_peak_delta_bytes'] <= 25165824,
+        wp_fts_jieba_parent_php_delta_within($measurement, 25165824),
         "the {$name} repeated-wide-run analysis should stay within a 24 MiB PHP peak delta"
     );
     wp_fts_jieba_multi_run_check(
-        $measurement['rss_delta_bytes'] <= 25165824,
+        wp_fts_jieba_parent_rss_deltas_within($measurement, 25165824),
         "the {$name} repeated-wide-run analysis should stay within a 24 MiB RSS delta"
     );
     wp_fts_jieba_multi_run_check(
-        $measurement['rss_peak_bytes'] <= 134217728,
-        "the {$name} repeated-wide-run analysis should stay within a 128 MiB RSS peak"
+        wp_fts_jieba_parent_rss_deltas_within($measurement, 25165824),
+        "the {$name} repeated-wide-run analysis should stay within a 24 MiB RSS peak delta"
     );
 }
 wp_fts_jieba_multi_run_check(
@@ -441,12 +792,12 @@ wp_fts_jieba_multi_run_check(
     '300 distinct hot-prefix permutations should finish within two seconds'
 );
 wp_fts_jieba_multi_run_check(
-    $permutedWide['php_peak_delta_bytes'] <= 25165824,
+    wp_fts_jieba_parent_php_delta_within($permutedWide, 25165824),
     '300 distinct hot-prefix permutations should stay within a 24 MiB PHP peak delta'
 );
 wp_fts_jieba_multi_run_check(
-    $permutedWide['rss_peak_bytes'] <= 134217728,
-    '300 distinct hot-prefix permutations should stay within a 128 MiB RSS peak'
+    wp_fts_jieba_parent_rss_deltas_within($permutedWide, 25165824),
+    '300 distinct hot-prefix permutations should stay within a 24 MiB attributable RSS delta'
 );
 unset($permutedSegmenter, $permutedRuns, $permutedRunSet, $lastPermutation);
 
@@ -482,12 +833,12 @@ wp_fts_jieba_multi_run_check(
     '300 runs with one changing prefix should finish within two seconds'
 );
 wp_fts_jieba_multi_run_check(
-    $changingPrefix['php_peak_delta_bytes'] <= 25165824,
+    wp_fts_jieba_parent_php_delta_within($changingPrefix, 25165824),
     '300 runs with one changing prefix should stay within a 24 MiB PHP peak delta'
 );
 wp_fts_jieba_multi_run_check(
-    $changingPrefix['rss_peak_bytes'] <= 134217728,
-    '300 runs with one changing prefix should stay within a 128 MiB RSS peak'
+    wp_fts_jieba_parent_rss_deltas_within($changingPrefix, 25165824),
+    '300 runs with one changing prefix should stay within a 24 MiB attributable RSS delta'
 );
 unset($changingSegmenter, $changingRuns, $changingLastCharacters);
 
@@ -525,12 +876,12 @@ wp_fts_jieba_multi_run_check(
     '300 disjoint 17-prefix sets should finish within three seconds'
 );
 wp_fts_jieba_multi_run_check(
-    $distinctPrefixSets['php_peak_delta_bytes'] <= 41943040,
+    wp_fts_jieba_parent_php_delta_within($distinctPrefixSets, 41943040),
     '300 disjoint 17-prefix sets should stay within a 40 MiB PHP peak delta'
 );
 wp_fts_jieba_multi_run_check(
-    $distinctPrefixSets['rss_peak_bytes'] <= 134217728,
-    '300 disjoint 17-prefix sets should stay within a 128 MiB RSS peak'
+    wp_fts_jieba_parent_rss_deltas_within($distinctPrefixSets, 41943040),
+    '300 disjoint 17-prefix sets should stay within a 40 MiB attributable RSS delta'
 );
 unset($distinctSetSegmenter, $distinctSetRuns, $distinctSetLastCharacters);
 
@@ -563,16 +914,16 @@ wp_fts_jieba_multi_run_check(
     'the 20,000-run occurrence boundary should finish within fifteen seconds'
 );
 wp_fts_jieba_multi_run_check(
-    $maximumDistinct['php_peak_delta_bytes'] <= 25165824,
+    wp_fts_jieba_parent_php_delta_within($maximumDistinct, 25165824),
     'the 20,000-run occurrence boundary should stay within a 24 MiB PHP peak delta'
 );
 wp_fts_jieba_multi_run_check(
-    $maximumDistinct['rss_delta_bytes'] <= 25165824,
+    wp_fts_jieba_parent_rss_deltas_within($maximumDistinct, 25165824),
     'the 20,000-run occurrence boundary should stay within a 24 MiB RSS delta'
 );
 wp_fts_jieba_multi_run_check(
-    $maximumDistinct['rss_peak_bytes'] <= 134217728,
-    'the 20,000-run occurrence boundary should stay within a 128 MiB RSS peak'
+    wp_fts_jieba_parent_rss_deltas_within($maximumDistinct, 25165824),
+    'the 20,000-run occurrence boundary should stay within a 24 MiB RSS peak delta'
 );
 unset($maximumSegmenter);
 
@@ -611,12 +962,12 @@ wp_fts_jieba_multi_run_check(
     'the maximum accepted pinned fanout should finish within five seconds'
 );
 wp_fts_jieba_multi_run_check(
-    $maximumFanout['php_peak_delta_bytes'] <= 67108864,
+    wp_fts_jieba_parent_php_delta_within($maximumFanout, 67108864),
     'the maximum accepted pinned fanout should stay within a 64 MiB PHP peak delta'
 );
 wp_fts_jieba_multi_run_check(
-    $maximumFanout['rss_peak_bytes'] <= 134217728,
-    'the maximum accepted pinned fanout should stay within a 128 MiB RSS peak'
+    wp_fts_jieba_parent_rss_deltas_within($maximumFanout, 67108864),
+    'the maximum accepted pinned fanout should stay within a 64 MiB attributable RSS delta'
 );
 wp_fts_jieba_multi_run_check(
     (int) (new ReflectionProperty($highFanoutSegmenter, 'cachedCandidateCount'))->getValue($highFanoutSegmenter)
@@ -671,12 +1022,12 @@ wp_fts_jieba_multi_run_check(
     'warming the complete pinned prefix cache should finish within five seconds'
 );
 wp_fts_jieba_multi_run_check(
-    $completePinnedCache['php_peak_delta_bytes'] <= 67108864,
+    wp_fts_jieba_parent_php_delta_within($completePinnedCache, 67108864),
     'the complete pinned prefix cache should stay within a 64 MiB PHP peak delta'
 );
 wp_fts_jieba_multi_run_check(
-    $completePinnedCache['rss_peak_bytes'] <= 134217728,
-    'the complete pinned prefix cache should stay within a 128 MiB RSS peak'
+    wp_fts_jieba_parent_rss_deltas_within($completePinnedCache, 67108864),
+    'the complete pinned prefix cache should stay within a 64 MiB attributable RSS delta'
 );
 wp_fts_jieba_multi_run_check(
     (int) (new ReflectionProperty($completePinnedSegmenter, 'cachedCandidateCount'))->getValue($completePinnedSegmenter)
@@ -707,16 +1058,16 @@ foreach (['cold' => $cold, 'saturated' => $saturated] as $name => $measurement) 
         "the {$name} 256-run analyzer call should finish within five seconds"
     );
     wp_fts_jieba_multi_run_check(
-        $measurement['php_peak_delta_bytes'] <= 25165824,
+        wp_fts_jieba_parent_php_delta_within($measurement, 25165824),
         "the {$name} 256-run analyzer call should stay within a 24 MiB PHP peak delta"
     );
     wp_fts_jieba_multi_run_check(
-        $measurement['rss_delta_bytes'] <= 25165824,
+        wp_fts_jieba_parent_rss_deltas_within($measurement, 25165824),
         "the {$name} 256-run analyzer call should stay within a 24 MiB RSS delta"
     );
     wp_fts_jieba_multi_run_check(
-        $measurement['rss_peak_bytes'] <= 134217728,
-        "the {$name} 256-run analyzer call should stay within a 128 MiB RSS peak"
+        wp_fts_jieba_parent_rss_deltas_within($measurement, 25165824),
+        "the {$name} 256-run analyzer call should stay within a 24 MiB RSS peak delta"
     );
     wp_fts_jieba_multi_run_check(
         $measurement['term_count'] >= 768 && $measurement['term_count'] <= 1024,
@@ -758,5 +1109,142 @@ $GLOBALS['wp_fts_jieba_multi_run_metrics'] = [
     ],
     'complete_pinned_cache' => $completePinnedCache,
 ];
+$parentRssPeak = wp_fts_jieba_multi_run_rss_sample('VmHWM');
+$GLOBALS['wp_fts_jieba_multi_run_metrics']['parent_process'] = [
+    // This process deliberately composes all adversaries. Its lifetime peak is
+    // retained as a cumulative diagnostic; the ten fresh children below are
+    // the authoritative per-request memory proof.
+    'role' => 'cumulative_multi_workload_diagnostic',
+    'php_peak_bytes' => memory_get_peak_usage(true),
+    'rss_peak_bytes' => $parentRssPeak['bytes'],
+    'rss_source' => $parentRssPeak['source'],
+    'within_128_mib' => memory_get_peak_usage(true) <= 134217728
+        && $parentRssPeak['bytes'] <= 134217728,
+];
+
+if (!function_exists('proc_open')) {
+    throw new RuntimeException('The isolated Jieba memory proof requires proc_open().');
+}
+$freshCommandPrefix = [PHP_BINARY];
+if (php_ini_loaded_file() === false) {
+    $freshCommandPrefix[] = '-n';
+}
+$freshCommandPrefix[] = '-d';
+$freshCommandPrefix[] = 'memory_limit=128M';
+$freshCommandPrefix[] = __FILE__;
+$freshProofs = [];
+$freshCases = [
+    'cold_256' => ['measurement' => $cold, 'workload' => wp_fts_jieba_multi_run_workload_identity($cold), 'delta_ceiling' => 25165824],
+    'saturated_256' => ['measurement' => $saturated, 'workload' => wp_fts_jieba_multi_run_workload_identity($saturated), 'delta_ceiling' => 25165824],
+    'repeated_wide_cold' => ['measurement' => $repeatedWideCold, 'workload' => wp_fts_jieba_multi_run_workload_identity($repeatedWideCold), 'delta_ceiling' => 25165824],
+    'repeated_wide_saturated' => ['measurement' => $repeatedWideSaturated, 'workload' => wp_fts_jieba_multi_run_workload_identity($repeatedWideSaturated), 'delta_ceiling' => 25165824],
+    'permuted_wide' => ['measurement' => $permutedWide, 'workload' => wp_fts_jieba_multi_run_workload_identity($permutedWide), 'delta_ceiling' => 25165824],
+    'changing_prefix' => ['measurement' => $changingPrefix, 'workload' => wp_fts_jieba_multi_run_workload_identity($changingPrefix), 'delta_ceiling' => 25165824],
+    'distinct_prefix_sets' => ['measurement' => $distinctPrefixSets, 'workload' => wp_fts_jieba_multi_run_workload_identity($distinctPrefixSets), 'delta_ceiling' => 41943040],
+    'maximum_distinct' => ['measurement' => $maximumDistinct, 'workload' => wp_fts_jieba_multi_run_workload_identity($maximumDistinct), 'delta_ceiling' => 25165824],
+    'maximum_fanout' => [
+        'measurement' => $maximumFanout,
+        'workload' => wp_fts_jieba_multi_run_workload_identity(
+            $maximumFanout,
+            $GLOBALS['wp_fts_jieba_multi_run_metrics']['maximum_fanout_evidence']
+        ),
+        'delta_ceiling' => 67108864,
+    ],
+    'complete_pinned_cache' => [
+        'measurement' => $completePinnedCache,
+        'workload' => wp_fts_jieba_multi_run_workload_identity(
+            $completePinnedCache,
+            $GLOBALS['wp_fts_jieba_multi_run_metrics']['complete_pinned_cache_evidence']
+        ),
+        'delta_ceiling' => 67108864,
+    ],
+];
+foreach ($freshCases as $freshCase => $freshExpected) {
+    $freshCommand = $freshCommandPrefix;
+    $freshCommand[] = '--fresh-process=' . $freshCase;
+    $freshPipes = [];
+    $freshProcess = proc_open($freshCommand, [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ], $freshPipes);
+    if (!is_resource($freshProcess)) {
+        throw new RuntimeException("Could not start the isolated {$freshCase} Jieba memory proof.");
+    }
+    fclose($freshPipes[0]);
+    $freshOutput = stream_get_contents($freshPipes[1]);
+    fclose($freshPipes[1]);
+    $freshError = stream_get_contents($freshPipes[2]);
+    fclose($freshPipes[2]);
+    $freshStatus = proc_close($freshProcess);
+    if ($freshStatus !== 0) {
+        throw new RuntimeException(
+            "The isolated {$freshCase} Jieba memory proof failed: " . trim((string) $freshError)
+        );
+    }
+    $freshPayload = json_decode((string) $freshOutput, true, 16, JSON_THROW_ON_ERROR);
+    $freshMeasurement = is_array($freshPayload['measurement'] ?? null) ? $freshPayload['measurement'] : [];
+    $freshProcessEvidence = is_array($freshPayload['process'] ?? null) ? $freshPayload['process'] : [];
+    wp_fts_jieba_multi_run_check(
+        ($freshPayload['schema'] ?? null) === 'jieba-isolated-memory-case-v2'
+            && ($freshPayload['status'] ?? null) === 'pass'
+            && ($freshPayload['case'] ?? null) === $freshCase
+            && ($freshPayload['memory_authority'] ?? null) === 'fresh_process_conservative_peak_attribution'
+            && ($freshPayload['memory_limit'] ?? null) === '128M'
+            && $freshMeasurement !== [],
+        "the isolated {$freshCase} Jieba proof should complete under a 128 MiB PHP limit"
+    );
+    $measurementMatches = true;
+    foreach (['term_count', 'complete_dictionary_scans', 'indexed_range_reads'] as $field) {
+        $measurementMatches = $measurementMatches
+            && ($freshMeasurement[$field] ?? null) === ($freshExpected['measurement'][$field] ?? null);
+    }
+    if (array_key_exists('run_count', $freshExpected['measurement'])) {
+        $measurementMatches = $measurementMatches
+            && ($freshMeasurement['run_count'] ?? null) === $freshExpected['measurement']['run_count'];
+    }
+    wp_fts_jieba_multi_run_check(
+        $measurementMatches,
+        "the isolated {$freshCase} Jieba workload should match its parent term and range inventory"
+    );
+    wp_fts_jieba_multi_run_check(
+        ($freshPayload['workload'] ?? null) === $freshExpected['workload'],
+        "the isolated {$freshCase} Jieba workload should match its parent candidate inventory"
+    );
+    $freshDeltaCeiling = (int) $freshExpected['delta_ceiling'];
+    wp_fts_jieba_multi_run_check(
+        ($freshMeasurement['php_peak_delta_bytes'] ?? PHP_INT_MAX) <= $freshDeltaCeiling,
+        "the isolated {$freshCase} Jieba PHP peak delta should retain its per-case ceiling"
+    );
+    wp_fts_jieba_multi_run_check(
+        ($freshMeasurement['rss_delta_bytes'] ?? PHP_INT_MAX) <= $freshDeltaCeiling
+            && ($freshMeasurement['rss_peak_delta_bytes'] ?? PHP_INT_MAX) <= $freshDeltaCeiling,
+        "the isolated {$freshCase} Jieba RSS deltas should retain their per-case ceiling"
+    );
+    wp_fts_jieba_multi_run_check(
+        ($freshProcessEvidence['php_peak_bytes'] ?? PHP_INT_MAX) <= 134217728,
+        "the isolated {$freshCase} Jieba proof should stay within a 128 MiB PHP peak"
+    );
+    wp_fts_jieba_multi_run_check(
+        ($freshProcessEvidence['rss_peak_bytes'] ?? PHP_INT_MAX) <= 134217728,
+        "the isolated {$freshCase} Jieba proof should stay within a 128 MiB RSS peak"
+    );
+    if (PHP_OS_FAMILY === 'Linux') {
+        wp_fts_jieba_multi_run_check(
+            ($freshMeasurement['rss_source'] ?? null) === 'linux_proc_status'
+                && ($freshProcessEvidence['rss_source'] ?? null) === 'linux_proc_status',
+            "the isolated {$freshCase} Linux RSS evidence should retain /proc/self/status provenance"
+        );
+    }
+    $freshProofs[$freshCase] = [
+        'schema' => $freshPayload['schema'],
+        'memory_authority' => $freshPayload['memory_authority'],
+        'memory_limit' => $freshPayload['memory_limit'],
+        'measurement' => $freshMeasurement,
+        'process' => $freshProcessEvidence,
+        'workload' => $freshPayload['workload'],
+    ];
+}
+$GLOBALS['wp_fts_jieba_multi_run_metrics']['fresh_processes'] = $freshProofs;
 
 return $wp_fts_jieba_multi_run_checks;

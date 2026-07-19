@@ -187,6 +187,7 @@ function wp_fts_disposable_smoke_contract_json(array $payload): string
     return $json;
 }
 
+/** Provide the release's expected WP-CLI command inventory to the smoke stub. */
 function wp_fts_disposable_smoke_contract_cli_help(): string
 {
     return implode("\n", [

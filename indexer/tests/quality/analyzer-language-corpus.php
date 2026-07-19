@@ -41,6 +41,7 @@ if ($wp_fts_alc_direct) {
                 return $this->current()['breadcrumbs'] ?? [];
             }
 
+            /** Derive stream depth without retaining a separate parser stack. */
             public function get_current_depth(): int
             {
                 return max(0, count($this->current()['breadcrumbs'] ?? []) - ($this->is_tag_closer() ? 1 : 0));
@@ -51,6 +52,7 @@ if ($wp_fts_alc_direct) {
                 return (string) ($this->current()['text'] ?? '');
             }
 
+            /** Recover synthetic tags from breadcrumbs when the fixture omits one. */
             public function get_tag(): ?string
             {
                 $tag = $this->current()['tag'] ?? null;
@@ -69,6 +71,7 @@ if ($wp_fts_alc_direct) {
                 return (bool) ($this->current()['closing'] ?? false);
             }
 
+            /** Match HTML void-element semantics in the synthetic event stream. */
             public function expects_closer(): bool
             {
                 return !$this->is_tag_closer()

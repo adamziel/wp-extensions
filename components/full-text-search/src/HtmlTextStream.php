@@ -29,6 +29,12 @@ final class WP_FTS_Html_Text_Stream
         'TEMPLATE' => true,
     ];
 
+    /** Hidden text elements whose tag-looking contents use non-data states. */
+    private const OPAQUE_TEXT_TAGS = [
+        'SCRIPT' => true,
+        'STYLE' => true,
+    ];
+
     /** @var array<string,bool> */
     private const BOUNDARY_TAGS = [
         'ADDRESS' => true,
@@ -147,6 +153,22 @@ final class WP_FTS_Html_Text_Stream
             if ($name !== '') {
                 if ($tag['closing']) {
                     self::pop_tag($stack, $stackPositions, $name);
+                } elseif (isset(self::OPAQUE_TEXT_TAGS[$name]) && !$tag['self_closing']) {
+                    // SCRIPT data and STYLE raw text treat a JavaScript or CSS
+                    // string such as "<div>" as text, not parser depth or markup
+                    // tokens. Skip it, but retain the real closing-tag token.
+                    WP_FTS_Analysis_Limits::assert_html_element_depth(count($stack) + 1);
+                    $closingTagStart = null;
+                    $offset = self::hidden_text_element_end_offset(
+                        $html,
+                        $tag['end'],
+                        $name,
+                        $closingTagStart
+                    );
+                    if ($closingTagStart !== null) {
+                        WP_FTS_Analysis_Limits::assert_html_markup_tokens(++$tokens);
+                    }
+                    continue;
                 } elseif (!isset(self::VOID_TAGS[$name]) && !$tag['self_closing']) {
                     self::push_tag($stack, $stackPositions, $name);
                     WP_FTS_Analysis_Limits::assert_html_element_depth(count($stack));
@@ -415,6 +437,11 @@ final class WP_FTS_Html_Text_Stream
                         $group++;
                     }
                 } else {
+                    if (isset(self::OPAQUE_TEXT_TAGS[$name]) && !$tag['self_closing']) {
+                        $offset = self::hidden_text_element_end_offset($html, $tag['end'], $name);
+                        $textStart = $offset;
+                        continue;
+                    }
                     if (isset(self::BOUNDARY_TAGS[$name])) {
                         $group++;
                     }
@@ -622,6 +649,154 @@ final class WP_FTS_Html_Text_Stream
         return null;
     }
 
+    /**
+     * Find the end of hidden SCRIPT/STYLE text without parsing its contents as
+     * ordinary tags. SCRIPT follows script-data states; STYLE uses raw text.
+     * `$name` is the uppercase name returned by the shared tag reader.
+     *
+     * @param-out int|null $closingTagStart Start of the parsed closer, or null
+     *                                      when the element runs through EOF.
+     * @internal Shared with the Analyzer fallback event stream.
+     */
+    public static function hidden_text_element_end_offset(
+        string $html,
+        int $offset,
+        string $name,
+        ?int &$closingTagStart = null
+    ): int
+    {
+        $closingTagStart = null;
+        if ($name === 'SCRIPT') {
+            return self::script_data_element_end_offset($html, $offset, $closingTagStart);
+        }
+
+        $length = strlen($html);
+        while ($offset < $length) {
+            $candidate = strpos($html, '<', $offset);
+            if ($candidate === false) {
+                return $length;
+            }
+            $end = self::matching_raw_text_end_offset($html, $candidate, $name);
+            if ($end !== null) {
+                $closingTagStart = $candidate;
+                return $end;
+            }
+            $offset = $candidate + 1;
+        }
+
+        return $length;
+    }
+
+    /**
+     * Find a SCRIPT end tag while preserving HTML's escaped script-data states.
+     *
+     * An appropriate `</script>` inside a `<!--<script>...` double-escaped run
+     * returns to the escaped state; it does not close the outer element. Treating
+     * it as a closer would expose hidden JavaScript to lexical analysis.
+     */
+    private static function script_data_element_end_offset(
+        string $html,
+        int $offset,
+        ?int &$closingTagStart
+    ): int
+    {
+        $length = strlen($html);
+        $state = 'data';
+
+        while ($offset < $length) {
+            if ($state === 'data') {
+                if ($html[$offset] !== '<') {
+                    $offset++;
+                    continue;
+                }
+                if (substr_compare($html, '<!--', $offset, 4) === 0) {
+                    $state = 'escaped';
+                    $offset += 4;
+                    continue;
+                }
+
+                $end = self::matching_raw_text_end_offset($html, $offset, 'SCRIPT');
+                if ($end !== null) {
+                    $closingTagStart = $offset;
+                    return $end;
+                }
+            } elseif ($state === 'escaped') {
+                if ($html[$offset] === '-' && substr_compare($html, '-->', $offset, 3) === 0) {
+                    $state = 'data';
+                    $offset += 3;
+                    continue;
+                }
+                if ($html[$offset] !== '<') {
+                    $offset++;
+                    continue;
+                }
+
+                $end = self::matching_raw_text_end_offset($html, $offset, 'SCRIPT');
+                if ($end !== null) {
+                    $closingTagStart = $offset;
+                    return $end;
+                }
+
+                if (self::script_keyword_at($html, $offset, '<script')) {
+                    $state = 'double_escaped';
+                    $offset += 7;
+                    continue;
+                }
+            } else {
+                // `-->` returns from double-escaped dash-dash to double-escaped
+                // script data, so it does not change this coarse state.
+                if ($html[$offset] !== '<') {
+                    $offset++;
+                    continue;
+                }
+
+                if (self::script_keyword_at($html, $offset, '</script')) {
+                    $state = 'escaped';
+                    $offset += 8;
+                    continue;
+                }
+            }
+
+            $offset++;
+        }
+
+        return $length;
+    }
+
+    /** Return a parsed matching raw-text end tag beginning at the offset. */
+    private static function matching_raw_text_end_offset(string $html, int $offset, string $name): ?int
+    {
+        $nameBytes = strlen($name);
+        $nameStart = $offset + 2;
+        $boundary = $html[$nameStart + $nameBytes] ?? '';
+        if (
+            ($html[$offset] ?? '') !== '<'
+            || ($html[$offset + 1] ?? '') !== '/'
+            || strncasecmp(substr($html, $nameStart, $nameBytes), $name, $nameBytes) !== 0
+            || ($boundary !== '>' && $boundary !== '/' && !self::is_html_whitespace($boundary))
+        ) {
+            return null;
+        }
+
+        $tag = self::read_tag($html, $offset, true);
+        return $tag !== null && $tag['closing'] && $tag['name'] === $name
+            ? $tag['end']
+            : null;
+    }
+
+    /** Match a SCRIPT state keyword followed by its required HTML delimiter. */
+    private static function script_keyword_at(string $html, int $offset, string $keyword): bool
+    {
+        $keywordBytes = strlen($keyword);
+        if (strncasecmp(substr($html, $offset, $keywordBytes), $keyword, $keywordBytes) !== 0) {
+            return false;
+        }
+
+        $boundary = $html[$offset + $keywordBytes] ?? '';
+        return $boundary === '>' || $boundary === '/' || self::is_html_whitespace($boundary);
+    }
+
+    /** Find a declaration terminator without treating a quoted `>` as markup. */
     private static function declaration_end_offset(string $html, int $offset): ?int
     {
         $quote = null;
@@ -646,6 +821,7 @@ final class WP_FTS_Html_Text_Stream
         return null;
     }
 
+    /** Recognize the bytes that terminate an HTML attribute name. */
     private static function is_attribute_name_delimiter(string $char): bool
     {
         return self::is_html_whitespace($char)
@@ -783,6 +959,7 @@ final class WP_FTS_Html_Text_Stream
         }
     }
 
+    /** Find a bounded entity terminator without scanning the rest of the run. */
     private static function entity_semicolon_offset(string $raw, int $ampersandOffset): ?int
     {
         $end = min(strlen($raw), $ampersandOffset + self::MAX_ENTITY_REFERENCE_BYTES);
@@ -835,6 +1012,7 @@ final class WP_FTS_Html_Text_Stream
         return $char !== '' && preg_match('/^[\p{L}\p{M}\p{N}_]$/u', $char) === 1;
     }
 
+    /** Inspect only the current tag span for a self-closing slash. */
     private static function tag_is_self_closing_at(string $html, int $tagStart, int $tagEnd): bool
     {
         $offset = $tagEnd - 1;
@@ -865,6 +1043,7 @@ final class WP_FTS_Html_Text_Stream
             || $char === "\f";
     }
 
+    /** Match one decoded Unicode whitespace character. */
     private static function is_whitespace_character(string $character): bool
     {
         if ($character === '') {

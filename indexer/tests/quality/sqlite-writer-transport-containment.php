@@ -49,6 +49,7 @@ function wp_fts_sqlite_transport_storage(): array
     return [$wpdb, new WP_FTS_Storage_Mysql($wpdb)];
 }
 
+/** Extract one exact method range for structural transport-boundary assertions. */
 function wp_fts_sqlite_transport_method_source(string $class, string $method): string
 {
     $reflection = new ReflectionMethod($class, $method);

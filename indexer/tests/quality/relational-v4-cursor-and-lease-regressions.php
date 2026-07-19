@@ -458,6 +458,7 @@ test_case('relational v4 validates cursors before every empty or impossible sear
     assert_same([], $wpdb->queries, 'an empty direct-storage plan should reject its cursor before SQL');
 
     $emptyAnalyzer = new class {
+        /** Force the public cursor path to confront an analyzer-empty plan. */
         public function analyze_query_occurrences(string $query, array $options = []): array
         {
             return [];
@@ -798,6 +799,50 @@ test_case('relational v6 AND prefixes intersect one range-led scan with exact ca
     assert_same([1], array_column($nextSelective['results'], 'doc_id'), 'the selective prefix anchor cursor must return the remaining exact member without a skip or duplicate');
     assert_same(false, $nextSelective['has_more'] ?? null, 'the final selective prefix page should terminate traversal');
     assert_same(4, count($wpdb->queries), 'two selective prefix pages must remain exactly two statements each');
+});
+
+test_case('relational v6 broad non-anchor prefixes execute candidate-first with exact score', function (): void {
+    [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
+    $wpdb->dbh->beginTransaction();
+    for ($postId = 1; $postId <= 8193; $postId++) {
+        wp_fts_v4_regression_add_post($wpdb, $postId, '2026-04-02 00:00:00');
+    }
+    wp_fts_v4_regression_add_term($wpdb, 'candidateanchor', [1 => 100.0]);
+    wp_fts_v6_regression_add_surface(
+        $wpdb,
+        'broadprefixcompletion',
+        array_fill_keys(range(1, 8193), 200.0)
+    );
+    for ($term = 0; $term < 32; $term++) {
+        wp_fts_v4_regression_add_term($wpdb, 'unrelated' . $term, [1 => 300.0]);
+        wp_fts_v6_regression_add_surface($wpdb, 'unrelated' . $term, [1 => 300.0]);
+    }
+    $wpdb->dbh->commit();
+
+    $groups = [
+        [['key' => WP_FTS_TermNamespace::namespace_term('en', 'candidateanchor'), 'rank' => 0]],
+        [['key' => WP_FTS_TermNamespace::namespace_term('en', 'broadprefix'), 'rank' => 0]],
+    ];
+    $wpdb->queries = [];
+    $payload = $storage->search_page($groups, array_replace(wp_fts_v4_regression_search_options(10), [
+        'mode' => 'AND',
+        'prefix_matching' => true,
+        'prefix_group_index' => 1,
+        'prefix_surface' => ['lang' => 'en', 'term' => 'broadprefix'],
+        'prefix_min_length' => 4,
+        'explain' => true,
+    ]));
+
+    assert_same([1], array_column($payload['results'], 'doc_id'), 'candidate-first prefix classification must preserve exact AND membership');
+    assert_same(100014640.0, $payload['results'][0]['score'] ?? null, 'candidate-first prefix classification must preserve exact per-surface rarity scoring');
+    assert_same(0, $payload['explain']['anchor_group'] ?? null, 'the one-row exact group must anchor ahead of the 8,193-row prefix');
+    assert_same('candidate_first', $payload['explain']['prefix_strategy'] ?? null, 'the prefix must cross the one-candidate 8,192-posting upper bound');
+    $rankSql = wp_fts_v4_regression_last_rank_sql($wpdb);
+    assert_contains('JOIN wp_fts_postings ppo ON prefix_candidate.post_id = ppo.post_id', $rankSql, 'candidate-first SQL must scan postings from the bounded exact candidate');
+    assert_contains('JOIN wp_fts_terms pt ON pt.term_id = ppo.term_id', $rankSql, 'candidate-first SQL must classify candidate term identities by primary key');
+    assert_true(!str_contains($rankSql, 'JOIN wp_fts_postings ppo ON ppo.term_id = pt.term_id'), 'candidate-first SQL must not scan all 8,193 broad-prefix postings');
+    assert_same(1, substr_count($rankSql, 'pt.term >='), 'candidate-first SQL must retain one exact binary surface predicate');
+    assert_same(2, count($wpdb->queries), 'candidate-first AND must remain exactly one plan plus one rank statement');
 });
 
 test_case('relational v6 unavailable surface ranges use exact probes without weakening cursor identity', function (): void {
@@ -2521,6 +2566,7 @@ function wp_fts_v4_regression_search_fixture(): array
     return [$wpdb, new WP_FTS_Storage_Mysql($wpdb)];
 }
 
+/** Install the production-shaped schema and readiness state used by every case. */
 function wp_fts_v4_regression_create_schema(WP_FTS_V4_Regression_SQLite_WPDB $wpdb): void
 {
     $statements = [
@@ -2588,6 +2634,7 @@ function wp_fts_v4_regression_create_schema(WP_FTS_V4_Regression_SQLite_WPDB $wp
     );
 }
 
+/** Seed one canonical and indexed row so visibility is tested through real SQL. */
 function wp_fts_v4_regression_add_post(
     WP_FTS_V4_Regression_SQLite_WPDB $wpdb,
     int $postId,
@@ -2606,6 +2653,7 @@ function wp_fts_v4_regression_add_post(
     );
 }
 
+/** Seed only canonical source content for cases that exercise preparation first. */
 function wp_fts_v4_regression_add_source_post(
     WP_FTS_V4_Regression_SQLite_WPDB $wpdb,
     int $postId,
@@ -2678,21 +2726,25 @@ function wp_fts_v4_regression_search_options(int $pageSize = 2): array
     ];
 }
 
+/** Keep the published readiness generation distinct from the epoch payload. */
 function wp_fts_v4_regression_ready_incarnation(): string
 {
     return str_repeat('a', 32);
 }
 
+/** Provide a stable analyzer-profile binding for cursor and readiness checks. */
 function wp_fts_v4_regression_ready_profile_hash(): string
 {
     return str_repeat('b', 40);
 }
 
+/** Deliberately separate the epoch incarnation from the publication token. */
 function wp_fts_v4_regression_epoch_incarnation(): string
 {
     return str_repeat('c', 32);
 }
 
+/** Recover the latest rank statement for structural regression assertions. */
 function wp_fts_v4_regression_last_rank_sql(WP_FTS_V4_Regression_SQLite_WPDB $wpdb): string
 {
     for ($index = count($wpdb->queries) - 1; $index >= 0; $index--) {
@@ -2703,6 +2755,7 @@ function wp_fts_v4_regression_last_rank_sql(WP_FTS_V4_Regression_SQLite_WPDB $wp
     return '';
 }
 
+/** Recover the latest plan statement without depending on incidental query order. */
 function wp_fts_v4_regression_last_plan_sql(WP_FTS_V4_Regression_SQLite_WPDB $wpdb): string
 {
     for ($index = count($wpdb->queries) - 1; $index >= 0; $index--) {
@@ -2713,6 +2766,7 @@ function wp_fts_v4_regression_last_plan_sql(WP_FTS_V4_Regression_SQLite_WPDB $wp
     return '';
 }
 
+/** Require a cursor-specific rejection rather than accepting an unrelated error. */
 function wp_fts_v4_regression_assert_invalid_cursor(callable $operation, string $message): void
 {
     $rejected = false;
@@ -2758,6 +2812,7 @@ final class WP_FTS_V4_Regression_SQLite_WPDB
     /** @var array<int,int> Test-only rank transport sizes keyed by document id. */
     public array $rankCanonicalByteOverrides = [];
 
+    /** Run each regression against an isolated transactional SQL database. */
     public function __construct()
     {
         $this->dbh = new PDO('sqlite::memory:');
@@ -2765,6 +2820,7 @@ final class WP_FTS_V4_Regression_SQLite_WPDB
         $this->dbh->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_OBJ);
     }
 
+    /** Emulate wpdb placeholders while respecting quoted percent sequences. */
     public function prepare(string $sql, mixed ...$args): string
     {
         $prepared = '';
@@ -2818,6 +2874,7 @@ final class WP_FTS_V4_Regression_SQLite_WPDB
         return $prepared;
     }
 
+    /** Translate only the required dialect subset and retain executed SQL. */
     public function query(mixed $statement): int|false
     {
         $sql = $this->portable_sql((string) $statement);
@@ -2858,6 +2915,7 @@ final class WP_FTS_V4_Regression_SQLite_WPDB
         }
     }
 
+    /** Execute scalar reads through the observer used by statement-count tests. */
     public function get_var(mixed $statement): mixed
     {
         $sql = (string) $statement;
@@ -2875,6 +2933,7 @@ final class WP_FTS_V4_Regression_SQLite_WPDB
         }
     }
 
+    /** Preserve wpdb's first-row shape while sharing the observed read path. */
     public function get_row(mixed $statement): ?object
     {
         $rows = $this->get_results($statement);
@@ -2914,6 +2973,7 @@ final class WP_FTS_V4_Regression_SQLite_WPDB
         $statement->execute();
     }
 
+    /** Map the narrow production MySQL forms exercised here onto SQLite syntax. */
     private function portable_sql(string $sql): string
     {
         if ($sql === 'START TRANSACTION') {

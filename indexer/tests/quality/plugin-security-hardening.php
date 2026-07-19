@@ -68,7 +68,7 @@ test_case('quality plugin settings sanitization clamps generated operator input'
         $settings = WP_FTS_Plugin::sanitize_settings($raw);
         assert_true($settings['index_post_types'] !== [], "plugin settings case {$i} should keep a non-empty post type allowlist");
         foreach ($settings['index_post_types'] as $postType) {
-            assert_true(in_array($postType, ['page', 'post'], true), "plugin settings case {$i} should reject non-public post type {$postType}");
+            assert_true(in_array($postType, ['attachment', 'page', 'post'], true), "plugin settings case {$i} should reject non-public post type {$postType}");
         }
         assert_true($settings['snippet_length'] >= 40 && $settings['snippet_length'] <= 500, "plugin settings case {$i} should clamp snippet length");
         assert_true($settings['result_limit'] >= 1 && $settings['result_limit'] <= WP_FTS_Plugin::MAX_SEARCH_LIMIT, "plugin settings case {$i} should clamp result limit");
@@ -162,7 +162,7 @@ test_case('quality plugin visibility scope authorizes type-wide statuses before 
 
     $defaultSettings = WP_FTS_Plugin::default_settings();
     $typeCases = [
-        ['label' => 'configured default', 'opts' => [], 'types' => ['page', 'post'], 'valid' => true],
+        ['label' => 'configured default', 'opts' => [], 'types' => ['attachment', 'page', 'post'], 'valid' => true],
         ['label' => 'singular post', 'opts' => ['post_type' => 'post'], 'types' => ['post'], 'valid' => true],
         ['label' => 'plural page', 'opts' => ['post_types' => ['page']], 'types' => ['page'], 'valid' => true],
         ['label' => 'normalized configured pair', 'opts' => ['post_types' => ['post,page', 'post']], 'types' => ['page', 'post'], 'valid' => true],
@@ -200,6 +200,7 @@ test_case('quality plugin visibility scope authorizes type-wide statuses before 
         ['label' => 'mixed supported and unsupported', 'opts' => ['post_statuses' => ['publish', 'inherit']], 'statuses' => ['inherit', 'publish'], 'valid' => false],
     ];
     $typeCapabilities = [
+        'attachment' => ['edit' => 'edit_others_posts', 'published' => 'edit_published_posts', 'private' => 'read_private_posts'],
         'post' => ['edit' => 'edit_others_posts', 'published' => 'edit_published_posts', 'private' => 'read_private_posts'],
         'page' => ['edit' => 'edit_others_pages', 'published' => 'edit_published_pages', 'private' => 'read_private_pages'],
     ];

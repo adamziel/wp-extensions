@@ -8,30 +8,35 @@ $GLOBALS['wp_fts_authoritative_dependency_calls'] = [
     'get_option' => 0,
 ];
 
+/** Fail if authoritative preparation reopens taxonomy registration. */
 function get_object_taxonomies(mixed ...$args): array
 {
     $GLOBALS['wp_fts_authoritative_dependency_calls']['get_object_taxonomies']++;
     throw new RuntimeException('authoritative preparation reopened taxonomy registration');
 }
 
+/** Fail if authoritative preparation reopens taxonomy relationships. */
 function wp_get_object_terms(mixed ...$args): array
 {
     $GLOBALS['wp_fts_authoritative_dependency_calls']['wp_get_object_terms']++;
     throw new RuntimeException('authoritative preparation reopened taxonomy relationships');
 }
 
+/** Fail if authoritative preparation reopens canonical post metadata. */
 function get_post_meta(mixed ...$args): mixed
 {
     $GLOBALS['wp_fts_authoritative_dependency_calls']['get_post_meta']++;
     throw new RuntimeException('authoritative preparation reopened post metadata');
 }
 
+/** Fail if authoritative preparation reads process-global plugin options. */
 function get_option(mixed ...$args): mixed
 {
     $GLOBALS['wp_fts_authoritative_dependency_calls']['get_option']++;
     throw new RuntimeException('authoritative preparation reopened plugin options');
 }
 
+/** Keep unrelated filter plumbing inert inside the isolated fixture. */
 function apply_filters(string $hook, mixed $value, mixed ...$args): mixed
 {
     return $value;

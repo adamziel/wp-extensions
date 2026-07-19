@@ -92,6 +92,7 @@ function wp_fts_release_packaging_contract_write_fixture(string $path, string $c
     }
 }
 
+/** Lock the documented exclusion policy to the builder's public entry point. */
 function wp_fts_release_packaging_contract_run(): void
 {
     $root = dirname(__DIR__, 2);
@@ -161,6 +162,7 @@ function wp_fts_release_packaging_contract_run(): void
     );
 }
 
+/** Prove pruning removes development and credential material but keeps runtime code. */
 function wp_fts_release_packaging_contract_prune_run(): void
 {
     $tmp = wp_fts_release_packaging_contract_temp_dir();
@@ -255,6 +257,7 @@ function wp_fts_release_packaging_contract_prune_run(): void
     }
 }
 
+/** Prove nested Composer cannot inherit credentials or shared mutable state. */
 function wp_fts_release_packaging_contract_composer_env_run(): void
 {
     $tmp = wp_fts_release_packaging_contract_temp_dir();
@@ -314,6 +317,7 @@ function wp_fts_release_packaging_contract_composer_env_run(): void
     }
 }
 
+/** Ensure staging rejects links before an outside target can enter the ZIP. */
 function wp_fts_release_packaging_contract_symlink_escape_run(): void
 {
     $tmp = wp_fts_release_packaging_contract_temp_dir();
@@ -351,6 +355,7 @@ function wp_fts_release_packaging_contract_symlink_escape_run(): void
     }
 }
 
+/** Ensure repository pointers and local VCS configuration never cross release bounds. */
 function wp_fts_release_packaging_contract_vcs_metadata_run(): void
 {
     $tmp = wp_fts_release_packaging_contract_temp_dir();
@@ -388,6 +393,7 @@ function wp_fts_release_packaging_contract_vcs_metadata_run(): void
     }
 }
 
+/** Reject a cache nested in staging before Composer can mutate package contents. */
 function wp_fts_release_packaging_contract_composer_state_overlap_run(): void
 {
     $tmp = wp_fts_release_packaging_contract_temp_dir();
@@ -411,6 +417,7 @@ function wp_fts_release_packaging_contract_composer_state_overlap_run(): void
     }
 }
 
+/** Prove destructive build paths cannot alias immutable source or Composer state. */
 function wp_fts_release_packaging_contract_destructive_path_overlap_run(): void
 {
     $tmp = wp_fts_release_packaging_contract_temp_dir();
@@ -539,6 +546,7 @@ function wp_fts_release_packaging_contract_blueprint(string $path): array
     return $decoded;
 }
 
+/** Install the ZIP alone and prove runtime code/data needs no monorepo neighbor. */
 function wp_fts_release_packaging_contract_standalone_bootstrap_run(): void
 {
     $tmp = wp_fts_release_packaging_contract_temp_dir();
@@ -637,6 +645,7 @@ PHP;
     }
 }
 
+/** Hold ZIP bytes stable across mtimes, permissions, sequential runs, and races. */
 function wp_fts_release_packaging_contract_deterministic_zip_bytes_run(): void
 {
     $tmp = wp_fts_release_packaging_contract_temp_dir();
@@ -738,6 +747,7 @@ PHP;
     }
 }
 
+/** Compare independent complete builds, not merely archives from one shared stage. */
 function wp_fts_release_packaging_contract_full_build_reproducibility_run(): void
 {
     $tmp = wp_fts_release_packaging_contract_temp_dir();
@@ -805,6 +815,7 @@ function wp_fts_release_packaging_contract_full_build_reproducibility_run(): voi
     }
 }
 
+/** Prove a reused vendor tree is replaced from current component source bytes. */
 function wp_fts_release_packaging_contract_stale_vendor_run(): void
 {
     $tmp = wp_fts_release_packaging_contract_temp_dir();

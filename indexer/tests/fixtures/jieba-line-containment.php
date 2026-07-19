@@ -27,7 +27,7 @@ function wp_fts_jieba_line_fixture_proc_status(): array
             }
             $value = trim(substr($line, $separator + 1));
             $space = strpos($value, ' ');
-            if ($space !== false && ctype_digit(substr($value, 0, $space)) && strtolower(trim(substr($value, $space + 1))) === 'kb') {
+            if ($space !== false && $space > 0 && strspn(substr($value, 0, $space), '0123456789') === $space && strtolower(trim(substr($value, $space + 1))) === 'kb') {
                 $values[$key] = (int) substr($value, 0, $space) * 1024;
             }
         }

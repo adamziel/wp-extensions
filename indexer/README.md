@@ -281,10 +281,11 @@ search service.
 
 Pages return `has_more`, signed forward/reverse cursors, `total: null`, and
 `total_relation: unknown`. Numbered deep offsets and synchronous exact totals
-would require repeated or exhaustive work. Unrelated constrained WordPress
-queries remain on core search; once FTS owns an otherwise-supported search,
-an unavailable index or unbounded numeric page fails closed instead of silently
-running an unindexed core `LIKE`/`OFFSET` query.
+would require repeated or exhaustive work. Valid WordPress query shapes with
+unsupported membership, projection, ordering, page-size, or numbered-pagination
+constraints remain on core search. Once FTS owns an otherwise-supported search,
+an unavailable index or malformed/oversized adapter input fails closed instead
+of silently running an unindexed core `LIKE`/`OFFSET` query.
 
 Legacy candidate options remain component compatibility inputs for local
 in-memory/file adapters. The plugin rejects them before relational planning;
@@ -495,25 +496,39 @@ enabling it on live traffic.
 
 Current caveats:
 
-- front-end search replacement is enabled by default and runs late in the
-  WordPress search hooks so configured front-end searches are owned by FTS. The
-  provider compatibility setting defaults to Prefer Language FTS; switch it to
-  keep another search provider's results when Jetpack Search, SearchWP,
-  Relevanssi, a theme filter, or custom search code appears to win or lose and
-  should answer first. The Health and Settings tabs show a read-only advisory
+- front-end search replacement is enabled by default for ordinary supported
+  search archives. A non-null result from an earlier `posts_pre_query` provider
+  is always preserved. The default **Use Language FTS when providers abstain**
+  mode accepts only a null handoff from an earlier provider; the stricter
+  **Keep provider-integrated searches on WordPress** mode leaves the whole
+  query on core whenever a third-party provider callback is registered. SQL
+  shaping, request-stage, later-provider, and post-result membership callbacks
+  already registered before ranking also keep valid searches on core with zero
+  FTS statements. If one first appears during the bounded relational page, the
+  ranked page is discarded and the already-owned query fails closed with later
+  result filters suppressed; it never falls through to core LIKE after FTS SQL.
+  Fresh settings index post, page, and attachment so stock unscoped searches
+  have the same built-in type surface as core. A deliberately saved scope that
+  omits any currently searchable type keeps unscoped searches on core. Feed, embed,
+  preview, singular, and other non-search-archive routes remain on WordPress.
+  The Health and Settings tabs show a read-only advisory
   when common providers such as Jetpack Search/Jetpack, SearchWP, Relevanssi, or
   ElasticPress are detected from safe activation/option/class/function signals;
   that advisory does not call provider APIs and is not certification that those
   products have been tested end to end. Request diagnostics can also show a
   bounded `posts_pre_query` hook pipeline with callback labels and priorities,
-  without executing callbacks or including provider result payloads;
+  without executing callbacks or including provider result payloads. The stock
+  WordPress comment-state `the_posts` callback is recognized as membership
+  neutral; foreign `the_posts` callbacks are not;
 - wp-admin Posts list search replacement is enabled for safe main-list searches
   over indexed supported admin post statuses and uses the same provider
   compatibility setting. Its pre-LIMIT gate follows each registered post
   type's capability map: other authors' draft/pending rows require
   `edit_others_posts`, future rows also require `edit_published_posts`, and
-  private rows require `read_private_posts`; an unrepresentable scope stays on
-  WordPress or fails closed. The `wp_fts_replace_frontend_search` and
+  private rows require `read_private_posts`; an unrepresentable scope and valid
+  numbered admin pagination stay on WordPress. A supported FTS-owned shape still
+  fails closed if the relational index becomes unavailable. The
+  `wp_fts_replace_frontend_search` and
   `wp_fts_replace_admin_post_search` filters can still disable a whole
   replacement surface;
 - Settings > Full-Text Search covers operational search/index defaults, but

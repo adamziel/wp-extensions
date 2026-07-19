@@ -36,23 +36,27 @@ caveats operators need to account for.
 
 ## Search Provider Compatibility
 
-The provider compatibility setting is an advisory coexistence control, not a
-certification suite for every search plugin. Known-provider detection can report
+The provider compatibility setting controls only null handoff ownership; it
+never permits Language FTS to replace a non-null provider result. The default
+mode runs FTS after an earlier provider returns `null`; the stricter mode keeps
+any provider-integrated query on core WordPress. Known-provider detection can report
 families such as Jetpack Search / Jetpack, SearchWP, Relevanssi, and
 ElasticPress from safe activation, option, class, and function signals, but the
 current repository does not include live end-to-end proof for those providers on
 a real site.
 
 Theme and custom `posts_pre_query` integrations that are not recognized as a
-known provider may only appear in diagnostics as generic hook callback labels.
-The hook pipeline view lists registered callbacks around Language FTS without
-calling them. For traced front-end and wp-admin Posts searches, a separate
-read-only late observer records bounded final ownership after later
-`posts_pre_query` callbacks have had a chance to run. It can show whether
-Language FTS survived, a later callback changed the FTS result, or coexistence
-mode respected an earlier provider result. If diagnostics are disabled, the
-trace is missing, or the final value cannot be safely compared, final ownership
-is reported as unavailable instead of guessing.
+known provider appear in diagnostics as generic hook callback labels. Earlier
+providers may hand off with `null` only in the default mode. Same-priority and
+later providers stay on core because they could change membership after the FTS
+limit. Registered SQL clause/request filters and post-result membership filters
+also stay on core. The hook pipeline view lists registered callbacks around
+Language FTS without calling them. A separate late observer normally preserves
+incoming results; for a plugin-owned unavailable query it restores the empty
+fail-closed page after callbacks registered during relational execution run.
+It is not used as a workaround for unsafe ownership. If diagnostics are
+disabled, the trace is missing, or the final value cannot be safely compared,
+final ownership is reported as unavailable instead of guessing.
 
 Request diagnostics are request-local and bounded. They help explain the current
 admin or debug-enabled request, but they are not persistent conflict logs,
@@ -183,11 +187,11 @@ Current language support is best read by tier:
 | Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Optional Wamania-backed Snowball stemming when Composer dependencies are present and the compliance harness accepts them. | Dutch now has a source-backed UniMorph pack when configured; no broad Wamania language claim is made beyond the allowlist. |
 | Chinese (`zh`) | Deterministic CJK fallback n-grams up to 4 characters, plus optional Jieba dictionary segmentation from the curated pinned runtime (or initialized source checkout during development). | Jieba is segmentation only, default-disabled outside the sandbox, and not morphology, synonym expansion, phrase search, broad Simplified/Traditional conversion, or a production custom-dictionary API. |
 | Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common feminine, masculine, Arabic-loan, and plural-oblique forms. | UniMorph Urdu is license-blocked because `unimorph/urd` has no redistribution license evidence; no generated Urdu pack is bundled. Persian (`fa`) is now its own partition and is not merged into Urdu routing. |
-| Generic packs | `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` can enable local manifest-backed, language-matched packs. | Invalid, missing, disabled, or mismatched packs do not stop indexing; they fall back to the built-in analyzer path. Runtime lines are capped at 4 KiB, and a shard above the 8 MiB decoded/scan lookup envelope must include the validated block-index sidecar. Multi-shard packs require complete normalized, strictly ordered, non-overlapping surface ranges so one lookup can select at most one shard. |
+| Generic packs | `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` can enable local manifest-backed, language-matched packs. | Invalid, missing, disabled, or mismatched packs do not stop indexing; they fall back to the built-in analyzer path. Runtime lines are capped at 4 KiB. Only `fixture_only` packs with at most 50,000 rows and 8 MiB of decoded runtime data may use eager unindexed storage, and all distinct eager-eligible fixture manifests in one analyzer share both the 50,000-row and 8-MiB decoded allowances; every other shard requires indexed gzip plus a validated block-index sidecar. Multi-shard packs require complete normalized, strictly ordered, non-overlapping surface ranges so one lookup can select at most one shard. |
 
 Every valid lemma pack is limited to twelve lemmas for one surface across all
-shards. The validator and streamed, gzip, and indexed runtime lookups enforce
-the same bound. The source importer retains an exact twelve-candidate surface;
+shards. Full validation, eager fixture loading, and indexed runtime lookup
+enforce the same bound. The source importer retains an exact twelve-candidate surface;
 when approved source data contains thirteen or more unique lemmas, it emits one
 explicit surface-to-itself row and records the replaced source-pair count. That
 is a deterministic ambiguity no-op, not a lexical first-twelve subset. A
@@ -247,7 +251,9 @@ Stemming is enabled by default and can be disabled with
   for them during this pass.
 - A full CLARIN-PL PoliMorf external pack builder exists for local/offline
   generation. It verifies the approved source artifact, writes the generated
-  runtime pack outside the plugin package, and validates the resulting manifest.
+  indexed-gzip runtime pack outside the plugin package, fully validates the
+  resulting manifest, and verifies that the pack can be activated with all
+  lookup sidecars retained.
   The source archive and extracted TSV are not committed or bundled. Separately
   generated external pack copies remain outside the release package,
   opt-in/default-disabled, and operators must install them externally before
@@ -346,6 +352,14 @@ Current search supports:
 
 Search membership is morphology-aware. Page decoration highlights literal
 surface words without re-running the analyzer once per snippet token.
+
+The front-end and wp-admin adapters take over only query shapes whose complete
+membership, visibility, projection, ordering, and cursor page can be expressed
+by the relational plan. Other valid WordPress shapes—including taxonomy, meta,
+author, date, `search_columns`, and numbered admin pages—remain on core search.
+After a supported shape is owned, stale readiness or a relational failure fails
+closed rather than changing engines mid-request. Malformed or oversized public
+adapter input is likewise rejected before it can reach core search.
 
 It does not support:
 

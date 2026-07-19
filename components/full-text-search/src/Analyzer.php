@@ -184,13 +184,16 @@ final class WP_FTS_Analyzer
         $this->queryLanguage = $this->canonicalLanguage($options['query_lang'] ?? null);
 
         $this->stopwords = [];
-        foreach (($options['stopwords'] ?? []) as $word) {
-            foreach ($this->languagePipeline->analyze_detailed((string) $word, $this->defaultLanguage) as $term) {
-                $this->stopwords[$term['term']] = true;
-            }
-        }
-
         $this->stopwordsByLang = [];
+        $stopwordSegments = [];
+        $stopwordTargets = [];
+        foreach (($options['stopwords'] ?? []) as $word) {
+            $stopwordSegments[] = [
+                'text' => (string) $word,
+                'language' => $this->defaultLanguage,
+            ];
+            $stopwordTargets[] = null;
+        }
         foreach (($options['stopwords_by_lang'] ?? []) as $lang => $words) {
             $canonical = $this->canonicalLanguage((string) $lang);
             if ($canonical === null || !is_array($words)) {
@@ -198,8 +201,20 @@ final class WP_FTS_Analyzer
             }
 
             foreach ($words as $word) {
-                foreach ($this->languagePipeline->analyze_detailed((string) $word, $canonical) as $term) {
-                    $this->stopwordsByLang[$canonical][$term['term']] = true;
+                $stopwordSegments[] = [
+                    'text' => (string) $word,
+                    'language' => $canonical,
+                ];
+                $stopwordTargets[] = $canonical;
+            }
+        }
+        foreach ($this->languagePipeline->analyze_detailed_batch($stopwordSegments) as $index => $terms) {
+            $target = $stopwordTargets[$index] ?? null;
+            foreach ($terms as $term) {
+                if ($target === null) {
+                    $this->stopwords[$term['term']] = true;
+                } else {
+                    $this->stopwordsByLang[$target][$term['term']] = true;
                 }
             }
         }
@@ -233,14 +248,11 @@ final class WP_FTS_Analyzer
         $tokens = [];
         $nextPosition = 0;
 
-        foreach ($this->extractHtmlSegments($html, $options) as $segment) {
+        $segments = $this->extractHtmlSegments($html, $options);
+        $segmentWeights = array_column($segments, 'weight');
+        foreach ($this->analyzeTextBatchStream($segments, $includeSurface, $maxOccurrences) as $index => $terms) {
             $terms = $this->renumberAnalyzedPositions(
-                $this->analyzeText(
-                    $segment['text'],
-                    $segment['lang'],
-                    $includeSurface,
-                    $maxOccurrences - count($tokens)
-                ),
+                $terms,
                 $nextPosition
             );
             foreach ($terms as $term) {
@@ -250,7 +262,7 @@ final class WP_FTS_Analyzer
 
                 $row = [
                     'term' => $term['term'],
-                    'weight' => $segment['weight'],
+                    'weight' => $segmentWeights[$index],
                     'lang' => $term['lang'],
                 ];
                 foreach (['position', 'rank', 'source', 'normalized_surface'] as $key) {
@@ -330,6 +342,134 @@ final class WP_FTS_Analyzer
     }
 
     /**
+     * Analyze all normalized index fields through one dictionary lookup batch.
+     *
+     * Indexer uses this production path to prevent field boundaries from
+     * multiplying sidecar reads. Each returned element contains the occurrence
+     * list for the field at the same input index; HTML boosts and language scopes
+     * remain local to their original field.
+     *
+     * @param array<int,array{name:string,text:string,html?:string,boost:float}> $fields
+     * @param array<string,mixed>|string|null $options
+     * @return array<int,array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>>
+     */
+    public function analyze_document_fields(array $fields, array|string|null $options = []): array
+    {
+        if (count($fields) > 32) {
+            throw new WP_FTS_Analysis_Limit_Exceeded(
+                'index_fields',
+                'FTS document analysis accepts at most 32 fields.'
+            );
+        }
+
+        $baseOptions = $this->normalizeLanguageOptions($options, 'document');
+        $maxOccurrences = $this->documentOccurrenceLimit($baseOptions);
+        $includeSurface = $this->truthyOption($baseOptions['_include_document_surface'] ?? false);
+        $segments = [];
+        $segmentFields = [];
+        $segmentWeights = [];
+        $sourceBytes = 0;
+        $lexicalWords = 0;
+        $fieldSources = [];
+        foreach ($fields as $fieldIndex => $field) {
+            if (!is_array($field) || count($field) > 4) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'index_field_shape',
+                    'FTS document fields must use the bounded normalized field shape.'
+                );
+            }
+            $source = isset($field['html'])
+                ? (string) $field['html']
+                : (string) ($field['text'] ?? '');
+            $fieldSources[$fieldIndex] = $source;
+            $sourceBytes += strlen($source);
+            WP_FTS_Analysis_Limits::assert_document_source_bytes($sourceBytes);
+            foreach (WP_FTS_Html_Text_Stream::visible_word_stream($source) as $word) {
+                WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen((string) ($word['text'] ?? '')));
+                if (++$lexicalWords > $maxOccurrences) {
+                    throw new WP_FTS_Analysis_Limit_Exceeded(
+                        'occurrences',
+                        'FTS document analysis exceeds the 20,000-occurrence limit.'
+                    );
+                }
+            }
+            if (isset($field['html'])) {
+                WP_FTS_Html_Text_Stream::assert_analysis_markup_limits($source);
+            }
+        }
+
+        // Only collect segment arrays after every aggregate source/word/markup
+        // preflight succeeds, so a late invalid field cannot leave an almost
+        // maximum document resident before rejection.
+        foreach ($fields as $fieldIndex => $field) {
+            $fieldOptions = $baseOptions;
+            $fieldOptions['field_name'] = (string) ($field['name'] ?? '');
+            $source = $fieldSources[$fieldIndex];
+            if (isset($field['html'])) {
+                foreach ($this->extractHtmlSegments($source, $fieldOptions) as $segment) {
+                    if (count($segments) >= WP_FTS_Analysis_Limits::MAX_HTML_MARKUP_TOKENS) {
+                        throw new WP_FTS_Analysis_Limit_Exceeded(
+                            'html_markup_tokens',
+                            'FTS document HTML exceeds the aggregate 20,000-segment limit.'
+                        );
+                    }
+                    $segments[] = $segment;
+                    $segmentFields[] = $fieldIndex;
+                    $segmentWeights[] = $segment['weight'];
+                }
+                continue;
+            }
+
+            $lang = $this->resolveDocumentLanguage($fieldOptions);
+            if ($this->shouldAutoDetectDocumentLanguage($fieldOptions)) {
+                $lang = $this->detectSegmentLanguage($source, $lang);
+            }
+            if (count($segments) >= WP_FTS_Analysis_Limits::MAX_HTML_MARKUP_TOKENS) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'html_markup_tokens',
+                    'FTS document fields exceed the aggregate 20,000-segment limit.'
+                );
+            }
+            $segments[] = ['text' => $source, 'lang' => $lang];
+            $segmentFields[] = $fieldIndex;
+            $segmentWeights[] = 1.0;
+        }
+
+        $tokensByField = array_fill(0, count($fields), []);
+        $nextPositions = array_fill(0, count($fields), 0);
+        $accepted = 0;
+        foreach ($this->analyzeTextBatchStream($segments, $includeSurface, $maxOccurrences) as $segmentIndex => $terms) {
+            $fieldIndex = $segmentFields[$segmentIndex];
+            $terms = $this->renumberAnalyzedPositions($terms, $nextPositions[$fieldIndex]);
+            foreach ($terms as $term) {
+                if ($this->isStopword($term['term'], $term['lang'])) {
+                    continue;
+                }
+                if (++$accepted > $maxOccurrences) {
+                    throw new WP_FTS_Analysis_Limit_Exceeded(
+                        'occurrences',
+                        'FTS document analysis exceeds the 20,000-occurrence limit.'
+                    );
+                }
+
+                $row = [
+                    'term' => $term['term'],
+                    'weight' => $segmentWeights[$segmentIndex],
+                    'lang' => $term['lang'],
+                ];
+                foreach (['position', 'rank', 'source', 'normalized_surface'] as $key) {
+                    if (array_key_exists($key, $term)) {
+                        $row[$key] = $term[$key];
+                    }
+                }
+                $tokensByField[$fieldIndex][] = $row;
+            }
+        }
+
+        return $tokensByField;
+    }
+
+    /**
      * Query analysis intentionally skips only the HTML extraction stage.
      *
      * Use this for user search text. By default it returns plain term strings
@@ -392,17 +532,19 @@ final class WP_FTS_Analyzer
         $terms = [];
         $nextPosition = 0;
 
-        foreach ($this->queryTextSegments($query, $lang, $options) as $segment) {
+        $segments = $this->queryTextSegments($query, $lang, $options);
+        foreach ($this->analyzeTextBatchStream($segments, $includeSurface, $maxOccurrences) as $analyzedSegment) {
             $segmentTerms = $this->renumberAnalyzedPositions(
-                $this->analyzeText(
-                    $segment['text'],
-                    $segment['lang'],
-                    $includeSurface,
-                    $maxOccurrences === null ? null : $maxOccurrences - count($terms)
-                ),
+                $analyzedSegment,
                 $nextPosition
             );
             array_push($terms, ...$this->filterQueryStopwords($segmentTerms, $includeSurface));
+            if ($maxOccurrences !== null && count($terms) > $maxOccurrences) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'occurrences',
+                    "FTS analysis exceeds its {$maxOccurrences}-occurrence limit."
+                );
+            }
         }
 
         return $terms;
@@ -519,6 +661,12 @@ final class WP_FTS_Analyzer
         return $this->indexSignature;
     }
 
+    /** Expose configured lemma-pack I/O diagnostics for acceptance checks. */
+    public function lemma_pack_diagnostics(string $language): ?array
+    {
+        return $this->languagePipeline->lemma_pack_diagnostics($language);
+    }
+
     /**
      * Run the configured language pipeline for one resolved text segment.
      *
@@ -537,6 +685,33 @@ final class WP_FTS_Analyzer
         $lang = $this->canonicalLanguage($lang) ?? $this->defaultLanguage;
 
         return $this->languagePipeline->analyze_detailed($text, $lang, $includeSurface, $maxTerms);
+    }
+
+    /**
+     * Transfer resolved segments into one streamed lemma lookup batch.
+     *
+     * The input is cleared before pipeline preparation so callers do not retain
+     * both analyzer and pipeline copies of every maximum-depth HTML segment.
+     *
+     * @param array<int,array{text:string,lang:string}> $segments
+     * @return iterable<int,array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string}>>
+     */
+    private function analyzeTextBatchStream(
+        array &$segments,
+        bool $includeSurface = false,
+        ?int $maxTerms = null
+    ): iterable {
+        $pipelineSegments = [];
+        foreach ($segments as $segment) {
+            $pipelineSegments[] = [
+                'text' => $segment['text'],
+                'language' => $this->canonicalLanguage($segment['lang']) ?? $this->defaultLanguage,
+                'include_surface' => $includeSurface,
+            ];
+        }
+        $segments = [];
+
+        return $this->languagePipeline->analyze_detailed_batch_stream($pipelineSegments, $maxTerms);
     }
 
     /** Resolve the remaining per-document occurrence allowance. */
@@ -1345,6 +1520,8 @@ final class WP_FTS_Analyzer
      *
      * Tag boundaries are found one byte at a time so `>` inside a quoted
      * attribute cannot end a tag. Invalid `<` sequences stay visible text.
+     * SCRIPT data and STYLE raw text use the shared byte-stream boundary logic,
+     * preventing tag-looking code from changing this fallback event stream.
      *
      * @return iterable<int,array{type:'text'|'tag'|'declaration',raw:string}>
      */
@@ -1387,9 +1564,34 @@ final class WP_FTS_Analyzer
             }
 
             $raw = substr($html, $tagStart, $tagEnd - $tagStart + 1);
-            if ($this->fallbackTagDescriptor($raw) !== null) {
+            $tag = $this->fallbackTagDescriptor($raw);
+            if ($tag !== null) {
                 yield ['type' => 'tag', 'raw' => $raw];
                 $offset = $tagEnd + 1;
+                if (
+                    !$tag['closing']
+                    && ($tag['name'] === 'SCRIPT' || $tag['name'] === 'STYLE')
+                    && !$this->fallbackTagIsSelfClosing($raw)
+                ) {
+                    $closingTagStart = null;
+                    $elementEnd = WP_FTS_Html_Text_Stream::hidden_text_element_end_offset(
+                        $html,
+                        $offset,
+                        $tag['name'],
+                        $closingTagStart
+                    );
+                    $contentEnd = $closingTagStart ?? $elementEnd;
+                    if ($contentEnd > $offset) {
+                        yield ['type' => 'text', 'raw' => substr($html, $offset, $contentEnd - $offset)];
+                    }
+                    if ($closingTagStart !== null) {
+                        yield [
+                            'type' => 'tag',
+                            'raw' => substr($html, $closingTagStart, $elementEnd - $closingTagStart),
+                        ];
+                    }
+                    $offset = $elementEnd;
+                }
                 continue;
             }
 

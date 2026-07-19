@@ -517,7 +517,7 @@ final class WP_FTS_WPCLI_Command
      *
      * ## OPTIONS
      *
-     * --yes
+     * [--yes]
      * : Required destructive confirmation. Without it, no storage or options are mutated.
      *
      * [--format=<format>]
@@ -765,6 +765,9 @@ final class WP_FTS_WPCLI_Command
      * [--chunk-rows=<n>]
      * : Number of deduplicated source pairs to sort per temporary chunk.
      *
+     * [--runtime-compression=<compression>]
+     * : Runtime storage (`gzip` or `none`). Non-fixture packs default to and require indexed gzip; `none` is limited to fixtures with at most 50,000 rows and 8 MiB decoded.
+     *
      * [--fixture-only]
      * : Mark the generated pack as a test fixture only.
      *
@@ -851,6 +854,9 @@ final class WP_FTS_WPCLI_Command
      * [--chunk-rows=<n>]
      * : Number of deduplicated source pairs to sort per temporary chunk.
      *
+     * [--runtime-compression=<compression>]
+     * : Runtime storage (`gzip` or `none`). Non-fixture packs default to and require indexed gzip; `none` is limited to fixtures with at most 50,000 rows and 8 MiB decoded.
+     *
      * [--fixture-only]
      * : Mark the generated pack as a test fixture only.
      *
@@ -936,6 +942,9 @@ final class WP_FTS_WPCLI_Command
      *
      * [--chunk-rows=<n>]
      * : Number of deduplicated source pairs to sort per temporary chunk.
+     *
+     * [--runtime-compression=<compression>]
+     * : Runtime storage (`gzip` or `none`). Non-fixture packs default to and require indexed gzip; `none` is limited to fixtures with at most 50,000 rows and 8 MiB decoded.
      *
      * [--fixture-only]
      * : Mark the generated pack as a test fixture only.
@@ -1797,6 +1806,7 @@ final class WP_FTS_WPCLI_Command
             'tmp_dir' => ['tmp-dir', 'tmp_dir'],
             'max_rows_per_file' => ['max-rows-per-file', 'max_rows_per_file'],
             'chunk_rows' => ['chunk-rows', 'chunk_rows'],
+            'runtime_compression' => ['runtime-compression', 'runtime_compression'],
             'fixture_only' => ['fixture-only', 'fixture_only'],
         ] as $importerKey => $cliNames) {
             $value = $this->assoc_arg($assoc_args, $cliNames, null);
