@@ -1681,6 +1681,21 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
     record_check('relational worst-case fixed profile contract', 16);
 });
 
+test_case('relational worst-case corpus starts with an empty configured post-type namespace', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $setup = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_setup');
+    $settings = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_enable_search_settings');
+
+    assert_contains("const WP_FTS_WC_INDEX_POST_TYPES = ['post', 'page', 'attachment'];", $integration, 'the deterministic corpus and public search scope should share one post-type list');
+    assert_contains('count(WP_FTS_WC_INDEX_POST_TYPES)', $setup, 'fixture cleanup should prepare one placeholder for every configured post type');
+    assert_contains('...WP_FTS_WC_INDEX_POST_TYPES', $setup, 'fixture cleanup should bind the shared configured post types');
+    assert_contains('ORDER BY ID ASC', $setup, 'fixture cleanup should enumerate deterministic post IDs');
+    assert_contains("'configured post-type fixture namespace after cleanup'", $setup, 'fixture cleanup should count its exact configured namespace after deletion');
+    assert_contains('wp_fts_wc_assert($remainingIndexedPosts === 0', $setup, 'fixture setup should fail while any configured post type remains');
+    assert_true(!str_contains($setup, "post_type = 'post'"), 'fixture cleanup must not leave stock pages or attachments outside its oracle corpus');
+    assert_contains("\$settings['index_post_types'] = WP_FTS_WC_INDEX_POST_TYPES;", $settings, 'public search settings should use the same post-type list as fixture cleanup');
+});
+
 test_case('relational worst-case records measured mutation SQL and effective pinned resources', function (): void {
     $root = dirname(__DIR__, 2);
     $runnerPath = $root . '/tools/run-relational-fts-worst-case.sh';

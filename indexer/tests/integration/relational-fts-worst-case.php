@@ -15,6 +15,7 @@ const WP_FTS_WC_IMMUTABLE_BASELINE_SHA = '36a26f4ad1aaef9758922f24677069045c5291
 const WP_FTS_WC_MANIFEST_OPTION = 'wp_fts_relational_wc_manifest';
 const WP_FTS_WC_POST_TITLE_PREFIX = 'WP FTS relational worst case ';
 const WP_FTS_WC_MULTISITE_POST_TITLE_PREFIX = 'WP FTS multisite migration sentinel ';
+const WP_FTS_WC_INDEX_POST_TYPES = ['post', 'page', 'attachment'];
 const WP_FTS_WC_DEPENDENCY_LOB_BYTES = 262144;
 const WP_FTS_WC_DEPENDENCY_ACCEPTED_UNSELECTED_ROWS = 511;
 const WP_FTS_WC_DEPENDENCY_OVERFLOW_UNSELECTED_ROWS = 512;
@@ -130,9 +131,24 @@ function wp_fts_wc_setup(): array
     wp_fts_wc_enable_search_settings();
     $packEvidence = wp_fts_wc_enable_all_runtime_lemma_packs();
 
-    foreach ($wpdb->get_col("SELECT ID FROM {$wpdb->posts} WHERE post_type = 'post'") ?: [] as $postId) {
+    $postTypePlaceholders = implode(',', array_fill(0, count(WP_FTS_WC_INDEX_POST_TYPES), '%s'));
+    $indexedPostTypePredicate = $wpdb->prepare(
+        'post_type IN (' . $postTypePlaceholders . ')',
+        ...WP_FTS_WC_INDEX_POST_TYPES
+    );
+    wp_fts_wc_assert(is_string($indexedPostTypePredicate) && $indexedPostTypePredicate !== '', 'Could not prepare the configured post-type cleanup predicate.');
+    $existingPostIds = $wpdb->get_col("SELECT ID FROM {$wpdb->posts} WHERE {$indexedPostTypePredicate} ORDER BY ID ASC");
+    if (!is_array($existingPostIds) || trim((string) $wpdb->last_error) !== '') {
+        throw new RuntimeException('Could not enumerate the configured post-type fixture namespace: ' . trim((string) $wpdb->last_error));
+    }
+    foreach ($existingPostIds as $postId) {
         wp_delete_post((int) $postId, true);
     }
+    $remainingIndexedPosts = wp_fts_wc_checked_count(
+        "SELECT COUNT(*) FROM {$wpdb->posts} WHERE {$indexedPostTypePredicate}",
+        'configured post-type fixture namespace after cleanup'
+    );
+    wp_fts_wc_assert($remainingIndexedPosts === 0, 'Configured post-type rows remain before deterministic corpus insertion.');
 
     $profile = wp_fts_wc_profile();
     $token = 'wpftswc' . substr(hash('sha256', wp_fts_wc_required_env('WP_FTS_SOURCE_SHA') . '|' . $profile['name'] . '|relational-worst-case-v1'), 0, 10);
@@ -17947,7 +17963,7 @@ function wp_fts_wc_enable_search_settings(): void
     $settings['replace_frontend_search'] = true;
     $settings['replace_admin_post_search'] = true;
     $settings['result_limit'] = 20;
-    $settings['index_post_types'] = ['post', 'page', 'attachment'];
+    $settings['index_post_types'] = WP_FTS_WC_INDEX_POST_TYPES;
     update_option(WP_FTS_Plugin::SETTINGS_OPTION, $settings, false);
 }
 
