@@ -18949,6 +18949,7 @@ LIMIT %d",
                             $post_payload,
                             $next_scope_payload
                         )) {
+                            $summary['scope_page_committed'] = true;
                             $summary['backfill_queued'] = count($scope_ids);
                         }
                         $summary['has_more'] = true;
@@ -21139,6 +21140,7 @@ WHERE p.ID IN ({$post_placeholders})";
             'queue_after' => 0,
             'backfill_scanned' => 0,
             'backfill_queued' => 0,
+            'scope_page_committed' => false,
             'scope_completed' => false,
             'scope_completed_global' => false,
             'lock_before' => [],
@@ -23433,6 +23435,7 @@ STRAIGHT_JOIN {$work_table} work_row
             'queue_after' => $summary['queue_after'] ?? 0,
             'backfill_scanned' => $summary['backfill_scanned'] ?? 0,
             'backfill_queued' => $summary['backfill_queued'] ?? 0,
+            'scope_page_committed' => $summary['scope_page_committed'] ?? false,
             'failures' => $summary['last_batch_failures'] ?? 0,
             'has_more' => $summary['has_more'] ?? false,
             'skipped_locked' => $summary['skipped_locked'] ?? false,
@@ -23503,6 +23506,7 @@ STRAIGHT_JOIN {$work_table} work_row
             'queue_after' => max(0, (int) ($raw['queue_after'] ?? 0)),
             'backfill_scanned' => max(0, (int) ($raw['backfill_scanned'] ?? 0)),
             'backfill_queued' => max(0, (int) ($raw['backfill_queued'] ?? 0)),
+            'scope_page_committed' => (bool) ($raw['scope_page_committed'] ?? false),
             'failures' => max(0, (int) ($raw['failures'] ?? 0)),
             'has_more' => (bool) ($raw['has_more'] ?? false),
             'skipped_locked' => (bool) ($raw['skipped_locked'] ?? false),

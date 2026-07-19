@@ -1056,6 +1056,23 @@ and exact remaining headroom and requires zero OOM and OOM-kill events in every
 segment. The whole-run peak has no tighter cache-sensitive threshold beyond the
 hard 1-GiB/no-swap contract.
 
+The persistent WordPress service has its own exact ordered two-checkpoint
+contract: once before corpus work and once after the final measured workload.
+Both checkpoints must retain the original 64-hex container ID, cgroup version,
+Docker `StartedAt` timestamp, positive host PID, and restart count. Docker can
+preserve an ID while restarting a container and resetting its cgroup counters;
+any lifecycle-token drift therefore fails even when the ID is unchanged.
+Because that container is never restarted, its final cumulative high-water
+mark is the whole measured-workload peak. It must remain within the hard 512-MiB/no-swap
+limit with exact remaining headroom and zero limit, OOM, and OOM-kill events at
+both checkpoints. This covers Apache and every simultaneous `docker exec` PHP
+worker in the persistent service. Ephemeral WP-CLI containers are separate and
+remain fail-closed through their process exit and PHP limits. The 128-MiB PHP
+limit is a per-process allocator ceiling, not a claim that aggregate container
+RSS is below 128 MiB; no tighter cache-sensitive WordPress-container peak is
+invented. The final checkpoint covers all measured workloads and precedes the
+report-assembly PHP process, which still cannot publish PASS if it fails.
+
 Finalization revalidates the complete raw image/cgroup artifact, including its
 empty failure list. A dirty local smoke is explicitly marked
 non-acceptance. It may record an explicit image override for diagnostics, but
@@ -1233,7 +1250,13 @@ followed by one selected value. Their selected values contain exact multibyte
 bytes, not ASCII-only placeholders. The production worker must index and make
 the accepted selected value searchable, preserve its byte-for-byte value,
 explicitly reject and acknowledge the 513-row document, and drain both work
-generations. Its tagged dependency
+generations. The first measured batch must isolate its permanent-rejection
+phase: it acknowledges only the overflow generation, records that rejection,
+and returns the analyzed accepted generation ready. One bounded successor then
+indexes and acknowledges the accepted generation before any search or document
+state is sampled. Treating the rejection as an indexed document, or treating
+the accepted deferral as a drained generation, fails the exact outcome gates.
+Its tagged dependency
 measurement/value reads must be exactly two statements, use the `post_id` and
 `PRIMARY` indexes respectively, return 1,027 measurement rows and only the one
 accepted selected value, create no disk temporary table, examine at most 8,192
@@ -1920,8 +1943,10 @@ The proof first changes, indexes, finds, and restores one post through
 a real save lifecycle. Its separate unchanged case queues 100 distinct
 documents through one 100-ID invalidation and 1,000 repeated requeues, verifies
 that they coalesce to 100 work rows, and runs the worker. It must report 100
-attempted/processed/committed/unchanged documents, zero analyzed documents and
-failures, and zero remaining work.
+attempted, committed, queue-processed, and unchanged generations; zero
+processed, indexed, or analyzed documents; zero adverse outcomes or failures;
+and zero remaining work. An unchanged acknowledgement is durable progress, not
+an indexing event.
 
 A deterministic lowest-ID poison post must not block 99 later posts. After
 three passes, later posts are searchable, poison debt remains durable, and a
@@ -2019,6 +2044,12 @@ boundaries, and readiness remains false until after `legacy_cleaned` returns.
 The killed worker writes an append-only NDJSON record for every actual batch;
 final evidence merges all eleven journals with finalizer batches and rejects a
 single failure, malformed/missing journal, or zero recorded progress.
+Each failpoint worker gets the full 7,200-second migration deadline used by the
+PHP loop and a 300-second production batch budget. The in-container readiness
+watcher is derived as 7,200 + 300 + 60 seconds, and the host timeout adds another
+60 seconds. Thus the wrapper cannot preempt the 100k corpus at the accepted
+minimum 20 documents/second (5,000 seconds), a final legitimate batch, or PHP
+bootstrap/cleanup headroom; the whole-run watchdog remains the terminal bound.
 
 Immediately after every SIGKILL and before the next migration phase, a fresh PHP
 process must read an ordinary option and corpus post, run a real no-op
@@ -2049,32 +2080,43 @@ fresh process has a 120-second hard wall-clock kill rather than an unbounded
 test timeout.
 The immutable legacy snapshot records six exact executions. Each is exclusively
 either a non-empty ordered BM25 score signature or the typed
-`WP_FTS_Search_Budget_Exceeded` rejection with budget `candidate rows` and
-message `Search request exceeded its candidate rows budget.` The 50k
-`common_or` fixture has 138,564 construction-known candidate postings
-(49,500 + 47,032 + 42,032), and the same query has 277,128 at 100k, so the
-legacy search must reject after reading its 100,001st capped row. The proof must
-not raise, disable, or bypass that 100,000-row budget. The eleven exact groups
-in `max_valid_or_prefix` already contribute 544,500 postings at 50k and
-1,089,000 at 100k, so those two profiles must reject it too. `rare_anchor_and`
-must return results at 2k and at its 96,564-row 50k shape, then reject its
-193,128-row 100k shape. The 2k `common_or` and `max_valid_or_prefix` cases also
-remain below the cap and must return results. The legacy 64-term expansion cap
-keeps `prefix_fanout` below 100,000 candidate rows even at 100k, and both
-four-document morphology cases are narrow; `prefix_fanout`,
-`ambiguous_morphology_or`, and `ambiguous_morphology_and` must therefore return
-results in all three profiles. A fresh isolated legacy
-`relational-fts-baseline-performance-v2` measurement passes only when it
-reproduces the snapshot's complete result or exact typed rejection; a rejection
-has zero result rows, null result hashes, and the exact error object. A different
-budget, exception, result, timeout, OOM, or process death remains diagnostic
-evidence but cannot satisfy migration acceptance.
+`WP_FTS_Search_Budget_Exceeded` rejection with budget `candidate rows`, zero
+results, null result hashes, and message
+`Search request exceeded its candidate rows budget.` The proof must not raise,
+disable, or bypass the legacy 100,000-row budget. Construction-known workload
+pressure remains explicit: `common_or` supplies 138,564 candidate postings at
+50k and 277,128 at 100k; the eleven `max_valid_or_prefix` groups supply 544,500
+and 1,089,000; and `rare_anchor_and` supplies 96,564 and 193,128. Those counts
+define adversarial input size, not a guessed execution outcome: the legacy
+implementation's fetch ordering and short-circuit behavior decide whether a
+given run returns complete results or reaches its typed cap. Acceptance freezes
+and authenticates whichever of those two valid outcomes actually occurred.
+
+Each case runs exactly once in its own fresh PHP process with `memory_limit=128M`,
+an inner 120-second kill, and an outer 150-second container deadline. Its
+source-, ZIP-, manifest-, profile-, query-, and option-bound artifact records a
+distinct PID/start-tick/boot-ID identity, ordered execution, duration, emitted
+query count, maximum SQL bytes, PHP allocation delta, RSS delta, reset phase PHP
+peak, lifetime PHP peak, and process RSS high-water mark. PHP phase and absolute
+peaks must stay within 128 MiB. The lightweight assembler executes no legacy
+search; it accepts only the exact six filenames, six distinct process
+identities, and each raw pretty-JSON SHA-256. Missing, extra, stale-sidecar,
+malformed, timed-out, OOM, killed, or otherwise failed evidence is terminal. A
+child failure is atomically published and then aborts the lane immediately so
+cleanup kills or tears down the workloads before diagnostics, stopping any
+server-side SQL left after client death. If kill, teardown, and direct-container
+fallbacks cannot prove quiescence, cleanup skips diagnostic capture and
+compression rather than prolonging unknown work. Child output and failure
+serialization are independently bounded. The same six
+artifacts provide the before metrics, so there is no redundant four-case replay:
+legacy executions per lane are six rather than ten.
+
 The completed populated-migration envelope is
-`relational-fts-migration-evidence-v3`; the final report accepts only v3, so a
+`relational-fts-migration-evidence-v4`; the final report accepts only v4, so a
 stale envelope that does not authenticate the target-v4 rarity basis fails.
 
 Legacy BM25 results are informational evidence of the intentional scoring-model
-cutover. The `relational-fts-v4-migration-oracle-v3` independent oracle selects
+cutover. The `relational-fts-v4-migration-oracle-v4` independent oracle selects
 its fixed five migration cases from the six-case snapshot and computes expected
 v4 order and integer scores directly from the untouched v3 logical postings,
 regardless of whether legacy execution returned results or hit its candidate-row
@@ -2109,7 +2151,11 @@ dictionary columns once: baseline DF probes bind the legacy single-column binary
 Unknown or partial dictionary shapes fail before either query is
 selected. Content-hash stability is measured across a new durable
 generation for every sentinel and a real bounded worker drain, never two
-back-to-back reads of the same rows.
+back-to-back reads of the same rows. Because every sentinel already has its
+current content hash, each stability generation must be acknowledged and
+classified unchanged with zero indexed or analyzed documents and zero adverse
+outcomes. `processed=0` is therefore the expected result, not evidence that the
+worker stalled.
 A 3×3 site-specific token matrix must have three populated diagonal cells and
 six empty off-diagonal cells, and all six foreign term DFs must be zero. During
 the entire main-site destructive migration loop and finalization, a database-
@@ -2129,7 +2175,7 @@ measurement.
 
 ## Evidence and before/after comparison
 
-The runner writes `relational-fts-evidence-v2` JSON containing source and ZIP
+The runner writes `relational-fts-evidence-v3` JSON containing source and ZIP
 hashes, image digests, effective resources, corpus seed/hash/counts, schema and
 DB bytes, raw latency samples, result IDs/hashes, SQL count/bytes/text,
 `EXPLAIN`/`ANALYZE`, rows examined/sent, temporary/sort/lock metrics, PHP
@@ -2144,13 +2190,13 @@ incomplete report. Every other acceptance phase likewise writes its terminal
 diagnostic artifact and then exits nonzero on a failed gate, so WP-CLI adapter,
 transaction-recovery, idle-HTTP, concurrent-worker, taxonomy-scope, and final
 drain failures cannot consume later expensive phases or survive until the
-finalizer. The old-version baseline wrapper retains timeout, OOM, process-death,
-and incorrect-execution `FAIL` artifacts rather than discarding comparison
-evidence or aborting before the current implementation's migration is
-exercised. Such an artifact cannot pass the final baseline-completeness gate:
-all four isolated legacy measurements must be `PASS` and exactly equal their
-frozen execution, including a construction-required typed candidate-row
-rejection. The runner publishes validation output only as partial evidence and
+finalizer. Each old-version snapshot child atomically replaces a stale or
+partial file with bounded `FAIL` evidence for timeout, OOM, process death, or a
+missing terminal artifact, then exits nonzero immediately. The lane teardown
+therefore happens before another snapshot or current-version migration can run
+against a database with residual legacy work. Only all six independently
+bounded, valid result-or-typed-rejection artifacts can pass the no-search
+snapshot assembler. The runner publishes validation output only as partial evidence and
 does not spend additional cold-cache or concurrency capacity on an already
 failed revision.
 
@@ -2203,8 +2249,11 @@ auth or global configuration. Acceptance requires byte-identical ZIPs and
 identical sorted per-entry name/content/metadata manifests. The report binds
 both ZIP and manifest hashes, the full manifest, PHP/Composer/zip/libzip/zlib
 versions where exposed, and PHP/Composer binary hashes to the source SHA. The
-workflow pins PHP 8.4.5 and Composer 2.9.8; a toolchain change is explicit
-rather than silently changing the package under the same commit. The immutable
+workflow selects the maintained stable PHP 8.4 release line and exact Composer
+2.9.8. Acceptance rejects prerelease or non-8.4 PHP versions and records the
+exact resolved PHP patch, extension and library versions, and PHP/Composer
+binary hashes, so every artifact binds the toolchain that actually produced it
+instead of claiming an ineffective patch pin. The immutable
 legacy runtime source is also packaged by this current hardened builder; the
 runner never executes historical packaging code that could re-enable obsolete
 Composer plugin, script, authentication, or global-configuration behavior.
@@ -2251,25 +2300,25 @@ and inventory hashes still fails. Deleting a section or case likewise fails.
 Before/after numbers use clean worktrees and source-bound ZIPs for legacy v3 at
 `36a26f4ad1aaef9758922f24677069045c5291ab` and the pull-request head, identical
 images/resources, and the same corpus manifest. A baseline timeout, OOM, silent
-provider switch, arbitrary exception, or wrong partial result is recorded as
-`FAIL (<reason>)`, never as zero or omitted. The construction-required
-candidate-row exception is instead a `PASS` measurement only when its complete
-typed execution exactly matches the snapshot. The PR description reports
+provider switch, arbitrary exception, or malformed partial result is recorded as
+`FAIL (<reason>)`, never as zero or omitted. The exact candidate-row exception
+is a valid `PASS` snapshot outcome only when its complete typed execution has
+zero results and the exact class, budget, and message. The PR description reports
 absolute values and links raw artifacts; speedup ratios alone are insufficient.
 
-Every legacy comparison artifact is schema-, source-, ZIP-, profile-, and
-case-bound. If the old process dies before writing evidence, the wrapper records
-its measured host wall time, 120-second ceiling, exit status, and a distinct
-timeout/killed/process-failure reason. Migration evidence rejects a missing or
-malformed comparison artifact even when `FAIL` is the honest legacy result. A
+Every legacy snapshot artifact is schema-, source-, ZIP-, manifest-, profile-,
+query-, option-, and case-bound. If the old process dies before writing evidence,
+the wrapper records its measured host wall time, 120-second ceiling, exit status,
+bounded log hash, and a distinct timeout/killed/memory/process-failure reason.
+Migration evidence rejects a missing or malformed artifact; `FAIL` is honest
+diagnostic evidence but never an accepted legacy execution. A
 nonzero or timed-out process can never retain an earlier `PASS` file: the
 wrapper preserves that pre-failure object only as a diagnostic sidecar and
-replaces the accepted comparison artifact with measured `FAIL` evidence. A
-completed isolated baseline measurement must reproduce the frozen populated-v3
-`legacy_execution` exactly: either the complete ordered result signature or the
-exact typed candidate-row rejection. A partial, reordered, differently rejected,
-or otherwise changed execution is `FAIL (ExecutionMismatch)`, not a successful
-timing sample.
+replaces the canonical artifact with measured `FAIL` evidence before aborting
+the lane. A completed snapshot contains exactly either the complete ordered
+result signature or the exact typed candidate-row rejection. Six raw hashes and
+six distinct process identities make that measured populated-v3 state the
+authenticated baseline; no second execution is mislabeled as a comparison.
 
 ## Validation sequence
 
@@ -2280,9 +2329,10 @@ Each required lane performs the same fail-closed sequence:
    cleanliness, the exact allowed lane ID, source/ZIP hashes, and the
    deterministic corpus manifest. The initial `RUNNING` envelope and whole-run
    watchdog already exist before these preflights.
-2. Build the immutable legacy ZIP, create and index the full legacy corpus, and
-   capture bounded baseline queries with explicit timeout/OOM/result-mismatch
-   failure artifacts.
+2. Build the immutable legacy ZIP, create and index the full legacy corpus, run
+   the exact six legacy snapshot cases in six fresh 128-MiB processes, and have a
+   no-search assembler authenticate the exact filename inventory, distinct
+   identities, raw hashes, and valid result-or-typed-rejection executions.
 3. Install the pull-request ZIP without resetting the populated database and
    bind the installed tree byte-for-byte to its ZIP manifest. Kill and resume
    every physical rename and logical migration boundary, running a fresh

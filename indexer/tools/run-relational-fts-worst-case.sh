@@ -25,6 +25,10 @@ WATCHDOG_ESCALATING=0
 WHOLE_RUN_TIMEOUT_SECONDS=19800
 WATCHDOG_CLEANUP_GRACE_SECONDS=300
 DB_PRE_CORPUS_PEAK_LIMIT_BYTES=805306368
+MIGRATION_FAILPOINT_DEADLINE_SECONDS=7200
+MIGRATION_FAILPOINT_BATCH_BUDGET_SECONDS=300
+MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS=$((MIGRATION_FAILPOINT_DEADLINE_SECONDS + MIGRATION_FAILPOINT_BATCH_BUDGET_SECONDS + 60))
+MIGRATION_FAILPOINT_OUTER_TIMEOUT_SECONDS=$((MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS + 60))
 MARIADB_IMAGE="mariadb@sha256:5a5c675881ef3fd1c1da9b0a3bfd6ee82edbe39cd9e32e06be18034c37235e0e"
 MYSQL57_IMAGE="mysql@sha256:4bc6bc963e6d8443453676cae56536f4b8156d78bae03c0145cbe47c2aad73bb"
 MYSQL_IMAGE="mysql@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
@@ -122,6 +126,8 @@ COMPOSE_FILE="${PROOF_ROOT}/compose.yaml"
 EVIDENCE_DIR="${PROOF_ROOT}/evidence"
 DB_MEMORY_CHECKPOINTS="${EVIDENCE_DIR}/database-memory-cgroup.tsv"
 DB_LAST_MEMORY_CHECKPOINT=""
+WP_MEMORY_CHECKPOINTS="${EVIDENCE_DIR}/wordpress-memory-cgroup.tsv"
+WP_LAST_MEMORY_CHECKPOINT=""
 BUILD_DIR="${PROOF_ROOT}/build"
 REPRO_BUILD_DIR="${PROOF_ROOT}/repro-build"
 ZIP_PATH="${PROOF_ROOT}/wp-fts-indexer.zip"
@@ -136,6 +142,7 @@ BASELINE_WORKTREE_CREATED=0
 SOURCE_DIRTY=0
 RUN_COMPLETED=0
 RUN_PUBLISHED=0
+COMPOSE_TORN_DOWN=0
 RUN_STAGE="source-and-package"
 RUN_PHASE="initialization"
 RUN_ID="$(php -r 'echo bin2hex(random_bytes(16));')"
@@ -332,7 +339,32 @@ capture_database_memory_checkpoint() {
     DB_LAST_MEMORY_CHECKPOINT="${raw}"
 }
 
-finalize_database_memory_evidence() {
+capture_wordpress_memory_checkpoint() {
+    local checkpoint="$1"
+    local raw container_id lifecycle started_at host_pid restart_count extra
+    if [[ "${checkpoint}" == *$'\t'* || "${checkpoint}" == *$'\n'* ]]; then
+        echo "BLOCKED: WordPress memory checkpoint labels must be one TSV-safe line." >&2
+        return 1
+    fi
+    capture_compose container_id "wordpress-memory-container-${checkpoint}" 30 ps -q wordpress
+    if [[ -z "${container_id}" || "${container_id}" != "${WP_CONTAINER}" ]]; then
+        echo "BLOCKED: WordPress container identity changed before memory checkpoint ${checkpoint}." >&2
+        return 1
+    fi
+    capture_compose raw "wordpress-memory-${checkpoint}" 30 exec -T wordpress sh -c "${CGROUP_MEMORY_PROBE}"
+    capture_host lifecycle "wordpress-lifecycle-${checkpoint}" 30 docker inspect \
+      --format '{{.State.StartedAt}}|{{.State.Pid}}|{{.RestartCount}}' "${container_id}"
+    IFS='|' read -r started_at host_pid restart_count extra <<< "${lifecycle}"
+    if [[ -z "${started_at}" || -n "${extra}" || -z "${host_pid}" || "${host_pid}" == *[!0-9]* || "${host_pid}" == "0" || -z "${restart_count}" || "${restart_count}" == *[!0-9]* ]]; then
+        echo "BLOCKED: WordPress container lifecycle is malformed at memory checkpoint ${checkpoint}." >&2
+        return 1
+    fi
+    raw="${raw}"$'\t'"${container_id}"$'\t'"${started_at}"$'\t'"${host_pid}"$'\t'"${restart_count}"
+    printf '%s\t%s\n' "${checkpoint}" "${raw}" >> "${WP_MEMORY_CHECKPOINTS}"
+    WP_LAST_MEMORY_CHECKPOINT="${raw}"
+}
+
+finalize_cgroup_memory_evidence() {
     local resources="${EVIDENCE_DIR}/resources.json"
     local temporary="${resources}.tmp.$$"
     php -r '
@@ -346,7 +378,7 @@ $parse=static function(string $label,string $raw)use($unsigned):array{
     $sources=$version==="v2"
         ? ["usage"=>"memory.current","peak"=>"memory.peak","limit_events"=>"memory.events:max","oom_events"=>"memory.events:oom","oom_kill_events"=>"memory.events:oom_kill"]
         : ["usage"=>"memory.usage_in_bytes","peak"=>"memory.max_usage_in_bytes","limit_events"=>"memory.failcnt","oom_events"=>"memory.failcnt (conservative)","oom_kill_events"=>"memory.oom_control:oom_kill"];
-    return [
+    $checkpoint=[
         "checkpoint"=>$label,
         "cgroup_version"=>$version,
         "usage_bytes"=>$unsigned($parts[1]??""),
@@ -357,6 +389,11 @@ $parse=static function(string $label,string $raw)use($unsigned):array{
         "sources"=>$sources,
         "raw_sha256"=>hash("sha256",$raw),
     ];
+    if(isset($parts[6])){$checkpoint["container_id"]=$parts[6];}
+    if(isset($parts[7])){$checkpoint["container_started_at"]=$parts[7];}
+    if(isset($parts[8])){$checkpoint["container_host_pid"]=$unsigned($parts[8]);}
+    if(isset($parts[9])){$checkpoint["container_restart_count"]=$unsigned($parts[9]);}
+    return $checkpoint;
 };
 $checkpoints=[];$labels=[];$malformed=false;
 foreach($lines as $line){
@@ -413,12 +450,75 @@ $memory["oom_kill_events"]=$maxOomKills;
 $memory["counter_aggregation"]="maximum across restart-delimited cumulative counters";
 $memory["complete"]=true;
 $resources["database"]["memory"]=$memory;
+
+$wordpressLines=file($argv[5],FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES);
+if(!is_array($wordpressLines)){fwrite(STDERR,"Could not read WordPress cgroup memory checkpoints.\n");exit(1);}
+$wordpressCheckpoints=[];$wordpressLabels=[];$wordpressMalformed=false;
+foreach($wordpressLines as $line){
+    $separator=strpos($line,"\t");
+    if($separator===false){$wordpressMalformed=true;continue;}
+    $label=substr($line,0,$separator);$raw=substr($line,$separator+1);
+    if($label===""||isset($wordpressLabels[$label])){$wordpressMalformed=true;continue;}
+    $wordpressLabels[$label]=true;$checkpoint=$parse($label,$raw);
+    $valid=in_array($checkpoint["cgroup_version"],["v1","v2"],true)
+        && is_int($checkpoint["usage_bytes"])&&$checkpoint["usage_bytes"]>=0
+        && is_int($checkpoint["peak_bytes"])&&$checkpoint["peak_bytes"]>0
+        && $checkpoint["peak_bytes"]>=$checkpoint["usage_bytes"]
+        && is_int($checkpoint["limit_events"])&&$checkpoint["limit_events"]>=0
+        && is_int($checkpoint["oom_events"])&&$checkpoint["oom_events"]>=0
+        && is_int($checkpoint["oom_kill_events"])&&$checkpoint["oom_kill_events"]>=0
+        && is_string($checkpoint["container_id"]??null)
+        && preg_match("/\\A[0-9a-f]{64}\\z/D",$checkpoint["container_id"])===1
+        && is_string($checkpoint["container_started_at"]??null)&&$checkpoint["container_started_at"]!==""
+        && is_int($checkpoint["container_host_pid"]??null)&&$checkpoint["container_host_pid"]>0
+        && is_int($checkpoint["container_restart_count"]??null)&&$checkpoint["container_restart_count"]>=0;
+    if(!$valid){$wordpressMalformed=true;}
+    $wordpressCheckpoints[]=$checkpoint;
+}
+$wordpressExpectedLabels=["pre-corpus","final-workload"];
+$wordpressActualLabels=array_column($wordpressCheckpoints,"checkpoint");
+$wordpressEvidence=is_array($resources["wordpress"]??null)?$resources["wordpress"]:[];
+$wordpressCgroup=is_array($wordpressEvidence["effective_cgroup"]??null)?$wordpressEvidence["effective_cgroup"]:[];
+$wordpressMemory=is_array($wordpressEvidence["memory"]??null)?$wordpressEvidence["memory"]:[];
+$wordpressContainerId=$wordpressEvidence["container_id"]??null;
+$wordpressLifecycle=is_array($wordpressEvidence["container_lifecycle"]??null)?$wordpressEvidence["container_lifecycle"]:[];
+$wordpressPre=is_array($wordpressMemory["pre_corpus"]??null)?$wordpressMemory["pre_corpus"]:[];
+$wordpressLimit=(int)($wordpressMemory["limit_bytes"]??0);
+$wordpressFirst=$wordpressCheckpoints[0]??[];$wordpressFinal=$wordpressCheckpoints[array_key_last($wordpressCheckpoints)]??[];
+$wordpressVersions=array_values(array_unique(array_column($wordpressCheckpoints,"cgroup_version")));
+$wordpressPeaks=array_values(array_filter(array_column($wordpressCheckpoints,"peak_bytes"),"is_int"));
+$wordpressLimitEvents=array_values(array_filter(array_column($wordpressCheckpoints,"limit_events"),"is_int"));
+$wordpressOomEvents=array_values(array_filter(array_column($wordpressCheckpoints,"oom_events"),"is_int"));
+$wordpressOomKills=array_values(array_filter(array_column($wordpressCheckpoints,"oom_kill_events"),"is_int"));
+$wordpressPeak=$wordpressPeaks===[]?null:max($wordpressPeaks);
+$wordpressMaxLimitEvents=$wordpressLimitEvents===[]?null:max($wordpressLimitEvents);
+$wordpressMaxOom=$wordpressOomEvents===[]?null:max($wordpressOomEvents);
+$wordpressMaxOomKills=$wordpressOomKills===[]?null:max($wordpressOomKills);
+if($wordpressMalformed||$wordpressActualLabels!==$wordpressExpectedLabels||($wordpressMemory["expected_checkpoint_labels"]??null)!==$wordpressExpectedLabels){$failures[]="WordPress cgroup memory checkpoints do not match the exact ordered two-checkpoint inventory";}
+if(count($wordpressVersions)!==1||($wordpressVersions[0]??null)!==($wordpressCgroup["version"]??null)){$failures[]="WordPress cgroup memory checkpoint versions do not match the effective cgroup";}
+if(!is_string($wordpressContainerId)||preg_match("/\\A[0-9a-f]{64}\\z/D",$wordpressContainerId)!==1||count(array_filter($wordpressCheckpoints,static fn(array $checkpoint):bool=>($checkpoint["container_id"]??null)!==$wordpressContainerId))!==0){$failures[]="WordPress cgroup memory checkpoints do not retain one persistent container identity";}
+if(array_keys($wordpressLifecycle)!==["started_at","host_pid","restart_count"]||!is_string($wordpressLifecycle["started_at"]??null)||$wordpressLifecycle["started_at"]===""||!is_int($wordpressLifecycle["host_pid"]??null)||$wordpressLifecycle["host_pid"]<1||!is_int($wordpressLifecycle["restart_count"]??null)||$wordpressLifecycle["restart_count"]<0||count(array_filter($wordpressCheckpoints,static fn(array $checkpoint):bool=>["started_at"=>$checkpoint["container_started_at"]??null,"host_pid"=>$checkpoint["container_host_pid"]??null,"restart_count"=>$checkpoint["container_restart_count"]??null]!==$wordpressLifecycle))!==0){$failures[]="WordPress cgroup memory checkpoints do not retain one unrestarted container lifecycle";}
+if($wordpressFirst!==$wordpressPre){$failures[]="WordPress pre-corpus cgroup memory checkpoint changed before finalization";}
+if(!is_int($wordpressPeak)||$wordpressPeak<1||$wordpressLimit!==536870912||$wordpressPeak>$wordpressLimit||($wordpressFinal["peak_bytes"]??null)!==$wordpressPeak||($wordpressFinal["peak_bytes"]??0)<($wordpressFirst["peak_bytes"]??PHP_INT_MAX)){$failures[]="WordPress whole-run cgroup peak is outside the hard 512 MiB persistent-container contract";}
+if($wordpressMaxLimitEvents!==0||$wordpressMaxOom!==0||$wordpressMaxOomKills!==0){$failures[]="WordPress cgroup recorded a memory-limit, OOM, or OOM-kill event";}
+$wordpressMemory["checkpoints"]=$wordpressCheckpoints;
+$wordpressMemory["expected_checkpoint_labels"]=$wordpressExpectedLabels;
+$wordpressMemory["checkpoint_count"]=count($wordpressCheckpoints);
+$wordpressMemory["final_checkpoint"]=$wordpressFinal;
+$wordpressMemory["whole_run_peak_bytes"]=$wordpressPeak;
+$wordpressMemory["whole_run_headroom_bytes"]=is_int($wordpressPeak)?$wordpressLimit-$wordpressPeak:null;
+$wordpressMemory["max_limit_events"]=$wordpressMaxLimitEvents;
+$wordpressMemory["oom_events"]=$wordpressMaxOom;
+$wordpressMemory["oom_kill_events"]=$wordpressMaxOomKills;
+$wordpressMemory["counter_aggregation"]="maximum across cumulative checkpoints in one unrestarted container";
+$wordpressMemory["complete"]=true;
+$resources["wordpress"]["memory"]=$wordpressMemory;
 $resources["verification"]["gate_failures"]=$failures;
 $resources["status"]=$failures===[]?"PASS":"FAIL";
 $json=json_encode($resources,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n";
 if(file_put_contents($argv[3],$json,LOCK_EX)!==strlen($json)||!rename($argv[3],$argv[1])){@unlink($argv[3]);fwrite(STDERR,"Could not atomically update database cgroup memory evidence.\n");exit(1);}
 if($failures!==[]){foreach($failures as $failure){fwrite(STDERR,"BLOCKED: {$failure}.\n");}exit(1);}
-' "${resources}" "${DB_MEMORY_CHECKPOINTS}" "${temporary}" "${DB_PRE_CORPUS_PEAK_LIMIT_BYTES}"
+' "${resources}" "${DB_MEMORY_CHECKPOINTS}" "${temporary}" "${DB_PRE_CORPUS_PEAK_LIMIT_BYTES}" "${WP_MEMORY_CHECKPOINTS}"
 }
 
 arm_cleanup_escalation() {
@@ -565,8 +665,40 @@ capture_failure_environment_artifacts() {
     mv "${temporary}" "${manifest}"
 }
 
+quiesce_failed_workloads() {
+    if [[ ! -f "${COMPOSE_FILE}" ]]; then
+        return 0
+    fi
+    # Stop the SQL server before any diagnostic capture or compression. A PHP
+    # client killed at its deadline may have left its statement running on the
+    # server, and cleanup evidence must never prolong that work.
+    if timeout --signal=KILL 30s docker compose -f "${COMPOSE_FILE}" kill wordpress db >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "WARN: compose kill failed; tearing down the failed workload before diagnostic capture." >&2
+    if timeout --signal=TERM --kill-after=15s 60s docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1; then
+        COMPOSE_TORN_DOWN=1
+        return 0
+    fi
+    # Compose may fail while the Docker daemon can still address already-known
+    # containers. This last bounded fallback is enough to stop residual SQL even
+    # when project-level teardown is unavailable.
+    local container_id direct_kill_failed=0
+    for container_id in "${WP_CONTAINER:-}" "${DB_CONTAINER:-}"; do
+        if [[ -n "${container_id}" ]] && ! timeout --signal=KILL 15s docker kill "${container_id}" >/dev/null 2>&1; then
+            direct_kill_failed=1
+        fi
+    done
+    if (( direct_kill_failed == 0 )) && [[ -n "${WP_CONTAINER:-}${DB_CONTAINER:-}" ]]; then
+        return 0
+    fi
+    echo "WARN: failed workloads could not be proven quiescent; skipping diagnostic capture and compression." >&2
+    return 1
+}
+
 cleanup() {
     local status=$?
+    local failure_workloads_quiesced=1
     trap - EXIT INT TERM USR1
     if (( status == 0 && RUN_COMPLETED == 0 )); then
         status=1
@@ -582,6 +714,11 @@ cleanup() {
         kill "${WATCHDOG_PID}" >/dev/null 2>&1 || true
         wait "${WATCHDOG_PID}" 2>/dev/null || true
         WATCHDOG_PID=""
+    fi
+    if (( status != 0 )); then
+        if ! quiesce_failed_workloads; then
+            failure_workloads_quiesced=0
+        fi
     fi
     if [[ -n "${MIGRATION_DISK_MONITOR_PID:-}" ]]; then
         touch "${EVIDENCE_DIR}/migration-disk-monitor.stop" 2>/dev/null || true
@@ -601,18 +738,31 @@ cleanup() {
         wait "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null || true
         MIGRATION_DISK_MONITOR_PID=""
     fi
-    if (( status != 0 )); then
-        capture_failure_environment_artifacts || true
+    if (( status != 0 && failure_workloads_quiesced == 1 )); then
+        if (( COMPOSE_TORN_DOWN == 0 )); then
+            capture_failure_environment_artifacts || true
+        fi
+        if (( KEEP == 0 )); then
+            if timeout --signal=TERM --kill-after=15s 60s docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1; then
+                COMPOSE_TORN_DOWN=1
+            fi
+        fi
     fi
     if [[ -n "${WPCLI_PROBE_CONTAINER:-}" ]]; then
         docker rm -f "${WPCLI_PROBE_CONTAINER}" >/dev/null 2>&1 || true
         WPCLI_PROBE_CONTAINER=""
     fi
     if (( status != 0 || RUN_PUBLISHED == 0 )); then
-        publish_evidence "${status}" || true
+        if (( status == 0 || failure_workloads_quiesced == 1 )); then
+            publish_evidence "${status}" || true
+        fi
+    fi
+    if (( KEEP == 0 || failure_workloads_quiesced == 0 )); then
+        if (( COMPOSE_TORN_DOWN == 0 )); then
+            timeout --signal=TERM --kill-after=30s 180s docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
+        fi
     fi
     if (( KEEP == 0 )); then
-        timeout --signal=TERM --kill-after=30s 180s docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
         if (( WORKTREE_CREATED == 1 )); then
             timeout --signal=TERM --kill-after=30s 60s git -C "${REPO_ROOT}" worktree remove --force "${SOURCE_ROOT}" >/dev/null 2>&1 || true
         fi
@@ -1151,6 +1301,9 @@ capture_compose WP_EFFECTIVE_CGROUP wordpress-cgroup-probe 30 exec -T wordpress 
 : > "${DB_MEMORY_CHECKPOINTS}"
 capture_database_memory_checkpoint pre-corpus
 DB_PRE_CORPUS_MEMORY="${DB_LAST_MEMORY_CHECKPOINT}"
+: > "${WP_MEMORY_CHECKPOINTS}"
+capture_wordpress_memory_checkpoint pre-corpus
+WP_PRE_CORPUS_MEMORY="${WP_LAST_MEMORY_CHECKPOINT}"
 capture_compose WPCLI_PROBE_CONTAINER wpcli-probe-start 60 run --no-deps -d --entrypoint sh wpcli -c 'sleep 300'
 if [[ -z "${WPCLI_PROBE_CONTAINER}" ]]; then
     echo "BLOCKED: could not create the persistent WP-CLI resource probe container." >&2
@@ -1282,7 +1435,7 @@ $memoryCheckpoint = static function (string $label, string $raw): array {
         ? ["usage" => "memory.current", "peak" => "memory.peak", "limit_events" => "memory.events:max", "oom_events" => "memory.events:oom", "oom_kill_events" => "memory.events:oom_kill"]
         : ["usage" => "memory.usage_in_bytes", "peak" => "memory.max_usage_in_bytes", "limit_events" => "memory.failcnt", "oom_events" => "memory.failcnt (conservative)", "oom_kill_events" => "memory.oom_control:oom_kill"];
 
-    return [
+    $checkpoint = [
         "checkpoint" => $label,
         "cgroup_version" => $version,
         "usage_bytes" => $unsigned($parts[1] ?? null),
@@ -1293,6 +1446,19 @@ $memoryCheckpoint = static function (string $label, string $raw): array {
         "sources" => $sources,
         "raw_sha256" => hash("sha256", $raw),
     ];
+    if (isset($parts[6])) {
+        $checkpoint["container_id"] = $parts[6];
+    }
+    if (isset($parts[7])) {
+        $checkpoint["container_started_at"] = $parts[7];
+    }
+    if (isset($parts[8])) {
+        $checkpoint["container_host_pid"] = $unsigned($parts[8]);
+    }
+    if (isset($parts[9])) {
+        $checkpoint["container_restart_count"] = $unsigned($parts[9]);
+    }
+    return $checkpoint;
 };
 
 $databaseImage = $imageEvidence("database", $argv[5], $argv[6], $argv[3], $argv[4], $argv[28]);
@@ -1317,6 +1483,32 @@ $databasePreCorpusValid = $databasePreCorpusMemory["cgroup_version"] === ($datab
     && $databasePreCorpusMemory["oom_kill_events"] === 0;
 if (!$databasePreCorpusValid) {
     $gates[] = "database pre-corpus cgroup memory must retain at least 256 MiB headroom without OOM";
+}
+$wordpressPreCorpusMemory = $memoryCheckpoint("pre-corpus", $argv[38]);
+$wordpressContainerLifecycle = [
+    "started_at" => $wordpressPreCorpusMemory["container_started_at"] ?? null,
+    "host_pid" => $wordpressPreCorpusMemory["container_host_pid"] ?? null,
+    "restart_count" => $wordpressPreCorpusMemory["container_restart_count"] ?? null,
+];
+$wordpressPreCorpusValid = $wordpressPreCorpusMemory["cgroup_version"] === ($wordpressCgroup["version"] ?? null)
+    && is_int($wordpressPreCorpusMemory["usage_bytes"])
+    && $wordpressPreCorpusMemory["usage_bytes"] >= 0
+    && is_int($wordpressPreCorpusMemory["peak_bytes"])
+    && $wordpressPreCorpusMemory["peak_bytes"] > 0
+    && $wordpressPreCorpusMemory["peak_bytes"] >= $wordpressPreCorpusMemory["usage_bytes"]
+    && $wordpressPreCorpusMemory["peak_bytes"] <= 536870912
+    && ($wordpressPreCorpusMemory["container_id"] ?? null) === $argv[39]
+    && is_string($wordpressContainerLifecycle["started_at"])
+    && $wordpressContainerLifecycle["started_at"] !== ""
+    && is_int($wordpressContainerLifecycle["host_pid"])
+    && $wordpressContainerLifecycle["host_pid"] > 0
+    && is_int($wordpressContainerLifecycle["restart_count"])
+    && $wordpressContainerLifecycle["restart_count"] >= 0
+    && $wordpressPreCorpusMemory["limit_events"] === 0
+    && $wordpressPreCorpusMemory["oom_events"] === 0
+    && $wordpressPreCorpusMemory["oom_kill_events"] === 0;
+if (!$wordpressPreCorpusValid) {
+    $gates[] = "WordPress pre-corpus cgroup memory must stay within 512 MiB without a limit or OOM event";
 }
 $databaseMemoryCheckpointLabels = ["pre-corpus"];
 foreach (["common_or", "max_valid_or_prefix", "rare_anchor_and", "prefix_fanout"] as $case) {
@@ -1364,7 +1556,27 @@ $data = [
      "limits" => $argv[8],
      "image_digests" => $wordpressImage["actual_repo_digests"],
      "image" => $wordpressImage,
+     "container_id" => $argv[39],
+     "container_lifecycle" => $wordpressContainerLifecycle,
      "effective_cgroup" => $wordpressCgroup,
+     "memory" => [
+         "schema" => "relational-fts-wordpress-cgroup-memory-v2",
+         "limit_bytes" => 536870912,
+         "pre_corpus" => $wordpressPreCorpusMemory,
+         "expected_checkpoint_labels" => ["pre-corpus", "final-workload"],
+         "checkpoints" => [$wordpressPreCorpusMemory],
+         "checkpoint_count" => 1,
+         "final_checkpoint" => null,
+         "whole_run_peak_bytes" => $wordpressPreCorpusMemory["peak_bytes"],
+         "whole_run_headroom_bytes" => is_int($wordpressPreCorpusMemory["peak_bytes"])
+             ? 536870912 - $wordpressPreCorpusMemory["peak_bytes"]
+             : null,
+         "max_limit_events" => $wordpressPreCorpusMemory["limit_events"],
+         "oom_events" => $wordpressPreCorpusMemory["oom_events"],
+         "oom_kill_events" => $wordpressPreCorpusMemory["oom_kill_events"],
+         "counter_aggregation" => "maximum across cumulative checkpoints in one unrestarted container",
+         "complete" => false,
+     ],
  ],
  "wpcli" => [
      "image_digests" => $wpcliImage["actual_repo_digests"],
@@ -1402,7 +1614,7 @@ if ($gates !== []) {
   "${PROFILE}" "${DOCUMENTS}" "${ENGINE}" "${TEST_SCRIPT_SHA256}" "${MUTATION_PROOF_SHA256}" "${ISOLATED_BOUNDARIES_SHA256}" "${ALLOW_DIRTY}" "${EVIDENCE_DIR}/resources.json" \
   "${OLD_POSTING_FRONTIER_SHA256}" "${DB_RUNNING_IMAGE_ID}" "${WP_RUNNING_IMAGE_ID}" "${WPCLI_RUNNING_IMAGE_ID}" \
   "${EVIDENCE_DIR}/package-reproducibility.json" "${RUNNER_OS:-local}" "${RUNNER_ARCH:-unknown}" "${ImageOS:-unknown}" "${ImageVersion:-unknown}" \
-  "${DB_PRE_CORPUS_MEMORY}" "${DB_PRE_CORPUS_PEAK_LIMIT_BYTES}"
+  "${DB_PRE_CORPUS_MEMORY}" "${DB_PRE_CORPUS_PEAK_LIMIT_BYTES}" "${WP_PRE_CORPUS_MEMORY}" "${WP_CONTAINER}"
 
 ACTIVE_SOURCE_SHA="${BASELINE_SHA}"
 ACTIVE_ZIP_SHA256="${BASELINE_ZIP_SHA256}"
@@ -1740,13 +1952,18 @@ kill_migration_phase() {
     local options=()
     while IFS= read -r option; do options+=("${option}"); done < <(env_options migration-failpoint)
     rm -f "${ready}" "${EVIDENCE_DIR}/migration-worker-${target}.ndjson"
-    timed_compose "migration-failpoint-${target}" 300 exec -T "${options[@]}" -e "WP_FTS_WC_MIGRATION_TARGET=${target}" wordpress sh -c '
+    timed_compose "migration-failpoint-${target}" "${MIGRATION_FAILPOINT_OUTER_TIMEOUT_SECONDS}" exec -T "${options[@]}" \
+      -e "WP_FTS_WC_MIGRATION_TARGET=${target}" \
+      -e "WP_FTS_WC_MIGRATION_DEADLINE_SECONDS=${MIGRATION_FAILPOINT_DEADLINE_SECONDS}" \
+      -e "WP_FTS_WC_MIGRATION_BATCH_BUDGET_SECONDS=${MIGRATION_FAILPOINT_BATCH_BUDGET_SECONDS}" \
+      wordpress sh -c '
         target="$1"
+        ready_timeout="$2"
         php /proof/relational-fts-worst-case.php >"/evidence/migration-${target}-process.log" 2>&1 &
         child=$!
         ready=0
         i=0
-        while [ "$i" -lt 7200 ]; do
+        while [ "$i" -lt "$ready_timeout" ]; do
             if [ -f "/evidence/migration-phase-${target}.json" ]; then ready=1; break; fi
             if ! kill -0 "$child" 2>/dev/null; then wait "$child"; exit $?; fi
             i=$((i+1)); sleep 1
@@ -1756,7 +1973,7 @@ kill_migration_phase() {
         wait "$child" 2>/dev/null
         status=$?
         [ "$status" -eq 137 ]
-    ' sh "${target}"
+    ' sh "${target}" "${MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS}"
 }
 
 run_migration_post_kill_probe() {
@@ -1769,47 +1986,118 @@ run_migration_post_kill_probe() {
         wordpress timeout -s KILL 120 php /proof/relational-fts-worst-case.php
 }
 
-run_baseline_performance_case() {
+run_migration_snapshot_case() {
     local case_id="$1"
-    local path="${EVIDENCE_DIR}/baseline-performance-${case_id}.json"
+    local path="${EVIDENCE_DIR}/migration-snapshot-case-${case_id}.json"
     local pre_failure_path="${path}.pre-failure.json"
+    local log_path="${EVIDENCE_DIR}/migration-snapshot-case-${case_id}.log"
     local options=()
-    while IFS= read -r option; do options+=("${option}"); done < <(env_options baseline-performance)
-    rm -f "${path}" "${pre_failure_path}"
+    while IFS= read -r option; do options+=("${option}"); done < <(env_options migration-snapshot-case)
+    rm -f "${path}" "${pre_failure_path}" "${log_path}"
     local started finished elapsed_ms
     started="$(php -r 'echo hrtime(true);')"
+    RUN_PHASE="migration-snapshot-case-${case_id}"
     set +e
-    timed_compose "baseline-performance-${case_id}" 150 exec -T "${options[@]}" -e "WP_FTS_WC_CASE=${case_id}" wordpress \
-      timeout -s KILL 120 php /proof/relational-fts-worst-case.php \
-      > "${EVIDENCE_DIR}/baseline-performance-${case_id}.log" 2>&1
-    local status=$?
+    timed_compose "migration-snapshot-case-${case_id}" 150 exec -T "${options[@]}" -e "WP_FTS_WC_CASE=${case_id}" wordpress \
+      timeout -s KILL 120 php -d memory_limit=128M /proof/relational-fts-worst-case.php \
+      2>&1 | php -r '
+$path=$argv[1];$limit=1048576;$tailLimit=65536;$marker="\n[output truncated; final 65536 bytes follow]\n";
+$output=fopen($path,"wb");
+if($output===false){fwrite(STDERR,"Could not open bounded migration snapshot log.\n");exit(1);}
+$written=0;$truncated=false;$tail="";
+while(!feof(STDIN)){
+    $chunk=fread(STDIN,8192);
+    if($chunk===false){fclose($output);fwrite(STDERR,"Could not read migration snapshot output.\n");exit(1);}
+    if($chunk===""){continue;}
+    $tail=substr($tail.$chunk,-$tailLimit);
+    $remaining=$limit-$written;
+    if($remaining>0){
+        $slice=substr($chunk,0,$remaining);$offset=0;$length=strlen($slice);
+        while($offset<$length){
+            $count=fwrite($output,substr($slice,$offset));
+            if($count===false||$count===0){fclose($output);fwrite(STDERR,"Could not write bounded migration snapshot log.\n");exit(1);}
+            $offset+=$count;
+        }
+        $written+=$length;
+    }
+    if(strlen($chunk)>$remaining){$truncated=true;}
+}
+if($truncated){
+    $payloadLimit=$limit-strlen($marker)-$tailLimit;
+    if(!ftruncate($output,$payloadLimit)||fseek($output,$payloadLimit)!==0){
+        fclose($output);fwrite(STDERR,"Could not mark truncated migration snapshot log.\n");exit(1);
+    }
+    foreach([$marker,$tail] as $suffix){
+        $offset=0;$length=strlen($suffix);
+        while($offset<$length){
+            $count=fwrite($output,substr($suffix,$offset));
+            if($count===false||$count===0){fclose($output);fwrite(STDERR,"Could not write migration snapshot log tail.\n");exit(1);}
+            $offset+=$count;
+        }
+    }
+}
+if(!fclose($output)){fwrite(STDERR,"Could not close bounded migration snapshot log.\n");exit(1);}
+' "${log_path}"
+    local -a statuses=("${PIPESTATUS[@]}")
+    local status="${statuses[0]:-1}"
+    local sink_status="${statuses[1]:-1}"
     set -e
+    if (( sink_status != 0 && status == 0 )); then
+        status=1
+    fi
     finished="$(php -r 'echo hrtime(true);')"
     elapsed_ms="$(php -r 'printf("%.3f", ((int)$argv[2]-(int)$argv[1])/1000000);' "${started}" "${finished}")"
     if (( status != 0 )) && [[ -f "${path}" ]]; then
         mv "${path}" "${pre_failure_path}"
     fi
     if (( status != 0 )) || [[ ! -f "${path}" ]]; then
-        php -r '
+        local failure_status=0
+        timeout --signal=TERM --kill-after=2s 10s php -r '
 $exit=(int)$argv[2];
 $elapsed=(float)$argv[6];
 $timedOut=$exit===124||($exit===137&&$elapsed>=119000.0);
-$class=$timedOut?"Timeout":($exit===137?"KilledOrOOM":"ProcessFailure");
-$message=$timedOut?"Legacy baseline exceeded the 120-second process limit":($exit===137?"Legacy baseline was SIGKILLed or OOM-killed before its timeout":"Legacy baseline exited before writing evidence");
+$logHash=is_file($argv[9])?hash_file("sha256",$argv[9]):hash("sha256","");
+$memoryFatal=false;
+if(is_file($argv[9])){
+    $handle=fopen($argv[9],"rb");
+    if($handle===false){fwrite(STDERR,"Could not scan migration snapshot log.\n");exit(1);}
+    while(($line=fgets($handle))!==false){
+        if(str_contains($line,"Allowed memory size of 134217728 bytes exhausted")){$memoryFatal=true;break;}
+    }
+    if(!feof($handle)&&!$memoryFatal){fclose($handle);fwrite(STDERR,"Could not scan migration snapshot log.\n");exit(1);}
+    fclose($handle);
+}
+$class=$timedOut?"Timeout":($exit===137?"KilledOrOOM":($memoryFatal?"MemoryLimitFatal":"ProcessFailure"));
+$message=$timedOut?"Legacy snapshot case exceeded the 120-second process limit":($exit===137?"Legacy snapshot case was SIGKILLed or OOM-killed before its timeout":($memoryFatal?"Legacy snapshot case exhausted its 128 MiB PHP memory limit":"Legacy snapshot case exited before writing PASS evidence"));
 $data=[
- "schema"=>"relational-fts-baseline-performance-v2","case"=>$argv[1],"status"=>"FAIL",
- "source_sha"=>$argv[3],"zip_sha256"=>$argv[4],"profile"=>$argv[5],"process_timeout_seconds"=>120,
- "duration_ms"=>$elapsed,"query_count"=>null,"max_sql_bytes"=>null,"php_memory_delta_bytes"=>null,
- "rss_delta_bytes"=>null,"php_peak_bytes"=>null,"result_count"=>null,"expected_result_hash"=>null,"result_hash"=>null,
- "expected_execution"=>null,"actual_execution"=>null,"execution_matches_snapshot"=>false,
- "error"=>["class"=>$class,"message"=>$message,"exit"=>$exit],
+ "schema"=>"relational-fts-migration-snapshot-case-v1","status"=>"FAIL","phase"=>"migration-snapshot-case","case"=>$argv[1],
+ "source_sha"=>$argv[3],"zip_sha256"=>$argv[4],"manifest_sha256"=>null,"profile"=>$argv[5],
+ "process_timeout_seconds"=>120,"memory_limit_bytes"=>134217728,"process_identity"=>null,
+ "duration_ms"=>$elapsed,"query_count"=>null,"max_sql_bytes"=>null,"php_memory_delta_bytes"=>null,"rss_delta_bytes"=>null,
+ "php_lifetime_peak_before_reset_bytes"=>null,
+ "php_phase_peak_bytes"=>null,"php_peak_bytes"=>null,"rss_peak_bytes"=>null,
+ "query"=>null,"options"=>null,"legacy_execution"=>null,
+ "error"=>["class"=>$class,"message"=>$message,"exit"=>$exit,"log_sha256"=>$logHash],
  "discarded_pre_failure_artifact"=>is_file($argv[8])?[
      "sha256"=>hash_file("sha256",$argv[8]),
      "bytes"=>filesize($argv[8]),
  ]:null
 ];
-file_put_contents($argv[7],json_encode($data,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n");
-' "${case_id}" "${status}" "${ACTIVE_SOURCE_SHA}" "${ACTIVE_ZIP_SHA256}" "${PROFILE}" "${elapsed_ms}" "${path}" "${pre_failure_path}"
+$json=json_encode($data,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n";
+$temporary=$argv[7].".tmp.".getmypid();
+if(file_put_contents($temporary,$json,LOCK_EX)!==strlen($json)||!rename($temporary,$argv[7])){@unlink($temporary);fwrite(STDERR,"Could not atomically publish migration snapshot failure evidence.\n");exit(1);}
+' "${case_id}" "${status}" "${ACTIVE_SOURCE_SHA}" "${ACTIVE_ZIP_SHA256}" "${PROFILE}" "${elapsed_ms}" "${path}" "${pre_failure_path}" "${log_path}" || failure_status=$?
+        if (( failure_status != 0 )); then
+            echo "FAIL: could not publish bounded failure evidence for migration snapshot case ${case_id}." >&2
+            return "${failure_status}"
+        fi
+        # A killed PHP client can leave its server-side statement running. Stop
+        # this lane immediately so the EXIT cleanup removes the database instead
+        # of contaminating a later case with residual legacy work.
+        if (( status == 0 )); then
+            return 1
+        fi
+        return "${status}"
     fi
 }
 
@@ -1835,11 +2123,14 @@ if (( BASELINE_INDEX_EXIT != 0 )); then
     exit 1
 fi
 run_php_phase multisite-baseline-setup > "${EVIDENCE_DIR}/multisite-baseline-setup.log"
-run_php_phase migration-snapshot > "${EVIDENCE_DIR}/migration-snapshot.log"
-for baseline_case in common_or max_valid_or_prefix rare_anchor_and prefix_fanout; do
-    run_baseline_performance_case "${baseline_case}"
+for migration_case in common_or max_valid_or_prefix rare_anchor_and prefix_fanout ambiguous_morphology_or ambiguous_morphology_and; do
+    run_migration_snapshot_case "${migration_case}"
 done
-
+snapshot_finalize_options=()
+while IFS= read -r option; do snapshot_finalize_options+=("${option}"); done < <(env_options migration-snapshot-finalize)
+timed_compose migration-snapshot-finalize 150 exec -T "${snapshot_finalize_options[@]}" wordpress \
+    timeout -s KILL 120 php -d memory_limit=128M /proof/relational-fts-worst-case.php \
+    > "${EVIDENCE_DIR}/migration-snapshot-finalize.log"
 # Replace the active plugin files without an activation request. The next fresh
 # PHP process installs each failpoint before it explicitly starts the migration.
 timed_compose current-plugin-install 600 run --rm wpcli --url=http://wordpress plugin install /proof/wp-fts-indexer.zip --force
@@ -2142,7 +2433,8 @@ run_php_phase drain > "${EVIDENCE_DIR}/drain.log"
 set_run_stage "finalization"
 record_installed_tree_binding pre-finalize
 capture_database_memory_checkpoint final-workload
-finalize_database_memory_evidence
+capture_wordpress_memory_checkpoint final-workload
+finalize_cgroup_memory_evidence
 run_php_phase finalize > "${EVIDENCE_DIR}/finalize.log"
 
 if grep -R -E '(^|\[)(SKIP|PENDING)(:|\])' "${EVIDENCE_DIR}" --exclude='relational-fts-evidence.json' >/dev/null 2>&1; then
@@ -2165,7 +2457,7 @@ $bound=($e["source_sha"]??null)===$argv[2]
  &&($manifest["documents"]??null)===(int)$argv[5]
  &&($e["acceptance_lane"]??null)===($argv[6]==="0")
  &&($e["lane_id"]??null)===$argv[7];
-if(($e["schema"]??null)!=="relational-fts-evidence-v2"||($e["status"]??null)!=="PASS"||($e["completed"]??null)!==true||!$bound||!is_string($recorded)||!hash_equals($calculated,$recorded)){fwrite(STDERR,"Final evidence is incomplete, unbound, failed, or has an invalid self-hash.\n");exit(1);}
+if(($e["schema"]??null)!=="relational-fts-evidence-v3"||($e["status"]??null)!=="PASS"||($e["completed"]??null)!==true||!$bound||!is_string($recorded)||!hash_equals($calculated,$recorded)){fwrite(STDERR,"Final evidence is incomplete, unbound, failed, or has an invalid self-hash.\n");exit(1);}
 ' "${EVIDENCE_DIR}/relational-fts-evidence.json" "${SOURCE_SHA}" "${ENGINE}" "${PROFILE}" "${DOCUMENTS}" "${ALLOW_DIRTY}" "${LANE_ID}"
 RUN_COMPLETED=1
 publish_evidence 0

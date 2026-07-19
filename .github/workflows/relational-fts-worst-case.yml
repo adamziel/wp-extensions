@@ -107,7 +107,7 @@ jobs:
           submodules: false
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4.5'
+          php-version: '8.4'
           extensions: zip
           coverage: none
           tools: composer:2.9.8
@@ -145,7 +145,7 @@ jobs:
           submodules: false
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4.5'
+          php-version: '8.4'
           extensions: zip
           coverage: none
           tools: composer:2.9.8
@@ -405,7 +405,7 @@ jobs:
           submodules: false
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4.5'
+          php-version: '8.4'
           extensions: zip
           coverage: none
           tools: composer:2.9.8
