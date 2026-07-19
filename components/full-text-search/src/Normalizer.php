@@ -108,6 +108,12 @@ final class WP_FTS_Normalizer
      */
     public function normalize_unicode(string $text): string
     {
+        // Every ASCII byte is valid UTF-8 and unchanged by NFKC. Avoid the
+        // table-backed normalizer for this exact fast path.
+        if (preg_match('/[\x80-\xFF]/', $text) === 0) {
+            return $text;
+        }
+
         $text = WP_FTS_Utf8::repair_word_boundaries($text);
         $normalizer = $this->unicode_normalizer_class();
         if ($normalizer === null) {

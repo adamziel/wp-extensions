@@ -500,6 +500,25 @@ wp_fts_component_hardening_same(
 );
 
 $unicodeNormalizer = new WP_FTS_Normalizer(['fold_diacritics' => false]);
+$asciiBytes = '';
+for ($byte = 0; $byte <= 0x7F; $byte++) {
+    $asciiBytes .= chr($byte);
+}
+wp_fts_component_hardening_same(
+    $asciiBytes,
+    $unicodeNormalizer->normalize_unicode($asciiBytes),
+    'the complete ASCII byte range should remain an exact NFKC fast path'
+);
+foreach (range(0x80, 0xFF) as $byte) {
+    foreach ([['', ''], ['left', ''], ['', 'right']] as $context => [$before, $after]) {
+        $malformed = $before . chr($byte) . $after;
+        wp_fts_component_hardening_same(
+            WP_FTS_Utf8::repair_word_boundaries($malformed),
+            $unicodeNormalizer->normalize_unicode($malformed),
+            sprintf('non-ASCII byte 0x%02X in context %d should retain UTF-8 repair before NFKC', $byte, $context)
+        );
+    }
+}
 if (class_exists('Normalizer')) {
     wp_fts_component_hardening_same(
         $unicodeNormalizer->normalize_token("caf\u{00e9}", 'fr'),
