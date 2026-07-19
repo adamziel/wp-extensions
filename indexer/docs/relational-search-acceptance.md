@@ -2047,12 +2047,40 @@ Each in-process save/search probe must finish within five seconds, public search
 may execute at most two statements with no statement above 32 KiB, and the
 fresh process has a 120-second hard wall-clock kill rather than an unbounded
 test timeout.
-Legacy BM25 scores are recorded as informational evidence of the intentional
-scoring-model cutover. Expected v4 order and integer scores are instead computed
-independently from the untouched v3 logical postings, checked exactly after
-migration, repeated after cache reset, and repeated again in a fresh PHP
-process. Legacy tables may be removed only after all work drains and takeover is
-ready.
+The immutable legacy snapshot records six exact executions. Each is exclusively
+either a non-empty ordered BM25 score signature or the typed
+`WP_FTS_Search_Budget_Exceeded` rejection with budget `candidate rows` and
+message `Search request exceeded its candidate rows budget.` The 50k
+`common_or` fixture has 138,564 construction-known candidate postings
+(49,500 + 47,032 + 42,032), and the same query has 277,128 at 100k, so the
+legacy search must reject after reading its 100,001st capped row. The proof must
+not raise, disable, or bypass that 100,000-row budget. The eleven exact groups
+in `max_valid_or_prefix` already contribute 544,500 postings at 50k and
+1,089,000 at 100k, so those two profiles must reject it too. `rare_anchor_and`
+must return results at 2k and at its 96,564-row 50k shape, then reject its
+193,128-row 100k shape. The 2k `common_or` and `max_valid_or_prefix` cases also
+remain below the cap and must return results. The legacy 64-term expansion cap
+keeps `prefix_fanout` below 100,000 candidate rows even at 100k, and both
+four-document morphology cases are narrow; `prefix_fanout`,
+`ambiguous_morphology_or`, and `ambiguous_morphology_and` must therefore return
+results in all three profiles. A fresh isolated legacy
+`relational-fts-baseline-performance-v2` measurement passes only when it
+reproduces the snapshot's complete result or exact typed rejection; a rejection
+has zero result rows, null result hashes, and the exact error object. A different
+budget, exception, result, timeout, OOM, or process death remains diagnostic
+evidence but cannot satisfy migration acceptance.
+The completed populated-migration envelope is
+`relational-fts-migration-evidence-v2`; the final report accepts only v2, so a
+stale result-only v1 consumer fails.
+
+Legacy BM25 results are informational evidence of the intentional scoring-model
+cutover. The `relational-fts-v4-migration-oracle-v2` independent oracle selects
+its fixed five migration cases from the six-case snapshot and computes expected
+v4 order and integer scores directly from the untouched v3 logical postings,
+regardless of whether legacy execution returned results or hit its candidate-row
+budget. Those v4 results are checked exactly after migration, repeated after
+cache reset, and repeated again in a fresh PHP process. Legacy tables may be
+removed only after all work drains and takeover is ready.
 
 The same proof seeds one, two, and three deterministic searchable documents in
 the three real multisite prefixes before migration. After an injected failure
@@ -2104,12 +2132,15 @@ incomplete report. Every other acceptance phase likewise writes its terminal
 diagnostic artifact and then exits nonzero on a failed gate, so WP-CLI adapter,
 transaction-recovery, idle-HTTP, concurrent-worker, taxonomy-scope, and final
 drain failures cannot consume later expensive phases or survive until the
-finalizer. The one deliberate exception is the old-version baseline query:
-timeout, OOM, or incorrect-result `FAIL` is comparison evidence that migration
-validation must retain rather than an early reason to discard the current
-implementation's run. The runner publishes validation output only as partial
-evidence and does not spend additional cold-cache or concurrency capacity on
-an already failed revision.
+finalizer. The old-version baseline wrapper retains timeout, OOM, process-death,
+and incorrect-execution `FAIL` artifacts rather than discarding comparison
+evidence or aborting before the current implementation's migration is
+exercised. Such an artifact cannot pass the final baseline-completeness gate:
+all four isolated legacy measurements must be `PASS` and exactly equal their
+frozen execution, including a construction-required typed candidate-row
+rejection. The runner publishes validation output only as partial evidence and
+does not spend additional cold-cache or concurrency capacity on an already
+failed revision.
 
 The final report embeds the complete source-bound resource, mutation-statement,
 and isolated-boundary artifacts plus the SHA-256 of each original file. The
@@ -2207,11 +2238,12 @@ and inventory hashes still fails. Deleting a section or case likewise fails.
 
 Before/after numbers use clean worktrees and source-bound ZIPs for legacy v3 at
 `36a26f4ad1aaef9758922f24677069045c5291ab` and the pull-request head, identical
-images/resources, and the same corpus manifest. A baseline timeout, posting-row
-exception, OOM, silent
-provider switch, or wrong partial result is recorded as `FAIL (<reason>)`, never
-as zero or omitted. The PR description reports absolute values and links raw
-artifacts; speedup ratios alone are insufficient.
+images/resources, and the same corpus manifest. A baseline timeout, OOM, silent
+provider switch, arbitrary exception, or wrong partial result is recorded as
+`FAIL (<reason>)`, never as zero or omitted. The construction-required
+candidate-row exception is instead a `PASS` measurement only when its complete
+typed execution exactly matches the snapshot. The PR description reports
+absolute values and links raw artifacts; speedup ratios alone are insufficient.
 
 Every legacy comparison artifact is schema-, source-, ZIP-, profile-, and
 case-bound. If the old process dies before writing evidence, the wrapper records
@@ -2221,9 +2253,11 @@ malformed comparison artifact even when `FAIL` is the honest legacy result. A
 nonzero or timed-out process can never retain an earlier `PASS` file: the
 wrapper preserves that pre-failure object only as a diagnostic sidecar and
 replaces the accepted comparison artifact with measured `FAIL` evidence. A
-completed isolated baseline query must also reproduce the frozen populated-v3
-ordered result hash; a non-empty but partial or reordered page is
-`FAIL (ResultMismatch)`, not a successful timing sample.
+completed isolated baseline measurement must reproduce the frozen populated-v3
+`legacy_execution` exactly: either the complete ordered result signature or the
+exact typed candidate-row rejection. A partial, reordered, differently rejected,
+or otherwise changed execution is `FAIL (ExecutionMismatch)`, not a successful
+timing sample.
 
 ## Validation sequence
 

@@ -1797,10 +1797,11 @@ $timedOut=$exit===124||($exit===137&&$elapsed>=119000.0);
 $class=$timedOut?"Timeout":($exit===137?"KilledOrOOM":"ProcessFailure");
 $message=$timedOut?"Legacy baseline exceeded the 120-second process limit":($exit===137?"Legacy baseline was SIGKILLed or OOM-killed before its timeout":"Legacy baseline exited before writing evidence");
 $data=[
- "schema"=>"relational-fts-baseline-performance-v1","case"=>$argv[1],"status"=>"FAIL",
+ "schema"=>"relational-fts-baseline-performance-v2","case"=>$argv[1],"status"=>"FAIL",
  "source_sha"=>$argv[3],"zip_sha256"=>$argv[4],"profile"=>$argv[5],"process_timeout_seconds"=>120,
  "duration_ms"=>$elapsed,"query_count"=>null,"max_sql_bytes"=>null,"php_memory_delta_bytes"=>null,
  "rss_delta_bytes"=>null,"php_peak_bytes"=>null,"result_count"=>null,"expected_result_hash"=>null,"result_hash"=>null,
+ "expected_execution"=>null,"actual_execution"=>null,"execution_matches_snapshot"=>false,
  "error"=>["class"=>$class,"message"=>$message,"exit"=>$exit],
  "discarded_pre_failure_artifact"=>is_file($argv[8])?[
      "sha256"=>hash_file("sha256",$argv[8]),

@@ -1255,7 +1255,7 @@ PROFILE=2k
 env_options() { printf '%s\n' -e WP_FTS_WC_PHASE=baseline-performance; }
 timed_compose() {
     cat > "${EVIDENCE_DIR}/baseline-performance-common_or.json" <<'JSON'
-{"schema":"relational-fts-baseline-performance-v1","case":"common_or","status":"PASS","sentinel":"written-before-death"}
+{"schema":"relational-fts-baseline-performance-v2","case":"common_or","status":"PASS","sentinel":"written-before-death"}
 JSON
     return 137
 }
@@ -2780,7 +2780,7 @@ test_case('relational worst-case migration kills every table boundary and valida
     assert_true(!str_contains($snapshot, 'sort('), 'legacy migration snapshot must preserve result order');
     assert_true(!str_contains($finalize, 'sort('), 'post-migration parity must preserve result order');
     foreach ([
-        'relational-fts-v4-migration-oracle-v1',
+        'relational-fts-v4-migration-oracle-v2',
         'legacy_bm25_float',
         'v4_quantized_impact_times_integer_rarity',
         'legacy_numeric_score_parity_expected',
@@ -2820,10 +2820,11 @@ test_case('relational worst-case migration kills every table boundary and valida
         'migration_post_kill_no_fts_schema_sql',
         'relational-fts-migration-worker-journal-v1',
         'migration_worker_recorded_progress',
-        'relational-fts-baseline-performance-v1',
+        'relational-fts-baseline-performance-v2',
         'migration_baseline_performance_artifacts_complete',
-        'ResultMismatch',
-        'legacy_bm25_result_hash',
+        'relational-fts-migration-baseline-v3',
+        'ExecutionMismatch',
+        'legacy_execution',
         'collection_metadata',
         'foreign_terms',
         'foreign_postings',
@@ -2851,10 +2852,305 @@ test_case('relational worst-case migration kills every table boundary and valida
         strpos($runner, 'run_php_phase multisite-baseline-setup') > strpos($runner, 'BASELINE_INDEX_EXIT'),
         'multisite sentinels should be created after the main baseline corpus so setup cannot delete site-one evidence'
     );
-    foreach (['seven physical table renames', 'Expected v4 order and integer scores', '3×3 site-specific token matrix', 'six empty off-diagonal cells', 'append-only NDJSON', 'Immediately after every SIGKILL', 'collection-metadata', 'generation for every sentinel'] as $required) {
+    foreach (['seven physical table renames', '100,001st capped row', '138,564 construction-known candidate postings', '3×3 site-specific token matrix', 'six empty off-diagonal cells', 'append-only NDJSON', 'Immediately after every SIGKILL', 'collection-metadata', 'generation for every sentinel'] as $required) {
         assert_contains($required, $acceptance, "acceptance writeup should retain populated migration requirement: {$required}");
     }
     record_check('relational populated migration contract', 61);
+});
+
+test_case('relational migration freezes and reproduces the exact legacy candidate-budget outcome', function (): void {
+    if (!function_exists('proc_open')) {
+        mark_pending('proc_open() is required to execute the extracted legacy outcome contract.');
+    }
+
+    $root = dirname(__DIR__, 2);
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $runner = (string) file_get_contents($root . '/tools/run-relational-fts-worst-case.sh');
+    $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
+    $snapshot = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_snapshot');
+    $oracle = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_oracle');
+    $performance = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_baseline_performance');
+    $execution = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_legacy_execution');
+    $executionValidator = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_legacy_execution_is_valid');
+    $baselineValidator = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_baseline_is_valid');
+    $oracleValidator = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_oracle_is_valid');
+    $finalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_finalize');
+
+    $sixCases = "['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and']";
+    $fiveOracleCases = "['common_or', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and']";
+    assert_contains($sixCases, $snapshot, 'the frozen baseline should execute the exact ordered six-case inventory, including formerly-unbound max_valid_or_prefix');
+    assert_contains("count(\$cases) === 6", $snapshot, 'the frozen baseline should assert all six executions were captured');
+    assert_contains($sixCases, $baselineValidator, 'the reread baseline validator should reject missing, extra, or reordered legacy executions');
+    assert_contains('array_keys($cases) !== $caseIds', $baselineValidator, 'the baseline validator should enforce the exact six-case inventory rather than a count alone');
+    assert_contains($fiveOracleCases, $oracle, 'the independent SQL oracle should select its exact five migration parity cases');
+    assert_true(!str_contains($oracle, 'max_valid_or_prefix'), 'max_valid_or_prefix should be measured against its legacy snapshot without becoming a sixth v4 migration oracle case');
+    assert_contains($fiveOracleCases, $oracleValidator, 'every oracle reread should require the exact ordered five-case inventory');
+    assert_contains("wp_fts_wc_v4_oracle_query_plan(\$case['query'], \$case['options'])", $oracleValidator, 'every oracle reread should recompute and bind its logical plan');
+    assert_contains("(\$case['legacy_execution'] ?? null) !== (\$baselineCase['legacy_execution'] ?? null)", $oracleValidator, 'every oracle case should bind its legacy execution to the authenticated baseline');
+    assert_contains('WP_FTS_Search_Budget_Exceeded $caught', $execution, 'legacy execution should catch only the typed search-budget exception');
+    assert_contains("\$caught->budget() !== 'candidate rows'", $execution, 'legacy execution should reject every non-candidate budget');
+    assert_contains("\$caught->getMessage() !== 'Search request exceeded its candidate rows budget.'", $execution, 'legacy execution should reject message or stage drift');
+    assert_contains("'outcome' => 'candidate_rows_budget_rejection'", $execution, 'legacy execution should retain a distinct typed rejection outcome');
+    assert_contains("'class' => 'WP_FTS_Search_Budget_Exceeded'", $executionValidator, 'legacy execution validation should require the exact exception class');
+    assert_contains("'budget' => 'candidate rows'", $executionValidator, 'legacy execution validation should require the exact budget name');
+    assert_contains("'message' => 'Search request exceeded its candidate rows budget.'", $executionValidator, 'legacy execution validation should require the exact exception message');
+    assert_true(!str_contains($snapshot . $performance . $execution, 'max_candidate_rows'), 'migration evidence must never raise or override the immutable legacy candidate-row budget');
+    assert_contains("\$query = (string) (\$case['query'] ?? '')", $performance, 'the isolated legacy measurement should execute the frozen snapshot query');
+    assert_contains("\$options = is_array(\$case['options'] ?? null) ? \$case['options'] : []", $performance, 'the isolated legacy measurement should execute the frozen snapshot options');
+    assert_contains('$actualExecution === $expectedExecution', $performance, 'the isolated legacy measurement should pass only on exact frozen-execution equality');
+    assert_contains("'status' => \$executionMatchesSnapshot ? 'PASS' : 'FAIL'", $performance, 'an exactly reproduced typed rejection should be a successful measurement');
+    assert_contains("(\$artifact['status'] ?? null) === 'PASS'", $finalize, 'generic or synthetic legacy FAIL evidence should fail final migration acceptance');
+    assert_contains('$artifactActualExecution === $expectedExecution', $finalize, 'finalization should independently recheck the exact legacy execution');
+    assert_contains('wp_fts_wc_migration_oracle_is_valid($oracle, $baseline)', $finalize, 'finalization should authenticate the exact v4 oracle before consuming results or keys');
+    assert_contains('"execution_matches_snapshot"=>false', $runner, 'the wrapper should mark timeout, OOM, and process-death evidence as nonmatching');
+    assert_contains('relational-fts-baseline-performance-v2', $performance . $runner . $finalize, 'the result-or-rejection measurement union should use only its v2 schema');
+    assert_same(2, substr_count($integration, 'relational-fts-migration-evidence-v2'), 'the v2 populated-migration envelope should be required by its only consumer and emitted by its only producer');
+    assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '1'), 'the incompatible v1 populated-migration envelope must not remain accepted or emitted');
+    assert_contains('138,564 construction-known candidate postings', $acceptance, 'the acceptance contract should retain the measured 50k common-OR fanout');
+    assert_contains('relational-fts-migration-evidence-v2', $acceptance, 'the acceptance contract should name the envelope version carrying the exact result-or-rejection union');
+    assert_contains('cannot pass the final baseline-completeness gate', $acceptance, 'the acceptance contract should distinguish a reproduced rejection PASS from an arbitrary legacy failure');
+
+    $extracted = '';
+    foreach ([
+        'wp_fts_wc_legacy_execution',
+        'wp_fts_wc_legacy_execution_is_valid',
+        'wp_fts_wc_migration_baseline_is_valid',
+        'wp_fts_wc_migration_oracle_is_valid',
+        'wp_fts_wc_case_definitions',
+        'wp_fts_wc_ordered_score_signature',
+        'wp_fts_wc_canonical_hash',
+        'wp_fts_wc_canonicalize',
+        'wp_fts_wc_is_ascii_digits',
+        'wp_fts_wc_is_ascii_hex',
+        'wp_fts_wc_assert',
+    ] as $functionName) {
+        $extracted .= wp_fts_wc_contract_function_source($integration, $functionName) . "\n";
+    }
+    $temporary = sys_get_temp_dir() . '/wp-fts-legacy-execution-' . bin2hex(random_bytes(6));
+    mkdir($temporary, 0777, true);
+    $script = $temporary . '/probe.php';
+    $source = <<<'PHP'
+<?php
+declare(strict_types=1);
+
+const WP_FTS_WC_IMMUTABLE_BASELINE_SHA = '36a26f4ad1aaef9758922f24677069045c5291ab';
+
+final class WP_FTS_Search_Budget_Exceeded extends RuntimeException
+{
+    public function __construct(private string $budget)
+    {
+        parent::__construct("Search request exceeded its {$budget} budget.");
+    }
+
+    public function budget(): string
+    {
+        return $this->budget;
+    }
+}
+
+final class WP_FTS_Plugin
+{
+    public static mixed $next = [];
+    public static array $lastOptions = [];
+
+    public static function search(string $query, array $options): array
+    {
+        self::$lastOptions = $options;
+        if (self::$next instanceof Throwable) {
+            throw self::$next;
+        }
+        return is_array(self::$next) ? self::$next : [];
+    }
+}
+
+function wp_fts_wc_v4_oracle_query_plan(string $query, array $options): array
+{
+    return [
+        'groups' => [[['key' => $query, 'rank' => 0]]],
+        'prefix' => !empty($options['prefix_matching']) ? ['group_id' => 0, 'key' => $query] : null,
+    ];
+}
+PHP;
+    $probe = <<<'PHP'
+function probe_assert(bool $condition, string $message): void
+{
+    if (!$condition) {
+        throw new RuntimeException($message);
+    }
+}
+
+$options = ['limit' => 20, 'prefix_matching' => false];
+WP_FTS_Plugin::$next = [['doc_id' => 9, 'score' => 1.25], ['doc_id' => 3, 'score' => 0.5]];
+$results = wp_fts_wc_legacy_execution('probe', $options);
+probe_assert(WP_FTS_Plugin::$lastOptions === $options, 'legacy execution changed caller options or injected a budget override');
+probe_assert(($results['outcome'] ?? null) === 'results' && wp_fts_wc_legacy_execution_is_valid($results), 'nonempty legacy results did not validate');
+
+WP_FTS_Plugin::$next = new WP_FTS_Search_Budget_Exceeded('candidate rows');
+$rejection = wp_fts_wc_legacy_execution('probe', $options);
+probe_assert(($rejection['outcome'] ?? null) === 'candidate_rows_budget_rejection', 'exact candidate-row rejection was not frozen');
+probe_assert(wp_fts_wc_legacy_execution_is_valid($rejection), 'exact candidate-row rejection did not validate');
+$mutated = $rejection;
+$mutated['error']['message'] .= ' drift';
+probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'message drift should invalidate a frozen rejection');
+$mutated = $rejection;
+$mutated['result_count'] = '0';
+probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'string result cardinality should not validate');
+$mutated = $results;
+$mutated['extra'] = true;
+probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'extra execution fields should not validate');
+$mutated = $results;
+$mutated['ordered_score_results'][0]['doc_id'] = '9';
+$mutated['ordered_score_result_hash'] = wp_fts_wc_canonical_hash($mutated['ordered_score_results']);
+probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'string document IDs should not validate after a matching rehash');
+$mutated = $results;
+$mutated['ordered_score_results'][0]['extra'] = true;
+$mutated['ordered_score_result_hash'] = wp_fts_wc_canonical_hash($mutated['ordered_score_results']);
+probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'extra score-row fields should not validate after a matching rehash');
+$mutated = $results;
+$mutated['ordered_score_results'][0]['score'] = '1.2';
+$mutated['ordered_score_result_hash'] = wp_fts_wc_canonical_hash($mutated['ordered_score_results']);
+probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'noncanonical score strings should not validate after a matching rehash');
+$mutated = $results;
+$mutated['ordered_score_results'][1]['doc_id'] = $mutated['ordered_score_results'][0]['doc_id'];
+$mutated['ordered_score_result_hash'] = wp_fts_wc_canonical_hash($mutated['ordered_score_results']);
+probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'duplicate result document IDs should not validate after a matching rehash');
+
+$legacyZip = str_repeat('a', 64);
+$legacyManifestHash = str_repeat('b', 64);
+$manifest = [
+    'source_sha' => WP_FTS_WC_IMMUTABLE_BASELINE_SHA,
+    'zip_sha256' => $legacyZip,
+    'sha256' => $legacyManifestHash,
+    'profile' => ['name' => '2k'],
+];
+$caseIds = ['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and'];
+$definitions = wp_fts_wc_case_definitions($manifest);
+$cases = [];
+foreach ($caseIds as $caseId) {
+    $definition = $definitions[$caseId];
+    $caseOptions = $definition['options'];
+    unset($caseOptions['explain']);
+    $caseOptions['include_snippets'] = false;
+    $cases[$caseId] = [
+        'query' => $definition['query'],
+        'options' => $caseOptions,
+        'legacy_execution' => $results,
+    ];
+}
+$baseline = [
+    'schema' => 'relational-fts-migration-baseline-v3',
+    'source_sha' => WP_FTS_WC_IMMUTABLE_BASELINE_SHA,
+    'zip_sha256' => $legacyZip,
+    'manifest_sha256' => $legacyManifestHash,
+    'indexer_signatures' => ['indexer' => 'legacy'],
+    'cases' => $cases,
+    'tables' => ['total_bytes' => 1],
+];
+$baseline50k = $baseline;
+$baseline50k['cases']['common_or']['legacy_execution'] = $rejection;
+$baseline50k['cases']['max_valid_or_prefix']['legacy_execution'] = $rejection;
+$manifest50k = $manifest;
+$manifest50k['profile']['name'] = '50k';
+$baseline100k = $baseline50k;
+$baseline100k['cases']['rare_anchor_and']['legacy_execution'] = $rejection;
+$manifest100k = $manifest;
+$manifest100k['profile']['name'] = '100k';
+$profiles = [
+    '2k' => ['manifest' => $manifest, 'baseline' => $baseline],
+    '50k' => ['manifest' => $manifest50k, 'baseline' => $baseline50k],
+    '100k' => ['manifest' => $manifest100k, 'baseline' => $baseline100k],
+];
+foreach ($profiles as $profileName => $fixture) {
+    probe_assert(wp_fts_wc_migration_baseline_is_valid($fixture['baseline'], $fixture['manifest']), "{$profileName} exact six-case outcome matrix should validate");
+    foreach ($caseIds as $caseId) {
+        $mutatedBaseline = $fixture['baseline'];
+        $outcome = $mutatedBaseline['cases'][$caseId]['legacy_execution']['outcome'];
+        $mutatedBaseline['cases'][$caseId]['legacy_execution'] = $outcome === 'results' ? $rejection : $results;
+        probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedBaseline, $fixture['manifest']), "{$profileName}/{$caseId} should reject the opposite legacy outcome");
+    }
+}
+$wrongLifecycleManifest = $manifest;
+$wrongLifecycleManifest['source_sha'] = str_repeat('c', 40);
+probe_assert(!wp_fts_wc_migration_baseline_is_valid($baseline, $wrongLifecycleManifest), 'a rebound or wrong-lifecycle manifest should not validate');
+
+$oracleCaseIds = ['common_or', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and'];
+$oracleResults = [['doc_id' => 9, 'score' => '123']];
+$oracleCases = [];
+foreach ($oracleCaseIds as $caseId) {
+    $baselineCase = $baseline['cases'][$caseId];
+    $plan = wp_fts_wc_v4_oracle_query_plan($baselineCase['query'], $baselineCase['options']);
+    $oracleCases[$caseId] = [
+        'query' => $baselineCase['query'],
+        'options' => $baselineCase['options'],
+        'logical_groups' => $plan['groups'],
+        'prefix' => $plan['prefix'],
+        'results' => $oracleResults,
+        'result_hash' => wp_fts_wc_canonical_hash($oracleResults),
+        'legacy_execution' => $baselineCase['legacy_execution'],
+    ];
+}
+$migrationOracle = [
+    'schema' => 'relational-fts-v4-migration-oracle-v2',
+    'source' => 'v3 logical terms/postings plus canonical wp_posts',
+    'scoring_cutover' => [
+        'from' => 'legacy_bm25_float',
+        'to' => 'v4_quantized_impact_times_integer_rarity',
+        'legacy_numeric_score_parity_expected' => false,
+    ],
+    'v3_doc_freq_mismatches' => 0,
+    'v3_queue_rows' => 0,
+    'cases' => $oracleCases,
+];
+probe_assert(wp_fts_wc_migration_oracle_is_valid($migrationOracle, $baseline), 'exact five-case v4 oracle should validate');
+$mutatedOracle = $migrationOracle;
+unset($mutatedOracle['cases']['ambiguous_morphology_and']);
+probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'missing oracle case should fail');
+$mutatedOracle = $migrationOracle;
+$mutatedOracle['cases']['common_or']['logical_groups'] = [];
+probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'oracle logical groups should stay bound to the recomputed plan');
+$mutatedOracle = $migrationOracle;
+$mutatedOracle['cases']['common_or']['legacy_execution'] = $rejection;
+probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'oracle legacy execution should stay bound to the baseline');
+$mutatedOracle = $migrationOracle;
+$mutatedOracle['cases']['common_or']['results'][0]['score'] = '0123';
+$mutatedOracle['cases']['common_or']['result_hash'] = wp_fts_wc_canonical_hash($mutatedOracle['cases']['common_or']['results']);
+probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'rehashed noncanonical oracle score should fail');
+
+$otherBudget = new WP_FTS_Search_Budget_Exceeded('query terms');
+WP_FTS_Plugin::$next = $otherBudget;
+try {
+    wp_fts_wc_legacy_execution('probe', $options);
+    throw new RuntimeException('non-candidate budget was accepted');
+} catch (WP_FTS_Search_Budget_Exceeded $caught) {
+    probe_assert($caught === $otherBudget, 'non-candidate budget was not rethrown unchanged');
+}
+
+$arbitrary = new LogicException('arbitrary failure');
+WP_FTS_Plugin::$next = $arbitrary;
+try {
+    wp_fts_wc_legacy_execution('probe', $options);
+    throw new RuntimeException('arbitrary failure was accepted');
+} catch (LogicException $caught) {
+    probe_assert($caught === $arbitrary, 'arbitrary failure was not rethrown unchanged');
+}
+
+fwrite(STDOUT, "PASS\n");
+PHP;
+    file_put_contents($script, $source . "\n" . $extracted . "\n" . $probe);
+
+    try {
+        $command = [PHP_BINARY];
+        if (php_ini_loaded_file() === false) {
+            $command[] = '-n';
+        }
+        array_push($command, '-d', 'memory_limit=128M', $script);
+        $result = test_run_subprocess($command, $root);
+        assert_same(0, $result['exit'], 'the extracted exact legacy-execution contract should pass in an isolated process: ' . $result['stdout'] . $result['stderr']);
+        assert_same("PASS\n", $result['stdout'], 'the isolated legacy-execution contract should reach its terminal assertion');
+    } finally {
+        @unlink($script);
+        @rmdir($temporary);
+    }
 });
 
 test_case('relational worst-case composes maximum document work with fair scope alternation', function (): void {
