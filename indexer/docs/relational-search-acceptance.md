@@ -1011,9 +1011,21 @@ memory after earlier adversaries have raised that process high-water mark.
 Twenty additional posts carry exactly 1.9 MB of canonical source each. Their
 padding is valid ignored HTML comment content, so the analyzer sees one bounded
 visible token rather than a forbidden lexical run. Indexing must accept all
-twenty, and fresh-process front-end cursor traversal must return every complete,
-hash-identical body without truncation while respecting the 4-MiB hydration
-transport bound.
+twenty. `relational-fts-max-valid-setup-v2` binds that setup to the source,
+package, preliminary report, and one Linux process, and retains every worker
+pass's exact statement count, ordered byte/hash/role vectors, duration, and
+conservative PHP/`VmHWM` attribution. Setup runs in one fresh phase process:
+PHP's peak counter is reset before each worker pass, while Linux `VmHWM` remains
+a conservative lifetime high-water mark. The retained aggregate peak must
+dominate every per-pass peak. Every pass must make progress, execute at most 20
+recognized statements with no statement above 4 MiB, finish within 30 seconds,
+add at most 32 MiB PHP and RSS, and remain below 128 MiB absolute PHP and RSS.
+The one enqueue is at most 1 MiB and five seconds. Fresh-process front-end
+cursor traversal must then return every complete, hash-identical body without
+truncation while respecting the 4-MiB hydration transport bound. Its v2
+artifact retains each returned post ID, exact content byte count, and SHA-256
+on all ten pages, so final validation independently reconstructs all twenty
+1.9-MiB bodies rather than trusting a child summary.
 
 ## Constrained host
 
@@ -1041,6 +1053,27 @@ cgroup peak must be at most 768 MiB, leaving at least 256 MiB of the hard limit
 for the measured workload. This checkpoint occurs after database/WordPress
 initialization, so it catches oversized fixed server allocations without mixing
 in corpus-dependent file cache.
+
+The `relational-fts-resources-v2` artifact retains each effective-cgroup
+probe's exact nonempty `raw` string next to `raw_sha256`. Database memory
+checkpoints use `relational-fts-database-cgroup-memory-v2`; WordPress memory
+checkpoints use `relational-fts-wordpress-cgroup-memory-v3`. They retain the
+same raw-counter binding for every checkpoint. An effective-cgroup probe is
+exactly five tab-delimited fields: version, CPU quota, CPU period, memory
+limit, and raw swap limit. A database memory probe is exactly six fields:
+version plus usage, peak, limit-event, OOM-event, and OOM-kill counters. A
+WordPress memory checkpoint is exactly those six fields plus container ID,
+Docker `StartedAt`, host PID, and restart count, for ten fields total. Missing
+or extra fields and non-unsigned numeric fields fail; validation does not trim
+or otherwise normalize the retained payload. Every parsed field must equal its
+structured evidence. For cgroup v1, the raw swap field is the combined
+memory-plus-swap limit, so effective swap must equal raw swap minus memory;
+cgroup v2 uses the raw swap field directly. Producer validation, memory
+finalization, and final evidence validation all recompute
+`SHA-256(raw) === raw_sha256`; a missing, empty, independently changed, or
+structured-inconsistent raw probe fails acceptance.
+`relational-fts-resource-verification-v1` remains the verification-envelope
+schema because its own fields did not change.
 
 The runner also records database usage, cumulative peak, limit events, OOM
 events, and OOM kills immediately before all 40 planned cold-cache database
@@ -1201,6 +1234,7 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | injected non-transactional engine | rejected; 1 drop; restored InnoDB; 1 bounded global-corpus recovery scope (harness-only state restoration is fixture cleanup) |
 | authoritative search PHP allocation, live RSS, PHP peak delta, and Linux `VmHWM`-after minus `VmRSS`-before | each <=16 MiB in every one of 13 fresh case processes, all 40 cold processes, and the maximum-valid front-end process |
 | PHP peak and absolute Linux `VmHWM` | each positive and <=128 MiB in those source-bound processes |
+| twenty 1.9-MiB maximum-valid setup rows | one <=1-MiB/5-second enqueue; every worker pass <=20 recognized statements, <=4-MiB SQL, <=30 seconds, <=32-MiB PHP/RSS delta, and <=128-MiB absolute PHP/RSS |
 | 100k nested tags / 1.8 MiB language attribute | typed rejection; 0 SQL; <=1 second; <=16 MiB PHP allocation delta; <=128 MiB RSS |
 | exact 20k markup tokens x 256 depth | 89,490-byte/0-occurrence and 99,235-byte/9,745-occurrence documents preserved; each <=2 seconds; <=16 MiB PHP allocation delta; <=128 MiB RSS |
 | 20k one-byte inline text segments | typed 4-KiB lexical-run rejection; <=2 seconds; <=16 MiB PHP allocation delta; <=128 MiB RSS; exact 4,096-byte run preserved |
@@ -1675,10 +1709,19 @@ analyzed/indexed document and one committed canonical generation,
 preservation of a completed targeted scope, and zero non-epoch metadata rows
 after twenty exact requests. The worker commit must leave the canonical key
 absent and the content searchable. On both engines, captured production SQL
-must contain exactly one writer-owned multi-table acknowledgement: `START
-TRANSACTION`, the singleton epoch UPSERT, one generation/token-CAS `DELETE`
-covering the canonical job key and serialized writer option, then `COMMIT`.
-Every retained statement records its wpdb
+must contain exactly one marked acknowledgement inside the writer-owned
+transaction: `START TRANSACTION`, bounded writes, the singleton epoch UPSERT,
+one generation/token-CAS `DELETE` covering only the canonical job key, then
+`COMMIT`. The acknowledgement must not join or delete the writer lease; the
+same exact lease remains owned through `COMMIT` and is deleted once afterward
+by a CAS on both its option name and serialized payload.
+`relational-fts-mutation-generation-cas-v4` also retains the complete ordered
+synthetic worker SQL stream in a `relational-fts-mutation-worker-sql-v1`
+envelope. It hard-fails above 32 statements, 1 MiB for any statement, or 4 MiB
+in total and binds every lossless statement to its index, byte count, SHA-256,
+the aggregate byte counts, and an envelope self-hash. Final validation reparses
+that stream rather than trusting the producer's ACK/lease booleans.
+Every retained boundary statement records its wpdb
 method, byte count, SHA-256, and at most 2 KiB of literal-redacted SQL. The
 finalizer rejects a missing boundary, a hard-coded summary without statements,
 an unredacted ownership token, or any count that differs from the captured SQL.
@@ -1936,8 +1979,13 @@ read sends at most three rows, finishes within 250 ms, and creates no disk
 temporary table, merge pass, or `NO_GOOD_INDEX_USED` flag. Data selectors send
 at most 100 rows, retain their per-case row/sort limits and keyed base-table
 plans, and may raise the statement-level `NO_INDEX_USED` flag only for a bounded
-derived table. The MyISAM fixtures are removed and verified absent. All four
-required database/profile lanes run this proof.
+derived table. The v2 sweep artifact retains one ordered measurement vector per
+selector and metadata statement: wpdb and Performance Schema SQL hashes,
+statement bytes, event ID, rows examined/sent, temporary/sort/index flags, raw
+picosecond timer, derived server duration, and the selector's client duration.
+Final validation recomputes every count, sum, and maximum from those vectors.
+The MyISAM fixtures are removed and verified absent. All four required
+database/profile lanes run this proof.
 
 The proof first changes, indexes, finds, and restores one post through
 a real save lifecycle. Its separate unchanged case queues 100 distinct
@@ -2034,6 +2082,9 @@ The populated migration proof builds a 50k legacy index from the exact
 immutable legacy-v3 `36a26f4ad1aaef9758922f24677069045c5291ab` ZIP, installs the pull-request ZIP, then SIGKILLs and resumes after
 each of the seven physical table renames and the `v4_created`,
 `reconciliation_enqueued`, `ready_verified`, and `legacy_cleaned` boundaries.
+At every boundary the wrapper verifies the ready artifact belongs to its exact
+child PID, requires its own `kill -9` call to succeed, and then requires wait
+status 137 before continuing.
 Every callback must expose the exact expected table-name set, logical schema
 version, pending health/readiness state, and exact post/scope/meta work
 cardinality. `work_rows` is semantic claimable debt (`post` plus `scope`), never
@@ -2054,7 +2105,9 @@ bootstrap/cleanup headroom; the whole-run watchdog remains the terminal bound.
 Immediately after every SIGKILL and before the next migration phase, a fresh PHP
 process must read an ordinary option and corpus post, run a real no-op
 `wp_update_post()` save, and execute an enabled main front-end `WP_Query` for a
-known corpus token. The save must leave its searchable source unchanged and
+known corpus token. The v3 post-kill artifact retains the option value again
+after the save so final validation can independently prove it remained exact.
+The save must leave its searchable source unchanged and
 produce phase-exact work and generations. At each of the seven rename
 boundaries, it attempts exactly one bounded recovery-scope DML against the
 absent work table, leaves no durable work or control generation, rotates the
@@ -2112,7 +2165,7 @@ artifacts provide the before metrics, so there is no redundant four-case replay:
 legacy executions per lane are six rather than ten.
 
 The completed populated-migration envelope is
-`relational-fts-migration-evidence-v4`; the final report accepts only v4, so a
+`relational-fts-migration-evidence-v5`; the final report accepts only v5, so a
 stale envelope that does not authenticate the target-v4 rarity basis fails.
 
 Legacy BM25 results are informational evidence of the intentional scoring-model
@@ -2179,7 +2232,7 @@ measurement.
 
 ## Evidence and before/after comparison
 
-The runner writes `relational-fts-evidence-v4` JSON containing source and ZIP
+The runner writes `relational-fts-evidence-v5` JSON containing source and ZIP
 hashes, image digests, effective resources, corpus seed/hash/counts, schema and
 DB bytes, raw latency samples, result IDs/hashes, SQL count/bytes/text,
 `EXPLAIN`/`ANALYZE`, rows examined/sent, temporary/sort/lock metrics, PHP
@@ -2381,7 +2434,8 @@ Each required lane performs the same fail-closed sequence:
    each <=4 MiB; the resolver must send exactly 8,192 rows, examine <=65,536
    rows, create no disk temporary table, and finish within 5 seconds. Verify
    exact stored counts and exact zero-row cleanup. Then run the 819,200-row
-   old-posting frontier and 1.9-MB source/search processes, followed by the fresh
+   old-posting frontier and the source-bound, self-hashed 1.9-MB source/search
+   processes with the setup statement/time/memory bounds above, followed by the fresh
    externally bounded isolated process for exact 4-KiB CJK, infinite-tokenizer,
    12/13-plan, 4,096/4,097-term, and 1,000/1,001-enqueue boundaries. Verify its
    byte-identical stdout/artifact and complete cleanup before fault or
@@ -2400,7 +2454,15 @@ Each required lane performs the same fail-closed sequence:
    applied-but-reported-failed ambiguous COMMIT outcomes at exactly 19 direct
    statements plus one cron write; prove the stale writer-lease takeover is a
    control-only callback before ordinary work resumes. Then kill an uncommitted
-   transaction, run conditioned buffer-pool-cold samples,
+   transaction. Before the kill, the child atomically publishes its Linux boot
+   ID, PID, start ticks, database connection, and sentinel; after `wait`, the
+   wrapper independently reads the live Linux boot ID and the child's `/proc`
+   start ticks, requires them to identify the same child as the ready identity,
+   requires a kill exit status 0, and after `wait` atomically records that
+   observation, the exact ready-file SHA-256, signal 9, and exit status 137.
+   `relational-fts-transaction-crash-v3` accepts rollback and the subsequent
+   search only when that exact SIGKILL receipt validates.
+   Then run conditioned buffer-pool-cold samples,
    release all ten ready processes into one shared eight-reader/two-writer
    window, and prove a >=60-second all-worker intersection plus independent
    progress and final-state parity for both writers. Then traverse the complete

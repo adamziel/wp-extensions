@@ -387,6 +387,7 @@ $parse=static function(string $label,string $raw)use($unsigned):array{
         "oom_events"=>$unsigned($parts[4]??""),
         "oom_kill_events"=>$unsigned($parts[5]??""),
         "sources"=>$sources,
+        "raw"=>$raw,
         "raw_sha256"=>hash("sha256",$raw),
     ];
     if(isset($parts[6])){$checkpoint["container_id"]=$parts[6];}
@@ -395,6 +396,58 @@ $parse=static function(string $label,string $raw)use($unsigned):array{
     if(isset($parts[9])){$checkpoint["container_restart_count"]=$unsigned($parts[9]);}
     return $checkpoint;
 };
+$memoryRawMatches=static function(array $checkpoint,int $expectedFieldCount)use($unsigned):bool{
+    $raw=$checkpoint["raw"]??null;
+    if(!is_string($raw)||$raw===""||!in_array($expectedFieldCount,[6,10],true)){return false;}
+    $parts=explode("\t",$raw);
+    if(count($parts)!==$expectedFieldCount
+        ||($checkpoint["cgroup_version"]??null)!==($parts[0]??null)
+        ||($checkpoint["usage_bytes"]??null)!==$unsigned($parts[1]??"")
+        ||($checkpoint["peak_bytes"]??null)!==$unsigned($parts[2]??"")
+        ||($checkpoint["limit_events"]??null)!==$unsigned($parts[3]??"")
+        ||($checkpoint["oom_events"]??null)!==$unsigned($parts[4]??"")
+        ||($checkpoint["oom_kill_events"]??null)!==$unsigned($parts[5]??"")
+        ||!is_string($checkpoint["raw_sha256"]??null)
+        ||!hash_equals(hash("sha256",$raw),$checkpoint["raw_sha256"])){
+        return false;
+    }
+    if($expectedFieldCount===6){
+        return !array_key_exists("container_id",$checkpoint)
+            &&!array_key_exists("container_started_at",$checkpoint)
+            &&!array_key_exists("container_host_pid",$checkpoint)
+            &&!array_key_exists("container_restart_count",$checkpoint);
+    }
+    return ($checkpoint["container_id"]??null)===$parts[6]
+        &&($checkpoint["container_started_at"]??null)===$parts[7]
+        &&($checkpoint["container_host_pid"]??null)===$unsigned($parts[8])
+        &&($checkpoint["container_restart_count"]??null)===$unsigned($parts[9]);
+};
+$effectiveCgroupMatches=static function(array $cgroup,int $expectedMemoryBytes)use($unsigned):bool{
+    $raw=$cgroup["raw"]??null;
+    if(!is_string($raw)||$raw===""||!is_string($cgroup["raw_sha256"]??null)||!hash_equals(hash("sha256",$raw),$cgroup["raw_sha256"])){return false;}
+    $parts=explode("\t",$raw);
+    if(count($parts)!==5||!in_array($parts[0],["v1","v2"],true)){return false;}
+    $quota=$unsigned($parts[1]);$period=$unsigned($parts[2]);$memory=$unsigned($parts[3]);$rawSwap=$unsigned($parts[4]);
+    if($quota===null||$period===null||$period<1||$memory===null||$rawSwap===null){return false;}
+    $effectiveSwap=$parts[0]==="v1"?$rawSwap-$memory:$rawSwap;
+    $cpuMatches=$quota>0&&$quota===$period;$memoryMatches=$memory===$expectedMemoryBytes;$swapMatches=$effectiveSwap===0;
+    $cpu=is_array($cgroup["cpu"]??null)?$cgroup["cpu"]:[];
+    $memoryEvidence=is_array($cgroup["memory"]??null)?$cgroup["memory"]:[];
+    $swap=is_array($cgroup["swap"]??null)?$cgroup["swap"]:[];
+    return ($cgroup["version"]??null)===$parts[0]
+        &&($cpu["quota_us"]??null)===$quota
+        &&($cpu["period_us"]??null)===$period
+        &&is_numeric($cpu["effective_cpus"]??null)
+        &&(float)$cpu["effective_cpus"]===(float)($quota/$period)
+        &&($cpu["matches_expected"]??null)===$cpuMatches
+        &&($memoryEvidence["max_bytes"]??null)===$memory
+        &&($memoryEvidence["matches_expected"]??null)===$memoryMatches
+        &&($swap["raw_max_bytes"]??null)===$rawSwap
+        &&($swap["effective_max_bytes"]??null)===$effectiveSwap
+        &&($swap["matches_expected"]??null)===$swapMatches
+        &&($cgroup["matches_expected"]??null)===($cpuMatches&&$memoryMatches&&$swapMatches)
+        &&$cpuMatches&&$memoryMatches&&$swapMatches;
+};
 $checkpoints=[];$labels=[];$malformed=false;
 foreach($lines as $line){
     $separator=strpos($line,"\t");
@@ -402,7 +455,8 @@ foreach($lines as $line){
     $label=substr($line,0,$separator);$raw=substr($line,$separator+1);
     if($label===""||isset($labels[$label])){$malformed=true;continue;}
     $labels[$label]=true;$checkpoint=$parse($label,$raw);
-    $valid=in_array($checkpoint["cgroup_version"],["v1","v2"],true)
+    $valid=$memoryRawMatches($checkpoint,6)
+        && in_array($checkpoint["cgroup_version"],["v1","v2"],true)
         && is_int($checkpoint["usage_bytes"])&&$checkpoint["usage_bytes"]>=0
         && is_int($checkpoint["peak_bytes"])&&$checkpoint["peak_bytes"]>0
         && $checkpoint["peak_bytes"]>=$checkpoint["usage_bytes"]
@@ -432,6 +486,11 @@ $oomKills=array_values(array_filter(array_column($checkpoints,"oom_kill_events")
 $wholePeak=$peaks===[]?null:max($peaks);$maxLimitEvents=$limitEvents===[]?null:max($limitEvents);
 $maxOom=$oomEvents===[]?null:max($oomEvents);$maxOomKills=$oomKills===[]?null:max($oomKills);
 $failures=is_array($resources["verification"]["gate_failures"]??null)?array_values($resources["verification"]["gate_failures"]):[];
+foreach(["database","wordpress","wpcli"] as $role){
+    $cgroup=is_array($resources[$role]["effective_cgroup"]??null)?$resources[$role]["effective_cgroup"]:[];
+    $expectedMemory=$role==="database"?1073741824:536870912;
+    if(!$effectiveCgroupMatches($cgroup,$expectedMemory)){$failures[]="{$role} effective cgroup raw probe does not match its structured evidence";}
+}
 if($malformed||$actualLabels!==$expectedLabels||($memory["expected_checkpoint_labels"]??null)!==$expectedLabels){$failures[]="database cgroup memory checkpoints do not match the exact ordered 42-checkpoint inventory";}
 if(count($versions)!==1||($versions[0]??null)!==($effectiveCgroup["version"]??null)){$failures[]="database cgroup memory checkpoint versions do not match the effective cgroup";}
 if($first!==$pre){$failures[]="database pre-corpus cgroup memory checkpoint changed before finalization";}
@@ -460,7 +519,8 @@ foreach($wordpressLines as $line){
     $label=substr($line,0,$separator);$raw=substr($line,$separator+1);
     if($label===""||isset($wordpressLabels[$label])){$wordpressMalformed=true;continue;}
     $wordpressLabels[$label]=true;$checkpoint=$parse($label,$raw);
-    $valid=in_array($checkpoint["cgroup_version"],["v1","v2"],true)
+    $valid=$memoryRawMatches($checkpoint,10)
+        && in_array($checkpoint["cgroup_version"],["v1","v2"],true)
         && is_int($checkpoint["usage_bytes"])&&$checkpoint["usage_bytes"]>=0
         && is_int($checkpoint["peak_bytes"])&&$checkpoint["peak_bytes"]>0
         && $checkpoint["peak_bytes"]>=$checkpoint["usage_bytes"]
@@ -1257,8 +1317,17 @@ read_first() {
     printf unavailable
 }
 if [ -r /sys/fs/cgroup/cgroup.controllers ]; then
-    printf "v2\t%s\t%s\t%s\n" \
-        "$(read_first /sys/fs/cgroup/cpu.max)" \
+    cpu_max="$(read_first /sys/fs/cgroup/cpu.max)"
+    IFS=" " read -r quota period extra <<EOF
+${cpu_max}
+EOF
+    if [ -z "${quota}" ] || [ -z "${period}" ] || [ -n "${extra}" ]; then
+        echo "Malformed cgroup v2 CPU limit." >&2
+        exit 1
+    fi
+    printf "v2\t%s\t%s\t%s\t%s\n" \
+        "${quota}" \
+        "${period}" \
         "$(read_first /sys/fs/cgroup/memory.max)" \
         "$(read_first /sys/fs/cgroup/memory.swap.max)"
 else
@@ -1266,7 +1335,7 @@ else
     period="$(read_first /sys/fs/cgroup/cpu/cpu.cfs_period_us /sys/fs/cgroup/cpu,cpuacct/cpu.cfs_period_us)"
     memory="$(read_first /sys/fs/cgroup/memory/memory.limit_in_bytes)"
     memory_swap="$(read_first /sys/fs/cgroup/memory/memory.memsw.limit_in_bytes)"
-    printf "v1\t%s %s\t%s\t%s\n" "${quota}" "${period}" "${memory}" "${memory_swap}"
+    printf "v1\t%s\t%s\t%s\t%s\n" "${quota}" "${period}" "${memory}" "${memory_swap}"
 fi'
 CGROUP_MEMORY_PROBE='set -eu
 event_value() {
@@ -1374,28 +1443,30 @@ $imageEvidence = static function (
 };
 
 $effectiveCgroup = static function (string $label, string $raw, int $expectedMemoryBytes) use (&$gates): array {
-    $parts = explode("\t", trim($raw));
+    $parts = explode("\t", $raw);
+    $fieldCountMatches = count($parts) === 5;
     $version = $parts[0] ?? "unavailable";
-    $cpuParts = array_values(array_filter(
-        explode(" ", trim($parts[1] ?? "")),
-        static fn(string $value): bool => $value !== ""
-    ));
     $integer = static fn(?string $value): ?int => is_string($value)
         && $value !== ""
         && strspn($value, "0123456789") === strlen($value)
             ? (int) $value
             : null;
-    $cpuQuota = $integer($cpuParts[0] ?? null);
-    $cpuPeriod = $integer($cpuParts[1] ?? null);
-    $memoryMax = $integer($parts[2] ?? null);
-    $rawSwapMax = $integer($parts[3] ?? null);
+    $cpuQuota = $integer($parts[1] ?? null);
+    $cpuPeriod = $integer($parts[2] ?? null);
+    $memoryMax = $integer($parts[3] ?? null);
+    $rawSwapMax = $integer($parts[4] ?? null);
     $swapMax = $version === "v1" && $rawSwapMax !== null && $memoryMax !== null
         ? $rawSwapMax - $memoryMax
         : $rawSwapMax;
     $cpuMatches = $cpuQuota !== null && $cpuQuota > 0 && $cpuPeriod !== null && $cpuQuota === $cpuPeriod;
     $memoryMatches = $memoryMax === $expectedMemoryBytes;
     $swapMatches = $swapMax === 0;
-    if (!$cpuMatches || !$memoryMatches || !$swapMatches || !in_array($version, ["v1", "v2"], true)) {
+    $matchesExpected = $fieldCountMatches
+        && in_array($version, ["v1", "v2"], true)
+        && $cpuMatches
+        && $memoryMatches
+        && $swapMatches;
+    if (!$matchesExpected) {
         $gates[] = "{$label} effective cgroup is not 1 CPU / {$expectedMemoryBytes} bytes / zero swap";
     }
 
@@ -1418,13 +1489,14 @@ $effectiveCgroup = static function (string $label, string $raw, int $expectedMem
             "effective_max_bytes" => $swapMax,
             "matches_expected" => $swapMatches,
         ],
+        "raw" => $raw,
         "raw_sha256" => hash("sha256", $raw),
-        "matches_expected" => $cpuMatches && $memoryMatches && $swapMatches,
+        "matches_expected" => $matchesExpected,
     ];
 };
 
 $memoryCheckpoint = static function (string $label, string $raw): array {
-    $parts = explode("\t", trim($raw));
+    $parts = explode("\t", $raw);
     $version = $parts[0] ?? "unavailable";
     $unsigned = static fn(?string $value): ?int => is_string($value)
         && $value !== ""
@@ -1444,6 +1516,7 @@ $memoryCheckpoint = static function (string $label, string $raw): array {
         "oom_events" => $unsigned($parts[4] ?? null),
         "oom_kill_events" => $unsigned($parts[5] ?? null),
         "sources" => $sources,
+        "raw" => $raw,
         "raw_sha256" => hash("sha256", $raw),
     ];
     if (isset($parts[6])) {
@@ -1460,6 +1533,41 @@ $memoryCheckpoint = static function (string $label, string $raw): array {
     }
     return $checkpoint;
 };
+$memoryCheckpointMatchesRaw = static function (array $checkpoint, int $expectedFieldCount): bool {
+    $raw = $checkpoint["raw"] ?? null;
+    if (!is_string($raw) || $raw === "" || !in_array($expectedFieldCount, [6, 10], true)) {
+        return false;
+    }
+    $parts = explode("\t", $raw);
+    $unsigned = static fn(?string $value): ?int => is_string($value)
+        && $value !== ""
+        && strspn($value, "0123456789") === strlen($value)
+            ? (int) $value
+            : null;
+    if (
+        count($parts) !== $expectedFieldCount
+        || ($checkpoint["cgroup_version"] ?? null) !== ($parts[0] ?? null)
+        || ($checkpoint["usage_bytes"] ?? null) !== $unsigned($parts[1] ?? null)
+        || ($checkpoint["peak_bytes"] ?? null) !== $unsigned($parts[2] ?? null)
+        || ($checkpoint["limit_events"] ?? null) !== $unsigned($parts[3] ?? null)
+        || ($checkpoint["oom_events"] ?? null) !== $unsigned($parts[4] ?? null)
+        || ($checkpoint["oom_kill_events"] ?? null) !== $unsigned($parts[5] ?? null)
+        || !is_string($checkpoint["raw_sha256"] ?? null)
+        || !hash_equals(hash("sha256", $raw), $checkpoint["raw_sha256"])
+    ) {
+        return false;
+    }
+    if ($expectedFieldCount === 6) {
+        return !array_key_exists("container_id", $checkpoint)
+            && !array_key_exists("container_started_at", $checkpoint)
+            && !array_key_exists("container_host_pid", $checkpoint)
+            && !array_key_exists("container_restart_count", $checkpoint);
+    }
+    return ($checkpoint["container_id"] ?? null) === $parts[6]
+        && ($checkpoint["container_started_at"] ?? null) === $parts[7]
+        && ($checkpoint["container_host_pid"] ?? null) === $unsigned($parts[8])
+        && ($checkpoint["container_restart_count"] ?? null) === $unsigned($parts[9]);
+};
 
 $databaseImage = $imageEvidence("database", $argv[5], $argv[6], $argv[3], $argv[4], $argv[28]);
 $wordpressImage = $imageEvidence("WordPress", $argv[11], $argv[12], $argv[9], $argv[10], $argv[29]);
@@ -1470,6 +1578,7 @@ $wpcliCgroup = $effectiveCgroup("WP-CLI", $argv[18], 536870912);
 $databasePreCorpusMemory = $memoryCheckpoint("pre-corpus", $argv[36]);
 $databasePreCorpusPeakLimit = (int) $argv[37];
 $databasePreCorpusValid = $databasePreCorpusMemory["cgroup_version"] === ($databaseCgroup["version"] ?? null)
+    && $memoryCheckpointMatchesRaw($databasePreCorpusMemory, 6)
     && is_int($databasePreCorpusMemory["usage_bytes"])
     && $databasePreCorpusMemory["usage_bytes"] >= 0
     && is_int($databasePreCorpusMemory["peak_bytes"])
@@ -1491,6 +1600,7 @@ $wordpressContainerLifecycle = [
     "restart_count" => $wordpressPreCorpusMemory["container_restart_count"] ?? null,
 ];
 $wordpressPreCorpusValid = $wordpressPreCorpusMemory["cgroup_version"] === ($wordpressCgroup["version"] ?? null)
+    && $memoryCheckpointMatchesRaw($wordpressPreCorpusMemory, 10)
     && is_int($wordpressPreCorpusMemory["usage_bytes"])
     && $wordpressPreCorpusMemory["usage_bytes"] >= 0
     && is_int($wordpressPreCorpusMemory["peak_bytes"])
@@ -1519,7 +1629,7 @@ foreach (["common_or", "max_valid_or_prefix", "rare_anchor_and", "prefix_fanout"
 $databaseMemoryCheckpointLabels[] = "final-workload";
 $packageReproducibility = json_decode((string) file_get_contents($argv[31]), true, 512, JSON_THROW_ON_ERROR);
 $data = [
- "schema" => "relational-fts-resources-v1",
+ "schema" => "relational-fts-resources-v2",
  "status" => $gates === [] ? "PASS" : "FAIL",
  "verification" => [
      "schema" => "relational-fts-resource-verification-v1",
@@ -1533,7 +1643,7 @@ $data = [
      "image" => $databaseImage,
      "effective_cgroup" => $databaseCgroup,
      "memory" => [
-         "schema" => "relational-fts-database-cgroup-memory-v1",
+         "schema" => "relational-fts-database-cgroup-memory-v2",
          "limit_bytes" => 1073741824,
          "pre_corpus_peak_limit_bytes" => $databasePreCorpusPeakLimit,
          "pre_corpus" => $databasePreCorpusMemory,
@@ -1560,7 +1670,7 @@ $data = [
      "container_lifecycle" => $wordpressContainerLifecycle,
      "effective_cgroup" => $wordpressCgroup,
      "memory" => [
-         "schema" => "relational-fts-wordpress-cgroup-memory-v2",
+         "schema" => "relational-fts-wordpress-cgroup-memory-v3",
          "limit_bytes" => 536870912,
          "pre_corpus" => $wordpressPreCorpusMemory,
          "expected_checkpoint_labels" => ["pre-corpus", "final-workload"],
@@ -1927,7 +2037,9 @@ if(!$passed){fwrite(STDERR,"Physical migration disk evidence failed.\n");exit(1)
 kill_uncommitted_transaction() {
     local options=()
     while IFS= read -r option; do options+=("${option}"); done < <(env_options transaction-crash)
-    rm -f "${EVIDENCE_DIR}/transaction-crash-ready.json"
+    rm -f "${EVIDENCE_DIR}/transaction-crash-ready.json" \
+        "${EVIDENCE_DIR}/transaction-crash-observed-process.json" \
+        "${EVIDENCE_DIR}/transaction-crash-kill-receipt.json"
     timed_compose transaction-crash 180 exec -T "${options[@]}" wordpress sh -c '
         php /proof/relational-fts-worst-case.php >/evidence/transaction-crash-process.log 2>&1 &
         child=$!
@@ -1939,10 +2051,81 @@ kill_uncommitted_transaction() {
             i=$((i+1)); sleep 1
         done
         if [ "$ready" -ne 1 ]; then kill -9 "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; exit 1; fi
-        kill -9 "$child"
-        wait "$child" 2>/dev/null
-        status=$?
-        [ "$status" -eq 137 ]
+        php -r '\''
+$readyPath=$argv[1];$target=$argv[2];$childRaw=$argv[3];
+if($childRaw===""||strspn($childRaw,"0123456789")!==strlen($childRaw)||(int)$childRaw<1){exit(1);}
+$child=(int)$childRaw;
+$ready=json_decode((string)file_get_contents($readyPath),true,512,JSON_THROW_ON_ERROR);
+$identity=is_array($ready["process_identity"]??null)?$ready["process_identity"]:[];
+$valid=array_keys($ready)===["schema","process_identity","connection_id","sentinel"]
+    &&($ready["schema"]??null)==="relational-fts-transaction-crash-ready-v1"
+    &&array_keys($identity)===["pid","start_ticks","boot_id","sha256"]
+    &&is_int($identity["pid"]??null)&&$identity["pid"]>0
+    &&is_int($identity["start_ticks"]??null)&&$identity["start_ticks"]>0
+    &&is_string($identity["boot_id"]??null)&&$identity["boot_id"]!==""
+    &&is_string($identity["sha256"]??null)
+    &&hash_equals(hash("sha256",implode("|",[$identity["boot_id"],(string)$identity["pid"],(string)$identity["start_ticks"]])),$identity["sha256"])
+    &&is_int($ready["connection_id"]??null)&&$ready["connection_id"]>0
+    &&($ready["sentinel"]??null)==="transactioncrashsentinel";
+if(!$valid||$identity["pid"]!==$child){exit(1);}
+$stat=(string)@file_get_contents("/proc/{$child}/stat");
+$closing=strrpos($stat,")");
+if(!is_int($closing)){exit(1);}
+$fields=[];$field="";$tail=substr($stat,$closing+1);$length=strlen($tail);
+for($index=0;$index<$length;$index++){
+    $byte=$tail[$index];
+    if($byte===" "||$byte==="\t"||$byte==="\r"||$byte==="\n"){
+        if($field!==""){$fields[]=$field;$field="";}
+        continue;
+    }
+    $field.=$byte;
+}
+if($field!==""){$fields[]=$field;}
+$startRaw=$fields[19]??"";
+$bootRaw=(string)@file_get_contents("/proc/sys/kernel/random/boot_id");
+$bootId=rtrim($bootRaw,"\r\n");
+if($startRaw===""||strspn($startRaw,"0123456789")!==strlen($startRaw)||(int)$startRaw<1||$bootId===""){exit(1);}
+$observed=["pid"=>$child,"start_ticks"=>(int)$startRaw,"boot_id"=>$bootId];
+$observed["sha256"]=hash("sha256",implode("|",[$bootId,(string)$child,$startRaw]));
+if($observed!==$identity){exit(1);}
+$temporary=$target.".tmp.".getmypid();
+$json=json_encode($observed,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_PRESERVE_ZERO_FRACTION|JSON_THROW_ON_ERROR)."\n";
+if(file_put_contents($temporary,$json,LOCK_EX)!==strlen($json)||!rename($temporary,$target)){@unlink($temporary);exit(1);}
+'\'' /evidence/transaction-crash-ready.json /evidence/transaction-crash-observed-process.json "$child" || {
+            kill -9 "$child" 2>/dev/null || true
+            wait "$child" 2>/dev/null || true
+            exit 1
+        }
+        if kill -9 "$child" 2>/dev/null; then
+            kill_status=0
+        else
+            kill_status=$?
+            wait "$child" 2>/dev/null || true
+            exit 1
+        fi
+        if wait "$child" 2>/dev/null; then status=0; else status=$?; fi
+        if [ "$status" -ne 137 ]; then exit 1; fi
+        php -r '\''
+$readyPath=$argv[1];$observedPath=$argv[2];$target=$argv[3];$child=(int)$argv[4];$killStatus=(int)$argv[5];$status=(int)$argv[6];$signal=(int)$argv[7];
+$ready=json_decode((string)file_get_contents($readyPath),true,512,JSON_THROW_ON_ERROR);
+$observed=json_decode((string)file_get_contents($observedPath),true,512,JSON_THROW_ON_ERROR);
+if(array_keys($observed)!==["pid","start_ticks","boot_id","sha256"]
+    ||$observed!==($ready["process_identity"]??null)
+    ||($observed["pid"]??null)!==$child
+    ||$killStatus!==0||$status!==137||$signal!==9){exit(1);}
+$data=[
+    "schema"=>"relational-fts-transaction-crash-kill-receipt-v2",
+    "ready_sha256"=>hash_file("sha256",$readyPath),
+    "child_pid"=>$child,
+    "observed_process_identity"=>$observed,
+    "kill_exit_status"=>$killStatus,
+    "exit_status"=>$status,
+    "signal"=>$signal,
+];
+$temporary=$target.".tmp.".getmypid();
+$json=json_encode($data,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n";
+if(file_put_contents($temporary,$json,LOCK_EX)!==strlen($json)||!rename($temporary,$target)){@unlink($temporary);exit(1);}
+'\'' /evidence/transaction-crash-ready.json /evidence/transaction-crash-observed-process.json /evidence/transaction-crash-kill-receipt.json "$child" "$kill_status" "$status" 9
     '
 }
 
@@ -1969,9 +2152,28 @@ kill_migration_phase() {
             i=$((i+1)); sleep 1
         done
         if [ "$ready" -ne 1 ]; then kill -9 "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; exit 1; fi
-        kill -9 "$child"
-        wait "$child" 2>/dev/null
-        status=$?
+        ready_pid="$(php -r '\''
+$evidence=json_decode((string)file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
+$valid=($evidence["schema"]??null)==="relational-fts-migration-phase-v3"
+    &&($evidence["status"]??null)==="PASS"
+    &&($evidence["phase"]??null)===$argv[2]
+    &&is_int($evidence["pid"]??null)&&$evidence["pid"]>0;
+if(!$valid){exit(1);}echo $evidence["pid"];
+'\'' "/evidence/migration-phase-${target}.json" "$target")" || {
+            kill -9 "$child" 2>/dev/null || true
+            wait "$child" 2>/dev/null || true
+            exit 1
+        }
+        if [ "$ready_pid" -ne "$child" ]; then
+            kill -9 "$child" 2>/dev/null || true
+            wait "$child" 2>/dev/null || true
+            exit 1
+        fi
+        if ! kill -9 "$child" 2>/dev/null; then
+            wait "$child" 2>/dev/null || true
+            exit 1
+        fi
+        if wait "$child" 2>/dev/null; then status=0; else status=$?; fi
         [ "$status" -eq 137 ]
     ' sh "${target}" "${MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS}"
 }
@@ -2457,7 +2659,7 @@ $bound=($e["source_sha"]??null)===$argv[2]
  &&($manifest["documents"]??null)===(int)$argv[5]
  &&($e["acceptance_lane"]??null)===($argv[6]==="0")
  &&($e["lane_id"]??null)===$argv[7];
-if(($e["schema"]??null)!=="relational-fts-evidence-v4"||($e["status"]??null)!=="PASS"||($e["completed"]??null)!==true||!$bound||!is_string($recorded)||!hash_equals($calculated,$recorded)){fwrite(STDERR,"Final evidence is incomplete, unbound, failed, or has an invalid self-hash.\n");exit(1);}
+if(($e["schema"]??null)!=="relational-fts-evidence-v5"||($e["status"]??null)!=="PASS"||($e["completed"]??null)!==true||!$bound||!is_string($recorded)||!hash_equals($calculated,$recorded)){fwrite(STDERR,"Final evidence is incomplete, unbound, failed, or has an invalid self-hash.\n");exit(1);}
 ' "${EVIDENCE_DIR}/relational-fts-evidence.json" "${SOURCE_SHA}" "${ENGINE}" "${PROFILE}" "${DOCUMENTS}" "${ALLOW_DIRTY}" "${LANE_ID}"
 RUN_COMPLETED=1
 publish_evidence 0

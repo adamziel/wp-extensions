@@ -857,7 +857,7 @@ try {
 
     echo json_encode([
         'status' => 'PASS',
-        'schema' => 'relational-fts-mutation-generation-cas-v2',
+        'schema' => 'relational-fts-mutation-generation-cas-v4',
         'engine' => (string) getenv('WP_FTS_WC_ENGINE'),
         'source_sha' => (string) getenv('WP_FTS_SOURCE_SHA'),
         'proof_sha256' => hash_file('sha256', __FILE__),
@@ -1630,6 +1630,7 @@ function wp_fts_mutation_proof_assert(bool $condition, string $message): void
 function wp_fts_mutation_proof_production_worker_cas(): array
 {
     global $wpdb;
+    wp_fts_mutation_proof_ack_transaction_sequence_self_check();
     wp_fts_mutation_proof_assert(isset($wpdb) && is_object($wpdb), 'WordPress did not expose its production wpdb connection.');
     wp_fts_mutation_proof_assert(class_exists('WP_FTS_Plugin'), 'The installed FTS plugin is not active in the production-worker proof.');
     wp_fts_mutation_proof_assert(method_exists('WP_FTS_Index_Queue', 'is_post_job_key'), 'The installed queue lacks canonical post identity validation.');
@@ -1737,6 +1738,7 @@ function wp_fts_mutation_proof_production_worker_cas(): array
         ]));
         $summary = is_array($captured['result'] ?? null) ? $captured['result'] : [];
         $queries = is_array($captured['queries'] ?? null) ? $captured['queries'] : [];
+        $sqlEvidence = wp_fts_mutation_proof_worker_sql_evidence($queries);
         wp_fts_mutation_proof_assert((int) ($summary['analyzed'] ?? -1) === 1, 'The canonical claim must produce one production analysis.');
         wp_fts_mutation_proof_assert((int) ($summary['indexed'] ?? -1) === 1, 'The canonical claim must produce one production replacement.');
         wp_fts_mutation_proof_assert((int) ($summary['processed'] ?? -1) === 1, 'The production batch must report one distinct processed post.');
@@ -1746,7 +1748,10 @@ function wp_fts_mutation_proof_production_worker_cas(): array
         $ackIndexes = [];
         foreach ($queries as $index => $sql) {
             $upper = strtoupper((string) $sql);
-            if (str_contains($upper, 'DELETE WORK_ROW, LOCK_ROW') && str_contains($upper, strtoupper($workTable))) {
+            if (str_contains($upper, '/* WP_FTS:ATOMIC-WORKER-ACK */')
+                && wp_fts_mutation_proof_sql_is_single_dml((string) $sql, 'DELETE')
+                && str_contains($upper, strtoupper($workTable))
+            ) {
                 $ackIndexes[] = (int) $index;
             }
         }
@@ -1754,26 +1759,57 @@ function wp_fts_mutation_proof_production_worker_cas(): array
         $ackIndex = $ackIndexes[0];
         $ackSql = (string) ($queries[$ackIndex] ?? '');
         $ackUpper = strtoupper($ackSql);
+        $writerLeaseDeleteIndexes = [];
+        $writerLeasePayloads = [];
+        foreach ($queries as $index => $sql) {
+            $leasePayload = wp_fts_mutation_proof_writer_lease_insert_payload(
+                (string) $sql,
+                (string) $wpdb->options,
+                WP_FTS_Plugin::INDEX_LOCK_OPTION
+            );
+            if ($leasePayload !== null) {
+                $writerLeasePayloads[] = $leasePayload;
+            }
+            if (wp_fts_mutation_proof_writer_lease_delete_candidate(
+                (string) $sql,
+                (string) $wpdb->options,
+                WP_FTS_Plugin::INDEX_LOCK_OPTION
+            )) {
+                $writerLeaseDeleteIndexes[] = (int) $index;
+            }
+        }
+        $ackTransaction = wp_fts_mutation_proof_ack_transaction_sequence($queries, $ackIndex);
+        $transactionStartIndex = $ackTransaction['start_index'];
         $ackSequence = [
-            (string) ($queries[$ackIndex - 2] ?? ''),
+            (string) ($queries[$transactionStartIndex] ?? ''),
             (string) ($queries[$ackIndex - 1] ?? ''),
             $ackSql,
             (string) ($queries[$ackIndex + 1] ?? ''),
         ];
-        $ackSequenceValid = strtoupper(trim($ackSequence[0])) === 'START TRANSACTION'
-            && str_contains(strtoupper($ackSequence[1]), 'META:SEARCH-EPOCH')
-            && str_contains(strtoupper($ackSequence[1]), 'ON DUPLICATE KEY UPDATE')
-            && strtoupper(trim($ackSequence[3])) === 'COMMIT';
-        $ackCasValid = str_contains($ackSql, $canonicalJobKey)
-            && substr_count($ackUpper, 'WORK_ROW.JOB_KEY =') === 1
-            && substr_count($ackUpper, 'WORK_ROW.CLAIM_TOKEN =') === 1
-            && substr_count($ackUpper, 'WORK_ROW.CLAIMED_GENERATION =') === 1
-            && substr_count($ackUpper, 'WORK_ROW.GENERATION =') === 1
-            && str_contains($ackSql, WP_FTS_Plugin::INDEX_LOCK_OPTION)
-            && str_contains($ackUpper, 'LEFT JOIN')
-            && str_contains($ackUpper, 'LOCK_ROW.OPTION_VALUE =');
-        wp_fts_mutation_proof_assert($ackSequenceValid, 'Atomic acknowledgement must be ordered START, epoch UPSERT, CAS DELETE, COMMIT.');
-        wp_fts_mutation_proof_assert($ackCasValid, 'The atomic acknowledgement DELETE must CAS the canonical generation and writer option.');
+        $ackSequenceValid = $ackTransaction['valid']
+            && wp_fts_mutation_proof_epoch_upsert_valid($ackSequence[1], $workTable);
+        $ackExcludesWriterLease = !str_contains($ackSql, WP_FTS_Plugin::INDEX_LOCK_OPTION)
+            && !str_contains($ackUpper, 'LOCK_ROW')
+            && !str_contains($ackUpper, 'LEFT JOIN');
+        $ackCasValid = wp_fts_mutation_proof_ack_generation_cas_valid($ackSql, $canonicalJobKey, $workTable)
+            && $ackExcludesWriterLease;
+        $writerLeaseReleasedAfterCommit = count($writerLeaseDeleteIndexes) === 1
+            && $writerLeaseDeleteIndexes[0] > $ackIndex + 1;
+        $writerLeaseDeleteSql = count($writerLeaseDeleteIndexes) === 1
+            ? (string) ($queries[$writerLeaseDeleteIndexes[0]] ?? '')
+            : '';
+        $writerLeaseDeleteCasValid = $writerLeaseReleasedAfterCommit
+            && count($writerLeasePayloads) === 1
+            && wp_fts_mutation_proof_writer_lease_delete_valid(
+                $writerLeaseDeleteSql,
+                (string) $wpdb->options,
+                WP_FTS_Plugin::INDEX_LOCK_OPTION,
+                (string) ($writerLeasePayloads[0] ?? '')
+            );
+        wp_fts_mutation_proof_assert($ackSequenceValid, 'Atomic acknowledgement must remain inside one worker transaction immediately after the epoch UPSERT and before COMMIT.');
+        wp_fts_mutation_proof_assert($ackCasValid, 'The atomic acknowledgement DELETE must CAS only the canonical work generation.');
+        wp_fts_mutation_proof_assert($writerLeaseReleasedAfterCommit, 'The exact writer lease must remain owned through the work acknowledgement COMMIT.');
+        wp_fts_mutation_proof_assert($writerLeaseDeleteCasValid, 'The post-COMMIT writer lease DELETE must compare both its exact option name and serialized payload.');
 
         $remainingKeys = array_map('strval', $wpdb->get_col($wpdb->prepare(
             "SELECT job_key FROM `{$workTable}` WHERE kind='post' AND post_id=%d ORDER BY job_key",
@@ -1784,7 +1820,7 @@ function wp_fts_mutation_proof_production_worker_cas(): array
             "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name=%s",
             WP_FTS_Plugin::INDEX_LOCK_OPTION
         ));
-        wp_fts_mutation_proof_assert($writerLockAfter === 0, 'The atomic production acknowledgement must remove the exact writer lease.');
+        wp_fts_mutation_proof_assert($writerLockAfter === 0, 'The production batch must remove the exact writer lease after acknowledgement commits.');
 
         $searchRows = WP_FTS_Plugin::search($token, [
             'lang' => 'en',
@@ -1811,13 +1847,17 @@ function wp_fts_mutation_proof_production_worker_cas(): array
             'remaining_job_keys' => $remainingKeys,
             'search_ids' => $searchIds,
             'captured_worker_statement_count' => count($queries),
+            'sql_evidence' => $sqlEvidence,
             'atomic_ack_statement_count' => count($ackIndexes),
             'atomic_ack_sql_bytes' => strlen($ackSql),
             'atomic_ack_sql_sha256' => hash('sha256', $ackSql),
-            'atomic_ack_sequence' => ['START TRANSACTION', 'epoch UPSERT', 'generation CAS + writer DELETE', 'COMMIT'],
+            'atomic_ack_sequence' => ['START TRANSACTION', 'bounded writes then epoch UPSERT', 'generation CAS DELETE', 'COMMIT'],
             'atomic_ack_sequence_valid' => $ackSequenceValid,
             'atomic_ack_generation_cas_valid' => $ackCasValid,
-            'writer_lock_rows_after_ack' => $writerLockAfter,
+            'atomic_ack_excludes_writer_lease' => $ackExcludesWriterLease,
+            'writer_lease_released_after_commit' => $writerLeaseReleasedAfterCommit,
+            'writer_lease_delete_cas_valid' => $writerLeaseDeleteCasValid,
+            'writer_lock_rows_after_batch' => $writerLockAfter,
         ];
     } finally {
         if ($postId > 0) {
@@ -1884,6 +1924,961 @@ function wp_fts_mutation_proof_production_worker_cas(): array
     $result['health_restored'] = true;
 
     return $result;
+}
+
+/** Retain the complete bounded worker query stream for independent validation. */
+function wp_fts_mutation_proof_worker_sql_evidence(array $queries): array
+{
+    wp_fts_mutation_proof_assert(
+        $queries !== [] && count($queries) <= 32,
+        'The production worker SQL evidence must contain between one and 32 statements.'
+    );
+
+    $statements = [];
+    $totalBytes = 0;
+    $maxStatementBytes = 0;
+    foreach (array_values($queries) as $index => $sql) {
+        wp_fts_mutation_proof_assert(is_string($sql), 'Every captured production worker statement must be a string.');
+        $bytes = strlen($sql);
+        wp_fts_mutation_proof_assert(
+            $bytes > 0 && $bytes <= 1048576,
+            'Every production worker SQL evidence statement must be nonempty and at most 1 MiB.'
+        );
+        $totalBytes += $bytes;
+        wp_fts_mutation_proof_assert(
+            $totalBytes <= 4194304,
+            'The complete production worker SQL evidence must be at most 4 MiB.'
+        );
+        $maxStatementBytes = max($maxStatementBytes, $bytes);
+        $statements[] = [
+            'index' => $index,
+            'sql' => $sql,
+            'bytes' => $bytes,
+            'sha256' => hash('sha256', $sql),
+        ];
+    }
+
+    $evidence = [
+        'schema' => 'relational-fts-mutation-worker-sql-v1',
+        'statement_count' => count($statements),
+        'total_bytes' => $totalBytes,
+        'max_statement_bytes' => $maxStatementBytes,
+        'statements' => $statements,
+    ];
+    $evidence['evidence_sha256'] = wp_fts_mutation_proof_canonical_hash($evidence);
+
+    return $evidence;
+}
+
+/** Prove the lexical transaction and compare-delete checks fail closed. */
+function wp_fts_mutation_proof_ack_transaction_sequence_self_check(): void
+{
+    $valid = [
+        'SELECT writer lease',
+        'START TRANSACTION',
+        'UPDATE bounded rows',
+        "INSERT INTO wp_fts_work (job_key,generation) VALUES ('meta:search-epoch',1) ON DUPLICATE KEY UPDATE generation=generation+1",
+        'DELETE /* wp_fts:atomic-worker-ack */ FROM work',
+        'COMMIT',
+        'DELETE writer lease',
+    ];
+    wp_fts_mutation_proof_assert(
+        wp_fts_mutation_proof_ack_transaction_sequence($valid, 4)['valid'],
+        'The atomic acknowledgement transaction-control self-check rejected the canonical sequence.'
+    );
+
+    $invalid = [
+        ['intermediate COMMIT', ['START TRANSACTION', 'UPDATE bounded rows', 'COMMIT', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        ['intermediate ROLLBACK', ['START TRANSACTION', 'UPDATE bounded rows', 'ROLLBACK', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        ['nested START', ['START TRANSACTION', 'UPDATE bounded rows', 'START TRANSACTION', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        ['savepoint control', ['START TRANSACTION', 'SAVEPOINT hidden', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 3],
+        ['ALTER TABLE', ['START TRANSACTION', 'UPDATE bounded rows', 'ALTER TABLE work ADD hidden INT', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        ['LOCK TABLES', ['START TRANSACTION', 'UPDATE bounded rows', 'LOCK TABLES work WRITE', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        ['SET SESSION autocommit', ['START TRANSACTION', 'UPDATE bounded rows', 'SET SESSION autocommit=1', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        ['SET @@session.autocommit', ['START TRANSACTION', 'UPDATE bounded rows', 'SET @@session.autocommit=1', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        ['leading-comment COMMIT', ['START TRANSACTION', 'UPDATE bounded rows', "/* hidden */ -- boundary\nCOMMIT", 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        ['multi-statement DML', ['START TRANSACTION', 'UPDATE bounded rows; DELETE FROM work', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 3],
+        ['non-adjacent COMMIT', ['START TRANSACTION', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'SELECT after ack', 'COMMIT'], 2],
+        ['missing START', ['INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 1],
+    ];
+    foreach ($invalid as [$context, $queries, $ackIndex]) {
+        wp_fts_mutation_proof_assert(
+            !wp_fts_mutation_proof_ack_transaction_sequence($queries, $ackIndex)['valid'],
+            "The atomic acknowledgement transaction-control self-check accepted {$context}."
+        );
+    }
+
+    $epochUpsert = $valid[3];
+    wp_fts_mutation_proof_assert(
+        wp_fts_mutation_proof_epoch_upsert_valid($epochUpsert, 'wp_fts_work'),
+        'The epoch UPSERT self-check rejected the exact singleton increment.'
+    );
+    foreach ([
+        'SELECT text impersonation' => "SELECT 'meta:search-epoch ON DUPLICATE KEY UPDATE generation=generation+1'",
+        'wrong work table' => str_replace('wp_fts_work', 'wp_other_work', $epochUpsert),
+        'wrong meta key' => str_replace('meta:search-epoch', 'meta:other', $epochUpsert),
+        'wrong generation update' => str_replace('generation=generation+1', 'generation=1', $epochUpsert),
+        'second VALUES tuple' => str_replace(
+            "'meta:search-epoch',1) ON",
+            "'meta:search-epoch',1),('meta:other',1) ON",
+            $epochUpsert
+        ),
+        'later generation overwrite' => $epochUpsert . ', generation=1',
+    ] as $context => $invalidEpoch) {
+        wp_fts_mutation_proof_assert(
+            !wp_fts_mutation_proof_epoch_upsert_valid($invalidEpoch, 'wp_fts_work'),
+            "The epoch UPSERT self-check accepted {$context}."
+        );
+    }
+
+    $canonicalJobKey = 'post:7';
+    $constantDriver = "SELECT bounded_claims.*
+FROM (SELECT '{$canonicalJobKey}' AS job_key, '0123456789abcdef0123456789abcdef' AS claim_token, 2 AS claimed_generation, 2 AS generation) bounded_claims
+LIMIT 1";
+    $ackSql = "DELETE /* wp_fts:atomic-worker-ack */ work_row
+FROM ({$constantDriver}) claim_driver
+STRAIGHT_JOIN wp_fts_work work_row
+        ON work_row.job_key = claim_driver.job_key
+       AND work_row.claim_token = claim_driver.claim_token
+       AND work_row.claimed_generation = claim_driver.claimed_generation
+       AND work_row.generation = claim_driver.generation";
+    wp_fts_mutation_proof_assert(
+        wp_fts_mutation_proof_ack_generation_cas_valid($ackSql, $canonicalJobKey, 'wp_fts_work'),
+        'The atomic acknowledgement CAS self-check rejected the exact four predicate pairs.'
+    );
+    foreach (['job_key', 'claim_token', 'claimed_generation', 'generation'] as $field) {
+        $wrongRhs = str_replace(
+            "work_row.{$field} = claim_driver.{$field}",
+            "work_row.{$field} = claim_driver.wrong_{$field}",
+            $ackSql
+        );
+        wp_fts_mutation_proof_assert(
+            !wp_fts_mutation_proof_ack_generation_cas_valid($wrongRhs, $canonicalJobKey, 'wp_fts_work'),
+            "The atomic acknowledgement CAS self-check accepted the wrong {$field} RHS alias."
+        );
+    }
+    foreach ([
+        'OR broadening' => $ackSql . ' OR 1=1',
+        'extra predicate' => $ackSql . ' AND 1=1',
+        'extra JOIN' => str_replace(
+            'STRAIGHT_JOIN wp_fts_work work_row',
+            'JOIN wp_fts_work extra_row ON 1=1 STRAIGHT_JOIN wp_fts_work work_row',
+            $ackSql
+        ),
+        'wrong work table' => str_replace('wp_fts_work work_row', 'wp_other_work work_row', $ackSql),
+        'live-row-derived driver' => str_replace(
+            $constantDriver,
+            "SELECT job_key,claim_token,claimed_generation,generation FROM wp_fts_work WHERE job_key='{$canonicalJobKey}'",
+            $ackSql
+        ),
+    ] as $context => $broadenedAck) {
+        wp_fts_mutation_proof_assert(
+            !wp_fts_mutation_proof_ack_generation_cas_valid(
+                $broadenedAck,
+                $canonicalJobKey,
+                'wp_fts_work'
+            ),
+            "The atomic acknowledgement CAS self-check accepted {$context}."
+        );
+    }
+
+    $leasePayload = serialize([
+        'token' => '0123456789abcdef01234567',
+        'mode' => 'manual',
+        'started_at' => 100,
+        'heartbeat_at' => 100,
+        'expires_at' => 400,
+        'renewals' => 0,
+    ]);
+    $leaseInsert = "INSERT IGNORE INTO wp_options (option_name,option_value,autoload)
+SELECT '_wp_fts_index_lock','{$leasePayload}','no'
+WHERE NOT EXISTS (SELECT 1 FROM wp_options uninstall_fence WHERE uninstall_fence.option_name='_wp_fts_uninstall_fence')";
+    $extractedPayload = wp_fts_mutation_proof_writer_lease_insert_payload(
+        $leaseInsert,
+        'wp_options',
+        '_wp_fts_index_lock'
+    );
+    wp_fts_mutation_proof_assert(
+        $extractedPayload === $leasePayload,
+        'The writer lease self-check did not recover the exact acquired serialized payload.'
+    );
+    $leaseDelete = "DELETE FROM wp_options WHERE option_name = '_wp_fts_index_lock' AND option_value = '{$leasePayload}'";
+    wp_fts_mutation_proof_assert(
+        wp_fts_mutation_proof_writer_lease_delete_valid(
+            $leaseDelete,
+            'wp_options',
+            '_wp_fts_index_lock',
+            $leasePayload
+        ),
+        'The writer lease self-check rejected the exact post-COMMIT compare-delete.'
+    );
+    foreach ([
+        'option-name column RHS' => "DELETE FROM wp_options WHERE option_name = option_name AND option_value = '{$leasePayload}'",
+        'payload column RHS' => "DELETE FROM wp_options WHERE option_name = '_wp_fts_index_lock' AND option_value = option_value",
+        'wrong payload literal' => "DELETE FROM wp_options WHERE option_name = '_wp_fts_index_lock' AND option_value = 'a:0:{}'",
+    ] as $context => $invalidDelete) {
+        wp_fts_mutation_proof_assert(
+            !wp_fts_mutation_proof_writer_lease_delete_valid(
+                $invalidDelete,
+                'wp_options',
+                '_wp_fts_index_lock',
+                $leasePayload
+            ),
+            "The writer lease compare-delete self-check accepted {$context}."
+        );
+    }
+}
+
+/**
+ * Prove the marked ACK closes one uninterrupted DML-only transaction.
+ *
+ * @param string[] $queries
+ * @return array{valid:bool,start_index:int}
+ */
+function wp_fts_mutation_proof_ack_transaction_sequence(array $queries, int $ackIndex): array
+{
+    if ($ackIndex < 0 || $ackIndex >= count($queries)) {
+        return ['valid' => false, 'start_index' => -1];
+    }
+
+    $controls = [];
+    $tokensByIndex = [];
+    $commentsByIndex = [];
+    foreach ($queries as $index => $sql) {
+        $comments = [];
+        $tokens = wp_fts_mutation_proof_sql_tokens((string) $sql, $comments);
+        if ($tokens === null) {
+            return ['valid' => false, 'start_index' => -1];
+        }
+        $tokensByIndex[(int) $index] = $tokens;
+        $commentsByIndex[(int) $index] = $comments;
+        $control = wp_fts_mutation_proof_transaction_control_tokens($tokens);
+        if ($control !== null) {
+            $controls[] = ['index' => (int) $index, 'control' => $control];
+        }
+    }
+
+    $startIndex = (int) ($controls[0]['index'] ?? -1);
+    $valid = count($controls) === 2
+        && ($controls[0]['control'] ?? null) === 'START TRANSACTION'
+        && wp_fts_mutation_proof_sql_tokens_are_exact_keywords(
+            $tokensByIndex[$startIndex] ?? [],
+            ['START', 'TRANSACTION']
+        )
+        && $startIndex < $ackIndex
+        && ($controls[1]['control'] ?? null) === 'COMMIT'
+        && wp_fts_mutation_proof_sql_tokens_are_exact_keywords(
+            $tokensByIndex[$ackIndex + 1] ?? [],
+            ['COMMIT']
+        )
+        && ($controls[1]['index'] ?? null) === $ackIndex + 1
+        && wp_fts_mutation_proof_sql_comment_count(
+            $commentsByIndex[$ackIndex] ?? [],
+            'wp_fts:atomic-worker-ack'
+        ) === 1;
+    if (!$valid) {
+        return ['valid' => false, 'start_index' => $startIndex];
+    }
+
+    for ($index = $startIndex + 1; $index <= $ackIndex; $index++) {
+        if (!wp_fts_mutation_proof_sql_tokens_are_single_dml($tokensByIndex[$index] ?? [])) {
+            return ['valid' => false, 'start_index' => $startIndex];
+        }
+    }
+
+    return ['valid' => true, 'start_index' => $startIndex];
+}
+
+/** Prove the pre-ACK statement increments the singleton epoch in the work table. */
+function wp_fts_mutation_proof_epoch_upsert_valid(string $sql, string $workTable): bool
+{
+    $tokens = wp_fts_mutation_proof_sql_tokens($sql);
+
+    return $tokens !== null
+        && wp_fts_mutation_proof_sql_tokens_are_single_dml($tokens, 'INSERT')
+        && wp_fts_mutation_proof_sql_token_is_keyword($tokens[1] ?? null, 'INTO')
+        && wp_fts_mutation_proof_sql_identifier_matches($tokens[2] ?? null, $workTable)
+        && wp_fts_mutation_proof_sql_token_value_count($tokens, 'JOB_KEY') === 1
+        && wp_fts_mutation_proof_sql_string_value_count($tokens, 'meta:search-epoch') === 1
+        && wp_fts_mutation_proof_sql_single_values_tuple_before_on_duplicate($tokens)
+        && wp_fts_mutation_proof_sql_token_sequence_count(
+            $tokens,
+            ['ON', 'DUPLICATE', 'KEY', 'UPDATE', 'GENERATION', '=', 'GENERATION', '+', '1']
+        ) === 1
+        && wp_fts_mutation_proof_sql_token_value_count($tokens, 'GENERATION') === 3
+        && wp_fts_mutation_proof_sql_token_value_count($tokens, 'SELECT') === 0;
+}
+
+/** @param list<array{type:string,value:string}> $tokens */
+function wp_fts_mutation_proof_sql_single_values_tuple_before_on_duplicate(array $tokens): bool
+{
+    $valuesIndex = null;
+    foreach ($tokens as $index => $token) {
+        if (wp_fts_mutation_proof_sql_token_is_keyword($token, 'VALUES')) {
+            if ($valuesIndex !== null) {
+                return false;
+            }
+            $valuesIndex = (int) $index;
+        }
+    }
+    if ($valuesIndex === null || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[$valuesIndex + 1] ?? null, '(')) {
+        return false;
+    }
+
+    $depth = 0;
+    $afterTuple = null;
+    for ($index = $valuesIndex + 1, $count = count($tokens); $index < $count; $index++) {
+        if (wp_fts_mutation_proof_sql_token_is_symbol($tokens[$index], '(')) {
+            $depth++;
+        } elseif (wp_fts_mutation_proof_sql_token_is_symbol($tokens[$index], ')')) {
+            $depth--;
+            if ($depth === 0) {
+                $afterTuple = $index + 1;
+                break;
+            }
+            if ($depth < 0) {
+                return false;
+            }
+        }
+    }
+    if ($afterTuple === null) {
+        return false;
+    }
+
+    return wp_fts_mutation_proof_sql_token_sequence_count(
+        array_slice($tokens, $afterTuple, 4),
+        ['ON', 'DUPLICATE', 'KEY', 'UPDATE']
+    ) === 1;
+}
+
+/** Require all four generation predicates to compare the exact driver fields. */
+function wp_fts_mutation_proof_ack_generation_cas_valid(
+    string $sql,
+    string $canonicalJobKey,
+    string $workTable
+): bool
+{
+    $comments = [];
+    $tokens = wp_fts_mutation_proof_sql_tokens($sql, $comments);
+    if (
+        $tokens === null
+        || !wp_fts_mutation_proof_sql_tokens_are_single_dml($tokens, 'DELETE')
+        || wp_fts_mutation_proof_sql_comment_count($comments, 'wp_fts:atomic-worker-ack') !== 1
+        || !wp_fts_mutation_proof_ack_constant_driver_valid(
+            $tokens,
+            $canonicalJobKey,
+            $workTable
+        )
+    ) {
+        return false;
+    }
+
+    $onTail = ['ON'];
+    foreach (['JOB_KEY', 'CLAIM_TOKEN', 'CLAIMED_GENERATION', 'GENERATION'] as $field) {
+        $lhs = ['WORK_ROW', '.', $field, '='];
+        $pair = [...$lhs, 'CLAIM_DRIVER', '.', $field];
+        if (
+            wp_fts_mutation_proof_sql_token_sequence_count($tokens, $lhs) !== 1
+            || wp_fts_mutation_proof_sql_token_sequence_count($tokens, $pair) !== 1
+        ) {
+            return false;
+        }
+        if (count($onTail) > 1) {
+            $onTail[] = 'AND';
+        }
+        array_push($onTail, ...$pair);
+    }
+
+    return wp_fts_mutation_proof_sql_token_value_count($tokens, 'ON') === 1
+        && wp_fts_mutation_proof_sql_token_sequence_count($tokens, $onTail) === 1
+        && wp_fts_mutation_proof_sql_token_sequence_is_tail($tokens, $onTail);
+}
+
+/**
+ * Bind the one-row claim snapshot to constants, never current work-table data.
+ *
+ * @param list<array{type:string,value:string}> $tokens
+ */
+function wp_fts_mutation_proof_ack_constant_driver_valid(
+    array $tokens,
+    string $canonicalJobKey,
+    string $workTable
+): bool {
+    $prefix = ['DELETE', 'WORK_ROW', 'FROM', '(', 'SELECT', 'BOUNDED_CLAIMS', '.', '*', 'FROM', '(', 'SELECT'];
+    if (
+        wp_fts_mutation_proof_sql_token_sequence_count(array_slice($tokens, 0, 11), $prefix) !== 1
+        || ($tokens[11]['type'] ?? null) !== 'string'
+        || ($tokens[11]['value'] ?? null) !== $canonicalJobKey
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[12] ?? null, 'AS')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[13] ?? null, 'JOB_KEY')
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[14] ?? null, ',')
+        || ($tokens[15]['type'] ?? null) !== 'string'
+        || strlen((string) ($tokens[15]['value'] ?? '')) !== 32
+        || !wp_fts_mutation_proof_ascii_hex_string((string) ($tokens[15]['value'] ?? ''))
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[16] ?? null, 'AS')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[17] ?? null, 'CLAIM_TOKEN')
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[18] ?? null, ',')
+        || !wp_fts_mutation_proof_sql_token_is_positive_decimal($tokens[19] ?? null)
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[20] ?? null, 'AS')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[21] ?? null, 'CLAIMED_GENERATION')
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[22] ?? null, ',')
+        || !wp_fts_mutation_proof_sql_token_is_positive_decimal($tokens[23] ?? null)
+        || ($tokens[23]['value'] ?? null) !== ($tokens[19]['value'] ?? null)
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[24] ?? null, 'AS')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[25] ?? null, 'GENERATION')
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[26] ?? null, ')')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[27] ?? null, 'BOUNDED_CLAIMS')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[28] ?? null, 'LIMIT')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[29] ?? null, '1')
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[30] ?? null, ')')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[31] ?? null, 'CLAIM_DRIVER')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[32] ?? null, 'STRAIGHT_JOIN')
+        || !wp_fts_mutation_proof_sql_identifier_matches($tokens[33] ?? null, $workTable)
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[34] ?? null, 'WORK_ROW')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[35] ?? null, 'ON')
+    ) {
+        return false;
+    }
+
+    return wp_fts_mutation_proof_sql_string_value_count($tokens, $canonicalJobKey) === 1
+        && wp_fts_mutation_proof_sql_token_value_count($tokens, 'SELECT') === 2
+        && wp_fts_mutation_proof_sql_token_value_count($tokens, 'FROM') === 2;
+}
+
+/** Return the exact payload literal from the worker's uncontended lease INSERT. */
+function wp_fts_mutation_proof_writer_lease_insert_payload(
+    string $sql,
+    string $optionsTable,
+    string $optionName
+): ?string {
+    $tokens = wp_fts_mutation_proof_sql_tokens($sql);
+    if (
+        $tokens === null
+        || !wp_fts_mutation_proof_sql_tokens_are_single_dml($tokens, 'INSERT')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[1] ?? null, 'IGNORE')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[2] ?? null, 'INTO')
+        || !wp_fts_mutation_proof_sql_identifier_matches($tokens[3] ?? null, $optionsTable)
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[4] ?? null, '(')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[5] ?? null, 'OPTION_NAME')
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[6] ?? null, ',')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[7] ?? null, 'OPTION_VALUE')
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[8] ?? null, ',')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[9] ?? null, 'AUTOLOAD')
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[10] ?? null, ')')
+    ) {
+        return null;
+    }
+
+    $valueIndex = null;
+    if (wp_fts_mutation_proof_sql_token_is_keyword($tokens[11] ?? null, 'SELECT')) {
+        $valueIndex = 12;
+    } elseif (
+        wp_fts_mutation_proof_sql_token_is_keyword($tokens[11] ?? null, 'VALUES')
+        && wp_fts_mutation_proof_sql_token_is_symbol($tokens[12] ?? null, '(')
+    ) {
+        $valueIndex = 13;
+    }
+    if (
+        $valueIndex === null
+        || ($tokens[$valueIndex]['type'] ?? null) !== 'string'
+        || ($tokens[$valueIndex]['value'] ?? null) !== $optionName
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[$valueIndex + 1] ?? null, ',')
+        || ($tokens[$valueIndex + 2]['type'] ?? null) !== 'string'
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[$valueIndex + 3] ?? null, ',')
+        || ($tokens[$valueIndex + 4]['type'] ?? null) !== 'string'
+        || ($tokens[$valueIndex + 4]['value'] ?? null) !== 'no'
+    ) {
+        return null;
+    }
+
+    $payload = (string) $tokens[$valueIndex + 2]['value'];
+
+    return wp_fts_mutation_proof_serialized_writer_payload_valid($payload) ? $payload : null;
+}
+
+/** Identify an option-table DELETE that names the writer lease literal. */
+function wp_fts_mutation_proof_writer_lease_delete_candidate(
+    string $sql,
+    string $optionsTable,
+    string $optionName
+): bool {
+    $tokens = wp_fts_mutation_proof_sql_tokens($sql);
+    if (
+        $tokens === null
+        || !wp_fts_mutation_proof_sql_tokens_are_single_dml($tokens, 'DELETE')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[1] ?? null, 'FROM')
+        || !wp_fts_mutation_proof_sql_identifier_matches($tokens[2] ?? null, $optionsTable)
+    ) {
+        return false;
+    }
+
+    return wp_fts_mutation_proof_sql_string_value_count($tokens, $optionName) === 1;
+}
+
+/** Prove the release DELETE compares exact name and acquired payload literals. */
+function wp_fts_mutation_proof_writer_lease_delete_valid(
+    string $sql,
+    string $optionsTable,
+    string $optionName,
+    string $expectedPayload
+): bool {
+    $tokens = wp_fts_mutation_proof_sql_tokens($sql);
+
+    return $tokens !== null
+        && count($tokens) === 11
+        && wp_fts_mutation_proof_sql_tokens_are_single_dml($tokens, 'DELETE')
+        && wp_fts_mutation_proof_sql_token_is_keyword($tokens[1] ?? null, 'FROM')
+        && wp_fts_mutation_proof_sql_identifier_matches($tokens[2] ?? null, $optionsTable)
+        && wp_fts_mutation_proof_sql_token_is_keyword($tokens[3] ?? null, 'WHERE')
+        && wp_fts_mutation_proof_sql_token_is_keyword($tokens[4] ?? null, 'OPTION_NAME')
+        && wp_fts_mutation_proof_sql_token_is_symbol($tokens[5] ?? null, '=')
+        && ($tokens[6]['type'] ?? null) === 'string'
+        && ($tokens[6]['value'] ?? null) === $optionName
+        && wp_fts_mutation_proof_sql_token_is_keyword($tokens[7] ?? null, 'AND')
+        && wp_fts_mutation_proof_sql_token_is_keyword($tokens[8] ?? null, 'OPTION_VALUE')
+        && wp_fts_mutation_proof_sql_token_is_symbol($tokens[9] ?? null, '=')
+        && ($tokens[10]['type'] ?? null) === 'string'
+        && ($tokens[10]['value'] ?? null) === $expectedPayload
+        && wp_fts_mutation_proof_serialized_writer_payload_valid($expectedPayload);
+}
+
+/** Validate the exact scalar shape serialized by acquire_index_lock(). */
+function wp_fts_mutation_proof_serialized_writer_payload_valid(string $serialized): bool
+{
+    $payload = @unserialize($serialized, ['allowed_classes' => false]);
+    if (
+        !is_array($payload)
+        || array_keys($payload) !== ['token', 'mode', 'started_at', 'heartbeat_at', 'expires_at', 'renewals']
+        || serialize($payload) !== $serialized
+        || !is_string($payload['token'])
+        || strlen($payload['token']) !== 24
+        || !wp_fts_mutation_proof_ascii_hex_string($payload['token'])
+        || $payload['mode'] !== 'manual'
+        || !is_int($payload['started_at'])
+        || !is_int($payload['heartbeat_at'])
+        || !is_int($payload['expires_at'])
+        || !is_int($payload['renewals'])
+    ) {
+        return false;
+    }
+
+    return $payload['started_at'] <= $payload['heartbeat_at']
+        && $payload['heartbeat_at'] < $payload['expires_at']
+        && $payload['renewals'] >= 0;
+}
+
+/** Classify explicit MySQL transaction controls after lexical comment removal. */
+function wp_fts_mutation_proof_transaction_control(string $sql): ?string
+{
+    $tokens = wp_fts_mutation_proof_sql_tokens($sql);
+
+    return $tokens === null ? 'INVALID SQL' : wp_fts_mutation_proof_transaction_control_tokens($tokens);
+}
+
+/** @param list<array{type:string,value:string}> $tokens */
+function wp_fts_mutation_proof_transaction_control_tokens(array $tokens): ?string
+{
+    foreach (['COMMIT', 'ROLLBACK', 'BEGIN', 'SAVEPOINT', 'XA'] as $control) {
+        if (wp_fts_mutation_proof_sql_token_is_keyword($tokens[0] ?? null, $control)) {
+            return $control;
+        }
+    }
+    if (wp_fts_mutation_proof_sql_token_is_keyword($tokens[0] ?? null, 'START')) {
+        return wp_fts_mutation_proof_sql_token_is_keyword($tokens[1] ?? null, 'TRANSACTION')
+            ? 'START TRANSACTION'
+            : 'START';
+    }
+    if (
+        wp_fts_mutation_proof_sql_token_is_keyword($tokens[0] ?? null, 'RELEASE')
+        && wp_fts_mutation_proof_sql_token_is_keyword($tokens[1] ?? null, 'SAVEPOINT')
+    ) {
+        return 'RELEASE SAVEPOINT';
+    }
+    if (
+        wp_fts_mutation_proof_sql_token_is_keyword($tokens[0] ?? null, 'LOCK')
+        && wp_fts_mutation_proof_sql_token_is_keyword($tokens[1] ?? null, 'TABLES')
+    ) {
+        return 'LOCK TABLES';
+    }
+    if (
+        wp_fts_mutation_proof_sql_token_is_keyword($tokens[0] ?? null, 'UNLOCK')
+        && wp_fts_mutation_proof_sql_token_is_keyword($tokens[1] ?? null, 'TABLES')
+    ) {
+        return 'UNLOCK TABLES';
+    }
+    if (wp_fts_mutation_proof_sql_token_is_keyword($tokens[0] ?? null, 'SET')) {
+        foreach ($tokens as $token) {
+            if (wp_fts_mutation_proof_sql_token_is_keyword($token, 'AUTOCOMMIT')) {
+                return 'SET AUTOCOMMIT';
+            }
+            if (wp_fts_mutation_proof_sql_token_is_keyword($token, 'TRANSACTION')) {
+                return 'SET TRANSACTION';
+            }
+        }
+    }
+
+    return null;
+}
+
+/** Require a comment-free, semicolon-free statement headed by one DML verb. */
+function wp_fts_mutation_proof_sql_is_single_dml(string $sql, ?string $requiredVerb = null): bool
+{
+    $tokens = wp_fts_mutation_proof_sql_tokens($sql);
+
+    return $tokens !== null && wp_fts_mutation_proof_sql_tokens_are_single_dml($tokens, $requiredVerb);
+}
+
+/** @param list<array{type:string,value:string}> $tokens */
+function wp_fts_mutation_proof_sql_tokens_are_single_dml(array $tokens, ?string $requiredVerb = null): bool
+{
+    $verbs = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'REPLACE'];
+    $verb = null;
+    foreach ($verbs as $candidate) {
+        if (wp_fts_mutation_proof_sql_token_is_keyword($tokens[0] ?? null, $candidate)) {
+            $verb = $candidate;
+            break;
+        }
+    }
+    if ($verb === null || ($requiredVerb !== null && $verb !== strtoupper($requiredVerb))) {
+        return false;
+    }
+    foreach ($tokens as $token) {
+        if (wp_fts_mutation_proof_sql_token_is_symbol($token, ';')) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/** @param list<array{type:string,value:string}> $tokens @param string[] $keywords */
+function wp_fts_mutation_proof_sql_tokens_are_exact_keywords(array $tokens, array $keywords): bool
+{
+    if (count($tokens) !== count($keywords)) {
+        return false;
+    }
+    foreach ($keywords as $index => $keyword) {
+        if (!wp_fts_mutation_proof_sql_token_is_keyword($tokens[$index] ?? null, $keyword)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/** @param array{type:string,value:string}|null $token */
+function wp_fts_mutation_proof_sql_token_is_keyword(?array $token, string $keyword): bool
+{
+    return in_array($token['type'] ?? null, ['word', 'identifier'], true)
+        && strtoupper((string) ($token['value'] ?? '')) === strtoupper($keyword);
+}
+
+/** @param array{type:string,value:string}|null $token */
+function wp_fts_mutation_proof_sql_token_is_symbol(?array $token, string $symbol): bool
+{
+    return ($token['type'] ?? null) === 'symbol' && ($token['value'] ?? null) === $symbol;
+}
+
+/** @param array{type:string,value:string}|null $token */
+function wp_fts_mutation_proof_sql_token_is_positive_decimal(?array $token): bool
+{
+    $value = (string) ($token['value'] ?? '');
+    if (($token['type'] ?? null) !== 'word' || $value === '' || $value[0] === '0') {
+        return false;
+    }
+    for ($offset = 0, $length = strlen($value); $offset < $length; $offset++) {
+        if (!str_contains('0123456789', $value[$offset])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/** @param array{type:string,value:string}|null $token */
+function wp_fts_mutation_proof_sql_identifier_matches(?array $token, string $identifier): bool
+{
+    return in_array($token['type'] ?? null, ['word', 'identifier'], true)
+        && strcasecmp((string) ($token['value'] ?? ''), $identifier) === 0;
+}
+
+/** @param list<array{type:string,value:string}> $tokens @param string[] $sequence */
+function wp_fts_mutation_proof_sql_token_sequence_count(array $tokens, array $sequence): int
+{
+    $count = 0;
+    $limit = count($tokens) - count($sequence);
+    for ($offset = 0; $offset <= $limit; $offset++) {
+        $matches = true;
+        foreach ($sequence as $index => $expected) {
+            $token = $tokens[$offset + $index] ?? null;
+            $matches = strlen($expected) === 1 && wp_fts_mutation_proof_sql_is_symbol_character($expected)
+                ? wp_fts_mutation_proof_sql_token_is_symbol($token, $expected)
+                : wp_fts_mutation_proof_sql_token_is_keyword($token, $expected);
+            if (!$matches) {
+                break;
+            }
+        }
+        if ($matches) {
+            $count++;
+        }
+    }
+
+    return $count;
+}
+
+/** @param list<array{type:string,value:string}> $tokens @param string[] $sequence */
+function wp_fts_mutation_proof_sql_token_sequence_is_tail(array $tokens, array $sequence): bool
+{
+    if (count($tokens) < count($sequence)) {
+        return false;
+    }
+
+    return wp_fts_mutation_proof_sql_token_sequence_count(
+        array_slice($tokens, count($tokens) - count($sequence)),
+        $sequence
+    ) === 1;
+}
+
+/** @param list<array{type:string,value:string}> $tokens */
+function wp_fts_mutation_proof_sql_token_value_count(array $tokens, string $value): int
+{
+    $count = 0;
+    foreach ($tokens as $token) {
+        if (wp_fts_mutation_proof_sql_token_is_keyword($token, $value)) {
+            $count++;
+        }
+    }
+
+    return $count;
+}
+
+/** @param list<array{type:string,value:string}> $tokens */
+function wp_fts_mutation_proof_sql_string_value_count(array $tokens, string $value): int
+{
+    $count = 0;
+    foreach ($tokens as $token) {
+        if (($token['type'] ?? null) === 'string' && ($token['value'] ?? null) === $value) {
+            $count++;
+        }
+    }
+
+    return $count;
+}
+
+/** @param string[] $comments */
+function wp_fts_mutation_proof_sql_comment_count(array $comments, string $expected): int
+{
+    $count = 0;
+    foreach ($comments as $comment) {
+        if (strcasecmp(trim($comment), $expected) === 0) {
+            $count++;
+        }
+    }
+
+    return $count;
+}
+
+/**
+ * Tokenize the small SQL surface needed by the transaction proof.
+ *
+ * Ordinary comments are whitespace. MySQL/MariaDB executable comments are
+ * rejected because treating their contents as comments could hide a boundary.
+ *
+ * @param string[]|null $comments
+ * @return list<array{type:string,value:string}>|null
+ */
+function wp_fts_mutation_proof_sql_tokens(string $sql, ?array &$comments = null): ?array
+{
+    $tokens = [];
+    $comments = [];
+    $length = strlen($sql);
+    $offset = 0;
+    while ($offset < $length) {
+        $character = $sql[$offset];
+        if (wp_fts_mutation_proof_sql_is_space($character)) {
+            $offset++;
+            continue;
+        }
+        if ($character === '#') {
+            wp_fts_mutation_proof_sql_skip_line_comment($sql, $offset);
+            continue;
+        }
+        if (
+            $character === '-'
+            && ($sql[$offset + 1] ?? '') === '-'
+            && (($sql[$offset + 2] ?? '') === '' || wp_fts_mutation_proof_sql_is_space($sql[$offset + 2]))
+        ) {
+            wp_fts_mutation_proof_sql_skip_line_comment($sql, $offset);
+            continue;
+        }
+        if ($character === '/' && ($sql[$offset + 1] ?? '') === '*') {
+            $third = $sql[$offset + 2] ?? '';
+            $fourth = $sql[$offset + 3] ?? '';
+            if ($third === '!' || ((strtoupper($third) === 'M') && $fourth === '!')) {
+                return null;
+            }
+            $end = strpos($sql, '*/', $offset + 2);
+            if ($end === false) {
+                return null;
+            }
+            $comments[] = substr($sql, $offset + 2, $end - $offset - 2);
+            $offset = $end + 2;
+            continue;
+        }
+        if ($character === "'" || $character === '"') {
+            $token = wp_fts_mutation_proof_sql_read_quoted($sql, $offset, $character, 'string');
+            if ($token === null) {
+                return null;
+            }
+            $tokens[] = $token;
+            continue;
+        }
+        if ($character === '`') {
+            $token = wp_fts_mutation_proof_sql_read_quoted($sql, $offset, '`', 'identifier');
+            if ($token === null) {
+                return null;
+            }
+            $tokens[] = $token;
+            continue;
+        }
+        if (wp_fts_mutation_proof_sql_is_symbol_character($character)) {
+            $tokens[] = ['type' => 'symbol', 'value' => $character];
+            $offset++;
+            continue;
+        }
+
+        $start = $offset;
+        while ($offset < $length) {
+            $current = $sql[$offset];
+            if (
+                wp_fts_mutation_proof_sql_is_space($current)
+                || $current === "'"
+                || $current === '"'
+                || $current === '`'
+                || $current === '#'
+                || wp_fts_mutation_proof_sql_is_symbol_character($current)
+            ) {
+                break;
+            }
+            $offset++;
+        }
+        if ($offset === $start) {
+            return null;
+        }
+        $tokens[] = ['type' => 'word', 'value' => substr($sql, $start, $offset - $start)];
+    }
+
+    return $tokens;
+}
+
+/** @return array{type:string,value:string}|null */
+function wp_fts_mutation_proof_sql_read_quoted(
+    string $sql,
+    int &$offset,
+    string $quote,
+    string $type
+): ?array {
+    $length = strlen($sql);
+    $offset++;
+    $value = '';
+    while ($offset < $length) {
+        $character = $sql[$offset];
+        if ($character === $quote) {
+            if (($sql[$offset + 1] ?? '') === $quote) {
+                $value .= $quote;
+                $offset += 2;
+                continue;
+            }
+            $offset++;
+            return ['type' => $type, 'value' => $value];
+        }
+        if ($character === '\\') {
+            if ($offset + 1 >= $length) {
+                return null;
+            }
+            $escaped = $sql[$offset + 1];
+            $value .= match ($escaped) {
+                '0' => "\0",
+                'b' => "\x08",
+                'n' => "\n",
+                'r' => "\r",
+                't' => "\t",
+                'Z' => chr(26),
+                default => $escaped,
+            };
+            $offset += 2;
+            continue;
+        }
+        $value .= $character;
+        $offset++;
+    }
+
+    return null;
+}
+
+/** Advance to the byte after a line comment's newline, or end of input. */
+function wp_fts_mutation_proof_sql_skip_line_comment(string $sql, int &$offset): void
+{
+    $length = strlen($sql);
+    while ($offset < $length && $sql[$offset] !== "\n" && $sql[$offset] !== "\r") {
+        $offset++;
+    }
+    while ($offset < $length && ($sql[$offset] === "\n" || $sql[$offset] === "\r")) {
+        $offset++;
+    }
+}
+
+/** SQL whitespace bytes accepted by MySQL around keywords and comments. */
+function wp_fts_mutation_proof_sql_is_space(string $character): bool
+{
+    return str_contains(" \t\r\n\f\v", $character);
+}
+
+/** Split punctuation needed by controls, qualified names, and predicates. */
+function wp_fts_mutation_proof_sql_is_symbol_character(string $character): bool
+{
+    return str_contains('();,.=@+-*/<>!|&:^%?', $character);
+}
+
+/** Validate the generated writer token without a regexp parser shortcut. */
+function wp_fts_mutation_proof_ascii_hex_string(string $value): bool
+{
+    if ($value === '') {
+        return false;
+    }
+    for ($offset = 0, $length = strlen($value); $offset < $length; $offset++) {
+        if (!str_contains('0123456789abcdef', $value[$offset])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/** Hash maps with stable key order while retaining statement-list order. */
+function wp_fts_mutation_proof_canonical_hash(mixed $value): string
+{
+    return hash('sha256', json_encode(
+        wp_fts_mutation_proof_canonicalize($value),
+        JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR
+    ));
+}
+
+/** Sort maps recursively without treating ordered lists as maps. */
+function wp_fts_mutation_proof_canonicalize(mixed $value): mixed
+{
+    if (!is_array($value)) {
+        return $value;
+    }
+    if (array_is_list($value)) {
+        return array_map('wp_fts_mutation_proof_canonicalize', $value);
+    }
+    ksort($value, SORT_STRING);
+    foreach ($value as $key => $child) {
+        $value[$key] = wp_fts_mutation_proof_canonicalize($child);
+    }
+
+    return $value;
 }
 
 /** @return array{result:mixed,queries:string[]} */

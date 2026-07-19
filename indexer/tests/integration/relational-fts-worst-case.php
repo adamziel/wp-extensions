@@ -10,7 +10,7 @@ declare(strict_types=1);
  * prerequisites are absent; this proof never reports a successful skip.
  */
 
-const WP_FTS_WC_EVIDENCE_SCHEMA = 'relational-fts-evidence-v4';
+const WP_FTS_WC_EVIDENCE_SCHEMA = 'relational-fts-evidence-v5';
 const WP_FTS_WC_IMMUTABLE_BASELINE_SHA = '36a26f4ad1aaef9758922f24677069045c5291ab';
 const WP_FTS_WC_MANIFEST_OPTION = 'wp_fts_relational_wc_manifest';
 const WP_FTS_WC_POST_TITLE_PREFIX = 'WP FTS relational worst case ';
@@ -1462,7 +1462,7 @@ function wp_fts_wc_validate(): array
         'mutation_fence_real_database_artifact',
         'source-bound three-connection PASS',
         [$mutationFence['schema'] ?? null, $mutationFence['status'] ?? null, $mutationFence['connections'] ?? null],
-        ($mutationFence['schema'] ?? null) === 'relational-fts-mutation-generation-cas-v2'
+        ($mutationFence['schema'] ?? null) === 'relational-fts-mutation-generation-cas-v4'
             && ($mutationFence['status'] ?? null) === 'PASS'
             && (int) ($mutationFence['connections'] ?? 0) === 3
     );
@@ -1572,22 +1572,34 @@ function wp_fts_wc_validate(): array
     $atomicAckBytes = (int) ($productionWorkerCas['atomic_ack_sql_bytes'] ?? PHP_INT_MAX);
     $gates[] = wp_fts_wc_gate(
         'mutation_fence_production_worker_atomic_ack',
-        [1, true, true, 0, '<= 4096', 'sha256'],
+        [1, true, true, true, true, true, 0, '<= 4096', 'sha256'],
         [
             $productionWorkerCas['atomic_ack_statement_count'] ?? null,
             $productionWorkerCas['atomic_ack_sequence_valid'] ?? null,
             $productionWorkerCas['atomic_ack_generation_cas_valid'] ?? null,
-            $productionWorkerCas['writer_lock_rows_after_ack'] ?? null,
+            $productionWorkerCas['atomic_ack_excludes_writer_lease'] ?? null,
+            $productionWorkerCas['writer_lease_released_after_commit'] ?? null,
+            $productionWorkerCas['writer_lease_delete_cas_valid'] ?? null,
+            $productionWorkerCas['writer_lock_rows_after_batch'] ?? null,
             $atomicAckBytes,
             $productionWorkerCas['atomic_ack_sql_sha256'] ?? null,
         ],
         (int) ($productionWorkerCas['atomic_ack_statement_count'] ?? -1) === 1
             && ($productionWorkerCas['atomic_ack_sequence_valid'] ?? null) === true
             && ($productionWorkerCas['atomic_ack_generation_cas_valid'] ?? null) === true
-            && (int) ($productionWorkerCas['writer_lock_rows_after_ack'] ?? -1) === 0
+            && ($productionWorkerCas['atomic_ack_excludes_writer_lease'] ?? null) === true
+            && ($productionWorkerCas['writer_lease_released_after_commit'] ?? null) === true
+            && ($productionWorkerCas['writer_lease_delete_cas_valid'] ?? null) === true
+            && (int) ($productionWorkerCas['writer_lock_rows_after_batch'] ?? -1) === 0
             && $atomicAckBytes > 0
             && $atomicAckBytes <= 4096
             && wp_fts_wc_is_lowercase_sha256($productionWorkerCas['atomic_ack_sql_sha256'] ?? null)
+    );
+    $gates[] = wp_fts_wc_gate(
+        'mutation_fence_production_worker_sql_evidence',
+        ['relational-fts-mutation-worker-sql-v1', '<=32 statements', '<=1 MiB/statement', '<=4 MiB total', 'self-hash'],
+        $productionWorkerCas['sql_evidence'] ?? null,
+        wp_fts_wc_mutation_worker_sql_evidence_valid($productionWorkerCas)
     );
     $expectedCasCleanup = ['posts' => 0, 'documents' => 0, 'postings' => 0, 'terms' => 0, 'work' => 0, 'writer_locks' => 0];
     $gates[] = wp_fts_wc_gate(
@@ -1739,7 +1751,7 @@ function wp_fts_wc_validate(): array
         'migration_ambiguous_morphology_or_post_migration_rerun_stable',
         'migration_ambiguous_morphology_and_v4_oracle_ordered_score_parity',
         'migration_ambiguous_morphology_and_post_migration_rerun_stable',
-    ], 'relational-fts-migration-evidence-v4'));
+    ], 'relational-fts-migration-evidence-v5'));
     $migrationDisk = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration-disk.json');
     array_push($gates, ...wp_fts_wc_require_evidence_gates($migrationDisk, 'physical migration disk monitor', [
         'migration_physical_disk_sample_count',
@@ -1907,7 +1919,7 @@ function wp_fts_wc_validate(): array
     $gates[] = wp_fts_wc_gate('indexing_rebuild_amplification_measured', 'finite positive surface/lexical ratio and postings/document', [$surfaceToLexicalRatio, $postingRowsPerDocument], is_finite($surfaceToLexicalRatio) && $surfaceToLexicalRatio > 0.0 && $postingRowsPerDocument > 0.0);
     $gates[] = wp_fts_wc_gate('indexing_rebuild_analyzed_document_count', (int) ($indexingPrepare['documents'] ?? -1), $analyzedDocuments, $analyzedDocuments > 0 && $analyzedDocuments === (int) ($indexingPrepare['documents'] ?? -1));
     $gates[] = wp_fts_wc_gate('indexing_rebuild_committed_document_count', (int) ($indexingPrepare['documents'] ?? -1), $committedDocuments, $committedDocuments > 0 && $committedDocuments === (int) ($indexingPrepare['documents'] ?? -1) && $rebuiltDocuments === $committedDocuments);
-    $gates[] = wp_fts_wc_gate('resource_evidence_binding', [$profile['name'], $profile['documents'], wp_fts_wc_required_env('WP_FTS_WC_ENGINE'), wp_fts_wc_required_env('WP_FTS_HARNESS_SHA256')], [$resources['profile'] ?? null, (int) ($resources['documents'] ?? -1), $resources['engine'] ?? null, $resources['harness_sha256'] ?? null], ($resources['schema'] ?? null) === 'relational-fts-resources-v1' && ($resources['status'] ?? null) === 'PASS' && ($resources['profile'] ?? null) === $profile['name'] && (int) ($resources['documents'] ?? -1) === $profile['documents'] && ($resources['engine'] ?? null) === wp_fts_wc_required_env('WP_FTS_WC_ENGINE') && ($resources['harness_sha256'] ?? null) === wp_fts_wc_required_env('WP_FTS_HARNESS_SHA256'));
+    $gates[] = wp_fts_wc_gate('resource_evidence_binding', [$profile['name'], $profile['documents'], wp_fts_wc_required_env('WP_FTS_WC_ENGINE'), wp_fts_wc_required_env('WP_FTS_HARNESS_SHA256')], [$resources['profile'] ?? null, (int) ($resources['documents'] ?? -1), $resources['engine'] ?? null, $resources['harness_sha256'] ?? null], ($resources['schema'] ?? null) === 'relational-fts-resources-v2' && ($resources['status'] ?? null) === 'PASS' && ($resources['profile'] ?? null) === $profile['name'] && (int) ($resources['documents'] ?? -1) === $profile['documents'] && ($resources['engine'] ?? null) === wp_fts_wc_required_env('WP_FTS_WC_ENGINE') && ($resources['harness_sha256'] ?? null) === wp_fts_wc_required_env('WP_FTS_HARNESS_SHA256'));
     $gates[] = wp_fts_wc_gate('storage_bytes_per_doc', '<= 12288', $bytesPerDoc, $bytesPerDoc <= 12288);
     $gates[] = wp_fts_wc_gate('storage_total_bytes', '<= 1288490188', $storageBytes['total_bytes'], $storageBytes['total_bytes'] <= 1288490188);
     $gates[] = wp_fts_wc_gate('indexing_docs_per_second', '>= 20', $throughput, $throughput >= 20.0);
@@ -1962,6 +1974,10 @@ function wp_fts_wc_validate(): array
             && !in_array('evidence_gate_ids_unique', $validationGateIds, true)
             && count(array_unique($validationGateIds)) === count($validationGateIds),
         'Validation gate IDs must be nonempty, unique, and must reserve the finalizer uniqueness gate.'
+    );
+    wp_fts_wc_assert(
+        wp_fts_wc_gate_inventory_fingerprint_matches($validationGateIds, 'preliminary'),
+        'Validation gate IDs differ from the exact source-reviewed preliminary inventory.'
     );
     $validationSections = wp_fts_wc_validation_section_ids();
     $validationInventory = [
@@ -3602,6 +3618,11 @@ function wp_fts_wc_max_valid_setup(): array
     wp_fts_wc_assert_runtime();
     wp_fts_wc_assert_source_binding();
     wp_fts_wc_require_plugin();
+    $manifest = wp_fts_wc_manifest();
+    $preliminary = wp_fts_wc_preliminary_evidence_binding();
+    $sourceBinding = wp_fts_wc_artifact_source_binding($manifest, $preliminary['sha256']);
+    $processIdentity = wp_fts_wc_process_identity();
+    wp_fts_wc_assert(wp_fts_wc_process_identity_valid($processIdentity), 'Near-limit setup requires an exact Linux process identity.');
 
     $contentBytes = 1900000;
     $visibleContent = '<p>maxsizeprobe</p>';
@@ -3613,6 +3634,7 @@ function wp_fts_wc_max_valid_setup(): array
         . $commentClose;
     wp_fts_wc_assert(strlen($content) === $contentBytes, 'Near-limit canonical source did not reach its exact byte boundary.');
     $contentHash = hash('sha256', $content);
+    wp_fts_wc_assert($contentHash === wp_fts_wc_max_valid_content_sha256(), 'Near-limit canonical source changed from the independently reconstructed acceptance payload.');
     $ids = [];
     for ($index = 0; $index < 20; $index++) {
         $date = gmdate('Y-m-d H:i:s', 1800000000 + $index);
@@ -3640,50 +3662,147 @@ VALUES (%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
     }
 
     $queue = new WP_FTS_Index_Queue($wpdb);
+    $enqueueStarted = hrtime(true);
     $enqueue = wp_fts_wc_record_queries(static fn() => $queue->enqueue_many($ids));
+    $enqueueDuration = wp_fts_wc_elapsed_ms($enqueueStarted);
+    $enqueueBytes = array_map('strlen', array_values($enqueue['queries']));
+    $enqueueMaxBytes = max($enqueueBytes ?: [0]);
     wp_fts_wc_assert(count($enqueue['queries']) === 1, 'Near-limit posts were not queued with one bounded multi-row UPSERT.');
     $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
     $idSql = implode(',', array_map('intval', $ids));
     $passes = [];
+    $phpLifetimePeak = memory_get_peak_usage(true);
     for ($pass = 0; $pass < 100; $pass++) {
         if (wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE post_id IN ({$idSql})", 'near-limit setup work') === 0) {
             break;
         }
+        gc_collect_cycles();
+        $phpLifetimePeak = max($phpLifetimePeak, memory_get_peak_usage(true));
+        wp_fts_wc_reset_php_peak_usage();
+        $phpUsageBefore = memory_get_usage(true);
+        $rssBefore = wp_fts_wc_rss_bytes('VmRSS');
         $started = hrtime(true);
-        $summary = WP_FTS_Plugin::process_manual_index_batch([
+        $recorded = wp_fts_wc_record_queries(static fn(): array => WP_FTS_Plugin::process_manual_index_batch([
             'source' => 'worst-case-max-valid',
             'batch_size' => 100,
             'time_budget' => 20.0,
-        ]);
+        ]));
+        $duration = wp_fts_wc_elapsed_ms($started);
+        $summary = is_array($recorded['result'] ?? null) ? $recorded['result'] : [];
+        $queries = is_array($recorded['queries'] ?? null) ? array_values($recorded['queries']) : [];
+        $statementBytes = array_map(static fn(string $sql): int => strlen($sql), $queries);
+        $statementHashes = array_map(static fn(string $sql): string => hash('sha256', $sql), $queries);
+        $statementRoles = wp_fts_wc_worker_statement_roles($queries);
+        $phpPeakAfterReset = memory_get_peak_usage(true);
+        $phpLifetimePeak = max($phpLifetimePeak, $phpPeakAfterReset);
+        $rssPeakAfter = wp_fts_wc_rss_bytes('VmHWM');
         $passes[] = [
-            'duration_ms' => wp_fts_wc_elapsed_ms($started),
+            'duration_ms' => $duration,
             'processed' => (int) ($summary['processed'] ?? 0),
             'failures' => (int) ($summary['last_batch_failures'] ?? 0),
             'skipped_locked' => !empty($summary['skipped_locked']),
+            'statement_count' => count($queries),
+            'statement_bytes' => $statementBytes,
+            'statement_sha256' => $statementHashes,
+            'max_statement_bytes' => max($statementBytes ?: [0]),
+            'statement_roles' => $statementRoles['roles'],
+            'unknown_statement_count' => count($statementRoles['unknown']),
+            'php_usage_before_bytes' => $phpUsageBefore,
+            'php_peak_after_reset_bytes' => $phpPeakAfterReset,
+            'php_peak_delta_bytes' => max(0, $phpPeakAfterReset - $phpUsageBefore),
+            'rss_before_bytes' => $rssBefore,
+            'rss_peak_after_bytes' => $rssPeakAfter,
+            'rss_peak_delta_bytes' => max(0, $rssPeakAfter - $rssBefore),
         ];
         wp_fts_wc_assert(empty($summary['skipped_locked']), 'Near-limit setup lost the only worker lease.');
         wp_fts_wc_assert((int) ($summary['last_batch_failures'] ?? 0) === 0, 'Near-limit setup produced a worker failure.');
+        unset($recorded, $summary, $queries, $statementBytes, $statementHashes, $statementRoles);
     }
     $remaining = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE post_id IN ({$idSql})", 'near-limit setup final work');
     wp_fts_wc_assert($remaining === 0, 'Near-limit posts did not drain from durable work.');
     $documents = wp_fts_wc_identifier($wpdb->prefix . 'fts_documents');
     $indexed = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$documents}` WHERE post_id IN ({$idSql})", 'near-limit indexed documents');
     wp_fts_wc_assert($indexed === 20, 'Near-limit posts were not all indexed.');
+    $workerStatementCountMax = max(array_column($passes, 'statement_count') ?: [0]);
+    $workerStatementBytesMax = max(array_column($passes, 'max_statement_bytes') ?: [0]);
+    $workerDurationMax = max(array_column($passes, 'duration_ms') ?: [0.0]);
+    $workerPhpDeltaMax = max(array_column($passes, 'php_peak_delta_bytes') ?: [0]);
+    $workerRssDeltaMax = max(array_column($passes, 'rss_peak_delta_bytes') ?: [0]);
+    $workerPhpPeakMax = max(array_column($passes, 'php_peak_after_reset_bytes') ?: [0]);
+    $workerRssPeakMax = max(array_column($passes, 'rss_peak_after_bytes') ?: [0]);
+    $phpPeak = max($phpLifetimePeak, memory_get_peak_usage(true));
+    $rssPeak = wp_fts_wc_rss_bytes('VmHWM');
+    $processed = array_sum(array_column($passes, 'processed'));
+    $unknownStatements = array_sum(array_column($passes, 'unknown_statement_count'));
+    $allPassesMadeProgress = $passes !== []
+        && count(array_filter($passes, static fn(array $pass): bool => (int) ($pass['processed'] ?? 0) > 0)) === count($passes);
+    $sourceBindingValid = array_keys($sourceBinding) === ['source_sha', 'zip_sha256', 'harness_sha256', 'lane_id', 'engine', 'profile', 'manifest_sha256', 'validation_evidence_sha256']
+        && strlen($sourceBinding['source_sha']) === 40
+        && wp_fts_wc_is_ascii_hex($sourceBinding['source_sha'])
+        && wp_fts_wc_is_lowercase_sha256($sourceBinding['zip_sha256'])
+        && wp_fts_wc_is_lowercase_sha256($sourceBinding['harness_sha256'])
+        && wp_fts_wc_is_lowercase_sha256($sourceBinding['manifest_sha256'])
+        && wp_fts_wc_is_lowercase_sha256($sourceBinding['validation_evidence_sha256'])
+        && $sourceBinding['lane_id'] !== ''
+        && $sourceBinding['engine'] !== ''
+        && $sourceBinding['profile'] !== '';
+    $gates = [
+        wp_fts_wc_gate('max_valid_setup_source_binding', 'complete source binding and Linux process identity', ['binding' => $sourceBinding, 'process_identity' => $processIdentity], $sourceBindingValid && wp_fts_wc_process_identity_valid($processIdentity)),
+        wp_fts_wc_gate('max_valid_setup_enqueue_bound', ['statements' => 1, 'max_bytes' => '<= 1048576', 'duration_ms' => '<= 5000'], ['statements' => count($enqueue['queries']), 'max_bytes' => $enqueueMaxBytes, 'duration_ms' => $enqueueDuration], count($enqueue['queries']) === 1 && $enqueueMaxBytes > 0 && $enqueueMaxBytes <= 1048576 && $enqueueDuration >= 0.0 && $enqueueDuration <= 5000.0),
+        wp_fts_wc_gate('max_valid_setup_worker_progress', ['processed' => 20, 'every_pass_progress' => true, 'failures' => 0, 'skipped_locked' => false], ['processed' => $processed, 'every_pass_progress' => $allPassesMadeProgress, 'failures' => array_sum(array_column($passes, 'failures')), 'skipped_locked' => count(array_filter(array_column($passes, 'skipped_locked')))], $allPassesMadeProgress && $processed === 20 && array_sum(array_column($passes, 'failures')) === 0 && count(array_filter(array_column($passes, 'skipped_locked'))) === 0),
+        wp_fts_wc_gate('max_valid_setup_worker_statement_bound', ['per_pass' => '<= 20', 'unknown' => 0], ['max' => $workerStatementCountMax, 'unknown' => $unknownStatements], $workerStatementCountMax > 0 && $workerStatementCountMax <= 20 && $unknownStatements === 0),
+        wp_fts_wc_gate('max_valid_setup_worker_sql_bound', '<= 4194304', $workerStatementBytesMax, $workerStatementBytesMax > 0 && $workerStatementBytesMax <= 4194304),
+        wp_fts_wc_gate('max_valid_setup_worker_duration_bound', '<= 30000 ms', $workerDurationMax, $workerDurationMax >= 0.0 && $workerDurationMax <= 30000.0),
+        wp_fts_wc_gate('max_valid_setup_worker_memory_bound', ['delta' => '<= 33554432', 'absolute' => '<= 134217728', 'aggregate_dominates_passes' => true], ['php_delta' => $workerPhpDeltaMax, 'rss_delta' => $workerRssDeltaMax, 'php_peak' => $phpPeak, 'rss_peak' => $rssPeak, 'max_pass_php_peak' => $workerPhpPeakMax, 'max_pass_rss_peak' => $workerRssPeakMax], $workerPhpDeltaMax <= 33554432 && $workerRssDeltaMax <= 33554432 && $phpPeak >= $workerPhpPeakMax && $phpPeak <= 134217728 && $rssPeak >= $workerRssPeakMax && $rssPeak <= 134217728),
+    ];
 
     $evidence = [
-        'schema' => 'relational-fts-max-valid-setup-v1',
-        'status' => 'PASS',
+        'schema' => 'relational-fts-max-valid-setup-v2',
+        'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
         'phase' => 'max-valid-setup',
+        ...$sourceBinding,
+        'process_identity' => $processIdentity,
+        'measurement_method' => 'fresh_phase_process_per_pass_php_peak_reset_conservative_rss_hwm',
+        'php_peak_delta_authoritative' => true,
+        'rss_peak_delta_authoritative' => true,
         'post_ids' => $ids,
         'content_bytes' => $contentBytes,
         'content_sha256' => $contentHash,
         'enqueue_statements' => count($enqueue['queries']),
+        'enqueue_max_statement_bytes' => $enqueueMaxBytes,
+        'enqueue_duration_ms' => $enqueueDuration,
         'worker_passes' => $passes,
+        'worker_statement_count_max' => $workerStatementCountMax,
+        'worker_max_statement_bytes' => $workerStatementBytesMax,
+        'worker_duration_ms_max' => $workerDurationMax,
+        'worker_php_peak_delta_bytes' => $workerPhpDeltaMax,
+        'worker_rss_peak_delta_bytes' => $workerRssDeltaMax,
+        'php_peak_bytes' => $phpPeak,
+        'rss_peak_bytes' => $rssPeak,
         'indexed' => $indexed,
+        'gates' => $gates,
     ];
+    $evidence['evidence_sha256'] = wp_fts_wc_canonical_hash($evidence);
     wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/max-valid-setup.json', $evidence);
+    if ($evidence['status'] !== 'PASS') {
+        throw new RuntimeException('Near-limit setup exceeded a hard worker bound: ' . implode(', ', wp_fts_wc_gate_failures($gates)));
+    }
 
     return $evidence;
+}
+
+/** Reconstruct the accepted 1.9-MiB source without trusting its artifact. */
+function wp_fts_wc_max_valid_content_sha256(): string
+{
+    $contentBytes = 1900000;
+    $visibleContent = '<p>maxsizeprobe</p>';
+    $commentOpen = '<!--';
+    $commentClose = '-->';
+
+    return hash('sha256', $visibleContent
+        . $commentOpen
+        . str_repeat('x', $contentBytes - strlen($visibleContent . $commentOpen . $commentClose))
+        . $commentClose);
 }
 
 /**
@@ -3705,9 +3824,10 @@ function wp_fts_wc_max_valid_search(): array
     $processIdentity = wp_fts_wc_process_identity();
     $setup = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/max-valid-setup.json');
     $expectedIds = array_reverse(array_map('intval', $setup['post_ids'] ?? []));
-    wp_fts_wc_assert(count($expectedIds) === 20, 'Near-limit setup evidence is incomplete.');
+    wp_fts_wc_assert(count($expectedIds) === 20 && count(array_unique($expectedIds)) === 20, 'Near-limit setup evidence is incomplete.');
     $expectedBytes = (int) ($setup['content_bytes'] ?? 0);
     $expectedHash = (string) ($setup['content_sha256'] ?? '');
+    wp_fts_wc_assert($expectedBytes === 1900000 && $expectedHash === wp_fts_wc_max_valid_content_sha256(), 'Near-limit search setup does not describe the exact accepted canonical payload.');
     $forceFrontend = static fn(mixed $enabled, mixed ...$unused): bool => true;
     add_filter(WP_FTS_Plugin::FRONTEND_SEARCH_REPLACEMENT_FILTER, $forceFrontend, PHP_INT_MAX, 2);
     $seen = [];
@@ -3763,15 +3883,23 @@ function wp_fts_wc_max_valid_search(): array
             $posts = is_array($recorded['result']) ? $recorded['result'] : [];
             wp_fts_wc_assert($posts !== [], 'Near-limit front-end cursor ended before all results were reached.');
             $ids = [];
+            $results = [];
             foreach ($posts as $post) {
                 wp_fts_wc_assert(is_object($post), 'Near-limit front-end result is not a post object.');
                 $id = (int) ($post->ID ?? 0);
                 $body = (string) ($post->post_content ?? '');
-                wp_fts_wc_assert(strlen($body) === $expectedBytes, 'Near-limit canonical content was truncated.');
-                wp_fts_wc_assert(hash_equals($expectedHash, hash('sha256', $body)), 'Near-limit canonical content changed during transport.');
+                $bodyBytes = strlen($body);
+                $bodyHash = hash('sha256', $body);
+                wp_fts_wc_assert($bodyBytes === $expectedBytes, 'Near-limit canonical content was truncated.');
+                wp_fts_wc_assert(hash_equals($expectedHash, $bodyHash), 'Near-limit canonical content changed during transport.');
                 wp_fts_wc_assert(!isset($seen[$id]), 'Near-limit cursor returned a duplicate post.');
                 $seen[$id] = true;
                 $ids[] = $id;
+                $results[] = [
+                    'post_id' => $id,
+                    'content_bytes' => $bodyBytes,
+                    'content_sha256' => $bodyHash,
+                ];
             }
             $queries = array_values($recorded['queries']);
             $shape = [
@@ -3788,6 +3916,7 @@ function wp_fts_wc_max_valid_search(): array
             $pages[] = [
                 'page' => $page,
                 'ids' => $ids,
+                'results' => $results,
                 'query_count' => count($queries),
                 'shape' => $shape,
                 'memory_before_bytes' => $pageMemoryBefore,
@@ -3810,7 +3939,10 @@ function wp_fts_wc_max_valid_search(): array
     $actualIds = array_map('intval', array_keys($seen));
     wp_fts_wc_assert($actualIds === $expectedIds, 'Near-limit cursor membership or order differs from the canonical 20-row result.');
     $pageMeasurementsValid = $pages !== [];
+    $retainedResults = [];
     foreach ($pages as $pageEvidence) {
+        $pageResults = is_array($pageEvidence['results'] ?? null) ? array_values($pageEvidence['results']) : [];
+        array_push($retainedResults, ...$pageResults);
         $pageMeasurementsValid = $pageMeasurementsValid
             && is_int($pageEvidence['memory_before_bytes'] ?? null)
             && is_int($pageEvidence['memory_phase_peak_bytes'] ?? null)
@@ -3833,11 +3965,19 @@ function wp_fts_wc_max_valid_search(): array
     $maxRss = max(array_column($pages, 'rss_delta_bytes') ?: [PHP_INT_MAX]);
     $rssPeakAfter = wp_fts_wc_rss_bytes('VmHWM');
     $rssPeakDelta = max(0, $rssPeakAfter - $rssBefore);
+    $retainedContentValid = count($retainedResults) === 20
+        && count(array_filter($retainedResults, static fn(mixed $result): bool => is_array($result)
+            && array_keys($result) === ['post_id', 'content_bytes', 'content_sha256']
+            && is_int($result['post_id'] ?? null)
+            && $result['post_id'] > 0
+            && ($result['content_bytes'] ?? null) === 1900000
+            && ($result['content_sha256'] ?? null) === wp_fts_wc_max_valid_content_sha256())) === 20;
     $gates = [
         wp_fts_wc_gate('max_valid_frontend_source_binding', $sourceBinding, wp_fts_wc_artifact_source_binding($manifest, $preliminary['sha256']), $sourceBinding === wp_fts_wc_artifact_source_binding($manifest, $preliminary['sha256'])),
         wp_fts_wc_gate('max_valid_frontend_validation_binding', $preliminary['sha256'], $sourceBinding['validation_evidence_sha256'], hash_equals($preliminary['sha256'], $sourceBinding['validation_evidence_sha256'])),
         wp_fts_wc_gate('max_valid_frontend_fresh_process_identity', 'positive pid/start ticks with a bound Linux boot identity', $processIdentity, wp_fts_wc_process_identity_valid($processIdentity)),
         wp_fts_wc_gate('max_valid_frontend_ids', $expectedIds, $actualIds, $actualIds === $expectedIds),
+        wp_fts_wc_gate('max_valid_frontend_content', ['rows' => 20, 'bytes' => 1900000, 'sha256' => wp_fts_wc_max_valid_content_sha256()], ['rows' => count($retainedResults), 'sha256' => wp_fts_wc_canonical_hash($retainedResults)], $retainedContentValid),
         wp_fts_wc_gate('max_valid_frontend_pages', 10, count($pages), count($pages) === 10),
         wp_fts_wc_gate('max_valid_frontend_query_count', 3, max(array_column($pages, 'query_count') ?: [PHP_INT_MAX]), max(array_column($pages, 'query_count') ?: [PHP_INT_MAX]) === 3),
         wp_fts_wc_gate('max_valid_frontend_memory_peak_attribution', 'maximum resettable page peak minus live PHP usage before the complete ten-page workload', [$processMemoryBefore, $phpPhasePeakAfter, $phpPeakDelta], $processMemoryBefore > 0 && $phpPhasePeakAfter >= $processMemoryBefore && $phpPeakDelta === max(0, $phpPhasePeakAfter - $processMemoryBefore)),
@@ -3849,13 +3989,14 @@ function wp_fts_wc_max_valid_search(): array
         wp_fts_wc_gate('max_valid_frontend_rss_peak', '0 < VmHWM <= 134217728', $rssPeakAfter, $rssPeakAfter > 0 && $rssPeakAfter <= 134217728),
     ];
     $evidence = [
-        'schema' => 'relational-fts-max-valid-search-v1',
+        'schema' => 'relational-fts-max-valid-search-v2',
         'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
         'phase' => 'max-valid-search',
         ...$sourceBinding,
         'process_identity' => $processIdentity,
         'measurement_method' => 'fresh_process_conservative_peak_attribution',
         'content_bytes' => $expectedBytes,
+        'content_sha256' => $expectedHash,
         'pages' => $pages,
         'actual_ids' => $actualIds,
         'php_usage_before_bytes' => $processMemoryBefore,
@@ -4668,16 +4809,39 @@ FROM `{$work}` ORDER BY job_key";
 function wp_fts_wc_analysis_proof(): array
 {
     $analyzer = new WP_FTS_Analyzer(WP_FTS_Plugin::runtime_analyzer_options());
+    $query = 'Wrocław commonalpha Häusern 中文搜索';
     $recorded = wp_fts_wc_record_queries(static fn() => $analyzer->analyze_query_occurrences(
-        'Wrocław commonalpha Häusern 中文搜索',
+        $query,
         ['lang' => 'en', 'return' => 'occurrences']
     ));
     $occurrences = is_array($recorded['result']) ? $recorded['result'] : [];
+    $queries = array_values($recorded['queries']);
+    wp_fts_wc_assert(array_is_list($occurrences) && count($occurrences) <= 64, 'Query-analysis occurrence evidence exceeds its 64-row bound.');
+    wp_fts_wc_assert(count($queries) <= 4, 'Query-analysis SQL evidence exceeds its four-statement diagnostic bound.');
+    foreach ($queries as $sql) {
+        wp_fts_wc_assert(strlen($sql) <= 32768, 'Query-analysis SQL evidence exceeds its 32 KiB statement bound.');
+    }
+    $observations = [
+        'query' => $query,
+        'query_sha256' => hash('sha256', $query),
+        'occurrences' => $occurrences,
+        'occurrences_sha256' => wp_fts_wc_canonical_hash($occurrences),
+        'sql' => $queries,
+        'sql_sha256' => array_map(static fn(string $sql): string => hash('sha256', $sql), $queries),
+    ];
+    wp_fts_wc_assert_json_evidence_bytes($observations, 65536, 'Query-analysis observations');
     $gates = [
-        wp_fts_wc_gate('query_analysis_sql_count', 0, count($recorded['queries']), $recorded['queries'] === []),
+        wp_fts_wc_gate('query_analysis_sql_count', 0, count($queries), $queries === []),
         wp_fts_wc_gate('query_analysis_occurrences', '> 0', count($occurrences), $occurrences !== []),
     ];
-    return ['occurrence_count' => count($occurrences), 'sql_count' => count($recorded['queries']), 'gates' => $gates];
+    return [
+        'schema' => 'relational-fts-analysis-v1',
+        'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
+        ...$observations,
+        'occurrence_count' => count($occurrences),
+        'sql_count' => count($queries),
+        'gates' => $gates,
+    ];
 }
 
 /**
@@ -4807,9 +4971,12 @@ function wp_fts_wc_cursor_proof(WP_FTS_Searcher $searcher, array $manifest): arr
     $cursor = null;
     $ids = [];
     $cursorHashes = [];
+    $pageObservations = [];
     $maxQueries = 0;
     $maxSql = 0;
+    $totalSqlBytes = 0;
     $offsetStatements = 0;
+    wp_fts_wc_assert($targetPages <= 100, 'Cursor evidence exceeds its 100-page bound.');
     for ($page = 0; $page < $targetPages; $page++) {
         $options = $definition['options'];
         if ($cursor !== null) {
@@ -4819,34 +4986,60 @@ function wp_fts_wc_cursor_proof(WP_FTS_Searcher $searcher, array $manifest): arr
         $payload = wp_fts_wc_payload($recorded['result']);
         $rows = wp_fts_wc_payload_results($payload);
         wp_fts_wc_assert(count($rows) === 20, "Cursor page {$page} did not contain exactly 20 results.");
-        foreach ($rows as $row) {
-            $ids[] = (int) $row['doc_id'];
-        }
+        $pageIds = array_map('intval', array_column($rows, 'doc_id'));
+        array_push($ids, ...$pageIds);
         $queries = array_values($recorded['queries']);
+        wp_fts_wc_assert(count($queries) <= 16, "Cursor page {$page} exceeds its 16-statement evidence bound.");
         $maxQueries = max($maxQueries, count($queries));
+        $pageOffsetStatements = 0;
         foreach ($queries as $sql) {
-            $maxSql = max($maxSql, strlen($sql));
+            $bytes = strlen($sql);
+            wp_fts_wc_assert($bytes <= 1048576, "Cursor page {$page} contains SQL beyond its 1 MiB evidence bound.");
+            $maxSql = max($maxSql, $bytes);
+            $totalSqlBytes += $bytes;
+            wp_fts_wc_assert($totalSqlBytes <= 16777216, 'Cursor SQL evidence exceeds its 16 MiB aggregate bound.');
             if (str_contains(strtoupper($sql), ' OFFSET ')) {
                 $offsetStatements++;
+                $pageOffsetStatements++;
             }
         }
         $cursor = isset($payload['next_cursor']) && is_scalar($payload['next_cursor']) ? (string) $payload['next_cursor'] : '';
         wp_fts_wc_assert($cursor !== '', "Cursor page {$page} did not provide another opaque cursor.");
-        $cursorHashes[] = hash('sha256', $cursor);
+        $cursorHash = hash('sha256', $cursor);
+        $cursorHashes[] = $cursorHash;
+        $pageObservations[] = [
+            'page' => $page + 1,
+            'result_ids' => $pageIds,
+            'cursor_sha256' => $cursorHash,
+            'query_count' => count($queries),
+            'statement_shape' => wp_fts_wc_statement_shape(array_map(static fn(string $sql): array => ['sql' => $sql], $queries)),
+            'statement_bytes' => array_map('strlen', $queries),
+            'sql_sha256' => array_map(static fn(string $sql): string => hash('sha256', $sql), $queries),
+            'sql' => $queries,
+            'offset_statement_count' => $pageOffsetStatements,
+        ];
     }
+
+    wp_fts_wc_assert(count($ids) <= 2000 && count($cursorHashes) <= 100 && count($pageObservations) <= 100, 'Cursor observations exceed their fixed vector bounds.');
+    wp_fts_wc_assert_json_evidence_bytes($pageObservations, 33554432, 'Cursor page observations');
 
     $uniqueIds = count(array_unique($ids));
     $uniqueCursors = count(array_unique($cursorHashes));
     $prefix = wp_fts_wc_prefix_cursor_proof($searcher, $manifest);
     $security = wp_fts_wc_cursor_security_proof($searcher);
     return [
+        'schema' => 'relational-fts-cursor-traversal-v1',
         'pages' => $targetPages,
         'rows' => count($ids),
         'unique_rows' => $uniqueIds,
         'unique_cursors' => $uniqueCursors,
+        'result_ids' => $ids,
+        'cursor_sha256' => $cursorHashes,
+        'page_observations' => $pageObservations,
         'result_hash' => wp_fts_wc_canonical_hash($ids),
         'max_query_count' => $maxQueries,
         'max_sql_bytes' => $maxSql,
+        'sql_total_bytes' => $totalSqlBytes,
         'offset_statements' => $offsetStatements,
         'prefix' => $prefix,
         'security' => $security,
@@ -4927,7 +5120,9 @@ function wp_fts_wc_prefix_cursor_proof(WP_FTS_Searcher $searcher, array $manifes
  * Traverse broad exact and prefix result sets through their terminal pages.
  * An independently populated relational oracle supplies 51-row keyset windows
  * while production supplies 50-row signed-cursor windows. Neither side keeps
- * the result set in PHP or stops at a fixed page/sample cap.
+ * full result rows in PHP or stops at a fixed page/sample cap. The report does
+ * retain a bounded JSONL projection of each page's IDs and SQL measurements so
+ * the aggregate hashes and maxima can be recomputed from the final artifact.
  *
  * @param array<string,mixed> $manifest
  * @return array<string,mixed>
@@ -4967,7 +5162,13 @@ KEY page_order (case_id,score,post_date_gmt,post_id)
         $cases = [];
         $gates = [wp_fts_wc_gate('terminal_oracle_initial_work_rows', 0, $workRows, $workRows === 0)];
         foreach ($definitions as $caseId => $definition) {
-            $case = wp_fts_wc_traverse_terminal_oracle_case($searcher, $oracleTable, $caseId, $definition);
+            $case = wp_fts_wc_traverse_terminal_oracle_case(
+                $searcher,
+                $oracleTable,
+                $caseId,
+                $definition,
+                (int) $manifest['profile']['documents']
+            );
             $cases[$caseId] = $case;
             $minimumRows = in_array((string) $manifest['profile']['name'], ['50k', '100k'], true) ? 5000 : 40;
             array_push($gates,
@@ -5056,16 +5257,19 @@ GROUP BY raw.post_id,p.post_date_gmt",
  * @param array{query:string,options:array<string,mixed>} $definition
  * @return array<string,mixed>
  */
-function wp_fts_wc_traverse_terminal_oracle_case(WP_FTS_Searcher $searcher, string $oracleTable, string $caseId, array $definition): array
+function wp_fts_wc_traverse_terminal_oracle_case(WP_FTS_Searcher $searcher, string $oracleTable, string $caseId, array $definition, int $maxEvidenceRows): array
 {
     global $wpdb;
 
+    wp_fts_wc_assert($maxEvidenceRows > 0 && $maxEvidenceRows <= 100000, "{$caseId} terminal evidence row bound is outside the supported corpus envelope.");
     $expectedTotal = wp_fts_wc_checked_count(
         $wpdb->prepare("SELECT COUNT(*) FROM `{$oracleTable}` WHERE case_id=%s", $caseId),
         "{$caseId} terminal-oracle rows"
     );
     wp_fts_wc_assert($expectedTotal > 0, "{$caseId} terminal oracle is empty.");
+    wp_fts_wc_assert($expectedTotal <= $maxEvidenceRows, "{$caseId} terminal oracle exceeds its manifest-bound evidence envelope.");
     $expectedPages = (int) ceil($expectedTotal / 50);
+    wp_fts_wc_assert($expectedPages <= 2000, "{$caseId} terminal oracle exceeds its 2,000-page evidence bound.");
     $expectedContext = hash_init('sha256');
     $actualContext = hash_init('sha256');
     $actualCursor = '';
@@ -5080,6 +5284,7 @@ function wp_fts_wc_traverse_terminal_oracle_case(WP_FTS_Searcher $searcher, stri
     $statementShapesValid = true;
     $completed = true;
     $firstMismatch = null;
+    $pageObservationsJsonl = '';
     $memoryBaseline = memory_get_usage(true);
     $maxMemoryDelta = 0;
 
@@ -5118,13 +5323,20 @@ function wp_fts_wc_traverse_terminal_oracle_case(WP_FTS_Searcher $searcher, stri
         $actualHasMore = !empty($payload['has_more']);
         $nextCursor = isset($payload['next_cursor']) && is_scalar($payload['next_cursor']) ? (string) $payload['next_cursor'] : '';
         $queries = array_values($recorded['queries']);
+        wp_fts_wc_assert(count($queries) <= 16, "{$caseId} terminal page {$page} exceeds its 16-statement evidence bound.");
         $shape = wp_fts_wc_statement_shape(array_map(static fn(string $sql): array => ['sql' => $sql], $queries));
         $statementShapesValid = $statementShapesValid && $shape === ['plan' => 1, 'rank' => 1, 'hydrate' => 1];
         $maxQueries = max($maxQueries, count($queries));
         $maxPageRows = max($maxPageRows, count($actualIds), count($expectedIds));
+        $pageOffsetStatements = 0;
         foreach ($queries as $sql) {
-            $maxSqlBytes = max($maxSqlBytes, strlen($sql));
-            $offsetStatements += str_contains(strtoupper($sql), ' OFFSET ') ? 1 : 0;
+            $sqlBytes = strlen($sql);
+            wp_fts_wc_assert($sqlBytes <= 1048576, "{$caseId} terminal page {$page} contains SQL beyond its 1 MiB evidence bound.");
+            $maxSqlBytes = max($maxSqlBytes, $sqlBytes);
+            if (str_contains(strtoupper($sql), ' OFFSET ')) {
+                $offsetStatements++;
+                $pageOffsetStatements++;
+            }
         }
         foreach ($expectedIds as $id) {
             wp_fts_wc_signature_update($expectedContext, [$id]);
@@ -5135,6 +5347,24 @@ function wp_fts_wc_traverse_terminal_oracle_case(WP_FTS_Searcher $searcher, stri
         $expectedRowsSeen += count($expectedIds);
         $actualRowsSeen += count($actualIds);
         $pages++;
+        $pageObservation = [
+            'page' => $page + 1,
+            'expected_ids' => $expectedIds,
+            'actual_ids' => $actualIds,
+            'expected_has_more' => $expectedHasMore,
+            'actual_has_more' => $actualHasMore,
+            'next_cursor_present' => $nextCursor !== '',
+            'cursor_sha256' => $nextCursor === '' ? null : hash('sha256', $nextCursor),
+            'query_count' => count($queries),
+            'statement_shape' => $shape,
+            'statement_bytes' => array_map('strlen', $queries),
+            'sql_sha256' => array_map(static fn(string $sql): string => hash('sha256', $sql), $queries),
+            'offset_statement_count' => $pageOffsetStatements,
+        ];
+        $pageObservationLine = json_encode($pageObservation, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n";
+        wp_fts_wc_assert(strlen($pageObservationLine) <= 65536, "{$caseId} terminal page {$page} observation exceeds 64 KiB.");
+        $pageObservationsJsonl .= $pageObservationLine;
+        wp_fts_wc_assert(strlen($pageObservationsJsonl) <= 16777216, "{$caseId} terminal page observations exceed 16 MiB.");
         $maxMemoryDelta = max($maxMemoryDelta, max(0, memory_get_usage(true) - $memoryBaseline));
 
         if ($actualIds !== $expectedIds || $actualHasMore !== $expectedHasMore || ($expectedHasMore && $nextCursor === '') || (!$expectedHasMore && $nextCursor !== '')) {
@@ -5174,6 +5404,10 @@ function wp_fts_wc_traverse_terminal_oracle_case(WP_FTS_Searcher $searcher, stri
         'pages' => $pages,
         'expected_sha256' => $expectedHash,
         'actual_sha256' => $actualHash,
+        'page_observations_format' => 'relational-fts-terminal-pages-jsonl-v1',
+        'page_observations_bytes' => strlen($pageObservationsJsonl),
+        'page_observations_sha256' => hash('sha256', $pageObservationsJsonl),
+        'page_observations_jsonl' => $pageObservationsJsonl,
         'completed' => $completed,
         'first_mismatch' => $firstMismatch,
         'max_page_rows' => $maxPageRows,
@@ -6835,6 +7069,7 @@ function wp_fts_wc_missing_table_and_lock_proof(array $manifest): array
     $ftsFailedClosed = false;
     $ordinaryRead = false;
     $saveAvailable = false;
+    $faultClass = '';
     $faultMessage = '';
     try {
         WP_FTS_Plugin::reset_request_caches();
@@ -6842,6 +7077,7 @@ function wp_fts_wc_missing_table_and_lock_proof(array $manifest): array
             WP_FTS_Plugin::search('rareanchor', ['lang' => 'en', 'mode' => 'OR', 'limit' => 20]);
         } catch (Throwable $error) {
             $ftsFailedClosed = true;
+            $faultClass = get_class($error);
             $faultMessage = $error->getMessage();
         }
         $post = get_post((int) $manifest['last_post_id']);
@@ -6857,22 +7093,38 @@ function wp_fts_wc_missing_table_and_lock_proof(array $manifest): array
         WP_FTS_Plugin::reset_request_caches();
     }
     $after = WP_FTS_Plugin::search('rareanchor', ['lang' => 'en', 'mode' => 'OR', 'limit' => 20]);
-    $restored = wp_fts_wc_result_hash($before) === wp_fts_wc_result_hash($after);
+    $beforeHash = wp_fts_wc_result_hash($before);
+    $afterHash = wp_fts_wc_result_hash($after);
+    $restored = $beforeHash === $afterHash;
+    wp_fts_wc_assert(count($before) <= 20 && count($after) <= 20, 'Availability-fault result evidence exceeds its 20-row page bound.');
+    wp_fts_wc_assert(strlen($faultClass) <= 512 && strlen($faultMessage) <= 8192, 'Availability-fault exception evidence exceeds its diagnostic byte bound.');
+    $observations = [
+        'before_results' => $before,
+        'after_results' => $after,
+        'before_result_hash' => $beforeHash,
+        'after_result_hash' => $afterHash,
+        'fault_class' => $faultClass,
+        'fault_message' => $faultMessage,
+    ];
+    wp_fts_wc_assert_json_evidence_bytes($observations, 4194304, 'Availability-fault observations');
+    $gates = [
+        wp_fts_wc_gate('maintenance_lock_contention', true, $lockSkipped, $lockSkipped),
+        wp_fts_wc_gate('missing_table_fts_failed_closed', true, $ftsFailedClosed, $ftsFailedClosed),
+        wp_fts_wc_gate('missing_table_ordinary_read_available', true, $ordinaryRead, $ordinaryRead),
+        wp_fts_wc_gate('missing_table_save_available', true, $saveAvailable, $saveAvailable),
+        wp_fts_wc_gate('missing_table_restore_parity', true, $restored, $restored),
+    ];
 
     return [
+        'schema' => 'relational-fts-availability-faults-v1',
+        'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
         'writer_lock_skipped' => $lockSkipped,
         'fts_failed_closed' => $ftsFailedClosed,
         'ordinary_read_available' => $ordinaryRead,
         'save_available' => $saveAvailable,
-        'fault_message' => $faultMessage,
-        'restored_result_hash' => wp_fts_wc_result_hash($after),
-        'gates' => [
-            wp_fts_wc_gate('maintenance_lock_contention', true, $lockSkipped, $lockSkipped),
-            wp_fts_wc_gate('missing_table_fts_failed_closed', true, $ftsFailedClosed, $ftsFailedClosed),
-            wp_fts_wc_gate('missing_table_ordinary_read_available', true, $ordinaryRead, $ordinaryRead),
-            wp_fts_wc_gate('missing_table_save_available', true, $saveAvailable, $saveAvailable),
-            wp_fts_wc_gate('missing_table_restore_parity', true, $restored, $restored),
-        ],
+        ...$observations,
+        'restored_result_hash' => $afterHash,
+        'gates' => $gates,
     ];
 }
 
@@ -9513,7 +9765,7 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
             wp_fts_wc_gate('filtered_scope_lane_overflow_zero_sql', 0, count($overflow['queries']), $overflow['queries'] === []),
         ];
         $result = [
-            'schema' => 'relational-fts-scope-expansion-v3',
+            'schema' => 'relational-fts-scope-expansion-v4',
             'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
             'fixture' => [
                 'posts_table' => $posts,
@@ -10493,6 +10745,8 @@ function wp_fts_wc_measure_scope_gap(
     $queryHashes = array_map(static fn(string $query): string => hash('sha256', $query), $taggedQueries);
     $metadataEventHashes = array_map(static fn(array $event): string => hash('sha256', (string) ($event['SQL_TEXT'] ?? '')), $metadataEvents);
     $metadataQueryHashes = array_map(static fn(string $query): string => hash('sha256', $query), $metadataQueries);
+    $selectorMeasurements = wp_fts_wc_scope_measurement_vectors($taggedQueries, $events, $clientDurations);
+    $metadataMeasurements = wp_fts_wc_scope_measurement_vectors($metadataQueries, $metadataEvents, null);
     $maxRowsExamined = wp_fts_wc_scope_event_max($events, 'ROWS_EXAMINED');
     $maxRowsSent = wp_fts_wc_scope_event_max($events, 'ROWS_SENT');
     $diskTempTables = wp_fts_wc_scope_event_sum($events, 'CREATED_TMP_DISK_TABLES');
@@ -10565,7 +10819,7 @@ function wp_fts_wc_measure_scope_gap(
 
     return [
         'evidence' => [
-            'schema' => 'relational-fts-scope-gap-sweep-v1',
+            'schema' => 'relational-fts-scope-gap-sweep-v2',
             'case_id' => $caseId,
             'tag' => $tag,
             'expected_pages' => $expectedPages,
@@ -10592,14 +10846,58 @@ function wp_fts_wc_measure_scope_gap(
             'representative_sql_sha256' => $sql !== '' ? hash('sha256', $sql) : null,
             'query_sql_sha256' => $queryHashes,
             'performance_schema_sql_sha256' => $eventHashes,
+            'selector_measurements' => $selectorMeasurements,
             'metadata_query_sql_sha256' => $metadataQueryHashes,
             'metadata_performance_schema_sql_sha256' => $metadataEventHashes,
+            'metadata_measurements' => $metadataMeasurements,
             'metadata_max_rows_sent_per_page' => $maxMetadataRowsSent,
             'metadata_max_server_page_duration_ms' => $maxMetadataServerDuration,
             'explain' => $explain,
         ],
         'gates' => $gates,
     ];
+}
+
+/**
+ * Bind each captured statement to its ordered Performance Schema counters.
+ *
+ * @param string[] $queries
+ * @param array<int,array<string,mixed>> $events
+ * @param float[]|null $clientDurations
+ * @return array<int,array<string,mixed>>
+ */
+function wp_fts_wc_scope_measurement_vectors(array $queries, array $events, ?array $clientDurations): array
+{
+    $vectors = [];
+    foreach (array_values($queries) as $index => $query) {
+        $event = is_array($events[$index] ?? null) ? $events[$index] : [];
+        $timerWait = max(0, (int) ($event['TIMER_WAIT'] ?? 0));
+        $vector = [
+            'sql_sha256' => hash('sha256', (string) $query),
+            'event_id' => max(0, (int) ($event['EVENT_ID'] ?? 0)),
+            'event_sql_sha256' => hash('sha256', (string) ($event['SQL_TEXT'] ?? '')),
+            'statement_bytes' => strlen((string) $query),
+        ];
+        if ($clientDurations !== null) {
+            $vector['client_duration_ms'] = is_numeric($clientDurations[$index] ?? null)
+                ? (float) $clientDurations[$index]
+                : null;
+        }
+        $vector += [
+            'rows_examined' => max(0, (int) ($event['ROWS_EXAMINED'] ?? 0)),
+            'rows_sent' => max(0, (int) ($event['ROWS_SENT'] ?? 0)),
+            'created_tmp_disk_tables' => max(0, (int) ($event['CREATED_TMP_DISK_TABLES'] ?? 0)),
+            'sort_merge_passes' => max(0, (int) ($event['SORT_MERGE_PASSES'] ?? 0)),
+            'sort_rows' => max(0, (int) ($event['SORT_ROWS'] ?? 0)),
+            'no_index_used' => max(0, (int) ($event['NO_INDEX_USED'] ?? 0)),
+            'no_good_index_used' => max(0, (int) ($event['NO_GOOD_INDEX_USED'] ?? 0)),
+            'timer_wait_picoseconds' => $timerWait,
+            'server_duration_ms' => (float) $timerWait / 1000000000.0,
+        ];
+        $vectors[] = $vector;
+    }
+
+    return $vectors;
 }
 
 /** @return array<string,mixed> */
@@ -10751,8 +11049,13 @@ function wp_fts_wc_transaction_crash(): never
     if ($wpdb->query($statement) !== 1) {
         throw new RuntimeException('Could not insert the uncommitted crash sentinel.');
     }
+    $processIdentity = wp_fts_wc_process_identity();
+    if (!wp_fts_wc_process_identity_valid($processIdentity)) {
+        throw new RuntimeException('Could not bind the crash probe to its Linux process lifetime.');
+    }
     wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/transaction-crash-ready.json', [
-        'pid' => getmypid(),
+        'schema' => 'relational-fts-transaction-crash-ready-v1',
+        'process_identity' => $processIdentity,
         'connection_id' => (int) $wpdb->get_var('SELECT CONNECTION_ID()'),
         'sentinel' => 'transactioncrashsentinel',
     ]);
@@ -10768,20 +11071,52 @@ function wp_fts_wc_verify_transaction_crash(): array
 
     wp_fts_wc_assert_disposable_guard();
     wp_fts_wc_require_plugin();
-    $ready = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/transaction-crash-ready.json');
+    $readyPath = wp_fts_wc_evidence_dir() . '/transaction-crash-ready.json';
+    $ready = wp_fts_wc_read_json($readyPath);
+    $receipt = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/transaction-crash-kill-receipt.json');
+    $readySha256 = hash_file('sha256', $readyPath);
+    $receiptValid = is_string($readySha256)
+        && wp_fts_wc_transaction_crash_receipt_is_exact($ready, $receipt, $readySha256);
     $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
     $count = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM `{$terms}` WHERE lang=%s AND kind=0 AND term=%s", 'en', 'transactioncrashsentinel'));
     $rows = WP_FTS_Plugin::search('rareanchor', ['lang' => 'en', 'mode' => 'OR', 'limit' => 20]);
     $gates = [
+        wp_fts_wc_gate('killed_transaction_sigkill_receipt', ['signal' => 9, 'kill_exit_status' => 0, 'exit_status' => 137, 'ready_sha256' => 'exact', 'process_identity' => 'independently observed exact'], ['signal' => $receipt['signal'] ?? null, 'kill_exit_status' => $receipt['kill_exit_status'] ?? null, 'exit_status' => $receipt['exit_status'] ?? null, 'ready_sha256' => $receipt['ready_sha256'] ?? null, 'ready_process_identity' => $ready['process_identity'] ?? null, 'observed_process_identity' => $receipt['observed_process_identity'] ?? null], $receiptValid),
         wp_fts_wc_gate('killed_transaction_rolled_back', 0, $count, $count === 0),
         wp_fts_wc_gate('search_after_killed_transaction', '> 0', count($rows), $rows !== []),
     ];
-    $result = ['schema' => 'relational-fts-transaction-crash-v1', 'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL', 'phase' => 'verify-transaction-crash', 'killed_process' => $ready, 'sentinel_rows' => $count, 'search_rows' => count($rows), 'gates' => $gates];
+    $result = ['schema' => 'relational-fts-transaction-crash-v3', 'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL', 'phase' => 'verify-transaction-crash', 'killed_process' => $ready, 'kill_receipt' => $receipt, 'sentinel_rows' => $count, 'search_rows' => count($rows), 'gates' => $gates];
     wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/transaction-crash.json', $result);
     if ($result['status'] !== 'PASS') {
         throw new RuntimeException('Killed-transaction recovery proof failed: ' . implode(', ', wp_fts_wc_gate_failures($gates)));
     }
     return ['status' => 'PASS', 'phase' => 'verify-transaction-crash'];
+}
+
+/** Prove the final artifact came from an observed SIGKILL of the ready child. */
+function wp_fts_wc_transaction_crash_receipt_is_exact(array $ready, array $receipt, string $readySha256): bool
+{
+    $identity = is_array($ready['process_identity'] ?? null) ? $ready['process_identity'] : [];
+    $observedIdentity = is_array($receipt['observed_process_identity'] ?? null)
+        ? $receipt['observed_process_identity']
+        : [];
+
+    return array_keys($ready) === ['schema', 'process_identity', 'connection_id', 'sentinel']
+        && ($ready['schema'] ?? null) === 'relational-fts-transaction-crash-ready-v1'
+        && wp_fts_wc_process_identity_valid($identity)
+        && is_int($ready['connection_id'] ?? null)
+        && $ready['connection_id'] > 0
+        && ($ready['sentinel'] ?? null) === 'transactioncrashsentinel'
+        && array_keys($receipt) === ['schema', 'ready_sha256', 'child_pid', 'observed_process_identity', 'kill_exit_status', 'exit_status', 'signal']
+        && ($receipt['schema'] ?? null) === 'relational-fts-transaction-crash-kill-receipt-v2'
+        && wp_fts_wc_is_lowercase_sha256($readySha256)
+        && ($receipt['ready_sha256'] ?? null) === $readySha256
+        && ($receipt['child_pid'] ?? null) === ($identity['pid'] ?? null)
+        && wp_fts_wc_process_identity_valid($observedIdentity)
+        && $observedIdentity === $identity
+        && ($receipt['kill_exit_status'] ?? null) === 0
+        && ($receipt['exit_status'] ?? null) === 137
+        && ($receipt['signal'] ?? null) === 9;
 }
 
 /** Seed and index deterministic legacy sentinels under every real site prefix. */
@@ -11670,7 +12005,7 @@ function wp_fts_wc_migration_post_kill_probe(): array
         wp_fts_wc_gate('migration_post_kill_no_fts_schema_sql', 0, count($ftsSchemaQueries), $ftsSchemaQueries === []),
     ];
     $result = [
-        'schema' => 'relational-fts-migration-post-kill-probe-v2',
+        'schema' => 'relational-fts-migration-post-kill-probe-v3',
         'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
         'target' => $target,
         'pid' => getmypid(),
@@ -11691,6 +12026,7 @@ function wp_fts_wc_migration_post_kill_probe(): array
         'expected_search_epoch_generation_delta' => $expectedSearchEpochGenerationDelta,
         'expected_fts_dml_count' => $expectedFtsDmlCount,
         'ordinary' => $ordinaryResult,
+        'ordinary_option_after' => $optionAfter,
         'ordinary_duration_ms' => $ordinaryDuration,
         'ordinary_queries' => $ordinaryQueries,
         'ordinary_fts_queries' => $ordinaryFtsQueries,
@@ -12218,11 +12554,14 @@ function wp_fts_wc_migration_finalize(): array
         $probeGates = is_array($probe['gates'] ?? null) ? $probe['gates'] : [];
         $probeGateIds = array_values(array_map('strval', array_column($probeGates, 'id')));
         wp_fts_wc_assert(
-            ($probe['schema'] ?? null) === 'relational-fts-migration-post-kill-probe-v2'
+            ($probe['schema'] ?? null) === 'relational-fts-migration-post-kill-probe-v3'
                 && ($probe['status'] ?? null) === 'PASS'
                 && ($probe['target'] ?? null) === $phase
                 && ($probe['phase_state']['target'] ?? null) === $phase
                 && (int) ($probe['pid'] ?? 0) > 0
+                && array_key_exists('ordinary_option_after', $probe)
+                && is_string($probe['ordinary_option_after'])
+                && $probe['ordinary_option_after'] === ($probe['ordinary']['option'] ?? null)
                 && $probeGateIds === wp_fts_wc_migration_post_kill_gate_ids()
                 && wp_fts_wc_gates_pass($probeGates),
             "Post-kill migration evidence is malformed or stale: {$phase}."
@@ -12359,7 +12698,7 @@ function wp_fts_wc_migration_finalize(): array
         'Migration final evidence gate set drifted.'
     );
     $result = [
-        'schema' => 'relational-fts-migration-evidence-v4',
+        'schema' => 'relational-fts-migration-evidence-v5',
         'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
         'baseline' => $baseline,
         'oracle' => $oracle,
@@ -15817,6 +16156,7 @@ function wp_fts_wc_finalize(): array
             'taxonomy_scope_search_outcome',
             'taxonomy_scope_search_statement_shape',
             'taxonomy_scope_active_broad_prefix_plan_only',
+            'taxonomy_scope_active_surface_range_gated',
             'taxonomy_scope_active_broad_prefix_plan_rows',
             'taxonomy_scope_active_broad_prefix_identity_index',
             'taxonomy_scope_active_broad_prefix_statement_bytes',
@@ -15932,8 +16272,8 @@ function wp_fts_wc_finalize(): array
     array_push($drainGates, ...wp_fts_wc_require_evidence_gates(
         $transactionCrash,
         'killed transaction proof',
-        ['killed_transaction_rolled_back', 'search_after_killed_transaction'],
-        'relational-fts-transaction-crash-v1'
+        ['killed_transaction_sigkill_receipt', 'killed_transaction_rolled_back', 'search_after_killed_transaction'],
+        'relational-fts-transaction-crash-v3'
     ));
     array_push($drainGates, ...wp_fts_wc_require_evidence_gates(
         $wpcliCursor,
@@ -15949,6 +16289,7 @@ function wp_fts_wc_finalize(): array
             'max_valid_frontend_validation_binding',
             'max_valid_frontend_fresh_process_identity',
             'max_valid_frontend_ids',
+            'max_valid_frontend_content',
             'max_valid_frontend_pages',
             'max_valid_frontend_query_count',
             'max_valid_frontend_memory_peak_attribution',
@@ -15959,7 +16300,7 @@ function wp_fts_wc_finalize(): array
             'max_valid_frontend_rss_peak_delta',
             'max_valid_frontend_rss_peak',
         ],
-        'relational-fts-max-valid-search-v1'
+        'relational-fts-max-valid-search-v2'
     ));
     $maxValidHashInput = $maxValidSearch;
     $maxValidRecordedHash = $maxValidHashInput['evidence_sha256'] ?? null;
@@ -15989,33 +16330,143 @@ function wp_fts_wc_finalize(): array
         && $maxValidSearch['rss_peak_bytes'] > 0
         && $maxValidSearch['rss_peak_bytes'] <= 134217728
         && wp_fts_wc_process_identity_valid(is_array($maxValidSearch['process_identity'] ?? null) ? $maxValidSearch['process_identity'] : []);
+    $maxValidArtifactValid = $maxValidMemoryValid
+        && wp_fts_wc_max_valid_frontend_artifact_is_exact($maxValidSearch, $maxValidSetup, $maxValidExpectedBinding);
     $drainGates[] = wp_fts_wc_gate('max_valid_frontend_artifact_self_hash', wp_fts_wc_canonical_hash($maxValidHashInput), $maxValidRecordedHash, wp_fts_wc_is_lowercase_sha256($maxValidRecordedHash) && hash_equals(wp_fts_wc_canonical_hash($maxValidHashInput), (string) $maxValidRecordedHash));
+    $drainGates[] = wp_fts_wc_gate('max_valid_frontend_artifact', 'ten exact two-row pages retaining twenty complete 1.9-MiB canonical bodies', [$maxValidSearch['schema'] ?? null, count(is_array($maxValidSearch['pages'] ?? null) ? $maxValidSearch['pages'] : []), count(is_array($maxValidSearch['actual_ids'] ?? null) ? $maxValidSearch['actual_ids'] : []), $maxValidSearch['content_bytes'] ?? null, $maxValidSearch['content_sha256'] ?? null], $maxValidArtifactValid);
     $drainGates[] = wp_fts_wc_gate('max_valid_frontend_authoritative_memory_binding', $maxValidExpectedBinding, array_intersect_key($maxValidSearch, $maxValidExpectedBinding), $maxValidMemoryValid);
+    array_push($drainGates, ...wp_fts_wc_require_evidence_gates(
+        $maxValidSetup,
+        'maximum-valid setup proof',
+        [
+            'max_valid_setup_source_binding',
+            'max_valid_setup_enqueue_bound',
+            'max_valid_setup_worker_progress',
+            'max_valid_setup_worker_statement_bound',
+            'max_valid_setup_worker_sql_bound',
+            'max_valid_setup_worker_duration_bound',
+            'max_valid_setup_worker_memory_bound',
+        ],
+        'relational-fts-max-valid-setup-v2'
+    ));
+    $maxValidSetupExpectedKeys = [
+        'schema', 'status', 'phase',
+        'source_sha', 'zip_sha256', 'harness_sha256', 'lane_id', 'engine', 'profile', 'manifest_sha256', 'validation_evidence_sha256',
+        'process_identity', 'measurement_method', 'php_peak_delta_authoritative', 'rss_peak_delta_authoritative',
+        'post_ids', 'content_bytes', 'content_sha256',
+        'enqueue_statements', 'enqueue_max_statement_bytes', 'enqueue_duration_ms',
+        'worker_passes', 'worker_statement_count_max', 'worker_max_statement_bytes', 'worker_duration_ms_max',
+        'worker_php_peak_delta_bytes', 'worker_rss_peak_delta_bytes', 'php_peak_bytes', 'rss_peak_bytes',
+        'indexed', 'gates', 'evidence_sha256',
+    ];
     $maxValidIds = is_array($maxValidSetup['post_ids'] ?? null) ? array_values($maxValidSetup['post_ids']) : [];
     $maxValidPasses = is_array($maxValidSetup['worker_passes'] ?? null) ? array_values($maxValidSetup['worker_passes']) : [];
     $maxValidPassesValid = $maxValidPasses !== [];
+    $setupProcessed = 0;
+    $setupStatementCounts = [];
+    $setupStatementMaxBytes = [];
+    $setupDurations = [];
+    $setupPhpDeltas = [];
+    $setupRssDeltas = [];
+    $setupPhpPeaks = [];
+    $setupRssPeaks = [];
     foreach ($maxValidPasses as $pass) {
-        $maxValidPassesValid = $maxValidPassesValid
-            && is_array($pass)
-            && is_int($pass['processed'] ?? null)
-            && (int) $pass['processed'] >= 0
+        if (!is_array($pass)) {
+            $maxValidPassesValid = false;
+            continue;
+        }
+        $statementCount = $pass['statement_count'] ?? null;
+        $statementBytes = is_array($pass['statement_bytes'] ?? null) ? array_values($pass['statement_bytes']) : [];
+        $statementHashes = is_array($pass['statement_sha256'] ?? null) ? array_values($pass['statement_sha256']) : [];
+        $statementRoles = is_array($pass['statement_roles'] ?? null) ? array_values($pass['statement_roles']) : [];
+        $duration = $pass['duration_ms'] ?? null;
+        $processed = $pass['processed'] ?? null;
+        $phpUsage = $pass['php_usage_before_bytes'] ?? null;
+        $phpPeak = $pass['php_peak_after_reset_bytes'] ?? null;
+        $phpDelta = $pass['php_peak_delta_bytes'] ?? null;
+        $rssBefore = $pass['rss_before_bytes'] ?? null;
+        $rssPeak = $pass['rss_peak_after_bytes'] ?? null;
+        $rssDelta = $pass['rss_peak_delta_bytes'] ?? null;
+        $passValid = array_keys($pass) === [
+            'duration_ms', 'processed', 'failures', 'skipped_locked',
+            'statement_count', 'statement_bytes', 'statement_sha256', 'max_statement_bytes', 'statement_roles', 'unknown_statement_count',
+            'php_usage_before_bytes', 'php_peak_after_reset_bytes', 'php_peak_delta_bytes',
+            'rss_before_bytes', 'rss_peak_after_bytes', 'rss_peak_delta_bytes',
+        ]
+            && is_numeric($duration) && (float) $duration >= 0.0 && (float) $duration <= 30000.0
+            && is_int($processed) && $processed > 0
             && ($pass['failures'] ?? null) === 0
-            && ($pass['skipped_locked'] ?? null) === false;
+            && ($pass['skipped_locked'] ?? null) === false
+            && is_int($statementCount) && $statementCount > 0 && $statementCount <= 20
+            && count($statementBytes) === $statementCount
+            && count($statementHashes) === $statementCount
+            && count($statementRoles) === $statementCount
+            && count(array_filter($statementBytes, static fn(mixed $bytes): bool => is_int($bytes) && $bytes > 0 && $bytes <= 4194304)) === $statementCount
+            && count(array_filter($statementHashes, static fn(mixed $hash): bool => wp_fts_wc_is_lowercase_sha256($hash))) === $statementCount
+            && count(array_filter($statementRoles, static fn(mixed $role): bool => is_string($role) && $role !== '' && $role !== 'unknown')) === $statementCount
+            && ($pass['unknown_statement_count'] ?? null) === 0
+            && ($pass['max_statement_bytes'] ?? null) === max($statementBytes ?: [0])
+            && is_int($phpUsage) && $phpUsage > 0
+            && is_int($phpPeak) && $phpPeak >= $phpUsage
+            && is_int($phpDelta) && $phpDelta === max(0, $phpPeak - $phpUsage) && $phpDelta <= 33554432
+            && is_int($rssBefore) && $rssBefore > 0
+            && is_int($rssPeak) && $rssPeak >= $rssBefore
+            && is_int($rssDelta) && $rssDelta === max(0, $rssPeak - $rssBefore) && $rssDelta <= 33554432;
+        $maxValidPassesValid = $maxValidPassesValid && $passValid;
+        if ($passValid) {
+            $setupProcessed += $processed;
+            $setupStatementCounts[] = $statementCount;
+            $setupStatementMaxBytes[] = (int) $pass['max_statement_bytes'];
+            $setupDurations[] = (float) $duration;
+            $setupPhpDeltas[] = $phpDelta;
+            $setupRssDeltas[] = $rssDelta;
+            $setupPhpPeaks[] = $phpPeak;
+            $setupRssPeaks[] = $rssPeak;
+        }
     }
-    $maxValidSetupValid = ($maxValidSetup['schema'] ?? null) === 'relational-fts-max-valid-setup-v1'
+    $maxValidSetupHashInput = $maxValidSetup;
+    $maxValidSetupRecordedHash = $maxValidSetupHashInput['evidence_sha256'] ?? null;
+    unset($maxValidSetupHashInput['evidence_sha256']);
+    $maxValidSetupHashValid = wp_fts_wc_is_lowercase_sha256($maxValidSetupRecordedHash)
+        && hash_equals(wp_fts_wc_canonical_hash($maxValidSetupHashInput), (string) $maxValidSetupRecordedHash);
+    $maxValidSetupValid = array_keys($maxValidSetup) === $maxValidSetupExpectedKeys
+        && ($maxValidSetup['schema'] ?? null) === 'relational-fts-max-valid-setup-v2'
         && ($maxValidSetup['status'] ?? null) === 'PASS'
         && ($maxValidSetup['phase'] ?? null) === 'max-valid-setup'
+        && array_intersect_key($maxValidSetup, $maxValidExpectedBinding) === $maxValidExpectedBinding
+        && ($maxValidSetup['measurement_method'] ?? null) === 'fresh_phase_process_per_pass_php_peak_reset_conservative_rss_hwm'
+        && ($maxValidSetup['php_peak_delta_authoritative'] ?? null) === true
+        && ($maxValidSetup['rss_peak_delta_authoritative'] ?? null) === true
+        && wp_fts_wc_process_identity_valid(is_array($maxValidSetup['process_identity'] ?? null) ? $maxValidSetup['process_identity'] : [])
         && count($maxValidIds) === 20
         && count(array_filter($maxValidIds, static fn(mixed $id): bool => is_int($id) && $id > 0)) === 20
         && count(array_unique($maxValidIds)) === 20
         && ($maxValidSetup['content_bytes'] ?? null) === 1900000
-        && is_string($maxValidSetup['content_sha256'] ?? null)
-        && strlen((string) $maxValidSetup['content_sha256']) === 64
-        && wp_fts_wc_is_ascii_hex((string) $maxValidSetup['content_sha256'])
+        && ($maxValidSetup['content_sha256'] ?? null) === wp_fts_wc_max_valid_content_sha256()
         && ($maxValidSetup['enqueue_statements'] ?? null) === 1
+        && is_int($maxValidSetup['enqueue_max_statement_bytes'] ?? null)
+        && $maxValidSetup['enqueue_max_statement_bytes'] > 0
+        && $maxValidSetup['enqueue_max_statement_bytes'] <= 1048576
+        && is_numeric($maxValidSetup['enqueue_duration_ms'] ?? null)
+        && (float) $maxValidSetup['enqueue_duration_ms'] >= 0.0
+        && (float) $maxValidSetup['enqueue_duration_ms'] <= 5000.0
+        && $maxValidPassesValid
+        && $setupProcessed === 20
+        && ($maxValidSetup['worker_statement_count_max'] ?? null) === max($setupStatementCounts ?: [0])
+        && ($maxValidSetup['worker_max_statement_bytes'] ?? null) === max($setupStatementMaxBytes ?: [0])
+        && ($maxValidSetup['worker_duration_ms_max'] ?? null) === max($setupDurations ?: [0.0])
+        && ($maxValidSetup['worker_php_peak_delta_bytes'] ?? null) === max($setupPhpDeltas ?: [0])
+        && ($maxValidSetup['worker_rss_peak_delta_bytes'] ?? null) === max($setupRssDeltas ?: [0])
+        && is_int($maxValidSetup['php_peak_bytes'] ?? null)
+        && $maxValidSetup['php_peak_bytes'] >= max($setupPhpPeaks ?: [PHP_INT_MAX])
+        && $maxValidSetup['php_peak_bytes'] <= 134217728
+        && is_int($maxValidSetup['rss_peak_bytes'] ?? null)
+        && $maxValidSetup['rss_peak_bytes'] >= max($setupRssPeaks ?: [PHP_INT_MAX])
+        && $maxValidSetup['rss_peak_bytes'] <= 134217728
         && ($maxValidSetup['indexed'] ?? null) === 20
-        && $maxValidPassesValid;
-    $drainGates[] = wp_fts_wc_gate('max_valid_setup_artifact', '20 complete 1.9 MiB rows indexed through one enqueue', [$maxValidSetup['schema'] ?? null, count($maxValidIds), $maxValidSetup['content_bytes'] ?? null, $maxValidSetup['enqueue_statements'] ?? null, $maxValidSetup['indexed'] ?? null, count($maxValidPasses)], $maxValidSetupValid);
+        && $maxValidSetupHashValid;
+    $drainGates[] = wp_fts_wc_gate('max_valid_setup_artifact_self_hash', wp_fts_wc_canonical_hash($maxValidSetupHashInput), $maxValidSetupRecordedHash, $maxValidSetupHashValid);
+    $drainGates[] = wp_fts_wc_gate('max_valid_setup_artifact', '20 complete 1.9 MiB rows indexed through bounded measured worker passes', [$maxValidSetup['schema'] ?? null, count($maxValidIds), $maxValidSetup['content_bytes'] ?? null, $maxValidSetup['enqueue_statements'] ?? null, $maxValidSetup['worker_statement_count_max'] ?? null, $maxValidSetup['worker_max_statement_bytes'] ?? null, $maxValidSetup['worker_duration_ms_max'] ?? null, $maxValidSetup['php_peak_bytes'] ?? null, $maxValidSetup['rss_peak_bytes'] ?? null, $maxValidSetup['indexed'] ?? null, count($maxValidPasses)], $maxValidSetupValid);
     $documentRejections = is_array($writerAggregate['document_rejections'] ?? null) ? $writerAggregate['document_rejections'] : [];
     $postingCapacity = is_array($writerAggregate['posting_capacity'] ?? null) ? $writerAggregate['posting_capacity'] : [];
     $identityCapacity = is_array($writerAggregate['identity_capacity'] ?? null) ? $writerAggregate['identity_capacity'] : [];
@@ -16636,6 +17087,10 @@ function wp_fts_wc_finalize(): array
     }
     $uniqueGateIds = count(array_unique($gateIds));
     $evidence['gates'][] = wp_fts_wc_gate('evidence_gate_ids_unique', count($gateIds) + 1, $uniqueGateIds + 1, $uniqueGateIds === count($gateIds) && !in_array('', $gateIds, true));
+    $finalGateIds = array_map(static fn(array $gate): string => (string) ($gate['id'] ?? ''), $evidence['gates']);
+    if (!wp_fts_wc_gate_inventory_fingerprint_matches($finalGateIds, 'final')) {
+        throw new RuntimeException('Final gate IDs differ from the exact source-reviewed inventory.');
+    }
     if (!wp_fts_wc_authoritative_search_memory_inventory_matches($evidence['authoritative_search_memory'])) {
         throw new RuntimeException('Final authoritative search-memory evidence was mutated or shrunk before publication.');
     }
@@ -16650,6 +17105,114 @@ function wp_fts_wc_finalize(): array
     }
 
     return ['status' => 'PASS', 'phase' => 'finalize', 'evidence_path' => wp_fts_wc_evidence_path(), 'evidence_sha256' => $evidence['evidence_sha256']];
+}
+
+/**
+ * Recompute the complete near-limit front-end artifact from retained rows.
+ *
+ * @param array<string,mixed> $artifact
+ * @param array<string,mixed> $setup
+ * @param array<string,string> $expectedBinding
+ */
+function wp_fts_wc_max_valid_frontend_artifact_is_exact(array $artifact, array $setup, array $expectedBinding): bool
+{
+    $expectedKeys = [
+        'schema', 'status', 'phase',
+        'source_sha', 'zip_sha256', 'harness_sha256', 'lane_id', 'engine', 'profile', 'manifest_sha256', 'validation_evidence_sha256',
+        'process_identity', 'measurement_method', 'content_bytes', 'content_sha256', 'pages', 'actual_ids',
+        'php_usage_before_bytes', 'php_lifetime_peak_before_reset_bytes', 'php_phase_peak_after_reset_bytes', 'php_peak_bytes', 'memory_peak_delta_bytes',
+        'rss_before_bytes', 'rss_source', 'rss_delta_bytes', 'rss_peak_bytes', 'rss_peak_delta_bytes',
+        'php_peak_delta_authoritative', 'rss_peak_delta_authoritative', 'gates', 'evidence_sha256',
+    ];
+    $pages = is_array($artifact['pages'] ?? null) ? array_values($artifact['pages']) : [];
+    $actualIds = is_array($artifact['actual_ids'] ?? null) ? array_values($artifact['actual_ids']) : [];
+    $setupIds = is_array($setup['post_ids'] ?? null) ? array_values($setup['post_ids']) : [];
+    $expectedIds = array_reverse($setupIds);
+    $pageIds = [];
+    $pageMemoryPeaks = [];
+    $pageRssDeltas = [];
+    $pageRssAfter = [];
+    $pagesValid = count($pages) === 10;
+    foreach ($pages as $index => $page) {
+        if (!is_array($page)) {
+            $pagesValid = false;
+            continue;
+        }
+        $ids = is_array($page['ids'] ?? null) ? array_values($page['ids']) : [];
+        $results = is_array($page['results'] ?? null) ? array_values($page['results']) : [];
+        $resultIds = [];
+        $resultsValid = count($results) === 2;
+        foreach ($results as $result) {
+            $valid = is_array($result)
+                && array_keys($result) === ['post_id', 'content_bytes', 'content_sha256']
+                && is_int($result['post_id'] ?? null)
+                && $result['post_id'] > 0
+                && ($result['content_bytes'] ?? null) === 1900000
+                && ($result['content_sha256'] ?? null) === wp_fts_wc_max_valid_content_sha256();
+            $resultsValid = $resultsValid && $valid;
+            if ($valid) {
+                $resultIds[] = $result['post_id'];
+            }
+        }
+        $memoryBefore = $page['memory_before_bytes'] ?? null;
+        $memoryPeak = $page['memory_phase_peak_bytes'] ?? null;
+        $memoryDelta = $page['memory_peak_delta_bytes'] ?? null;
+        $rssBefore = $page['rss_before_bytes'] ?? null;
+        $rssAfter = $page['rss_after_bytes'] ?? null;
+        $rssDelta = $page['rss_delta_bytes'] ?? null;
+        $pageValid = array_keys($page) === [
+            'page', 'ids', 'results', 'query_count', 'shape',
+            'memory_before_bytes', 'memory_peak_delta_bytes', 'memory_phase_peak_bytes',
+            'rss_before_bytes', 'rss_after_bytes', 'rss_delta_bytes', 'has_more',
+        ]
+            && ($page['page'] ?? null) === $index + 1
+            && count($ids) === 2
+            && count(array_filter($ids, static fn(mixed $id): bool => is_int($id) && $id > 0)) === 2
+            && $resultsValid
+            && $resultIds === $ids
+            && ($page['query_count'] ?? null) === 3
+            && ($page['shape'] ?? null) === ['plan' => 1, 'rank' => 1, 'hydrate' => 1]
+            && is_int($memoryBefore) && $memoryBefore > 0
+            && is_int($memoryPeak) && $memoryPeak >= $memoryBefore
+            && is_int($memoryDelta) && $memoryDelta === $memoryPeak - $memoryBefore && $memoryDelta <= 16777216
+            && is_int($rssBefore) && $rssBefore > 0
+            && is_int($rssAfter) && $rssAfter > 0
+            && is_int($rssDelta) && $rssDelta === max(0, $rssAfter - $rssBefore) && $rssDelta <= 16777216
+            && ($page['has_more'] ?? null) === ($index < 9);
+        $pagesValid = $pagesValid && $pageValid;
+        if ($pageValid) {
+            array_push($pageIds, ...$ids);
+            $pageMemoryPeaks[] = $memoryPeak;
+            $pageRssDeltas[] = $rssDelta;
+            $pageRssAfter[] = $rssAfter;
+        }
+    }
+
+    return array_keys($artifact) === $expectedKeys
+        && ($artifact['schema'] ?? null) === 'relational-fts-max-valid-search-v2'
+        && ($artifact['status'] ?? null) === 'PASS'
+        && ($artifact['phase'] ?? null) === 'max-valid-search'
+        && array_intersect_key($artifact, $expectedBinding) === $expectedBinding
+        && wp_fts_wc_process_identity_valid(is_array($artifact['process_identity'] ?? null) ? $artifact['process_identity'] : [])
+        && ($artifact['measurement_method'] ?? null) === 'fresh_process_conservative_peak_attribution'
+        && ($artifact['content_bytes'] ?? null) === 1900000
+        && ($artifact['content_sha256'] ?? null) === wp_fts_wc_max_valid_content_sha256()
+        && count($setupIds) === 20
+        && count(array_filter($setupIds, static fn(mixed $id): bool => is_int($id) && $id > 0)) === 20
+        && count(array_unique($setupIds)) === 20
+        && $pagesValid
+        && $pageIds === $expectedIds
+        && $actualIds === $pageIds
+        && count(array_unique($actualIds)) === 20
+        && ($artifact['php_phase_peak_after_reset_bytes'] ?? null) === max($pageMemoryPeaks ?: [PHP_INT_MAX])
+        && ($artifact['rss_delta_bytes'] ?? null) === max($pageRssDeltas ?: [PHP_INT_MAX])
+        && is_int($artifact['rss_peak_bytes'] ?? null)
+        && $artifact['rss_peak_bytes'] >= max($pageRssAfter ?: [PHP_INT_MAX])
+        && ($artifact['rss_source'] ?? null) === 'linux_proc_status'
+        && ($artifact['php_peak_delta_authoritative'] ?? null) === true
+        && ($artifact['rss_peak_delta_authoritative'] ?? null) === true
+        && is_array($artifact['gates'] ?? null)
+        && wp_fts_wc_is_lowercase_sha256($artifact['evidence_sha256'] ?? null);
 }
 
 /**
@@ -16964,9 +17527,9 @@ function wp_fts_wc_resource_artifact_gates(array $resources, array $validationEv
     $gates = [
         wp_fts_wc_gate(
             'resource_artifact_contract',
-            ['relational-fts-resources-v1', 'PASS', 'relational-fts-resource-verification-v1', $acceptanceLane, []],
+            ['relational-fts-resources-v2', 'PASS', 'relational-fts-resource-verification-v1', $acceptanceLane, []],
             [$resources['schema'] ?? null, $resources['status'] ?? null, $verification['schema'] ?? null, $verification['acceptance_lane'] ?? null, $verification['gate_failures'] ?? null],
-            ($resources['schema'] ?? null) === 'relational-fts-resources-v1'
+            ($resources['schema'] ?? null) === 'relational-fts-resources-v2'
                 && ($resources['status'] ?? null) === 'PASS'
                 && ($verification['schema'] ?? null) === 'relational-fts-resource-verification-v1'
                 && ($verification['acceptance_lane'] ?? null) === $acceptanceLane
@@ -17138,7 +17701,7 @@ function wp_fts_wc_database_memory_evidence_is_exact(array $memory, array $datab
     }
     $expectedLabels[] = 'final-workload';
     if (
-        ($memory['schema'] ?? null) !== 'relational-fts-database-cgroup-memory-v1'
+        ($memory['schema'] ?? null) !== 'relational-fts-database-cgroup-memory-v2'
         || ($memory['limit_bytes'] ?? null) !== 1073741824
         || ($memory['pre_corpus_peak_limit_bytes'] ?? null) !== 805306368
         || ($memory['complete'] ?? null) !== true
@@ -17160,6 +17723,11 @@ function wp_fts_wc_database_memory_evidence_is_exact(array $memory, array $datab
     $limitEvents = [];
     $oomEvents = [];
     $oomKills = [];
+    $unsigned = static fn(mixed $value): ?int => is_string($value)
+        && $value !== ''
+        && strspn($value, '0123456789') === strlen($value)
+            ? (int) $value
+            : null;
     foreach ($checkpoints as $checkpoint) {
         if (!is_array($checkpoint)) {
             return false;
@@ -17169,6 +17737,17 @@ function wp_fts_wc_database_memory_evidence_is_exact(array $memory, array $datab
             ? ['usage' => 'memory.current', 'peak' => 'memory.peak', 'limit_events' => 'memory.events:max', 'oom_events' => 'memory.events:oom', 'oom_kill_events' => 'memory.events:oom_kill']
             : ['usage' => 'memory.usage_in_bytes', 'peak' => 'memory.max_usage_in_bytes', 'limit_events' => 'memory.failcnt', 'oom_events' => 'memory.failcnt (conservative)', 'oom_kill_events' => 'memory.oom_control:oom_kill'];
         $label = $checkpoint['checkpoint'] ?? null;
+        $raw = $checkpoint['raw'] ?? null;
+        $rawParts = is_string($raw) ? explode("\t", $raw) : [];
+        $rawMatchesStructured = count($rawParts) === 6
+            && ($rawParts[0] ?? null) === $version
+            && $unsigned($rawParts[1] ?? null) === ($checkpoint['usage_bytes'] ?? null)
+            && $unsigned($rawParts[2] ?? null) === ($checkpoint['peak_bytes'] ?? null)
+            && $unsigned($rawParts[3] ?? null) === ($checkpoint['limit_events'] ?? null)
+            && $unsigned($rawParts[4] ?? null) === ($checkpoint['oom_events'] ?? null)
+            && $unsigned($rawParts[5] ?? null) === ($checkpoint['oom_kill_events'] ?? null)
+            && is_string($checkpoint['raw_sha256'] ?? null)
+            && hash_equals(hash('sha256', $raw), $checkpoint['raw_sha256']);
         if (
             !is_string($label)
             || $label === ''
@@ -17187,6 +17766,7 @@ function wp_fts_wc_database_memory_evidence_is_exact(array $memory, array $datab
             || $checkpoint['oom_events'] < 0
             || !is_int($checkpoint['oom_kill_events'] ?? null)
             || $checkpoint['oom_kill_events'] < 0
+            || !$rawMatchesStructured
             || !wp_fts_wc_is_lowercase_sha256($checkpoint['raw_sha256'] ?? null)
         ) {
             return false;
@@ -17221,7 +17801,7 @@ function wp_fts_wc_wordpress_memory_evidence_is_exact(array $memory, array $word
     $checkpoints = is_array($memory['checkpoints'] ?? null) ? array_values($memory['checkpoints']) : [];
     $expectedLabels = ['pre-corpus', 'final-workload'];
     if (
-        ($memory['schema'] ?? null) !== 'relational-fts-wordpress-cgroup-memory-v2'
+        ($memory['schema'] ?? null) !== 'relational-fts-wordpress-cgroup-memory-v3'
         || ($memory['limit_bytes'] ?? null) !== 536870912
         || ($memory['complete'] ?? null) !== true
         || ($memory['checkpoint_count'] ?? null) !== count($checkpoints)
@@ -17260,6 +17840,11 @@ function wp_fts_wc_wordpress_memory_evidence_is_exact(array $memory, array $word
     $limitEvents = [];
     $oomEvents = [];
     $oomKills = [];
+    $unsigned = static fn(mixed $value): ?int => is_string($value)
+        && $value !== ''
+        && strspn($value, '0123456789') === strlen($value)
+            ? (int) $value
+            : null;
     foreach ($checkpoints as $checkpoint) {
         if (!is_array($checkpoint)) {
             return false;
@@ -17269,6 +17854,21 @@ function wp_fts_wc_wordpress_memory_evidence_is_exact(array $memory, array $word
             ? ['usage' => 'memory.current', 'peak' => 'memory.peak', 'limit_events' => 'memory.events:max', 'oom_events' => 'memory.events:oom', 'oom_kill_events' => 'memory.events:oom_kill']
             : ['usage' => 'memory.usage_in_bytes', 'peak' => 'memory.max_usage_in_bytes', 'limit_events' => 'memory.failcnt', 'oom_events' => 'memory.failcnt (conservative)', 'oom_kill_events' => 'memory.oom_control:oom_kill'];
         $label = $checkpoint['checkpoint'] ?? null;
+        $raw = $checkpoint['raw'] ?? null;
+        $rawParts = is_string($raw) ? explode("\t", $raw) : [];
+        $rawMatchesStructured = count($rawParts) === 10
+            && ($rawParts[0] ?? null) === $version
+            && $unsigned($rawParts[1] ?? null) === ($checkpoint['usage_bytes'] ?? null)
+            && $unsigned($rawParts[2] ?? null) === ($checkpoint['peak_bytes'] ?? null)
+            && $unsigned($rawParts[3] ?? null) === ($checkpoint['limit_events'] ?? null)
+            && $unsigned($rawParts[4] ?? null) === ($checkpoint['oom_events'] ?? null)
+            && $unsigned($rawParts[5] ?? null) === ($checkpoint['oom_kill_events'] ?? null)
+            && ($rawParts[6] ?? null) === ($checkpoint['container_id'] ?? null)
+            && ($rawParts[7] ?? null) === ($checkpoint['container_started_at'] ?? null)
+            && $unsigned($rawParts[8] ?? null) === ($checkpoint['container_host_pid'] ?? null)
+            && $unsigned($rawParts[9] ?? null) === ($checkpoint['container_restart_count'] ?? null)
+            && is_string($checkpoint['raw_sha256'] ?? null)
+            && hash_equals(hash('sha256', $raw), $checkpoint['raw_sha256']);
         if (
             !is_string($label)
             || $label === ''
@@ -17288,6 +17888,7 @@ function wp_fts_wc_wordpress_memory_evidence_is_exact(array $memory, array $word
             || $checkpoint['oom_events'] < 0
             || !is_int($checkpoint['oom_kill_events'] ?? null)
             || $checkpoint['oom_kill_events'] < 0
+            || !$rawMatchesStructured
             || !wp_fts_wc_is_lowercase_sha256($checkpoint['raw_sha256'] ?? null)
             || ($checkpoint['container_id'] ?? null) !== $containerId
             || ($checkpoint['container_started_at'] ?? null) !== $containerLifecycle['started_at']
@@ -17555,8 +18156,48 @@ function wp_fts_wc_resource_cgroup_is_exact(array $cgroup, int $expectedMemoryBy
     $quota = $cpu['quota_us'] ?? null;
     $period = $cpu['period_us'] ?? null;
     $effective = $cpu['effective_cpus'] ?? null;
+    $raw = $cgroup['raw'] ?? null;
+    $rawParts = is_string($raw) ? explode("\t", $raw) : [];
+    $unsigned = static fn(mixed $value): ?int => is_string($value)
+        && $value !== ''
+        && strspn($value, '0123456789') === strlen($value)
+            ? (int) $value
+            : null;
+    $rawVersion = $rawParts[0] ?? null;
+    $rawQuota = $unsigned($rawParts[1] ?? null);
+    $rawPeriod = $unsigned($rawParts[2] ?? null);
+    $rawMemory = $unsigned($rawParts[3] ?? null);
+    $rawSwap = $unsigned($rawParts[4] ?? null);
+    $rawEffectiveSwap = $rawVersion === 'v1' && $rawSwap !== null && $rawMemory !== null
+        ? $rawSwap - $rawMemory
+        : $rawSwap;
+    $rawCpuMatches = $rawQuota !== null && $rawQuota > 0 && $rawPeriod !== null && $rawQuota === $rawPeriod;
+    $rawMemoryMatches = $rawMemory === $expectedMemoryBytes;
+    $rawSwapMatches = $rawEffectiveSwap === 0;
+    $rawMatchesStructured = count($rawParts) === 5
+        && in_array($rawVersion, ['v1', 'v2'], true)
+        && $rawQuota !== null
+        && $rawPeriod !== null
+        && $rawPeriod > 0
+        && $rawMemory !== null
+        && $rawSwap !== null
+        && ($cgroup['version'] ?? null) === $rawVersion
+        && $quota === $rawQuota
+        && $period === $rawPeriod
+        && is_numeric($effective)
+        && (float) $effective === (float) ($rawQuota / $rawPeriod)
+        && ($cpu['matches_expected'] ?? null) === $rawCpuMatches
+        && ($memory['max_bytes'] ?? null) === $rawMemory
+        && ($memory['matches_expected'] ?? null) === $rawMemoryMatches
+        && ($swap['raw_max_bytes'] ?? null) === $rawSwap
+        && ($swap['effective_max_bytes'] ?? null) === $rawEffectiveSwap
+        && ($swap['matches_expected'] ?? null) === $rawSwapMatches
+        && is_string($cgroup['raw_sha256'] ?? null)
+        && hash_equals(hash('sha256', $raw), $cgroup['raw_sha256'])
+        && ($cgroup['matches_expected'] ?? null) === ($rawCpuMatches && $rawMemoryMatches && $rawSwapMatches);
 
-    return in_array($cgroup['version'] ?? null, ['v1', 'v2'], true)
+    return $rawMatchesStructured
+        && in_array($cgroup['version'] ?? null, ['v1', 'v2'], true)
         && is_int($quota)
         && $quota > 0
         && is_int($period)
@@ -17950,9 +18591,9 @@ function wp_fts_wc_mutation_artifact_gates(array $mutation, array $resources, ar
     return [
         wp_fts_wc_gate(
             'mutation_statement_evidence_contract',
-            ['relational-fts-mutation-generation-cas-v2', 'PASS', 'relational-fts-mutation-statements-v1', 2048, 7],
+            ['relational-fts-mutation-generation-cas-v4', 'PASS', 'relational-fts-mutation-statements-v1', 2048, 7],
             [$mutation['schema'] ?? null, $mutation['status'] ?? null, $mutation['statement_evidence_schema'] ?? null, $mutation['statement_evidence_max_redacted_sql_bytes'] ?? null, $mutation['measured_boundary_count'] ?? null],
-            ($mutation['schema'] ?? null) === 'relational-fts-mutation-generation-cas-v2'
+            ($mutation['schema'] ?? null) === 'relational-fts-mutation-generation-cas-v4'
                 && ($mutation['status'] ?? null) === 'PASS'
                 && ($mutation['statement_evidence_schema'] ?? null) === 'relational-fts-mutation-statements-v1'
                 && ($mutation['statement_evidence_max_redacted_sql_bytes'] ?? null) === 2048
@@ -17973,6 +18614,14 @@ function wp_fts_wc_mutation_artifact_gates(array $mutation, array $resources, ar
         wp_fts_wc_gate('mutation_boundary_statement_order', $expectedBoundaryIds, $actualBoundaryIds, $actualBoundaryIds === $expectedBoundaryIds),
         wp_fts_wc_gate('mutation_boundary_statement_counts', $expectedCounts, $actualBoundaryCounts, $actualBoundaryCounts === $expectedCounts),
         wp_fts_wc_gate('mutation_boundary_statement_payloads', [], $invalidBoundaries, $invalidBoundaries === []),
+        wp_fts_wc_gate(
+            'mutation_artifact_production_worker_sql_evidence_contract',
+            ['relational-fts-mutation-worker-sql-v1', '<=32 statements', '<=1 MiB/statement', '<=4 MiB total', 'self-hash'],
+            $mutation['production_worker_cas']['sql_evidence'] ?? null,
+            wp_fts_wc_mutation_worker_sql_evidence_valid(
+                is_array($mutation['production_worker_cas'] ?? null) ? $mutation['production_worker_cas'] : []
+            )
+        ),
         wp_fts_wc_gate(
             'mutation_artifact_cross_process_guard_contract',
             'independent source-bound holder, exact busy/free statements and EXPLAIN rows, fenced debt never auto-recovered',
@@ -18009,6 +18658,82 @@ function wp_fts_wc_mutation_artifact_gates(array $mutation, array $resources, ar
             wp_fts_wc_mutation_corpus_publication_proofs_valid($mutation)
         ),
     ];
+}
+
+/** Validate the complete bounded production-worker SQL evidence envelope. */
+function wp_fts_wc_mutation_worker_sql_evidence_valid(array $worker): bool
+{
+    $evidence = is_array($worker['sql_evidence'] ?? null) ? $worker['sql_evidence'] : [];
+    if (
+        array_keys($evidence) !== [
+            'schema',
+            'statement_count',
+            'total_bytes',
+            'max_statement_bytes',
+            'statements',
+            'evidence_sha256',
+        ]
+        || ($evidence['schema'] ?? null) !== 'relational-fts-mutation-worker-sql-v1'
+        || !is_int($evidence['statement_count'] ?? null)
+        || $evidence['statement_count'] < 1
+        || $evidence['statement_count'] > 32
+        || ($worker['captured_worker_statement_count'] ?? null) !== $evidence['statement_count']
+        || !is_int($evidence['total_bytes'] ?? null)
+        || $evidence['total_bytes'] < 1
+        || $evidence['total_bytes'] > 4194304
+        || !is_int($evidence['max_statement_bytes'] ?? null)
+        || $evidence['max_statement_bytes'] < 1
+        || $evidence['max_statement_bytes'] > 1048576
+        || !is_array($evidence['statements'] ?? null)
+        || !array_is_list($evidence['statements'])
+        || count($evidence['statements']) !== $evidence['statement_count']
+        || !wp_fts_wc_is_lowercase_sha256($evidence['evidence_sha256'] ?? null)
+    ) {
+        return false;
+    }
+
+    $totalBytes = 0;
+    $maxStatementBytes = 0;
+    $ackMatches = 0;
+    foreach ($evidence['statements'] as $index => $statement) {
+        if (
+            !is_array($statement)
+            || array_keys($statement) !== ['index', 'sql', 'bytes', 'sha256']
+            || ($statement['index'] ?? null) !== $index
+            || !is_string($statement['sql'] ?? null)
+            || $statement['sql'] === ''
+            || !is_int($statement['bytes'] ?? null)
+            || $statement['bytes'] !== strlen($statement['sql'])
+            || $statement['bytes'] < 1
+            || $statement['bytes'] > 1048576
+            || !wp_fts_wc_is_lowercase_sha256($statement['sha256'] ?? null)
+            || !hash_equals($statement['sha256'], hash('sha256', $statement['sql']))
+        ) {
+            return false;
+        }
+        $totalBytes += $statement['bytes'];
+        $maxStatementBytes = max($maxStatementBytes, $statement['bytes']);
+        if (
+            ($worker['atomic_ack_sql_bytes'] ?? null) === $statement['bytes']
+            && is_string($worker['atomic_ack_sql_sha256'] ?? null)
+            && hash_equals($worker['atomic_ack_sql_sha256'], $statement['sha256'])
+        ) {
+            $ackMatches++;
+        }
+    }
+    if (
+        $totalBytes !== $evidence['total_bytes']
+        || $maxStatementBytes !== $evidence['max_statement_bytes']
+        || ($worker['atomic_ack_statement_count'] ?? null) !== 1
+        || $ackMatches !== 1
+    ) {
+        return false;
+    }
+
+    $recordedHash = $evidence['evidence_sha256'];
+    unset($evidence['evidence_sha256']);
+
+    return hash_equals($recordedHash, wp_fts_wc_canonical_hash($evidence));
 }
 
 /** @param array<string,mixed> $mutation */
@@ -19170,7 +19895,8 @@ function wp_fts_wc_assert_relational_schema(): array
     foreach ($tables as $key => $table) {
         $identifier = wp_fts_wc_identifier($table);
         $status = $wpdb->get_row($wpdb->prepare('SHOW TABLE STATUS LIKE %s', $table));
-        wp_fts_wc_assert(is_object($status) && strtolower((string) ($status->Engine ?? '')) === 'innodb', "{$table} must use InnoDB.");
+        $engine = is_object($status) ? strtolower((string) ($status->Engine ?? '')) : '';
+        wp_fts_wc_assert($engine === 'innodb', "{$table} must use InnoDB.");
         $columns = [];
         $definitions = [];
         foreach ($wpdb->get_results("SHOW COLUMNS FROM `{$identifier}`") ?: [] as $column) {
@@ -19199,7 +19925,7 @@ function wp_fts_wc_assert_relational_schema(): array
             $indexes === $requiredIndexes[$key],
             "{$table} indexes do not exactly match the production schema contract."
         );
-        $physical[$key] = ['table' => $table, 'columns' => $definitions, 'indexes' => $indexes];
+        $physical[$key] = ['table' => $table, 'engine' => $engine, 'columns' => $definitions, 'indexes' => $indexes];
     }
 
     $termIndexes = wp_fts_wc_table_indexes($tables['terms']);
@@ -19340,8 +20066,10 @@ function wp_fts_wc_failure_recovery_proof(array $manifest): array
 
     $recorded = wp_fts_wc_record_queries(static fn() => $queue->enqueue_many($ids));
     $enqueueCount = is_numeric($recorded['result']) ? (int) $recorded['result'] : count($ids);
+    $enqueueSql = array_values($recorded['queries']);
     wp_fts_wc_assert($enqueueCount === count($ids), 'enqueue_many() did not report every unique post.');
-    wp_fts_wc_assert(count($recorded['queries']) === 1, 'enqueue_many() must use exactly one data statement.');
+    wp_fts_wc_assert(count($enqueueSql) === 1, 'enqueue_many() must use exactly one data statement.');
+    wp_fts_wc_assert(strlen($enqueueSql[0]) <= 1048576, 'Poison-proof enqueue SQL exceeds its 1 MiB evidence bound.');
 
     $filter = static function (array $options, object $post) use ($poisonId): array {
         if ((int) ($post->ID ?? 0) === $poisonId) {
@@ -19369,7 +20097,25 @@ function wp_fts_wc_failure_recovery_proof(array $manifest): array
         "SELECT post_id FROM `{$work}` WHERE post_id BETWEEN " . (int) min($ids) . ' AND ' . (int) max($ids) . ' ORDER BY post_id ASC'
     ) ?: []);
     $laterRemaining = array_values(array_diff($remainingIds, [$poisonId]));
-    $state = (string) $wpdb->get_var("SELECT state FROM `{$work}` WHERE post_id = " . (int) $poisonId);
+    $workStateRow = $wpdb->get_row(
+        "SELECT job_key,kind,post_id,generation,state,available_at,attempts,claimed_generation,claim_expires_at,last_error_code,last_error_at FROM `{$work}` WHERE post_id = " . (int) $poisonId,
+        ARRAY_A
+    );
+    wp_fts_wc_assert(is_array($workStateRow), 'Poison work has no durable row evidence.');
+    $workState = [
+        'job_key' => (string) ($workStateRow['job_key'] ?? ''),
+        'kind' => (string) ($workStateRow['kind'] ?? ''),
+        'post_id' => (int) ($workStateRow['post_id'] ?? 0),
+        'generation' => (int) ($workStateRow['generation'] ?? 0),
+        'state' => (string) ($workStateRow['state'] ?? ''),
+        'available_at' => (int) ($workStateRow['available_at'] ?? 0),
+        'attempts' => (int) ($workStateRow['attempts'] ?? 0),
+        'claimed_generation' => (int) ($workStateRow['claimed_generation'] ?? 0),
+        'claim_expires_at' => (int) ($workStateRow['claim_expires_at'] ?? 0),
+        'last_error_code' => (string) ($workStateRow['last_error_code'] ?? ''),
+        'last_error_at' => (int) ($workStateRow['last_error_at'] ?? 0),
+    ];
+    $state = $workState['state'];
     $scheduled = function_exists('wp_next_scheduled') ? wp_next_scheduled(WP_FTS_Plugin::CRON_HOOK) : false;
 
     wp_fts_wc_assert($laterRemaining === [], 'A poison item blocked unrelated later queue work.');
@@ -19409,11 +20155,38 @@ function wp_fts_wc_failure_recovery_proof(array $manifest): array
     $poisonRemaining = (int) $wpdb->get_var("SELECT COUNT(*) FROM `{$work}` WHERE post_id = " . (int) $poisonId);
     wp_fts_wc_assert($poisonRemaining === 0, 'Removing the poison fault did not reconcile and acknowledge the desired generation.');
 
+    wp_fts_wc_assert(count($ids) === 100 && count($remainingIds) <= 100 && count($laterRemaining) <= 99, 'Failure-recovery post-ID evidence exceeds its fixed vector bounds.');
+    wp_fts_wc_assert(count($batchErrors) <= 3, 'Failure-recovery error evidence exceeds its three-attempt bound.');
+    foreach ($batchErrors as $errorMessage) {
+        wp_fts_wc_assert(is_string($errorMessage) && strlen($errorMessage) <= 8192, 'Failure-recovery error evidence exceeds its 8 KiB message bound.');
+    }
+    $observations = [
+        'enqueued_post_ids' => $ids,
+        'enqueued_post_ids_sha256' => wp_fts_wc_canonical_hash($ids),
+        'enqueue_sql' => $enqueueSql,
+        'enqueue_sql_sha256' => array_map(static fn(string $sql): string => hash('sha256', $sql), $enqueueSql),
+        'enqueue_statement_byte_counts' => array_map('strlen', $enqueueSql),
+        'remaining_post_ids_before_recovery' => $remainingIds,
+        'later_remaining_post_ids_before_recovery' => $laterRemaining,
+        'poison_work_row_before_recovery' => $workState,
+        'poison_remaining_after_recovery' => $poisonRemaining,
+    ];
+    wp_fts_wc_assert_json_evidence_bytes($observations, 4194304, 'Failure-recovery observations');
+    $gates = [
+        wp_fts_wc_gate('poison_later_posts_searchable', true, $laterSearchable, $laterSearchable),
+        wp_fts_wc_gate('poison_debt_durable_before_recovery', true, in_array($poisonId, $remainingIds, true), in_array($poisonId, $remainingIds, true)),
+        wp_fts_wc_gate('poison_recovered_desired_generation', 0, $poisonRemaining, $poisonRemaining === 0),
+        ...$generationFence['gates'],
+    ];
+
     return [
+        'schema' => 'relational-fts-failure-recovery-v1',
+        'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
         'passed' => $laterRemaining === [] && $poisonRemaining === 0,
         'poison_post_id' => $poisonId,
-        'enqueue_statement_count' => count($recorded['queries']),
-        'enqueue_statement_bytes' => max(array_map('strlen', $recorded['queries'])),
+        ...$observations,
+        'enqueue_statement_count' => count($enqueueSql),
+        'enqueue_statement_bytes' => max(array_map('strlen', $enqueueSql)),
         'processed_before_recovery' => $processed,
         'batch_errors' => $batchErrors,
         'durable_state_before_recovery' => $state,
@@ -19422,12 +20195,7 @@ function wp_fts_wc_failure_recovery_proof(array $manifest): array
         'later_searchable_before_recovery' => $laterSearchable,
         'generation_fence' => $generationFence,
         'recovered' => $recovered,
-        'gates' => [
-            wp_fts_wc_gate('poison_later_posts_searchable', true, $laterSearchable, $laterSearchable),
-            wp_fts_wc_gate('poison_debt_durable_before_recovery', true, in_array($poisonId, $remainingIds, true), in_array($poisonId, $remainingIds, true)),
-            wp_fts_wc_gate('poison_recovered_desired_generation', 0, $poisonRemaining, $poisonRemaining === 0),
-            ...$generationFence['gates'],
-        ],
+        'gates' => $gates,
     ];
 }
 
@@ -19530,25 +20298,43 @@ function wp_fts_wc_enqueue_dirty_head(array $manifest): array
             $queue->enqueue_many($chunk);
         }
     });
+    $queries = array_values($recorded['queries']);
     wp_fts_wc_assert(
-        count($recorded['queries']) === count($chunks),
+        count($queries) === count($chunks),
         'Dirty-head enqueue must use exactly one bounded multi-row UPSERT per chunk.'
     );
+    wp_fts_wc_assert(count($ids) <= 20000 && count($chunks) <= 20, 'Dirty-head evidence exceeds the largest supported corpus vector.');
+    $statementByteCounts = array_map('strlen', $queries);
     wp_fts_wc_assert(
-        max(array_map('strlen', $recorded['queries'])) <= 1048576,
+        max($statementByteCounts) <= 1048576,
         'Dirty-head enqueue statements must remain within the one-megabyte queue contract.'
     );
+    $totalStatementBytes = array_sum($statementByteCounts);
+    wp_fts_wc_assert($totalStatementBytes <= 20971520, 'Dirty-head SQL evidence exceeds its 20 MiB aggregate bound.');
+    $observations = [
+        'post_ids' => $ids,
+        'post_ids_sha256' => wp_fts_wc_canonical_hash($ids),
+        'statement_post_counts' => array_map('count', $chunks),
+        'statement_byte_counts' => $statementByteCounts,
+        'sql_sha256' => array_map(static fn(string $sql): string => hash('sha256', $sql), $queries),
+        'sql' => $queries,
+    ];
+    wp_fts_wc_assert_json_evidence_bytes($observations, 33554432, 'Dirty-head observations');
 
     $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
     $actual = (int) $wpdb->get_var("SELECT COUNT(*) FROM `{$work}` WHERE post_id BETWEEN " . min($ids) . ' AND ' . max($ids));
     wp_fts_wc_assert($actual === count($ids), 'Dirty-head work rows were not durably persisted.');
 
     return [
+        'schema' => 'relational-fts-dirty-head-v1',
+        'status' => 'PASS',
+        ...$observations,
         'post_count' => count($ids),
         'first_post_id' => min($ids),
         'last_post_id' => max($ids),
-        'statement_count' => count($recorded['queries']),
-        'statement_bytes' => max(array_map('strlen', $recorded['queries'])),
+        'statement_count' => count($queries),
+        'statement_bytes' => max($statementByteCounts),
+        'statement_total_bytes' => $totalStatementBytes,
     ];
 }
 
@@ -21130,16 +21916,31 @@ function wp_fts_wc_pack_cardinality_statement_proof(array $definition, array $or
             WP_FTS_Plugin::runtime_analyzer_pack_statuses(),
             static fn(array $status): bool => ($status['kind'] ?? null) === 'lemmatizer' && ($status['status'] ?? null) === 'active' && empty($status['fixture_only'])
         ));
+        wp_fts_wc_assert(count($statuses) <= 64, 'Pack-cardinality active-pack evidence exceeds its 64-pack bound.');
+        wp_fts_wc_assert(count($queries) <= 16, 'Pack-cardinality SQL evidence exceeds its 16-statement diagnostic bound.');
+        $statementBytes = array_map('strlen', $queries);
+        foreach ($statementBytes as $bytes) {
+            wp_fts_wc_assert($bytes <= 1048576, 'Pack-cardinality SQL evidence exceeds its 1 MiB statement bound.');
+        }
+        wp_fts_wc_assert(array_sum($statementBytes) <= 4194304, 'Pack-cardinality SQL evidence exceeds its 4 MiB aggregate bound.');
+        wp_fts_wc_assert(count($rows) <= 20, 'Pack-cardinality result evidence exceeds its 20-row page bound.');
 
-        return [
+        $measurement = [
             'active_pack_count' => count($statuses),
             'active_pack_ids' => array_values(array_map(static fn(array $status): string => (string) ($status['pack_id'] ?? ''), $statuses)),
             'query_count' => count($queries),
             'statement_shape' => wp_fts_wc_statement_shape(array_map(static fn(string $sql): array => ['sql' => $sql], $queries)),
+            'statement_bytes' => $statementBytes,
+            'max_sql_bytes' => $statementBytes === [] ? 0 : max($statementBytes),
+            'sql_total_bytes' => array_sum($statementBytes),
             'sql_sha256' => array_map(static fn(string $sql): string => hash('sha256', $sql), $queries),
+            'sql' => $queries,
             'result_ids' => array_map('intval', array_column($rows, 'doc_id')),
             'result_score_signature' => wp_fts_wc_ordered_score_signature($rows),
         ];
+        wp_fts_wc_assert_json_evidence_bytes($measurement, 8388608, 'Pack-cardinality measurement');
+
+        return $measurement;
     };
 
     try {
@@ -22970,8 +23771,9 @@ function wp_fts_wc_performance_schema_request_events(string $requestId, bool $fr
         static fn(array $event): bool => (int) ($event['event_id'] ?? PHP_INT_MAX) < $taggedStartEvent
     ));
     $tableTouching = array_values(array_filter($events, static function (array $event) use ($wpdb): bool {
-        $sql = strtolower((string) ($event['sql'] ?? ''));
-        return str_contains($sql, strtolower($wpdb->prefix . 'fts_')) || str_contains($sql, strtolower($wpdb->posts));
+        $sql = (string) ($event['sql'] ?? '');
+        return wp_fts_wc_sql_references_owned_fts_table($sql, (string) $wpdb->prefix)
+            || wp_fts_wc_sql_references_physical_table($sql, (string) $wpdb->posts);
     }));
     $unattributedTableTouching = array_values(array_filter(
         $tableTouching,
@@ -22979,23 +23781,23 @@ function wp_fts_wc_performance_schema_request_events(string $requestId, bool $fr
     ));
     $searchEvents = array_values(array_filter($tableTouching, static fn(array $event): bool => wp_fts_wc_is_search_statement((string) ($event['sql'] ?? ''))));
     $pluginTableEvents = array_values(array_filter($tableTouching, static function (array $event) use ($wpdb): bool {
-        return str_contains(strtolower((string) ($event['sql'] ?? '')), strtolower($wpdb->prefix . 'fts_'));
+        return wp_fts_wc_sql_references_owned_fts_table((string) ($event['sql'] ?? ''), (string) $wpdb->prefix);
     }));
     $pluginAttributedEvents = array_values(array_filter($events, static fn(array $event): bool => str_contains(
         (string) ($event['sql'] ?? ''),
         'wp_fts_wc_plugin_query'
     )));
     $pluginOptionSitemetaEvents = array_values(array_filter($pluginAttributedEvents, static function (array $event) use ($wpdb): bool {
-        $sql = strtolower((string) ($event['sql'] ?? ''));
-        return str_contains($sql, strtolower((string) $wpdb->options))
-            || str_contains($sql, strtolower((string) $wpdb->sitemeta));
+        $sql = (string) ($event['sql'] ?? '');
+        return wp_fts_wc_sql_references_physical_table($sql, (string) $wpdb->options)
+            || wp_fts_wc_sql_references_physical_table($sql, (string) $wpdb->sitemeta);
     }));
     $nonSearchPluginTableEvents = array_values(array_filter($pluginTableEvents, static fn(array $event): bool => !wp_fts_wc_is_search_statement((string) ($event['sql'] ?? ''))));
     $coreLikeEvents = array_values(array_filter($tableTouching, static function (array $event) use ($wpdb): bool {
         $sql = (string) ($event['sql'] ?? '');
-        return str_contains(strtolower($sql), strtolower($wpdb->posts))
-            && str_contains(strtoupper($sql), 'LIKE')
-            && !str_contains($sql, 'wp_fts:');
+        return wp_fts_wc_sql_references_physical_table($sql, (string) $wpdb->posts)
+            && wp_fts_wc_sql_contains_executable_word($sql, 'like')
+            && !wp_fts_wc_sql_references_owned_fts_table($sql, (string) $wpdb->prefix);
     }));
 
     return [
@@ -23023,6 +23825,82 @@ function wp_fts_wc_performance_schema_request_events(string $requestId, bool $fr
         'core_like_events' => $coreLikeEvents,
         'ordered_sql_sha256' => array_column($events, 'sql_sha256'),
     ];
+}
+
+/** Match one decoded identifier token; comments and quoted values are absent. */
+function wp_fts_wc_sql_references_physical_table(string $sql, string $table): bool
+{
+    $table = strtolower(trim($table, "` \t\n\r\0\x0B"));
+    if ($table === '') {
+        return false;
+    }
+    foreach (wp_fts_wc_sql_token_stream($sql) as $token) {
+        if (in_array($token['type'] ?? null, ['word', 'identifier'], true) && ($token['value'] ?? null) === $table) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/** Recognize only current-site production tables and bounded fault descendants. */
+function wp_fts_wc_sql_references_owned_fts_table(string $sql, string $tablePrefix): bool
+{
+    foreach (wp_fts_wc_sql_token_stream($sql) as $token) {
+        if (
+            in_array($token['type'] ?? null, ['word', 'identifier'], true)
+            && wp_fts_wc_is_owned_fts_table_identifier((string) ($token['value'] ?? ''), $tablePrefix)
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/** Parse the deliberately narrow physical table-name grammar without regexp. */
+function wp_fts_wc_is_owned_fts_table_identifier(string $identifier, string $tablePrefix): bool
+{
+    $identifier = strtolower(trim($identifier, "` \t\n\r\0\x0B"));
+    $tablePrefix = strtolower($tablePrefix);
+    if (in_array($identifier, [
+        $tablePrefix . 'fts_terms',
+        $tablePrefix . 'fts_postings',
+        $tablePrefix . 'fts_documents',
+        $tablePrefix . 'fts_work',
+        $tablePrefix . 'fts_terms_wc_missing',
+    ], true)) {
+        return true;
+    }
+
+    $failurePrefix = $tablePrefix . 'fts_wc_failed_';
+    if (!str_starts_with($identifier, $failurePrefix)) {
+        return false;
+    }
+    $suffix = substr($identifier, strlen($failurePrefix));
+    foreach (['plan', 'rank', 'hydrate'] as $stage) {
+        $stagePrefix = $stage . '_';
+        if (!str_starts_with($suffix, $stagePrefix)) {
+            continue;
+        }
+        $nonce = substr($suffix, strlen($stagePrefix));
+        return strlen($nonce) === 8 && strspn($nonce, '0123456789abcdef') === 8;
+    }
+
+    return false;
+}
+
+/** Match a real executable keyword rather than text inside a value/comment. */
+function wp_fts_wc_sql_contains_executable_word(string $sql, string $word): bool
+{
+    $word = strtolower($word);
+    foreach (wp_fts_wc_sql_token_stream($sql) as $token) {
+        if (($token['type'] ?? null) === 'word' && ($token['value'] ?? null) === $word) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /**
@@ -23135,9 +24013,16 @@ function wp_fts_wc_record_queries(callable $callback): array
 /** Identify every statement touching the current relational search tables. */
 function wp_fts_wc_is_search_statement(string $sql): bool
 {
-    $lower = strtolower($sql);
-    foreach (['fts_terms', 'fts_postings', 'fts_documents', 'fts_work'] as $table) {
-        if (str_contains($lower, $table)) {
+    global $wpdb;
+
+    if (isset($wpdb) && is_object($wpdb) && wp_fts_wc_sql_references_owned_fts_table($sql, (string) ($wpdb->prefix ?? ''))) {
+        return true;
+    }
+    foreach (wp_fts_wc_sql_token_stream($sql) as $token) {
+        if (
+            in_array($token['type'] ?? null, ['word', 'identifier'], true)
+            && wp_fts_wc_fts_table_kind((string) ($token['value'] ?? '')) !== null
+        ) {
             return true;
         }
     }
@@ -23834,8 +24719,6 @@ function wp_fts_wc_validation_inventory_matches(array $evidence): bool
         'selective_prefix_anchor_and_rank_rows_examined',
         'selective_prefix_anchor_and_common_exact_not_materialized',
         'surface_dense_candidate_prefix_and_unrelated_posting_envelope',
-        'dense_relationship_active_targeted_broad_prefix_rows_examined',
-        'dense_relationship_rank_control_revocation_short_circuits_postings',
         'indexing_rebuild_complete_signature_restored',
         'all_distributable_pack_identities_active',
         'failure_recovery_progress',
@@ -23941,7 +24824,43 @@ function wp_fts_wc_validation_inventory_matches(array $evidence): bool
         && !in_array('evidence_gate_ids_unique', $gateIds, true)
         && count(array_unique($gateIds)) === count($gateIds)
         && array_diff($criticalGateIds, $gateIds) === []
+        && wp_fts_wc_gate_inventory_fingerprint_matches($gateIds, 'preliminary')
         && array_keys(is_array($evidence['cases'] ?? null) ? $evidence['cases'] : []) === $expectedCaseIds;
+}
+
+/** Return the two explicitly reviewed ordered gate inventories. */
+function wp_fts_wc_expected_gate_inventory_fingerprints(): array
+{
+    return [
+        'preliminary' => [
+            'count' => 1293,
+            'sha256' => 'c054488a7ce7f2863c1582230f583a94198f06e28aac3bc4a21ccef8ba47aaad',
+        ],
+        'final' => [
+            'count' => 2769,
+            'sha256' => 'd92a4fd85fa8f38600c53aef256294e83437f1cec69d400d3c7221282d3d536c',
+        ],
+    ];
+}
+
+/** Match an ordered gate list without allowing self-rehashed shrinkage. */
+function wp_fts_wc_gate_inventory_fingerprint_matches(mixed $gateIds, string $phase): bool
+{
+    $expected = wp_fts_wc_expected_gate_inventory_fingerprints()[$phase] ?? null;
+    if (!is_array($expected)
+        || !is_array($gateIds)
+        || !array_is_list($gateIds)
+        || count($gateIds) !== ($expected['count'] ?? null)
+        || count(array_filter($gateIds, static fn(mixed $id): bool => is_string($id) && $id !== '' && trim($id) === $id)) !== count($gateIds)
+        || count(array_unique($gateIds)) !== count($gateIds)
+    ) {
+        return false;
+    }
+
+    $actualHash = wp_fts_wc_canonical_hash($gateIds);
+
+    return is_string($expected['sha256'] ?? null)
+        && hash_equals((string) $expected['sha256'], $actualHash);
 }
 
 /**
@@ -24022,6 +24941,14 @@ function wp_fts_wc_manifest(): array
 function wp_fts_wc_canonical_hash(mixed $value): string
 {
     return hash('sha256', json_encode(wp_fts_wc_canonicalize($value), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR));
+}
+
+/** Fail before a diagnostic vector can make the compact evidence unbounded. */
+function wp_fts_wc_assert_json_evidence_bytes(mixed $value, int $maxBytes, string $label): void
+{
+    wp_fts_wc_assert($maxBytes > 0, "{$label} has an invalid byte bound.");
+    $json = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
+    wp_fts_wc_assert(strlen($json) <= $maxBytes, "{$label} exceeds its {$maxBytes}-byte compact JSON bound.");
 }
 
 /** Sort maps recursively while preserving list order and scalar types. */

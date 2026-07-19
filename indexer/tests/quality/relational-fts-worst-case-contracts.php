@@ -93,7 +93,7 @@ run_wpcli_php_phase() { printf '%s\n' "$1" >> "${INVOCATIONS}"; }
 run_php_phase() {
     printf '%s\n' "$1" >> "${INVOCATIONS}"
     if [[ "$1" == validate ]]; then
-        printf '{"schema":"relational-fts-evidence-v4","status":"FAIL","completed":false}\n' > "${EVIDENCE_DIR}/relational-fts-evidence.json"
+        printf '{"schema":"relational-fts-evidence-v5","status":"FAIL","completed":false}\n' > "${EVIDENCE_DIR}/relational-fts-evidence.json"
         return 47
     fi
 }
@@ -301,8 +301,6 @@ test_case('relational worst-case preliminary inventory rejects self-rehashed evi
         'selective_prefix_anchor_and_rank_rows_examined',
         'selective_prefix_anchor_and_common_exact_not_materialized',
         'surface_dense_candidate_prefix_and_unrelated_posting_envelope',
-        'dense_relationship_active_targeted_broad_prefix_rows_examined',
-        'dense_relationship_rank_control_revocation_short_circuits_postings',
         'indexing_rebuild_complete_signature_restored',
         'all_distributable_pack_identities_active',
         'failure_recovery_progress',
@@ -396,12 +394,12 @@ test_case('relational worst-case preliminary inventory rejects self-rehashed evi
             $criticalGateIds[] = "{$caseId}_{$suffix}";
         }
     }
-    $probe = "<?php\n" . $extracted
+    $probe = "<?php\nfunction wp_fts_wc_gate_inventory_fingerprint_matches(mixed \$gateIds, string \$phase): bool { return \$phase === 'preliminary'; }\n" . $extracted
         . '$caseIds = ' . var_export($caseIds, true) . ";\n"
         . '$gateIds = ' . var_export($criticalGateIds, true) . ";\n"
         . <<<'PHP'
 $evidence = [
-    'schema' => 'relational-fts-evidence-v4',
+    'schema' => 'relational-fts-evidence-v5',
     'status' => 'PASS',
     'source_sha' => str_repeat('a', 40),
     'zip_sha256' => str_repeat('b', 64),
@@ -484,6 +482,52 @@ PHP;
         ], $outcomes, 'recomputing the evidence self-hash must not make a shrunken gate, section, or case inventory acceptable');
     } finally {
         @unlink($temporary);
+    }
+});
+
+test_case('relational worst-case gate fingerprints reject ordered inventory drift', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $expectedSource = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_expected_gate_inventory_fingerprints');
+    foreach ([
+        "'count' => 1293",
+        "'sha256' => 'c054488a7ce7f2863c1582230f583a94198f06e28aac3bc4a21ccef8ba47aaad'",
+        "'count' => 2769",
+        "'sha256' => 'd92a4fd85fa8f38600c53aef256294e83437f1cec69d400d3c7221282d3d536c'",
+    ] as $required) {
+        assert_contains($required, $expectedSource, "reviewed gate fingerprint must retain {$required}");
+    }
+
+    $preliminary = ['alpha', 'beta', 'gamma'];
+    $final = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
+    $canonicalHash = static fn(array $ids): string => hash('sha256', json_encode($ids, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR));
+    $matcherSource = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_gate_inventory_fingerprint_matches');
+    $matcherSource = str_replace(
+        ['wp_fts_wc_gate_inventory_fingerprint_matches', 'wp_fts_wc_expected_gate_inventory_fingerprints', 'wp_fts_wc_canonical_hash'],
+        ['wp_fts_wc_test_gate_inventory_fingerprint_matches', 'wp_fts_wc_test_expected_gate_inventory_fingerprints', 'wp_fts_wc_test_canonical_hash'],
+        $matcherSource
+    );
+    eval('function wp_fts_wc_test_expected_gate_inventory_fingerprints(): array { return ' . var_export([
+        'preliminary' => ['count' => count($preliminary), 'sha256' => $canonicalHash($preliminary)],
+        'final' => ['count' => count($final), 'sha256' => $canonicalHash($final)],
+    ], true) . '; }');
+    eval('function wp_fts_wc_test_canonical_hash(mixed $value): string { return hash("sha256", json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR)); }');
+    eval($matcherSource);
+
+    assert_true(wp_fts_wc_test_gate_inventory_fingerprint_matches($preliminary, 'preliminary'), 'exact preliminary ordered inventory should pass');
+    assert_true(wp_fts_wc_test_gate_inventory_fingerprint_matches($final, 'final'), 'exact final ordered inventory should pass');
+    $mutations = [
+        'deleted preliminary ID' => [array_slice($preliminary, 0, -1), 'preliminary'],
+        'added preliminary ID' => [[...$preliminary, 'extra'], 'preliminary'],
+        'reordered preliminary IDs' => [['beta', 'alpha', 'gamma'], 'preliminary'],
+        'duplicate preliminary ID' => [['alpha', 'alpha', 'gamma'], 'preliminary'],
+        'deleted final-only ID' => [array_slice($final, 0, -1), 'final'],
+        'reordered final-only IDs' => [['alpha', 'beta', 'gamma', 'epsilon', 'delta'], 'final'],
+        'unknown phase' => [$preliminary, 'unknown'],
+        'associative list' => [['first' => 'alpha', 'second' => 'beta', 'third' => 'gamma'], 'preliminary'],
+        'blank ID' => [['alpha', '', 'gamma'], 'preliminary'],
+    ];
+    foreach ($mutations as $description => [$ids, $phase]) {
+        assert_true(!wp_fts_wc_test_gate_inventory_fingerprint_matches($ids, $phase), "gate fingerprint must reject {$description}");
     }
 });
 
@@ -1610,7 +1654,11 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         'capture_wordpress_memory_checkpoint final-workload',
         'wordpress-memory-cgroup.tsv',
         'WordPress container identity changed before memory checkpoint',
-        'relational-fts-wordpress-cgroup-memory-v2',
+        'relational-fts-resources-v2',
+        'relational-fts-database-cgroup-memory-v2',
+        'relational-fts-wordpress-cgroup-memory-v3',
+        '"raw" => $raw',
+        'hash_equals(hash("sha256",$raw),$checkpoint["raw_sha256"])',
         "--format '{{.State.StartedAt}}|{{.State.Pid}}|{{.RestartCount}}'",
         'finalize_cgroup_memory_evidence',
         '["common_or","max_valid_or_prefix","rare_anchor_and","prefix_fanout"]',
@@ -1806,6 +1854,7 @@ test_case('relational worst-case records measured mutation SQL and effective pin
     $runnerPath = $root . '/tools/run-relational-fts-worst-case.sh';
     $runner = (string) file_get_contents($runnerPath);
     $mutation = (string) file_get_contents(dirname(__DIR__) . '/integration/mutation-fence-concurrency.php');
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
 
     foreach ([
@@ -1815,7 +1864,7 @@ test_case('relational worst-case records measured mutation SQL and effective pin
         "'fence_boundary_statement_counts' => \$fenceStatementCounts",
         "'promotion_boundary_statement_counts' => \$promotionStatementCounts",
         "'boundary_statement_evidence' => \$boundaryEvidence",
-        "'schema' => 'relational-fts-mutation-generation-cas-v2'",
+        "'schema' => 'relational-fts-mutation-generation-cas-v4'",
         "'production_worker_cas' => \$productionWorker",
         "'cross_process_foreground_guard' => \$crossProcessGuardEvidence",
         "'schema' => 'relational-fts-cross-process-owner-guard-v1'",
@@ -1835,6 +1884,16 @@ test_case('relational worst-case records measured mutation SQL and effective pin
         "'committed' => (int) (\$summary['committed'] ?? -1)",
         "'queue_processed' => (int) (\$summary['queue_processed'] ?? -1)",
         "'atomic_ack_generation_cas_valid' => \$ackCasValid",
+        "'atomic_ack_excludes_writer_lease' => \$ackExcludesWriterLease",
+        "'writer_lease_released_after_commit' => \$writerLeaseReleasedAfterCommit",
+        "'writer_lease_delete_cas_valid' => \$writerLeaseDeleteCasValid",
+        'wp_fts_mutation_proof_epoch_upsert_valid',
+        'wp_fts_mutation_proof_ack_generation_cas_valid',
+        'wp_fts_mutation_proof_ack_constant_driver_valid',
+        'wp_fts_mutation_proof_writer_lease_delete_valid',
+        'wp_fts_mutation_proof_worker_sql_evidence',
+        'relational-fts-mutation-worker-sql-v1',
+        'MySQL/MariaDB executable comments are',
         "'terms' => (int) \$wpdb->get_var",
         "\$result['fixture_cleanup'] = \$cleanup",
     ] as $required) {
@@ -1848,6 +1907,194 @@ test_case('relational worst-case records measured mutation SQL and effective pin
         !str_contains($mutation, "'promotion_statements_per_boundary' => 1"),
         'promotion statement count must be derived from the executed SQL log, not asserted as a literal'
     );
+    foreach ([
+        'wp_fts_mutation_proof_assert',
+        'wp_fts_mutation_proof_canonicalize',
+        'wp_fts_mutation_proof_canonical_hash',
+        'wp_fts_mutation_proof_worker_sql_evidence',
+        'wp_fts_mutation_proof_ascii_hex_string',
+        'wp_fts_mutation_proof_transaction_control',
+        'wp_fts_mutation_proof_transaction_control_tokens',
+        'wp_fts_mutation_proof_ack_transaction_sequence',
+        'wp_fts_mutation_proof_epoch_upsert_valid',
+        'wp_fts_mutation_proof_sql_single_values_tuple_before_on_duplicate',
+        'wp_fts_mutation_proof_ack_constant_driver_valid',
+        'wp_fts_mutation_proof_ack_generation_cas_valid',
+        'wp_fts_mutation_proof_writer_lease_insert_payload',
+        'wp_fts_mutation_proof_writer_lease_delete_valid',
+        'wp_fts_mutation_proof_serialized_writer_payload_valid',
+        'wp_fts_mutation_proof_sql_is_single_dml',
+        'wp_fts_mutation_proof_sql_tokens_are_single_dml',
+        'wp_fts_mutation_proof_sql_tokens_are_exact_keywords',
+        'wp_fts_mutation_proof_sql_token_is_keyword',
+        'wp_fts_mutation_proof_sql_token_is_symbol',
+        'wp_fts_mutation_proof_sql_token_is_positive_decimal',
+        'wp_fts_mutation_proof_sql_identifier_matches',
+        'wp_fts_mutation_proof_sql_token_sequence_count',
+        'wp_fts_mutation_proof_sql_token_sequence_is_tail',
+        'wp_fts_mutation_proof_sql_token_value_count',
+        'wp_fts_mutation_proof_sql_string_value_count',
+        'wp_fts_mutation_proof_sql_comment_count',
+        'wp_fts_mutation_proof_sql_tokens',
+        'wp_fts_mutation_proof_sql_read_quoted',
+        'wp_fts_mutation_proof_sql_skip_line_comment',
+        'wp_fts_mutation_proof_sql_is_space',
+        'wp_fts_mutation_proof_sql_is_symbol_character',
+    ] as $functionName) {
+        if (!function_exists($functionName)) {
+            eval(wp_fts_wc_contract_function_source($mutation, $functionName));
+        }
+    }
+    $validAckSequence = [
+        'SELECT writer lease',
+        'START TRANSACTION',
+        'UPDATE bounded rows',
+        'INSERT meta:search-epoch ON DUPLICATE KEY UPDATE generation=generation+1',
+        'DELETE /* wp_fts:atomic-worker-ack */ FROM work',
+        'COMMIT',
+        'DELETE exact writer lease',
+    ];
+    assert_true(
+        wp_fts_mutation_proof_ack_transaction_sequence($validAckSequence, 4)['valid'],
+        'the exact START/write/epoch/ACK/COMMIT sequence should validate'
+    );
+    $invalidAckSequences = [
+        'intermediate COMMIT' => [['START TRANSACTION', 'UPDATE bounded rows', 'COMMIT', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        'intermediate ROLLBACK' => [['START TRANSACTION', 'UPDATE bounded rows', 'ROLLBACK', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        'nested START' => [['START TRANSACTION', 'UPDATE bounded rows', 'START TRANSACTION', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        'savepoint control' => [['START TRANSACTION', 'SAVEPOINT hidden', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 3],
+        'ALTER TABLE' => [['START TRANSACTION', 'UPDATE bounded rows', 'ALTER TABLE work ADD hidden INT', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        'LOCK TABLES' => [['START TRANSACTION', 'UPDATE bounded rows', 'LOCK TABLES work WRITE', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        'SET SESSION autocommit' => [['START TRANSACTION', 'UPDATE bounded rows', 'SET SESSION autocommit=1', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        'SET @@session.autocommit' => [['START TRANSACTION', 'UPDATE bounded rows', 'SET @@session.autocommit=1', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        'leading-comment COMMIT' => [['START TRANSACTION', 'UPDATE bounded rows', "/* hidden */ -- boundary\nCOMMIT", 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+        'multi-statement DML' => [['START TRANSACTION', 'UPDATE bounded rows; DELETE FROM work', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 3],
+        'non-adjacent COMMIT' => [['START TRANSACTION', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'SELECT after ack', 'COMMIT'], 2],
+        'missing START' => [['INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 1],
+        'prior completed transaction' => [['START TRANSACTION', 'COMMIT', 'START TRANSACTION', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
+    ];
+    foreach ($invalidAckSequences as $description => [$queries, $ackIndex]) {
+        assert_true(
+            !wp_fts_mutation_proof_ack_transaction_sequence($queries, $ackIndex)['valid'],
+            "atomic acknowledgement sequence validation must reject {$description}"
+        );
+    }
+
+    $canonicalJobKey = 'post:7';
+    $constantDriver = "SELECT bounded_claims.*
+FROM (SELECT '{$canonicalJobKey}' AS job_key, '0123456789abcdef0123456789abcdef' AS claim_token, 2 AS claimed_generation, 2 AS generation) bounded_claims
+LIMIT 1";
+    $ackSql = "DELETE /* wp_fts:atomic-worker-ack */ work_row
+FROM ({$constantDriver}) claim_driver
+STRAIGHT_JOIN wp_fts_work work_row
+ON work_row.job_key = claim_driver.job_key
+AND work_row.claim_token = claim_driver.claim_token
+AND work_row.claimed_generation = claim_driver.claimed_generation
+AND work_row.generation = claim_driver.generation";
+    assert_true(wp_fts_mutation_proof_ack_generation_cas_valid($ackSql, $canonicalJobKey, 'wp_fts_work'), 'the exact four generation predicates should validate');
+    foreach (['job_key', 'claim_token', 'claimed_generation', 'generation'] as $field) {
+        $wrongRhs = str_replace("work_row.{$field} = claim_driver.{$field}", "work_row.{$field} = claim_driver.wrong_{$field}", $ackSql);
+        assert_true(!wp_fts_mutation_proof_ack_generation_cas_valid($wrongRhs, $canonicalJobKey, 'wp_fts_work'), "the generation CAS must reject a wrong {$field} RHS");
+    }
+    foreach ([
+        $ackSql . ' OR 1=1',
+        $ackSql . ' AND 1=1',
+        str_replace(
+            $constantDriver,
+            "SELECT job_key,claim_token,claimed_generation,generation FROM wp_fts_work WHERE job_key='{$canonicalJobKey}'",
+            $ackSql
+        ),
+    ] as $broadenedAckSql) {
+        assert_true(
+            !wp_fts_mutation_proof_ack_generation_cas_valid($broadenedAckSql, $canonicalJobKey, 'wp_fts_work'),
+            'the generation CAS must reject a broadened predicate or live-row driver'
+        );
+    }
+
+    $epochSql = "INSERT INTO wp_fts_work (job_key,generation) VALUES ('meta:search-epoch',1) ON DUPLICATE KEY UPDATE generation = generation + 1";
+    assert_true(wp_fts_mutation_proof_epoch_upsert_valid($epochSql, 'wp_fts_work'), 'the exact singleton epoch UPSERT should validate');
+    foreach ([
+        str_replace('wp_fts_work', 'wrong_work', $epochSql),
+        str_replace("'meta:search-epoch'", "'meta:wrong'", $epochSql),
+        str_replace('generation = generation + 1', 'generation = generation', $epochSql),
+        str_replace('VALUES', "SELECT 'meta:search-epoch',1 UNION ALL SELECT 'meta:search-epoch',1", $epochSql),
+    ] as $invalidEpochSql) {
+        assert_true(!wp_fts_mutation_proof_epoch_upsert_valid($invalidEpochSql, 'wp_fts_work'), 'epoch proof must reject a broadened or impersonated UPSERT');
+    }
+
+    $leasePayload = serialize([
+        'token' => '0123456789abcdef01234567',
+        'mode' => 'manual',
+        'started_at' => 100,
+        'heartbeat_at' => 100,
+        'expires_at' => 400,
+        'renewals' => 0,
+    ]);
+    $leaseInsert = "INSERT IGNORE INTO wp_options (option_name,option_value,autoload) SELECT '_wp_fts_index_lock','{$leasePayload}','no'";
+    assert_same($leasePayload, wp_fts_mutation_proof_writer_lease_insert_payload($leaseInsert, 'wp_options', '_wp_fts_index_lock'), 'the exact acquired lease payload should be recovered');
+    $leaseDelete = "DELETE FROM wp_options WHERE option_name = '_wp_fts_index_lock' AND option_value = '{$leasePayload}'";
+    assert_true(wp_fts_mutation_proof_writer_lease_delete_valid($leaseDelete, 'wp_options', '_wp_fts_index_lock', $leasePayload), 'the exact post-COMMIT lease CAS should validate');
+    foreach ([
+        "DELETE FROM wp_options WHERE option_name = option_name AND option_value = '{$leasePayload}'",
+        "DELETE FROM wp_options WHERE option_name = '_wp_fts_index_lock' AND option_value = option_value",
+        "DELETE FROM wp_options WHERE option_name = '_wp_fts_index_lock' AND option_value = 'a:0:{}'",
+    ] as $invalidLeaseDelete) {
+        assert_true(!wp_fts_mutation_proof_writer_lease_delete_valid($invalidLeaseDelete, 'wp_options', '_wp_fts_index_lock', $leasePayload), 'writer lease CAS must reject tautological or wrong RHS predicates');
+    }
+
+    foreach (['wp_fts_wc_canonicalize', 'wp_fts_wc_canonical_hash', 'wp_fts_wc_is_ascii_hex', 'wp_fts_wc_is_lowercase_sha256', 'wp_fts_wc_mutation_worker_sql_evidence_valid'] as $functionName) {
+        if (!function_exists($functionName)) {
+            eval(wp_fts_wc_contract_function_source($integration, $functionName));
+        }
+    }
+    $workerStatements = ['START TRANSACTION', 'COMMIT'];
+    $workerSqlEvidence = wp_fts_mutation_proof_worker_sql_evidence($workerStatements);
+    assert_same(
+        ['schema', 'statement_count', 'total_bytes', 'max_statement_bytes', 'statements', 'evidence_sha256'],
+        array_keys($workerSqlEvidence),
+        'worker SQL evidence should retain its exact independently verifiable envelope'
+    );
+    assert_same(2, $workerSqlEvidence['statement_count'] ?? null, 'worker SQL evidence should retain every captured statement');
+    assert_same(
+        wp_fts_wc_canonical_hash(array_slice($workerSqlEvidence, 0, 5, true)),
+        $workerSqlEvidence['evidence_sha256'] ?? null,
+        'worker SQL evidence should bind its exact ordered statements and limits'
+    );
+    foreach ([
+        'statement count' => array_fill(0, 33, 'SELECT 1'),
+        'per-statement bytes' => [str_repeat('x', 1048577)],
+        'total bytes' => array_fill(0, 5, str_repeat('x', 1048576)),
+    ] as $context => $invalidStatements) {
+        $caught = null;
+        try {
+            wp_fts_mutation_proof_worker_sql_evidence($invalidStatements);
+        } catch (RuntimeException $error) {
+            $caught = $error;
+        }
+        assert_true($caught instanceof RuntimeException, "worker SQL evidence must reject its {$context} cap");
+    }
+
+    $workerEnvelope = [
+        'captured_worker_statement_count' => 2,
+        'sql_evidence' => $workerSqlEvidence,
+        'atomic_ack_statement_count' => 1,
+        'atomic_ack_sql_bytes' => strlen($workerStatements[1]),
+        'atomic_ack_sql_sha256' => hash('sha256', $workerStatements[1]),
+    ];
+    assert_true(wp_fts_wc_mutation_worker_sql_evidence_valid($workerEnvelope), 'finalizer should accept exact lossless worker SQL evidence');
+    foreach (['sql', 'index', 'self_hash', 'ack_hash'] as $tamper) {
+        $mutatedEnvelope = $workerEnvelope;
+        if ($tamper === 'sql') {
+            $mutatedEnvelope['sql_evidence']['statements'][0]['sql'] .= ' ';
+        } elseif ($tamper === 'index') {
+            $mutatedEnvelope['sql_evidence']['statements'][0]['index'] = 1;
+        } elseif ($tamper === 'self_hash') {
+            $mutatedEnvelope['sql_evidence']['evidence_sha256'] = str_repeat('0', 64);
+        } else {
+            $mutatedEnvelope['atomic_ack_sql_sha256'] = str_repeat('0', 64);
+        }
+        assert_true(!wp_fts_wc_mutation_worker_sql_evidence_valid($mutatedEnvelope), "finalizer should reject {$tamper} worker SQL evidence tampering");
+    }
 
     foreach ([
         'image overrides are forbidden in clean acceptance lanes',
@@ -1881,8 +2128,10 @@ test_case('relational worst-case records measured mutation SQL and effective pin
     }
     assert_true(!str_contains($runner, 'php "${BASELINE_ROOT}/indexer/tools/build-release-zip.php"'), 'the runner must not execute historical packaging code with obsolete Composer policy');
 
-    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     foreach ([
+        'relational-fts-resources-v2',
+        'relational-fts-database-cgroup-memory-v2',
+        'relational-fts-wordpress-cgroup-memory-v3',
         'relational-fts-resource-verification-v1',
         'resource_artifact_contract',
         'resource_artifact_full_binding',
@@ -1909,8 +2158,9 @@ test_case('relational worst-case records measured mutation SQL and effective pin
         'recorded non-acceptance image override',
         '!$requireAcceptanceDigest || $matchesExpected',
         "\$image['running_container_image_id']",
-        'relational-fts-mutation-generation-cas-v2',
+        'relational-fts-mutation-generation-cas-v4',
         'relational-fts-mutation-statements-v1',
+        'relational-fts-mutation-worker-sql-v1',
         'mutation_boundary_statement_order',
         'mutation_boundary_statement_counts',
         'mutation_boundary_statement_payloads',
@@ -1923,6 +2173,9 @@ test_case('relational worst-case records measured mutation SQL and effective pin
         'mutation_fence_production_worker_canonical_generation',
         'mutation_fence_production_worker_canonical_visible',
         'mutation_fence_production_worker_atomic_ack',
+        'mutation_fence_production_worker_sql_evidence',
+        'mutation_artifact_production_worker_sql_evidence_contract',
+        'wp_fts_wc_mutation_worker_sql_evidence_valid',
         'mutation_fence_production_worker_fixture_restored',
         'mutation_fence_real_database_handoff_contract',
         'mutation_artifact_handoff_contract',
@@ -1957,13 +2210,16 @@ test_case('relational worst-case records measured mutation SQL and effective pin
         "(\$memory['whole_run_peak_bytes'] ?? null) === \$wholeRunPeak",
         "(\$memory['oom_events'] ?? null) === max(\$oomEvents)",
         "(\$memory['oom_kill_events'] ?? null) === max(\$oomKills)",
+        'count($rawParts) === 6',
+        '$unsigned($rawParts[1] ?? null)',
+        "hash_equals(hash('sha256', \$raw), \$checkpoint['raw_sha256'])",
     ] as $required) {
         assert_contains($required, $memoryContract, "restart-safe database memory contract must retain every segment maximum: {$required}");
     }
     $wordpressMemoryContract = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_wordpress_memory_evidence_is_exact');
     foreach ([
         "['pre-corpus', 'final-workload']",
-        'relational-fts-wordpress-cgroup-memory-v2',
+        'relational-fts-wordpress-cgroup-memory-v3',
         '536870912',
         "preg_match('/\\A[0-9a-f]{64}\\z/D', \$containerId)",
         "(\$checkpoint['container_id'] ?? null) !== \$containerId",
@@ -1976,13 +2232,151 @@ test_case('relational worst-case records measured mutation SQL and effective pin
         'max($limitEvents) === 0',
         'max($oomEvents) === 0',
         'max($oomKills) === 0',
+        'count($rawParts) === 10',
+        '$unsigned($rawParts[8] ?? null)',
+        "hash_equals(hash('sha256', \$raw), \$checkpoint['raw_sha256'])",
     ] as $required) {
         assert_contains($required, $wordpressMemoryContract, "persistent WordPress memory contract must retain identity, peak, and zero-event proof: {$required}");
     }
-    foreach (['wp_fts_wc_is_ascii_hex', 'wp_fts_wc_is_lowercase_sha256', 'wp_fts_wc_wordpress_memory_evidence_is_exact'] as $functionName) {
+    $cgroupContract = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_resource_cgroup_is_exact');
+    foreach ([
+        'count($rawParts) === 5',
+        "\$rawVersion === 'v1'",
+        '$rawSwap - $rawMemory',
+        "hash_equals(hash('sha256', \$raw), \$cgroup['raw_sha256'])",
+    ] as $required) {
+        assert_contains($required, $cgroupContract, "effective cgroup contract must bind the retained raw probe: {$required}");
+    }
+    foreach (['wp_fts_wc_is_ascii_hex', 'wp_fts_wc_is_lowercase_sha256', 'wp_fts_wc_database_memory_evidence_is_exact', 'wp_fts_wc_wordpress_memory_evidence_is_exact', 'wp_fts_wc_resource_cgroup_is_exact'] as $functionName) {
         if (!function_exists($functionName)) {
             eval(wp_fts_wc_contract_function_source($integration, $functionName));
         }
+    }
+    if (!defined('WP_FTS_WC_COLD_SAMPLE_COUNT')) {
+        define('WP_FTS_WC_COLD_SAMPLE_COUNT', 10);
+    }
+    $cgroupRaw = "v2\t100000\t100000\t536870912\t0";
+    $cgroupFixture = [
+        'version' => 'v2',
+        'cpu' => ['quota_us' => 100000, 'period_us' => 100000, 'effective_cpus' => 1.0, 'matches_expected' => true],
+        'memory' => ['max_bytes' => 536870912, 'matches_expected' => true],
+        'swap' => ['raw_max_bytes' => 0, 'effective_max_bytes' => 0, 'matches_expected' => true],
+        'raw' => $cgroupRaw,
+        'raw_sha256' => hash('sha256', $cgroupRaw),
+        'matches_expected' => true,
+    ];
+    assert_true(wp_fts_wc_resource_cgroup_is_exact($cgroupFixture, 536870912), 'the exact effective cgroup raw probe fixture should validate');
+    $cgroupMutations = [
+        'missing raw probe' => static function (array &$cgroup): void { unset($cgroup['raw']); },
+        'empty raw probe' => static function (array &$cgroup): void { $cgroup['raw'] = ''; },
+        'raw probe digest mismatch' => static function (array &$cgroup): void { $cgroup['raw_sha256'] = str_repeat('0', 64); },
+        'structured quota disagrees with raw' => static function (array &$cgroup): void { $cgroup['cpu']['quota_us']++; },
+        'rehash cannot hide changed raw memory' => static function (array &$cgroup): void {
+            $cgroup['raw'] = "v2\t100000\t100000\t536870913\t0";
+            $cgroup['raw_sha256'] = hash('sha256', $cgroup['raw']);
+        },
+        'raw probe has an extra field' => static function (array &$cgroup): void {
+            $cgroup['raw'] .= "\t0";
+            $cgroup['raw_sha256'] = hash('sha256', $cgroup['raw']);
+        },
+        'raw probe is missing a field' => static function (array &$cgroup): void {
+            $cgroup['raw'] = "v2\t100000\t100000\t536870912";
+            $cgroup['raw_sha256'] = hash('sha256', $cgroup['raw']);
+        },
+    ];
+    foreach ($cgroupMutations as $description => $mutate) {
+        $mutated = $cgroupFixture;
+        $mutate($mutated);
+        assert_true(!wp_fts_wc_resource_cgroup_is_exact($mutated, 536870912), "effective cgroup evidence must reject {$description}");
+    }
+    $v1CgroupRaw = "v1\t100000\t100000\t536870912\t536870912";
+    $v1CgroupFixture = [
+        'version' => 'v1',
+        'cpu' => ['quota_us' => 100000, 'period_us' => 100000, 'effective_cpus' => 1.0, 'matches_expected' => true],
+        'memory' => ['max_bytes' => 536870912, 'matches_expected' => true],
+        'swap' => ['raw_max_bytes' => 536870912, 'effective_max_bytes' => 0, 'matches_expected' => true],
+        'raw' => $v1CgroupRaw,
+        'raw_sha256' => hash('sha256', $v1CgroupRaw),
+        'matches_expected' => true,
+    ];
+    assert_true(wp_fts_wc_resource_cgroup_is_exact($v1CgroupFixture, 536870912), 'cgroup v1 raw memsw must derive zero effective swap from raw memsw minus memory');
+    $databaseLabels = ['pre-corpus'];
+    foreach (['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout'] as $caseId) {
+        for ($sample = 0; $sample < WP_FTS_WC_COLD_SAMPLE_COUNT; $sample++) {
+            $databaseLabels[] = "pre-cold-restart-{$caseId}-{$sample}";
+        }
+    }
+    $databaseLabels[] = 'final-workload';
+    $databaseCheckpoints = [];
+    foreach ($databaseLabels as $index => $label) {
+        $usage = 67108864 + $index;
+        $peak = 100663296 + $index;
+        $raw = "v2\t{$usage}\t{$peak}\t0\t0\t0";
+        $databaseCheckpoints[] = [
+            'checkpoint' => $label,
+            'cgroup_version' => 'v2',
+            'usage_bytes' => $usage,
+            'peak_bytes' => $peak,
+            'limit_events' => 0,
+            'oom_events' => 0,
+            'oom_kill_events' => 0,
+            'sources' => [
+                'usage' => 'memory.current',
+                'peak' => 'memory.peak',
+                'limit_events' => 'memory.events:max',
+                'oom_events' => 'memory.events:oom',
+                'oom_kill_events' => 'memory.events:oom_kill',
+            ],
+            'raw' => $raw,
+            'raw_sha256' => hash('sha256', $raw),
+        ];
+    }
+    $databasePeak = $databaseCheckpoints[array_key_last($databaseCheckpoints)]['peak_bytes'];
+    $databaseMemoryFixture = [
+        'schema' => 'relational-fts-database-cgroup-memory-v2',
+        'limit_bytes' => 1073741824,
+        'pre_corpus_peak_limit_bytes' => 805306368,
+        'pre_corpus' => $databaseCheckpoints[0],
+        'expected_checkpoint_labels' => $databaseLabels,
+        'checkpoints' => $databaseCheckpoints,
+        'checkpoint_count' => count($databaseCheckpoints),
+        'final_checkpoint' => $databaseCheckpoints[array_key_last($databaseCheckpoints)],
+        'whole_run_peak_bytes' => $databasePeak,
+        'whole_run_headroom_bytes' => 1073741824 - $databasePeak,
+        'max_limit_events' => 0,
+        'oom_events' => 0,
+        'oom_kill_events' => 0,
+        'counter_aggregation' => 'maximum across restart-delimited cumulative counters',
+        'complete' => true,
+    ];
+    $databaseFixture = ['effective_cgroup' => ['version' => 'v2']];
+    assert_true(wp_fts_wc_database_memory_evidence_is_exact($databaseMemoryFixture, $databaseFixture), 'the exact database cgroup raw checkpoint fixture should validate');
+    $databaseMutations = [
+        'missing raw probe' => static function (array &$memory): void { unset($memory['checkpoints'][1]['raw']); },
+        'empty raw probe' => static function (array &$memory): void { $memory['checkpoints'][1]['raw'] = ''; },
+        'raw probe digest mismatch' => static function (array &$memory): void { $memory['checkpoints'][1]['raw_sha256'] = str_repeat('0', 64); },
+        'structured usage disagrees with raw' => static function (array &$memory): void { $memory['checkpoints'][1]['usage_bytes']++; },
+        'rehash cannot hide changed raw usage' => static function (array &$memory): void {
+            $parts = explode("\t", $memory['checkpoints'][1]['raw']);
+            $parts[1] = (string) ((int) $parts[1] + 1);
+            $memory['checkpoints'][1]['raw'] = implode("\t", $parts);
+            $memory['checkpoints'][1]['raw_sha256'] = hash('sha256', $memory['checkpoints'][1]['raw']);
+        },
+        'raw checkpoint has an extra field' => static function (array &$memory): void {
+            $memory['checkpoints'][1]['raw'] .= "\t0";
+            $memory['checkpoints'][1]['raw_sha256'] = hash('sha256', $memory['checkpoints'][1]['raw']);
+        },
+        'raw checkpoint is missing a field' => static function (array &$memory): void {
+            $parts = explode("\t", $memory['checkpoints'][1]['raw']);
+            array_pop($parts);
+            $memory['checkpoints'][1]['raw'] = implode("\t", $parts);
+            $memory['checkpoints'][1]['raw_sha256'] = hash('sha256', $memory['checkpoints'][1]['raw']);
+        },
+    ];
+    foreach ($databaseMutations as $description => $mutate) {
+        $mutated = $databaseMemoryFixture;
+        $mutate($mutated);
+        assert_true(!wp_fts_wc_database_memory_evidence_is_exact($mutated, $databaseFixture), "database cgroup evidence must reject {$description}");
     }
     $containerId = str_repeat('a', 64);
     $startedAt = '2026-07-18T12:34:56.123456789Z';
@@ -1995,25 +2389,29 @@ test_case('relational worst-case records measured mutation SQL and effective pin
         'oom_events' => 'memory.events:oom',
         'oom_kill_events' => 'memory.events:oom_kill',
     ];
-    $checkpoint = static fn(string $label, int $usage, int $peak): array => [
-        'checkpoint' => $label,
-        'cgroup_version' => 'v2',
-        'usage_bytes' => $usage,
-        'peak_bytes' => $peak,
-        'limit_events' => 0,
-        'oom_events' => 0,
-        'oom_kill_events' => 0,
-        'sources' => $sources,
-        'raw_sha256' => hash('sha256', $label),
-        'container_id' => $containerId,
-        'container_started_at' => $startedAt,
-        'container_host_pid' => $hostPid,
-        'container_restart_count' => $restartCount,
-    ];
+    $checkpoint = static function (string $label, int $usage, int $peak) use ($sources, $containerId, $startedAt, $hostPid, $restartCount): array {
+        $raw = implode("\t", ['v2', $usage, $peak, 0, 0, 0, $containerId, $startedAt, $hostPid, $restartCount]);
+        return [
+            'checkpoint' => $label,
+            'cgroup_version' => 'v2',
+            'usage_bytes' => $usage,
+            'peak_bytes' => $peak,
+            'limit_events' => 0,
+            'oom_events' => 0,
+            'oom_kill_events' => 0,
+            'sources' => $sources,
+            'raw' => $raw,
+            'raw_sha256' => hash('sha256', $raw),
+            'container_id' => $containerId,
+            'container_started_at' => $startedAt,
+            'container_host_pid' => $hostPid,
+            'container_restart_count' => $restartCount,
+        ];
+    };
     $pre = $checkpoint('pre-corpus', 67108864, 100663296);
     $final = $checkpoint('final-workload', 83886080, 201326592);
     $memoryFixture = [
-        'schema' => 'relational-fts-wordpress-cgroup-memory-v2',
+        'schema' => 'relational-fts-wordpress-cgroup-memory-v3',
         'limit_bytes' => 536870912,
         'pre_corpus' => $pre,
         'expected_checkpoint_labels' => ['pre-corpus', 'final-workload'],
@@ -2039,7 +2437,27 @@ test_case('relational worst-case records measured mutation SQL and effective pin
         'reordered checkpoints' => static function (array &$memory): void { $memory['checkpoints'] = array_reverse($memory['checkpoints']); },
         'duplicate checkpoint label' => static function (array &$memory): void { $memory['checkpoints'][1]['checkpoint'] = 'pre-corpus'; },
         'cgroup version drift' => static function (array &$memory): void { $memory['checkpoints'][1]['cgroup_version'] = 'v1'; },
-        'invalid raw hash' => static function (array &$memory): void { $memory['checkpoints'][1]['raw_sha256'] = str_repeat('G', 64); },
+        'missing raw probe' => static function (array &$memory): void { unset($memory['checkpoints'][1]['raw'], $memory['final_checkpoint']['raw']); },
+        'empty raw probe' => static function (array &$memory): void { $memory['checkpoints'][1]['raw'] = ''; $memory['final_checkpoint']['raw'] = ''; },
+        'raw probe digest mismatch' => static function (array &$memory): void { $memory['checkpoints'][1]['raw_sha256'] = str_repeat('0', 64); $memory['final_checkpoint']['raw_sha256'] = str_repeat('0', 64); },
+        'invalid raw hash' => static function (array &$memory): void { $memory['checkpoints'][1]['raw_sha256'] = str_repeat('G', 64); $memory['final_checkpoint']['raw_sha256'] = str_repeat('G', 64); },
+        'structured usage disagrees with raw' => static function (array &$memory): void { $memory['checkpoints'][1]['usage_bytes']++; },
+        'rehash cannot hide changed raw peak' => static function (array &$memory): void {
+            $parts = explode("\t", $memory['checkpoints'][1]['raw']);
+            $parts[2] = (string) ((int) $parts[2] + 1);
+            $memory['checkpoints'][1]['raw'] = implode("\t", $parts);
+            $memory['checkpoints'][1]['raw_sha256'] = hash('sha256', $memory['checkpoints'][1]['raw']);
+        },
+        'raw checkpoint has an extra field' => static function (array &$memory): void {
+            $memory['checkpoints'][1]['raw'] .= "\t0";
+            $memory['checkpoints'][1]['raw_sha256'] = hash('sha256', $memory['checkpoints'][1]['raw']);
+        },
+        'raw checkpoint is missing a field' => static function (array &$memory): void {
+            $parts = explode("\t", $memory['checkpoints'][1]['raw']);
+            array_pop($parts);
+            $memory['checkpoints'][1]['raw'] = implode("\t", $parts);
+            $memory['checkpoints'][1]['raw_sha256'] = hash('sha256', $memory['checkpoints'][1]['raw']);
+        },
         'peak beyond 512 MiB' => static function (array &$memory): void { $memory['checkpoints'][1]['peak_bytes'] = 536870913; },
         'incorrect headroom' => static function (array &$memory): void { $memory['whole_run_headroom_bytes']++; },
         'aggregation drift' => static function (array &$memory): void { $memory['counter_aggregation'] = 'latest only'; },
@@ -2054,7 +2472,7 @@ test_case('relational worst-case records measured mutation SQL and effective pin
         $mutate($mutated);
         assert_true(!wp_fts_wc_wordpress_memory_evidence_is_exact($mutated, $wordpressFixture), "WordPress cgroup evidence must reject {$description}");
     }
-    foreach (['cgroup peak must be at most 768 MiB', 'exact ordered 42-checkpoint inventory', 'restart therefore cannot erase', 'requires zero OOM and OOM-kill events', 'no tighter cache-sensitive threshold'] as $required) {
+    foreach (['cgroup peak must be at most 768 MiB', 'exact ordered 42-checkpoint inventory', 'restart therefore cannot erase', 'requires zero OOM and OOM-kill events', 'no tighter cache-sensitive threshold', 'relational-fts-resources-v2', 'relational-fts-database-cgroup-memory-v2', 'relational-fts-wordpress-cgroup-memory-v3', 'SHA-256(raw) === raw_sha256', 'missing, empty, independently changed, or', 'structured-inconsistent raw probe fails acceptance'] as $required) {
         assert_contains($required, $acceptance, "constrained-host acceptance must document actual peak/OOM semantics: {$required}");
     }
     foreach ([
@@ -2099,6 +2517,109 @@ test_case('relational worst-case records measured mutation SQL and effective pin
         assert_same(1, $result['exit'], "{$override} must fail before a clean acceptance run starts");
         assert_contains($override, $result['stdout'] . $result['stderr'], 'the rejected override should be named explicitly');
         assert_contains('image overrides are forbidden in clean acceptance lanes', $result['stdout'] . $result['stderr'], 'clean override rejection should explain the acceptance rule');
+    }
+});
+
+test_case('killed transaction recovery retains an exact SIGKILL receipt', function (): void {
+    $root = dirname(__DIR__, 2);
+    $runner = (string) file_get_contents($root . '/tools/run-relational-fts-worst-case.sh');
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
+
+    foreach ([
+        'transaction-crash-kill-receipt.json',
+        'relational-fts-transaction-crash-ready-v1',
+        'relational-fts-transaction-crash-kill-receipt-v2',
+        'transaction-crash-observed-process.json',
+        'file_get_contents("/proc/{$child}/stat")',
+        'file_get_contents("/proc/sys/kernel/random/boot_id")',
+        '$observed!==$identity',
+        'if kill -9 "$child"',
+        '"kill_exit_status"=>$killStatus',
+        'if [ "$status" -ne 137 ]',
+        '"ready_sha256"=>hash_file("sha256",$readyPath)',
+        '"observed_process_identity"=>$observed',
+        '"signal"=>$signal',
+        'file_put_contents($temporary,$json,LOCK_EX)',
+        'rename($temporary,$target)',
+    ] as $required) {
+        assert_contains($required, $runner, "transaction crash wrapper must retain: {$required}");
+    }
+    foreach ([
+        'relational-fts-transaction-crash-v3',
+        'relational-fts-transaction-crash-ready-v1',
+        'relational-fts-transaction-crash-kill-receipt-v2',
+        'wp_fts_wc_process_identity()',
+        'wp_fts_wc_transaction_crash_receipt_is_exact',
+        'killed_transaction_sigkill_receipt',
+        "['killed_transaction_sigkill_receipt', 'killed_transaction_rolled_back', 'search_after_killed_transaction']",
+    ] as $required) {
+        assert_contains($required, $integration, "transaction crash evidence must retain: {$required}");
+    }
+
+    foreach ([
+        'wp_fts_wc_is_ascii_hex',
+        'wp_fts_wc_is_lowercase_sha256',
+        'wp_fts_wc_process_identity_valid',
+        'wp_fts_wc_transaction_crash_receipt_is_exact',
+    ] as $functionName) {
+        if (!function_exists($functionName)) {
+            eval(wp_fts_wc_contract_function_source($integration, $functionName));
+        }
+    }
+    $identity = ['pid' => 321, 'start_ticks' => 654, 'boot_id' => 'fixture-boot-id'];
+    $identity['sha256'] = hash('sha256', implode('|', [$identity['boot_id'], (string) $identity['pid'], (string) $identity['start_ticks']]));
+    $ready = [
+        'schema' => 'relational-fts-transaction-crash-ready-v1',
+        'process_identity' => $identity,
+        'connection_id' => 987,
+        'sentinel' => 'transactioncrashsentinel',
+    ];
+    $readySha256 = hash('sha256', json_encode($ready, JSON_THROW_ON_ERROR));
+    $receipt = [
+        'schema' => 'relational-fts-transaction-crash-kill-receipt-v2',
+        'ready_sha256' => $readySha256,
+        'child_pid' => 321,
+        'observed_process_identity' => $identity,
+        'kill_exit_status' => 0,
+        'exit_status' => 137,
+        'signal' => 9,
+    ];
+    assert_true(
+        wp_fts_wc_transaction_crash_receipt_is_exact($ready, $receipt, $readySha256),
+        'the exact process-bound SIGKILL receipt should validate'
+    );
+    $mutations = [
+        'different killed PID' => static function (array &$ready, array &$receipt, string &$sha): void { $receipt['child_pid']++; },
+        'different observed lifetime' => static function (array &$ready, array &$receipt, string &$sha): void {
+            $receipt['observed_process_identity']['start_ticks']++;
+            $observed = $receipt['observed_process_identity'];
+            $receipt['observed_process_identity']['sha256'] = hash('sha256', implode('|', [$observed['boot_id'], (string) $observed['pid'], (string) $observed['start_ticks']]));
+        },
+        'failed kill command' => static function (array &$ready, array &$receipt, string &$sha): void { $receipt['kill_exit_status'] = 1; },
+        'ordinary process exit' => static function (array &$ready, array &$receipt, string &$sha): void { $receipt['exit_status'] = 0; },
+        'different signal' => static function (array &$ready, array &$receipt, string &$sha): void { $receipt['signal'] = 15; },
+        'stale ready digest' => static function (array &$ready, array &$receipt, string &$sha): void { $receipt['ready_sha256'] = str_repeat('0', 64); },
+        'invalid connection identity' => static function (array &$ready, array &$receipt, string &$sha): void { $ready['connection_id'] = 0; },
+        'extra ready field' => static function (array &$ready, array &$receipt, string &$sha): void { $ready['unbound'] = true; },
+        'extra receipt field' => static function (array &$ready, array &$receipt, string &$sha): void { $receipt['unbound'] = true; },
+        'ready changed after receipt' => static function (array &$ready, array &$receipt, string &$sha): void {
+            $ready['connection_id']++;
+            $sha = hash('sha256', json_encode($ready, JSON_THROW_ON_ERROR));
+        },
+    ];
+    foreach ($mutations as $description => $mutate) {
+        $mutatedReady = $ready;
+        $mutatedReceipt = $receipt;
+        $mutatedSha256 = $readySha256;
+        $mutate($mutatedReady, $mutatedReceipt, $mutatedSha256);
+        assert_true(
+            !wp_fts_wc_transaction_crash_receipt_is_exact($mutatedReady, $mutatedReceipt, $mutatedSha256),
+            "SIGKILL receipt validation must reject {$description}"
+        );
+    }
+    foreach (['relational-fts-transaction-crash-v3', 'same child', 'live Linux boot', 'start ticks', 'kill exit status 0', 'signal 9', 'exit status 137', 'exact SIGKILL receipt validates'] as $required) {
+        assert_contains($required, $acceptance, "acceptance must document the retained kill receipt: {$required}");
     }
 });
 
@@ -2178,7 +2699,7 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     $acceptance = (string) file_get_contents(dirname(__DIR__, 2) . '/docs/relational-search-acceptance.md');
     foreach ([
-        'relational-fts-evidence-v4',
+        'relational-fts-evidence-v5',
         "'acceptance_lane' => wp_fts_wc_required_env('WP_FTS_WC_ALLOW_DIRTY') !== '1'",
         "'completed' => false",
         "\$evidence['completed'] = true",
@@ -3172,7 +3693,9 @@ test_case('relational worst-case migration kills every table boundary and valida
         'multisite_empty_foreign_query_probes',
         'multisite_site_three_untouched_after_site_two_failure',
         'migration-post-kill-probe',
-        'relational-fts-migration-post-kill-probe-v2',
+        'relational-fts-migration-post-kill-probe-v3',
+        "'ordinary_option_after' => \$optionAfter",
+        "\$probe['ordinary_option_after'] === (\$probe['ordinary']['option'] ?? null)",
         'relational-fts-migration-phase-v3',
         'migration_phase_exact_tables',
         'migration_phase_exact_scope_rows',
@@ -3399,12 +3922,13 @@ test_case('relational migration captures and authenticates the exact legacy resu
     assert_contains("(\$artifact['status'] ?? null) !== 'PASS'", $snapshotValidator, 'generic or synthetic legacy FAIL evidence should fail snapshot assembly');
     assert_contains('wp_fts_wc_migration_oracle_is_valid($oracle, $baseline)', $finalize, 'finalization should authenticate the exact v4 oracle before consuming results or keys');
     assert_contains('"status"=>"FAIL"', $runner, 'the wrapper should replace timeout, OOM, and process-death evidence with terminal FAIL');
-    assert_same(2, substr_count($integration, 'relational-fts-migration-evidence-v4'), 'the v4 populated-migration envelope should be required by its only consumer and emitted by its only producer');
+    assert_same(2, substr_count($integration, 'relational-fts-migration-evidence-v5'), 'the v5 populated-migration envelope should be required by its only consumer and emitted by its only producer');
+    assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '4'), 'the stale v4 populated-migration envelope must not remain accepted or emitted');
     assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '3'), 'the stale v3 populated-migration envelope must not remain accepted or emitted');
     assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '2'), 'the stale v2 populated-migration envelope must not remain accepted or emitted');
     assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '1'), 'the incompatible v1 populated-migration envelope must not remain accepted or emitted');
     assert_contains('138,564 candidate postings', $acceptance, 'the acceptance contract should retain the construction-known 50k common-OR fanout without guessing execution order');
-    assert_contains('relational-fts-migration-evidence-v4', $acceptance, 'the acceptance contract should name the envelope version carrying the target-v4 rarity basis and exact result-or-rejection union');
+    assert_contains('relational-fts-migration-evidence-v5', $acceptance, 'the acceptance contract should name the envelope version carrying the target-v4 rarity basis and exact result-or-rejection union');
     assert_contains('Only all six independently', $acceptance, 'the acceptance contract should distinguish an exact typed-rejection snapshot from an arbitrary legacy failure');
 
     $extracted = '';
@@ -3988,6 +4512,29 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         'migration_physical_fts_peak_ratio',
         'migration_physical_disk_raw_samples_hash',
         'max_valid_setup_artifact',
+        'max_valid_setup_artifact_self_hash',
+        'relational-fts-max-valid-setup-v2',
+        'max_valid_setup_worker_progress',
+        'max_valid_setup_worker_statement_bound',
+        'max_valid_setup_worker_sql_bound',
+        'max_valid_setup_worker_duration_bound',
+        'max_valid_setup_worker_memory_bound',
+        'relational-fts-max-valid-search-v2',
+        'max_valid_frontend_content',
+        'max_valid_frontend_artifact',
+        "'results' => \$results",
+        "'content_sha256' => \$expectedHash",
+        'wp_fts_wc_max_valid_frontend_artifact_is_exact',
+        "'statement_count' => count(\$queries)",
+        "'statement_bytes' => \$statementBytes",
+        "'statement_sha256' => \$statementHashes",
+        "'statement_roles' => \$statementRoles['roles']",
+        "'php_peak_delta_bytes' => max(0, \$phpPeakAfterReset - \$phpUsageBefore)",
+        "'rss_peak_delta_bytes' => max(0, \$rssPeakAfter - \$rssBefore)",
+        "'measurement_method' => 'fresh_phase_process_per_pass_php_peak_reset_conservative_rss_hwm'",
+        'wp_fts_wc_max_valid_content_sha256()',
+        '$phpPeak >= $workerPhpPeakMax',
+        '$rssPeak >= $workerRssPeakMax',
         ". str_repeat('x', \$contentBytes - strlen(\$visibleContent . \$commentOpen . \$commentClose))",
         'max_connections must be exactly 24',
         'PHP memory_limit must be exactly 128 MiB',
@@ -4050,7 +4597,7 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     assert_same(1, count($nearLimitTerms), 'near-limit valid source should analyze one bounded visible term');
     assert_same('en', $nearLimitTerms[0]['lang'] ?? null, 'near-limit valid source should preserve its explicit analyzer language');
 
-    foreach (['all 8,192', 'dedicated 512-MiB InnoDB relation', 'every process records its own elapsed time', 'empty gate list', 'leftover `term_hash` column/index, scalar `doc_len`'] as $required) {
+    foreach (['all 8,192', 'dedicated 512-MiB InnoDB relation', 'every process records its own elapsed time', 'empty gate list', 'leftover `term_hash` column/index, scalar `doc_len`', '`relational-fts-max-valid-setup-v2`', '20 recognized statements', 'no statement above 4 MiB', 'add at most 32 MiB PHP and RSS'] as $required) {
         assert_contains($required, $acceptance, "acceptance writeup should retain non-synthetic worst-case requirement: {$required}");
     }
     record_check('relational hard conditioning and evidence contract', 34);
@@ -4069,6 +4616,7 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         'wp_fts_wc_search_statement_metrics($scopeSearchEvents)',
         "'plan' => 1, 'rank' => 0, 'hydrate' => 0",
         "'taxonomy_scope_search_duration_ms'",
+        "'taxonomy_scope_active_surface_range_gated'",
         "'taxonomy_scope_search_rows_examined'",
         "'taxonomy_scope_search_disk_temp_tables'",
         "'taxonomy_scope_search_sort_merge_passes'",
@@ -4140,12 +4688,17 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         "'filtered_scope_max_lanes_rows_examined_per_page'",
         "'corpus_scope_expansion_explain_bounded_derived'",
         "'scope_expansion_fixture_cleanup'",
-        "'relational-fts-scope-expansion-v3'",
+        "'relational-fts-scope-expansion-v4'",
+        "'schema' => 'relational-fts-scope-gap-sweep-v2'",
+        "'selector_measurements' => \$selectorMeasurements",
+        "'metadata_measurements' => \$metadataMeasurements",
+        "'timer_wait_picoseconds' => \$timerWait",
         '6600',
         'SORT_ROWS',
     ] as $required) {
         assert_contains($required, $integration, "scope proof should retain measured anti-join evidence: {$required}");
     }
+    assert_same(2, substr_count($integration, "'taxonomy_scope_active_surface_range_gated'"), 'the gated surface-range proof must be emitted once and consumed once during finalization');
     assert_contains('old-posting-frontier|scope-ddl-writer|scope-proof', $runner, 'the populated scope-index DDL phase should retain its 1,800-second external kill');
     assert_contains('scope_ddl_writer_pids', $runner, 'the populated scope-index proof should launch separate concurrent core-table writers');
     foreach ([
@@ -4397,6 +4950,141 @@ test_case('frontend cache priming stays in the bounded core WP_Query lifecycle',
     ] as $required) {
         assert_contains($required, $acceptance, "cache acceptance must publish the measured envelope and its scope: {$required}");
     }
+});
+
+test_case('relational worst-case producers retain bounded lossless observations for formerly aggregate-only claims', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $contracts = [
+        'wp_fts_wc_analysis_proof' => [
+            "'schema' => 'relational-fts-analysis-v1'",
+            "'occurrences' => \$occurrences",
+            "'sql' => \$queries",
+            '65536',
+        ],
+        'wp_fts_wc_cursor_proof' => [
+            "'schema' => 'relational-fts-cursor-traversal-v1'",
+            "'result_ids' => \$ids",
+            "'page_observations' => \$pageObservations",
+            "'sql' => \$queries",
+            '33554432',
+        ],
+        'wp_fts_wc_traverse_terminal_oracle_case' => [
+            'relational-fts-terminal-pages-jsonl-v1',
+            "'expected_ids' => \$expectedIds",
+            "'actual_ids' => \$actualIds",
+            "'page_observations_sha256' => hash('sha256', \$pageObservationsJsonl)",
+            '16777216',
+        ],
+        'wp_fts_wc_missing_table_and_lock_proof' => [
+            "'schema' => 'relational-fts-availability-faults-v1'",
+            "'before_results' => \$before",
+            "'after_results' => \$after",
+            "'fault_class' => \$faultClass",
+            '4194304',
+        ],
+        'wp_fts_wc_failure_recovery_proof' => [
+            "'schema' => 'relational-fts-failure-recovery-v1'",
+            "'enqueued_post_ids' => \$ids",
+            "'enqueue_sql' => \$enqueueSql",
+            "'poison_work_row_before_recovery' => \$workState",
+            "'poison_remaining_after_recovery' => \$poisonRemaining",
+        ],
+        'wp_fts_wc_enqueue_dirty_head' => [
+            "'schema' => 'relational-fts-dirty-head-v1'",
+            "'post_ids' => \$ids",
+            "'sql' => \$queries",
+            "'statement_post_counts' => array_map('count', \$chunks)",
+            '33554432',
+        ],
+        'wp_fts_wc_pack_cardinality_statement_proof' => [
+            "'sql' => \$queries",
+            "'statement_bytes' => \$statementBytes",
+            "'sql_total_bytes' => array_sum(\$statementBytes)",
+            '8388608',
+        ],
+    ];
+    foreach ($contracts as $function => $requiredFragments) {
+        $source = wp_fts_wc_contract_function_source($integration, $function);
+        foreach ($requiredFragments as $fragment) {
+            assert_contains($fragment, $source, "{$function} must retain bounded independently checkable observations: {$fragment}");
+        }
+        assert_true(!str_contains($source, 'preg_'), "{$function} evidence must not parse structured data with regular expressions");
+    }
+
+    $schema = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_assert_relational_schema');
+    assert_contains("'engine' => \$engine", $schema, 'physical schema evidence must retain the normalized engine that was asserted');
+    $bound = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_assert_json_evidence_bytes');
+    foreach (['json_encode(', 'strlen($json) <= $maxBytes', 'JSON_THROW_ON_ERROR'] as $required) {
+        assert_contains($required, $bound, "compact diagnostic vectors must fail closed through: {$required}");
+    }
+    assert_true(!str_contains($bound, 'preg_'), 'compact diagnostic byte bounds must not use regular-expression parsing');
+    assert_true(!function_exists('wp_fts_wc_assert_json_evidence_bytes'), 'the evidence-bound helper should be isolated before its executable contract is loaded');
+    eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_assert'));
+    eval($bound);
+    wp_fts_wc_assert_json_evidence_bytes(['value' => 'bounded'], 64, 'focused bounded fixture');
+    $rejected = false;
+    try {
+        wp_fts_wc_assert_json_evidence_bytes(['value' => str_repeat('x', 65)], 64, 'focused oversized fixture');
+    } catch (RuntimeException $error) {
+        $rejected = str_contains($error->getMessage(), '64-byte compact JSON bound');
+    }
+    assert_true($rejected, 'an oversized diagnostic vector must fail instead of merely reporting a hash');
+});
+
+test_case('HTTP attribution classifies physical table tokens without comment or string impersonation', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    foreach ([
+        'wp_fts_wc_sql_token_stream',
+        'wp_fts_wc_sql_references_physical_table',
+        'wp_fts_wc_sql_references_owned_fts_table',
+        'wp_fts_wc_is_owned_fts_table_identifier',
+        'wp_fts_wc_sql_contains_executable_word',
+    ] as $function) {
+        assert_true(!function_exists($function), "{$function} should be isolated before its executable contract is loaded");
+        eval(wp_fts_wc_contract_function_source($integration, $function));
+    }
+
+    $requestMarker = '/* wp_fts_wc_request:0123456789abcdef0123456789abcdef */';
+    $core = "SELECT ID FROM `wp_posts` WHERE post_title LIKE '%wp_fts_terms%' {$requestMarker}";
+    assert_true(wp_fts_wc_sql_references_physical_table($core, 'wp_posts'), 'a decoded backtick identifier should retain the exact core table reference');
+    assert_true(wp_fts_wc_sql_contains_executable_word($core, 'like'), 'an executable LIKE token should be detected');
+    assert_true(!wp_fts_wc_sql_references_owned_fts_table($core, 'wp_'), 'a request comment and string literal must not impersonate an FTS table');
+
+    foreach ([
+        "SELECT 'wp_fts_terms' AS alleged_table",
+        'SELECT 1 /* wp_fts_terms wp_fts_wc_failed_plan_deadbeef */',
+        "SELECT 1 AS wp_fts_terms_evil {$requestMarker}",
+        'SELECT 1 FROM `other_fts_terms`',
+        'SELECT 1 FROM `wp_fts_wc_failed_plan_deadbee`',
+        'SELECT 1 FROM `wp_fts_wc_failed_unknown_deadbeef`',
+    ] as $spoof) {
+        assert_true(!wp_fts_wc_sql_references_owned_fts_table($spoof, 'wp_'), "near-miss/comment/value SQL must not claim FTS ownership: {$spoof}");
+    }
+    foreach ([
+        'SELECT * FROM `wp_fts_terms`',
+        'SELECT * FROM wp_fts_postings',
+        'SELECT * FROM `wp_fts_documents`',
+        'SELECT * FROM wp_fts_work',
+        'SELECT * FROM `wp_fts_terms_wc_missing`',
+        'SELECT * FROM `wp_fts_wc_failed_plan_deadbeef`',
+        'SELECT * FROM `wp_fts_wc_failed_rank_0123abcd`',
+        'SELECT * FROM `wp_fts_wc_failed_hydrate_ffffffff`',
+    ] as $owned) {
+        assert_true(wp_fts_wc_sql_references_owned_fts_table($owned, 'wp_'), "exact current-site FTS identifier should be owned: {$owned}");
+    }
+    assert_true(!wp_fts_wc_sql_references_physical_table("SELECT 'wp_options' {$requestMarker}", 'wp_options'), 'an option-table string/comment must not count as a physical option-table reference');
+    assert_true(wp_fts_wc_sql_references_physical_table('UPDATE `wp_options` SET option_value=1', 'wp_options'), 'an executable option-table identifier should be detected');
+    assert_true(!wp_fts_wc_sql_contains_executable_word("SELECT 'LIKE' /* LIKE */", 'like'), 'LIKE inside strings/comments must not become a core-like query');
+
+    $attribution = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_performance_schema_request_events');
+    foreach ([
+        'wp_fts_wc_sql_references_owned_fts_table',
+        'wp_fts_wc_sql_references_physical_table',
+        'wp_fts_wc_sql_contains_executable_word',
+    ] as $required) {
+        assert_contains($required, $attribution, "HTTP attribution must use structural SQL classification through {$required}");
+    }
+    assert_true(!str_contains($attribution, "strtolower(\$wpdb->prefix . 'fts_')"), 'HTTP attribution must not classify its own request-marker substring as a plugin table');
 });
 
 test_case('relational search ceilings count every recorded wpdb statement including transaction control', function (): void {
