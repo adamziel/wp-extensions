@@ -31,6 +31,7 @@ final class WP_FTS_Normalizer
      */
     public function __construct(array $options = [])
     {
+        WP_FTS_Analyzer_Config_Limits::assert_option_graph($options, 'Normalizer options');
         $this->foldDiacritics = (bool) ($options['fold_diacritics'] ?? true);
         $normalizer = $options['token_normalizer'] ?? null;
         $this->tokenNormalizer = is_callable($normalizer) ? $normalizer : null;
@@ -99,19 +100,22 @@ final class WP_FTS_Normalizer
      *
      * Compatibility normalization includes canonical NFC composition while
      * also folding presentation variants such as full-width Latin letters and
-     * ligatures. Composer installs the pure-PHP intl normalizer polyfill when
-     * the extension is unavailable; the guarded fallback keeps source-tree
-     * bootstraps usable when dependencies have not been installed yet.
+     * ligatures. Composer's implementation is preferred even when ext-intl is
+     * loaded: web and CLI SAPIs commonly ship different ICU releases, and an
+     * index written by one process must produce the same terms in the other.
+     * The guarded native/fallback paths keep source-tree bootstraps usable when
+     * dependencies have not been installed yet.
      */
     public function normalize_unicode(string $text): string
     {
         $text = WP_FTS_Utf8::repair_word_boundaries($text);
-        if (!class_exists('Normalizer')) {
+        $normalizer = $this->unicode_normalizer_class();
+        if ($normalizer === null) {
             return $text;
         }
 
         try {
-            $normalized = Normalizer::normalize($text, Normalizer::FORM_KC);
+            $normalized = $normalizer::normalize($text, $normalizer::FORM_KC);
         } catch (Throwable) {
             return $text;
         }
@@ -122,13 +126,17 @@ final class WP_FTS_Normalizer
     /**
      * Identify the Unicode normalization backend for stale-index checks.
      *
-     * Composer makes NFKC available through the Symfony polyfill, while raw
-     * source-tree bootstraps may temporarily run without it. Encoding that
-     * distinction prevents installing the dependency later from silently
+     * Composer makes one NFKC data set authoritative across SAPIs, while raw
+     * source-tree bootstraps may temporarily use native ICU or no normalizer.
+     * Encoding that distinction prevents a dependency change from silently
      * changing query terms without reindexing existing documents.
      */
     public function index_signature(): string
     {
+        if (class_exists('Symfony\\Polyfill\\Intl\\Normalizer\\Normalizer')) {
+            return 'wp-fts-unicode-normalizer:nfkc-symfony-polyfill-' . $this->polyfill_version_signature();
+        }
+
         if (!class_exists('Normalizer')) {
             return 'wp-fts-unicode-normalizer:none';
         }
@@ -138,6 +146,16 @@ final class WP_FTS_Normalizer
             : 'symfony-polyfill-' . $this->polyfill_version_signature();
 
         return 'wp-fts-unicode-normalizer:nfkc-' . $backend;
+    }
+
+    /** Return the deterministic packaged backend, then the raw-source fallback. */
+    private function unicode_normalizer_class(): ?string
+    {
+        if (class_exists('Symfony\\Polyfill\\Intl\\Normalizer\\Normalizer')) {
+            return 'Symfony\\Polyfill\\Intl\\Normalizer\\Normalizer';
+        }
+
+        return class_exists('Normalizer') ? 'Normalizer' : null;
     }
 
     /**
@@ -508,7 +526,17 @@ final class WP_FTS_Normalizer
             return $token;
         }
 
-        return is_scalar($normalized) ? (string) $normalized : $token;
+        if (!is_scalar($normalized)) {
+            return $token;
+        }
+
+        $normalized = (string) $normalized;
+        // Extension output crosses the same lexical boundary as source text.
+        // Reject it before the second Unicode-normalization pass can copy or
+        // scan an arbitrarily large callback result.
+        WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($normalized));
+
+        return $normalized;
     }
 
     /**

@@ -221,7 +221,7 @@ final class WP_FTS_DisposableUpgradeSmokeRunner
             $createdPostIds[] = $indexedPostId;
             $previousIndexing = $this->require_json_success(
                 'process previous-package fixture batch',
-                array_merge($baseCommand, ['fts', 'process_batch', '--batch_size=1', '--time_budget=5', '--format=json']),
+                array_merge($baseCommand, ['fts', 'process-batch', '--batch_size=1', '--time_budget=5', '--format=json']),
                 $report
             );
             $this->assert_processed_at_least_one($previousIndexing, 'previous-package fixture indexing');
@@ -304,7 +304,7 @@ final class WP_FTS_DisposableUpgradeSmokeRunner
             );
             $queueIndexing = $this->require_json_success(
                 'process upgraded queue fixture batch',
-                array_merge($baseCommand, ['fts', 'process_batch', '--batch_size=1', '--time_budget=5', '--format=json']),
+                array_merge($baseCommand, ['fts', 'process-batch', '--batch_size=1', '--time_budget=5', '--format=json']),
                 $report
             );
             $this->assert_processed_at_least_one($queueIndexing, 'upgraded queue fixture indexing');
@@ -834,7 +834,7 @@ final class WP_FTS_DisposableUpgradeSmokeRunner
             $createdPostIds[] = $indexedPostId;
             $indexing = $this->require_json_success(
                 'process multisite subsite fixture batch',
-                array_merge($subsiteBaseCommand, ['fts', 'process_batch', '--batch_size=1', '--time_budget=5', '--format=json']),
+                array_merge($subsiteBaseCommand, ['fts', 'process-batch', '--batch_size=1', '--time_budget=5', '--format=json']),
                 $report
             );
             $this->assert_processed_at_least_one($indexing, 'multisite subsite fixture indexing');
@@ -861,7 +861,7 @@ final class WP_FTS_DisposableUpgradeSmokeRunner
             );
             $queueIndexing = $this->require_json_success(
                 'process multisite subsite queue batch',
-                array_merge($subsiteBaseCommand, ['fts', 'process_batch', '--batch_size=1', '--time_budget=5', '--format=json']),
+                array_merge($subsiteBaseCommand, ['fts', 'process-batch', '--batch_size=1', '--time_budget=5', '--format=json']),
                 $report
             );
             $this->assert_processed_at_least_one($queueIndexing, 'multisite subsite queue indexing');

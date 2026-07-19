@@ -198,12 +198,28 @@ function wp_fts_release_evidence_contract_lane_ids(array $report): array
     return $ids;
 }
 
-function wp_fts_release_evidence_contract_lifecycle_output(string $status): string
+function wp_fts_release_evidence_contract_lifecycle_output(
+    string $status,
+    string $multisiteStatus = 'passed',
+    bool $uninstallCleanup = true,
+    bool $uninstallFence = true,
+    bool $networkReactivation = true
+): string
 {
+    if ($status !== 'passed' && $multisiteStatus === 'passed') {
+        $multisiteStatus = $status;
+        $uninstallCleanup = false;
+        $uninstallFence = false;
+        $networkReactivation = false;
+    }
     $json = json_encode([
         'schema' => 'wp-fts-disposable-lifecycle-wrapper-proof-v1',
         'inner_report_schema' => 'wp-fts-disposable-lifecycle-smoke-v1',
         'inner_report_status' => $status,
+        'multisite_evidence_status' => $multisiteStatus,
+        'uninstall_table_cleanup' => $uninstallCleanup,
+        'uninstall_fence' => $uninstallFence,
+        'network_reactivation' => $networkReactivation,
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
     if (!is_string($json)) {
         throw new RuntimeException('Could not encode fake lifecycle report.');
@@ -433,6 +449,24 @@ function wp_fts_release_evidence_contract_previous_ref_runner(string $mode = 'pa
         }
 
         if (($command[0] ?? '') === 'tar') {
+            $destinationIndex = array_search('-C', $command, true);
+            $destination = is_int($destinationIndex) ? ($command[$destinationIndex + 1] ?? '') : '';
+            if (is_string($destination) && $destination !== '') {
+                $tools = $destination . '/indexer/tools';
+                mkdir($tools, 0777, true);
+                $supported = in_array($mode, ['explicit-cache-builder', 'explicit-cache-builder-fail'], true)
+                    ? "['plugin-src', 'composer-cache-dir']"
+                    : "['plugin-src']";
+                file_put_contents(
+                    $tools . '/build-release-zip.php',
+                    "<?php\n\$supported_options = {$supported};\n"
+                );
+                if ($mode === 'symbolic-link-source') {
+                    $outside = dirname($destination) . '/outside-credential.txt';
+                    file_put_contents($outside, 'must-not-be-read-or-packaged');
+                    symlink($outside, $destination . '/indexer/innocent-runtime.php');
+                }
+            }
             return ['exit' => 0, 'stdout' => '', 'stderr' => ''];
         }
 
@@ -444,7 +478,7 @@ function wp_fts_release_evidence_contract_previous_ref_runner(string $mode = 'pa
                     'stderr' => 'Release package build failed: The PHP zip extension is required to create the release archive.',
                 ];
             }
-            if ($mode === 'build-fail') {
+            if (in_array($mode, ['build-fail', 'explicit-cache-builder-fail'], true)) {
                 return [
                     'exit' => 1,
                     'stdout' => '',
@@ -701,7 +735,7 @@ test_case('quality release evidence collector runs Docker lifecycle smokes only 
     wp_fts_release_evidence_contract_same('skip', $defaultLane['status'] ?? null, 'Docker lifecycle smoke lane should skip without explicit opt-in');
     wp_fts_release_evidence_contract_same('--run-docker-lifecycle-smokes', $defaultDetails['enable_with'] ?? null, 'Docker lifecycle lane should document its collector opt-in flag');
     wp_fts_release_evidence_contract_contains('not public-submission readiness', (string) ($defaultDetails['target_policy'] ?? ''), 'Docker lifecycle lane should label direct-install/operator evidence');
-    wp_fts_release_evidence_contract_contains('multisite lifecycle proof is explicitly not run', (string) ($defaultDetails['multisite_policy'] ?? ''), 'Docker lifecycle lane should record the multisite boundary');
+    wp_fts_release_evidence_contract_contains('network activation', (string) ($defaultDetails['multisite_policy'] ?? ''), 'Docker lifecycle lane should describe the multisite runtime boundary');
 
     $optInLane = wp_fts_release_evidence_contract_lane(
         wp_fts_release_evidence_contract_fake_report(['run_docker_lifecycle_smokes' => true]),
@@ -711,8 +745,56 @@ test_case('quality release evidence collector runs Docker lifecycle smokes only 
     wp_fts_release_evidence_contract_same('pass', $optInLane['status'] ?? null, 'Docker lifecycle smoke lane should run through the shell wrapper when opted in');
     wp_fts_release_evidence_contract_same('tools/run-disposable-lifecycle-smoke.sh', $optInLane['command'] ?? null, 'Docker lifecycle lane should report the shell wrapper command');
     wp_fts_release_evidence_contract_same('passed', $optInDetails['lifecycle_report_status'] ?? null, 'Docker lifecycle lane should require a passed inner lifecycle report');
+    wp_fts_release_evidence_contract_same('passed', $optInDetails['multisite_evidence_status'] ?? null, 'Docker lifecycle lane should require passed multisite runtime evidence');
+    wp_fts_release_evidence_contract_same(true, $optInDetails['uninstall_table_cleanup'] ?? null, 'Docker lifecycle lane should require current/legacy uninstall cleanup evidence');
+    wp_fts_release_evidence_contract_same(true, $optInDetails['uninstall_fence'] ?? null, 'Docker lifecycle lane should require exact uninstall-fence evidence');
+    wp_fts_release_evidence_contract_same(true, $optInDetails['network_reactivation'] ?? null, 'Docker lifecycle lane should require all-site reactivation evidence');
     wp_fts_release_evidence_contract_contains('not public-submission readiness', (string) ($optInDetails['target_policy'] ?? ''), 'Docker lifecycle lane should keep target policy explicit');
-    wp_fts_release_evidence_contract_contains('multisite lifecycle proof is explicitly not run', (string) ($optInDetails['multisite_policy'] ?? ''), 'Docker lifecycle lane should keep multisite boundary explicit');
+    wp_fts_release_evidence_contract_contains('both disposable sites', (string) ($optInDetails['multisite_policy'] ?? ''), 'Docker lifecycle lane should keep the network cleanup boundary explicit');
+});
+
+test_case('quality release evidence collector rejects incomplete Docker lifecycle proof', function (): void {
+    $base = wp_fts_release_evidence_contract_fake_runner();
+    $runner = static function (array $command, string $cwd, int $timeout) use ($base): array {
+        if (($command[0] ?? '') === 'tools/run-disposable-lifecycle-smoke.sh') {
+            return [
+                'exit' => 0,
+                'stdout' => wp_fts_release_evidence_contract_lifecycle_output('passed', 'single_site', false),
+                'stderr' => '',
+            ];
+        }
+
+        return $base($command, $cwd, $timeout);
+    };
+    $lane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report_with_runner($runner, ['run_docker_lifecycle_smokes' => true]),
+        'docker_disposable_lifecycle_smoke'
+    );
+
+    wp_fts_release_evidence_contract_same('fail', $lane['status'] ?? null, 'lifecycle status alone must not pass without multisite table-removal proof');
+    wp_fts_release_evidence_contract_contains('multisite evidence status single_site', (string) ($lane['summary'] ?? ''), 'collector should explain the missing network proof');
+});
+
+test_case('quality release evidence collector rejects missing fence or reactivation lifecycle proof', function (): void {
+    foreach ([
+        'uninstall fence' => wp_fts_release_evidence_contract_lifecycle_output('passed', 'passed', true, false, true),
+        'network reactivation' => wp_fts_release_evidence_contract_lifecycle_output('passed', 'passed', true, true, false),
+    ] as $label => $output) {
+        $base = wp_fts_release_evidence_contract_fake_runner();
+        $runner = static function (array $command, string $cwd, int $timeout) use ($base, $output): array {
+            if (($command[0] ?? '') === 'tools/run-disposable-lifecycle-smoke.sh') {
+                return ['exit' => 0, 'stdout' => $output, 'stderr' => ''];
+            }
+
+            return $base($command, $cwd, $timeout);
+        };
+        $lane = wp_fts_release_evidence_contract_lane(
+            wp_fts_release_evidence_contract_fake_report_with_runner($runner, ['run_docker_lifecycle_smokes' => true]),
+            'docker_disposable_lifecycle_smoke'
+        );
+        wp_fts_release_evidence_contract_same('fail', $lane['status'] ?? null, "lifecycle lane must fail without {$label} proof");
+        wp_fts_release_evidence_contract_contains($label . ' status missing', (string) ($lane['summary'] ?? ''), "collector should identify missing {$label} proof");
+    }
 });
 
 test_case('quality release evidence collector runs Docker upgrade/multisite smoke only with explicit opt-in and previous package', function (): void {
@@ -888,6 +970,7 @@ test_case('quality release evidence collector runs Docker upgrade with a generat
     wp_fts_release_evidence_contract_true(in_array('COMPOSER_DISABLE_NETWORK=1', $buildCommand, true), 'generated previous package build should disable Composer network access');
     wp_fts_release_evidence_contract_same(1, count(array_filter($buildCommand, static fn(string $arg): bool => str_starts_with($arg, 'COMPOSER_HOME='))), 'generated previous package build should pass one isolated Composer home');
     wp_fts_release_evidence_contract_same(1, count(array_filter($buildCommand, static fn(string $arg): bool => str_starts_with($arg, 'COMPOSER_CACHE_DIR='))), 'generated previous package build should pass one isolated Composer cache');
+    wp_fts_release_evidence_contract_same(0, count(array_filter($buildCommand, static fn(string $arg): bool => str_starts_with($arg, '--composer-cache-dir='))), 'a legacy release builder must not receive a newer CLI option that it cannot parse');
 
     foreach (['COMPOSER_AUTH=', 'GITHUB_TOKEN=', 'GH_TOKEN=', 'GIT_ASKPASS=', 'SSH_AUTH_SOCK=', 'WP_FTS_SECRET_TOKEN='] as $blockedPrefix) {
         wp_fts_release_evidence_contract_true(
@@ -895,6 +978,74 @@ test_case('quality release evidence collector runs Docker upgrade with a generat
             "generated previous package builder environment should not include {$blockedPrefix}"
         );
     }
+});
+
+test_case('quality release evidence collector explicitly selects offline cache for capable historical builders', function (): void {
+    $observed = [];
+    $report = wp_fts_release_evidence_contract_fake_report_with_runner(
+        wp_fts_release_evidence_contract_previous_ref_runner('explicit-cache-builder', $observed),
+        [
+            'run_docker_upgrade_multisite_smoke' => true,
+            'previous_direct_package_ref' => 'refs/tags/previous-release',
+        ]
+    );
+    $lane = wp_fts_release_evidence_contract_lane($report, 'docker_disposable_upgrade_multisite_smoke');
+    wp_fts_release_evidence_contract_same('pass', $lane['status'] ?? null, 'a capable historical builder should receive its isolated offline cache and complete');
+
+    $buildCommands = array_values(array_filter(
+        $observed,
+        static fn(array $command): bool => ($command[0] ?? '') === 'env'
+    ));
+    wp_fts_release_evidence_contract_same(1, count($buildCommands), 'capable historical package build should launch once');
+    $buildCommand = $buildCommands[0];
+    $environmentCaches = array_values(array_filter($buildCommand, static fn(string $arg): bool => str_starts_with($arg, 'COMPOSER_CACHE_DIR=')));
+    $builderCaches = array_values(array_filter($buildCommand, static fn(string $arg): bool => str_starts_with($arg, '--composer-cache-dir=')));
+    wp_fts_release_evidence_contract_same(1, count($environmentCaches), 'capable historical build should retain one isolated cache environment assignment for compatibility');
+    wp_fts_release_evidence_contract_same(1, count($builderCaches), 'capable historical build should explicitly select one offline cache');
+    wp_fts_release_evidence_contract_same(
+        substr($environmentCaches[0], strlen('COMPOSER_CACHE_DIR=')),
+        substr($builderCaches[0], strlen('--composer-cache-dir=')),
+        'capable historical build should select the same cache that was populated for offline Composer use'
+    );
+});
+
+test_case('quality release evidence collector redacts capable-builder cache paths on failure', function (): void {
+    $observed = [];
+    $report = wp_fts_release_evidence_contract_fake_report_with_runner(
+        wp_fts_release_evidence_contract_previous_ref_runner('explicit-cache-builder-fail', $observed),
+        [
+            'run_docker_upgrade_multisite_smoke' => true,
+            'previous_direct_package_ref' => 'refs/tags/previous-release',
+        ]
+    );
+    $lane = wp_fts_release_evidence_contract_lane($report, 'docker_disposable_upgrade_multisite_smoke');
+    $details = is_array($lane['details'] ?? null) ? $lane['details'] : [];
+    $command = (string) ($details['previous_package_build_command'] ?? '');
+
+    wp_fts_release_evidence_contract_same('fail', $lane['status'] ?? null, 'capable historical builder failure should remain a failed lane');
+    wp_fts_release_evidence_contract_contains('--composer-cache-dir=[path]', $command, 'failed historical command should retain the explicit-cache policy without its host path');
+    wp_fts_release_evidence_contract_true(!str_contains($command, sys_get_temp_dir()), 'failed historical command must not disclose its temporary cache root');
+});
+
+test_case('quality release evidence collector rejects symbolic links before executing historical code', function (): void {
+    $observed = [];
+    $report = wp_fts_release_evidence_contract_fake_report_with_runner(
+        wp_fts_release_evidence_contract_previous_ref_runner('symbolic-link-source', $observed),
+        [
+            'run_docker_upgrade_multisite_smoke' => true,
+            'previous_direct_package_ref' => 'refs/tags/previous-release',
+        ]
+    );
+    $lane = wp_fts_release_evidence_contract_lane($report, 'docker_disposable_upgrade_multisite_smoke');
+    $details = is_array($lane['details'] ?? null) ? $lane['details'] : [];
+    wp_fts_release_evidence_contract_same('unavailable', $lane['status'] ?? null, 'a symbolic link in archived historical source must block the upgrade lane');
+    wp_fts_release_evidence_contract_same('previous_ref_contains_symbolic_links', $details['previous_package_policy'] ?? null, 'historical symbolic-link rejection should retain a precise policy');
+    wp_fts_release_evidence_contract_same('unavailable', $details['previous_package_build_status'] ?? null, 'historical symbolic-link rejection must happen before package execution');
+    wp_fts_release_evidence_contract_same(
+        0,
+        count(array_filter($observed, static fn(array $command): bool => ($command[0] ?? '') === 'env')),
+        'historical symbolic-link rejection must not execute the archived PHP builder or Composer'
+    );
 });
 
 test_case('quality release evidence collector scrubs dummy credentials from generated previous package build environment', function (): void {

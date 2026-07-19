@@ -6,15 +6,20 @@ WordPress.
 
 The component owns HTML text extraction, normalization, language detection,
 stemming and lemmatizer-pack loading, term generation, document indexing,
-BM25-style searching, snippets/highlighting helpers, storage interfaces, and
-the in-memory backend plus a test/demo-only file backend for non-WordPress
-callers.
+set-oriented search planning, snippets/highlighting helpers, storage
+interfaces, and legacy in-memory/file fixtures for tests and local demos.
 
 It does not own WordPress hooks, plugin activation, wp-admin UI, WP-CLI commands,
 post extraction, `$wpdb`/MySQL storage, REST integration, or Playground
 packaging. Those stay in the `indexer/` plugin adapter.
 
-## Minimal Usage
+## Legacy local fixture usage
+
+This example is deliberately not the WordPress production path. The
+in-memory/file backends materialize posting lists in PHP and exist only for
+component fixtures and tiny local demos. WordPress constructs search through
+`WP_FTS_Searcher::for_set_oriented_storage()`; that factory rejects either
+legacy backend.
 
 ```php
 require_once __DIR__ . '/vendor/autoload.php';
@@ -35,6 +40,11 @@ $results = $searcher->search('portable search', [
 
 echo $results[0]['snippet'];
 ```
+
+Everything below that discusses candidate caps, PHP BM25, full posting lists,
+exact totals, or callback-based visibility describes this legacy local fixture
+API only. The WordPress plugin uses the fail-closed set-oriented factory and
+does not expose those modes on any production surface.
 
 ## Retrieval Accuracy
 
@@ -115,7 +125,97 @@ When one dictionary surface has several possible lemmas, every candidate keeps
 a posting for recall, but the source token contributes only once to document
 length. Search selects the best-ranked, strongest BM25 candidate inside each
 logical query-token group instead of adding every ambiguous interpretation to
-the score.
+the score. A pack may contain at most 12 lemmas for one surface across all of
+its shards. Manifest validation, streamed lookup, gzip lookup, and indexed
+lookup all reject candidate 13; runtime lookup never truncates an invalid pack.
+
+HTML is preflighted in one byte-streaming pass before either WordPress HTML
+processor or the component fallback parser runs. One document may contain at
+most 20,000 markup tokens, 256 nested elements, 16,384 bytes in one element tag,
+128 attributes on one tag, 4,096 bytes in one complete ordinary attribute,
+64 bytes in `lang`/`xml:lang`, and eight language subtags. Exceeding a boundary
+raises a typed `WP_FTS_Analysis_Limit_Exceeded` before storage is consulted.
+Caller-provided HTML processors cross those same boundaries: their complete
+token stream is capped at 40,001 tokens, the active element-state stack at 256
+rows below the processor's implicit fragment roots, tags at 16 KiB, language
+attributes at 64 bytes, and token-type names at 64 bytes. Aggregate tag,
+language, and text output shares a 2-MiB envelope; token-type output has a
+separate 2-MiB aggregate envelope. Processors must expose the WordPress 6.6
+depth and closer event API; earlier or partial implementations use the fallback
+parser. The analyzer never requests breadcrumb snapshots. Each opener pushes
+one scalar state row and each closer pops it, while inline ancestor sequences
+are interned once per request and segments retain one integer path ID. Valid
+source depth and token limits therefore consume linear rather than
+multiplicative time and storage. Provider output is measured
+before trim, uppercase, coalescing, or Unicode-normalization copies. Custom CJK tokenizers, token normalizers, and
+stemmers likewise may emit at most one 4-KiB lexical run. Legacy component
+analyzer arrays may return at most 20,000 occurrences (the relational production
+path retains its stricter 12-alternative limit), with scalar fields checked
+before the array is reindexed.
+
+Analyzer construction is bounded before it resolves pack paths: 32 configured
+languages, 2,048 option nodes, 64 KiB of scalar/key data, eight array levels,
+256 entries per array, 128-byte keys, 4 KiB scalar/path values, and 32 fields in
+one pack option. Local manifests are limited to 64 KiB, 2,048 nodes, eight
+levels, 64 runtime files, 256 lookup blocks per file, and 4,096 lookup blocks
+per pack. Configured packs collectively retain at most 128 runtime files and
+4,096 lookup blocks; lookup headers stop at 64 KiB. Runtime rows/comments stop
+at 4 KiB. Every multi-shard pack must declare complete normalized surface
+ranges that are strictly ordered and non-overlapping; validation rejects unsafe
+ranges before runtime files are read, and lookup binary-selects at most one
+shard. A single-shard pack may omit ranges and retain the bounded fallback. A
+shard without a seek sidecar may decode or stream at most 8 MiB for one lookup,
+so larger custom packs must ship the validated block index instead of relying
+on whole-gzip decoding or a linear scan. Over-limit arrays,
+language-map iterators, paths, compressed expansions, and callback captures throw
+`WP_FTS_Analyzer_Config_Limit_Exceeded`; they are not partially loaded or
+silently truncated.
+
+The component repository commits a 329,972-byte, 11,783-range lookup index
+keyed by first Unicode codepoint. An initialized source checkout supplies the
+pinned dictionary during development. The WordPress release builder verifies
+that checkout and stages only `dict.txt`, its MIT `LICENSE`, and `dict.idx`
+under the curated runtime path; it does not ship the raw checkout. A standalone
+component copy without either the curated runtime dictionary or initialized
+source checkout makes the default Jieba option unavailable and continues with
+deterministic CJK fallback n-grams.
+
+The index digest is compiled into the segmenter, its header binds the pinned
+source digest and byte size, and every range carries its own 128-bit SHA-256
+prefix. Pinned construction therefore hashes the compact index rather than
+rereading all 5,071,852 dictionary bytes; each source range is verified when
+used. Source-only custom dictionaries are supported only by explicit fixture
+configuration. They retain eager complete-source hashing and build a packed
+6.38-MiB Unicode head/count state plus 12-byte range records in one complete
+scan; records spill to a temporary stream above 1 MiB. Production custom
+dictionaries are not currently supported. A future production custom-pack
+contract would need an offline-built, source-bound attested sidecar rather than
+per-request source hashing and indexing.
+
+`php tools/build-jieba-lookup-index.php --check` rebuilds the v2 sidecar from
+the pinned source and compares it byte-for-byte with the committed file. Run
+the command without `--check` only when intentionally updating that source.
+
+Every requested first-codepoint range is loaded at most once per segmenter
+instance. Populated prefixes use compact word-membership and word-length maps;
+a 136-KiB Unicode bitset remembers both populated and empty ranges without an
+evictable prefix LRU. The complete pinned definition contains 337,461 eligible
+rows and 3,013,799 candidate-word bytes. Of those, 337,399 rows and 3,013,489
+bytes across 5,628 Han prefixes are reachable through `LanguagePipeline`; all
+fit below the 350,000-row and 8-MiB complete-cache bounds. A maximum accepted
+4,095-byte Han run can cover 285,075 rows without changing segmentation or
+triggering an aggregate run rejection.
+
+Fixture dictionaries are admitted during their one dynamic-index scan only if
+their complete eligible set fits the same 350,000-row and 8-MiB cache, with at
+most 5,000 candidates per prefix. Accepted fixtures therefore have no eviction
+or alternating-prefix reread path. Rejected admission is memoized, so retrying
+the same instance is constant work. Dictionary readers accept at most one
+8-KiB row; byte 8,193 raises `jieba_dictionary_line_bytes` before an oversized
+row is materialized. Complete segment results are additionally memoized in an
+LRU of at most 256 runs, 4,096 result tokens, and 256 KiB of run/token bytes;
+that eviction changes only token recomputation because prefix ranges remain
+resident.
 
 ## Search Explain Payloads
 

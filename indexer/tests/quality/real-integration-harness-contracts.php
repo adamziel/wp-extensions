@@ -232,16 +232,37 @@ test_case('quality real mysql proof helper excludes composer auth files from cop
     assert_true(is_int($pluginCopy) && is_int($componentCopy), 'proof helper should use the shared auth-excluding copy path for plugin and component trees');
 });
 
-test_case('quality real mysql harness source tracks current seven-table row-postings schema', function (): void {
+test_case('quality real mysql harness source tracks exact four-table current schema', function (): void {
     $script = (string) file_get_contents(dirname(__DIR__) . '/integration/real-wordpress-mysql.php');
     $proof = (string) file_get_contents(dirname(__DIR__) . '/integration/real-mysql-production-proof.php');
 
-    foreach (['fts_terms', 'fts_postings', 'fts_docs', 'fts_doc_lengths', 'fts_docmeta', 'fts_meta', 'fts_queue'] as $table) {
+    foreach (['fts_terms', 'fts_postings', 'fts_documents', 'fts_work'] as $table) {
         assert_contains($table, $script, "real integration harness should mention {$table}");
         assert_contains($table, $proof, "real MySQL proof should mention {$table}");
     }
 
-    assert_contains('doc_freq', $script, 'real integration harness should assert fts_terms.doc_freq');
+    foreach (['fts_docs', 'fts_doc_lengths', 'fts_docmeta', 'fts_meta', 'fts_queue'] as $removedTable) {
+        assert_true(!str_contains($script, $removedTable), "real integration harness should not mention removed {$removedTable}");
+        assert_true(!str_contains($proof, $removedTable), "real MySQL proof should not mention removed {$removedTable}");
+    }
+
+    foreach ([
+        "['term_id', 'lang', 'kind', 'term', 'doc_freq']",
+        "['term_id', 'post_id', 'impact']",
+        "['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at']",
+        "['job_key', 'kind', 'post_id', 'generation', 'state', 'available_at', 'attempts', 'claim_token', 'claimed_generation', 'claim_expires_at', 'cursor_post_id', 'scope_coverage', 'scope_incarnation', 'scope_subject_type', 'scope_subject_id', 'payload', 'last_error_code', 'last_error_at']",
+        "'term_identity' => ['unique' => true, 'columns' => ['lang', 'kind', 'term']]",
+        "'post_term_impact' => ['unique' => false, 'columns' => ['post_id', 'term_id', 'impact']]",
+        "'ready' => ['unique' => false, 'columns' => ['kind', 'state', 'available_at', 'post_id', 'job_key']]",
+        "'scope_subject' => ['unique' => false, 'columns' => ['kind', 'scope_coverage', 'scope_subject_type', 'scope_subject_id']]",
+    ] as $contract) {
+        assert_contains($contract, $script, "real integration harness should assert schema contract {$contract}");
+        assert_contains($contract, $proof, "real MySQL proof should assert schema contract {$contract}");
+    }
+
+    foreach (['get_terms', 'get_postings', 'get_capped_postings', 'get_budgeted_postings'] as $method) {
+        assert_contains("\$storage->{$method}", $script, "real integration harness should prove {$method} fails closed before SQL");
+    }
+    assert_contains('wp_fts_real_integration_term_state', $script, 'real integration harness should inspect one exact relational term through a bounded test helper');
     assert_contains('WP_FTS_MYSQL_PROOF_ALLOW_DISPOSABLE', $proof, 'real MySQL proof should require disposable-site opt-in');
-    assert_true(!str_contains($script, "assert_column(\$wpdb, \$tables['terms'], 'postings')"), 'real integration harness should not expect a stale fts_terms.postings column');
 });

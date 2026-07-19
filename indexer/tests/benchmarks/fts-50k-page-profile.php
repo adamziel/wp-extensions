@@ -919,6 +919,9 @@ class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadata
         if ($inner instanceof WP_FTS_Row_Postings_Storage && $inner instanceof WP_FTS_Document_Terms_Storage) {
             return new WP_FTS_Profiled_Row_Postings_Storage($inner);
         }
+        if ($inner instanceof WP_FTS_Row_Postings_Writer_Storage && $inner instanceof WP_FTS_Document_Terms_Storage) {
+            return new WP_FTS_Profiled_Row_Postings_Writer_Storage($inner);
+        }
 
         return new self($inner);
     }
@@ -1098,6 +1101,43 @@ class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadata
             $this->timers[$name]['calls'] = ($this->timers[$name]['calls'] ?? 0) + 1;
             $this->timers[$name]['total_ms'] = ($this->timers[$name]['total_ms'] ?? 0.0) + ((hrtime(true) - $started) / 1_000_000);
         }
+    }
+}
+
+/** Timing adapter for a native posting writer that exposes no posting-list reader. */
+final class WP_FTS_Profiled_Row_Postings_Writer_Storage extends WP_FTS_Profiled_Storage implements WP_FTS_Row_Postings_Writer_Storage, WP_FTS_Document_Terms_Storage
+{
+    public function replace_doc_postings(int $doc_id, array $term_frequencies): void
+    {
+        $this->timed(
+            'replace_doc_postings',
+            function () use ($doc_id, $term_frequencies): void {
+                $this->writer_storage()->replace_doc_postings($doc_id, $term_frequencies);
+            }
+        );
+    }
+
+    public function terms_for_doc(int $doc_id): array
+    {
+        return $this->timed('terms_for_doc', fn(): array => $this->document_terms_storage()->terms_for_doc($doc_id));
+    }
+
+    private function writer_storage(): WP_FTS_Row_Postings_Writer_Storage
+    {
+        if (!$this->inner instanceof WP_FTS_Row_Postings_Writer_Storage) {
+            throw new LogicException('Wrapped storage no longer exposes a native posting writer.');
+        }
+
+        return $this->inner;
+    }
+
+    private function document_terms_storage(): WP_FTS_Document_Terms_Storage
+    {
+        if (!$this->inner instanceof WP_FTS_Document_Terms_Storage) {
+            throw new LogicException('Wrapped storage no longer exposes document terms.');
+        }
+
+        return $this->inner;
     }
 }
 

@@ -162,9 +162,12 @@ final class WP_FTS_LemmaTsvPackImporter
                 'runtime_files' => $runtimeFiles,
                 'stats' => $stats + [
                     'runtime_rows' => $runtimeRows,
-                    'deduplicated_rows' => $stats['accepted_source_rows'] - $runtimeRows,
+                    'unique_source_rows' => $merge['source_rows'],
+                    'deduplicated_rows' => $stats['accepted_source_rows'] - $merge['source_rows'],
                     'ambiguous_surfaces' => $merge['ambiguous_surfaces'],
                     'unambiguous_surfaces' => $merge['unambiguous_surfaces'],
+                    'ambiguity_noop_surfaces' => $merge['ambiguity_noop_surfaces'],
+                    'ambiguity_noop_source_pairs' => $merge['ambiguity_noop_source_pairs'],
                 ],
                 'importer_commit' => $importerCommit,
                 'rows_per_file' => $rowsPerFile,
@@ -455,7 +458,7 @@ final class WP_FTS_LemmaTsvPackImporter
 
     /**
      * @param string[] $chunkFiles
-     * @return array{files:array<int,array<string,mixed>>,rows:int,sha256:string,ambiguous_surfaces:int,unambiguous_surfaces:int}
+     * @return array{files:array<int,array<string,mixed>>,rows:int,source_rows:int,sha256:string,ambiguous_surfaces:int,unambiguous_surfaces:int,ambiguity_noop_surfaces:int,ambiguity_noop_source_pairs:int}
      */
     private function merge_chunks(array $chunkFiles, string $runtimeDir, int $rowsPerFile, ?string $runtimeCompression): array
     {
@@ -477,13 +480,32 @@ final class WP_FTS_LemmaTsvPackImporter
         $runtimeDigest = hash_init('sha256');
         $previousPair = null;
         $currentSurface = null;
+        $currentSurfacePairs = [];
         $currentSurfaceLemmaCount = 0;
         $ambiguousSurfaces = 0;
         $unambiguousSurfaces = 0;
+        $ambiguityNoopSurfaces = 0;
+        $ambiguityNoopSourcePairs = 0;
+        $sourceRows = 0;
         $totalRows = 0;
         $shard = null;
 
-        $finishSurface = static function () use (&$currentSurface, &$currentSurfaceLemmaCount, &$ambiguousSurfaces, &$unambiguousSurfaces): void {
+        $finishSurface = function () use (
+            &$currentSurface,
+            &$currentSurfacePairs,
+            &$currentSurfaceLemmaCount,
+            &$ambiguousSurfaces,
+            &$unambiguousSurfaces,
+            &$ambiguityNoopSurfaces,
+            &$ambiguityNoopSourcePairs,
+            &$files,
+            &$shard,
+            &$runtimeDigest,
+            &$totalRows,
+            $runtimeDir,
+            $rowsPerFile,
+            $runtimeCompression
+        ): void {
             if ($currentSurface === null) {
                 return;
             }
@@ -491,6 +513,31 @@ final class WP_FTS_LemmaTsvPackImporter
                 $unambiguousSurfaces++;
             } else {
                 $ambiguousSurfaces++;
+            }
+
+            // Search SQL can represent at most twelve alternatives for one
+            // source token. Silently keeping a lexical first-twelve subset
+            // would make results depend on truncation, so an over-cap source
+            // surface compiles to one explicit identity row instead. The
+            // source remains recognized while both indexing and querying use
+            // the declared ambiguity no-op behavior.
+            if ($currentSurfaceLemmaCount > WP_FTS_LemmaPackLimits::MAX_LEMMAS_PER_SURFACE) {
+                $ambiguityNoopSurfaces++;
+                $ambiguityNoopSourcePairs += $currentSurfaceLemmaCount;
+                $currentSurfacePairs = [$currentSurface . "\t" . $currentSurface];
+            }
+
+            if ($shard !== null && $shard['rows'] >= $rowsPerFile) {
+                $files[] = $this->close_shard($shard);
+                $shard = null;
+            }
+            if ($shard === null) {
+                $shard = $this->open_shard($runtimeDir, count($files) + 1, $runtimeCompression);
+            }
+            foreach ($currentSurfacePairs as $pair) {
+                $this->write_pair_to_shard($shard, $pair, $currentSurface);
+                hash_update($runtimeDigest, $pair . "\n");
+                $totalRows++;
             }
         };
 
@@ -510,24 +557,23 @@ final class WP_FTS_LemmaTsvPackImporter
                     continue;
                 }
                 $previousPair = $pair;
+                $sourceRows++;
                 [$surface] = explode("\t", $pair, 2);
                 if ($currentSurface !== $surface) {
                     $finishSurface();
                     $currentSurface = $surface;
+                    $currentSurfacePairs = [];
                     $currentSurfaceLemmaCount = 0;
-                    if ($shard !== null && $shard['rows'] >= $rowsPerFile) {
-                        $files[] = $this->close_shard($shard);
-                        $shard = null;
-                    }
                 }
                 $currentSurfaceLemmaCount++;
-
-                if ($shard === null) {
-                    $shard = $this->open_shard($runtimeDir, count($files) + 1, $runtimeCompression);
+                if ($currentSurfaceLemmaCount <= WP_FTS_LemmaPackLimits::MAX_LEMMAS_PER_SURFACE) {
+                    $currentSurfacePairs[] = $pair;
+                } elseif ($currentSurfaceLemmaCount === WP_FTS_LemmaPackLimits::MAX_LEMMAS_PER_SURFACE + 1) {
+                    // Once the surface is known to be a no-op, discard the
+                    // bounded candidate buffer and only count later source
+                    // rows. This keeps merge memory independent of ambiguity.
+                    $currentSurfacePairs = [];
                 }
-                $this->write_pair_to_shard($shard, $pair, $surface);
-                hash_update($runtimeDigest, $pair . "\n");
-                $totalRows++;
             }
         } finally {
             foreach ($chunks as $chunk) {
@@ -572,9 +618,12 @@ final class WP_FTS_LemmaTsvPackImporter
                 $files
             ),
             'rows' => $totalRows,
+            'source_rows' => $sourceRows,
             'sha256' => hash_final($runtimeDigest),
             'ambiguous_surfaces' => $ambiguousSurfaces,
             'unambiguous_surfaces' => $unambiguousSurfaces,
+            'ambiguity_noop_surfaces' => $ambiguityNoopSurfaces,
+            'ambiguity_noop_source_pairs' => $ambiguityNoopSourcePairs,
         ];
     }
 

@@ -100,6 +100,8 @@ function wp_fts_mysql_proof_run_inside_wordpress(): void
     WP_FTS_Plugin::upgrade_schema();
     $tables = wp_fts_mysql_proof_tables($prefix);
     wp_fts_mysql_proof_assert_tables($wpdb, $tables);
+    wp_fts_mysql_proof_assert_schema($wpdb, $tables);
+    wp_fts_mysql_proof_assert_same(true, WP_FTS_Plugin::storage(false)->verify_schema()['valid'] ?? null, 'production schema verifier should accept the exact current relations.');
     $tableEngines = wp_fts_mysql_proof_table_engines($wpdb, $tables);
 
     $token = wp_fts_mysql_proof_token();
@@ -133,12 +135,14 @@ function wp_fts_mysql_proof_run_inside_wordpress(): void
             'reindex',
             '--post_type=post',
             '--post_status=publish',
-            '--batch_size=10',
+            '--format=json',
         ]);
-        $evidence['timings']['wpcli_reindex_elapsed_sec'] = wp_fts_mysql_proof_elapsed($start);
-        wp_fts_mysql_proof_assert_success($reindex, 'wp fts reindex should complete against MySQL.');
-        wp_fts_mysql_proof_assert_contains('Indexed ', $reindex['stdout'] . $reindex['stderr'], 'reindex output should report indexed posts.');
+        wp_fts_mysql_proof_assert_success($reindex, 'wp fts reindex should queue one scope against MySQL.');
+        wp_fts_mysql_proof_assert_contains('"status":"queued"', $reindex['stdout'], 'reindex output should report queued background work.');
+        $workerPasses = wp_fts_mysql_proof_drain_reindex_work();
+        $evidence['timings']['wpcli_reindex_and_drain_elapsed_sec'] = wp_fts_mysql_proof_elapsed($start);
         $evidence['wpcli']['reindex'] = wp_fts_mysql_proof_command_summary($reindex);
+        $evidence['wpcli']['reindex_worker_passes'] = $workerPasses;
 
         wp_fts_mysql_proof_make_posts_stale_hidden($wpdb, $fixture['hidden_ids']);
 
@@ -157,6 +161,8 @@ function wp_fts_mysql_proof_run_inside_wordpress(): void
         $evidence['wpcli'] += wp_fts_mysql_proof_wpcli_probes($token, $fixture);
         $evidence['rest'] = wp_fts_mysql_proof_rest_probes($token, $fixture);
         $evidence['db_counts'] = wp_fts_mysql_proof_db_counts($wpdb, $tables);
+        wp_fts_mysql_proof_assert_same(0, $evidence['db_counts']['pending_work_rows'], 'The production proof should drain all post and scope work.');
+        wp_fts_mysql_proof_assert_same(1, $evidence['db_counts']['search_epoch_rows'], 'The production proof should retain exactly one search-epoch sentinel.');
         $evidence['language_counts'] = wp_fts_mysql_proof_language_counts($wpdb, $tables);
         $evidence['query_plans'] = wp_fts_mysql_proof_query_plans($wpdb, $tables);
         $evidence['memory_peak_bytes'] = memory_get_peak_usage(true);
@@ -392,7 +398,7 @@ function wp_fts_mysql_proof_rest_probes(string $token, array $fixture): array
         ]));
         wp_fts_mysql_proof_assert_same(200, $response['status'], "{$name} REST probe should return HTTP 200.");
         $docId = (int) ($response['json']['results'][0]['doc_id'] ?? 0);
-        wp_fts_mysql_proof_assert_same($expectedVisible, $docId, "{$name} REST probe should return the visible post after hidden refill.");
+        wp_fts_mysql_proof_assert_same($expectedVisible, $docId, "{$name} REST probe should apply canonical visibility before LIMIT.");
         $probes[$name] = ['status' => $response['status'], 'doc_id' => $docId];
     }
 
@@ -511,20 +517,18 @@ function wp_fts_mysql_proof_db_counts(object $wpdb, array $tables): array
 {
     $terms = wp_fts_mysql_proof_identifier($tables['terms']);
     $postings = wp_fts_mysql_proof_identifier($tables['postings']);
-    $docs = wp_fts_mysql_proof_identifier($tables['docs']);
-    $docLengths = wp_fts_mysql_proof_identifier($tables['doc_lengths']);
-    $docmeta = wp_fts_mysql_proof_identifier($tables['docmeta']);
-    $meta = wp_fts_mysql_proof_identifier($tables['meta']);
+    $documents = wp_fts_mysql_proof_identifier($tables['documents']);
+    $work = wp_fts_mysql_proof_identifier($tables['work']);
 
-    $row = $wpdb->get_row(
+    $row = $wpdb->get_row($wpdb->prepare(
         "SELECT
   (SELECT COUNT(*) FROM `{$terms}`) AS terms,
   (SELECT COUNT(*) FROM `{$postings}`) AS postings,
-  (SELECT COUNT(*) FROM `{$docs}` WHERE is_deleted = 0) AS active_docs,
-  (SELECT COUNT(*) FROM `{$docLengths}`) AS doc_lengths,
-  (SELECT COUNT(*) FROM `{$docmeta}`) AS docmeta,
-  (SELECT COUNT(*) FROM `{$meta}`) AS meta_rows"
-    );
+  (SELECT COUNT(*) FROM `{$documents}`) AS documents,
+  (SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')) AS pending_work_rows,
+  (SELECT COUNT(*) FROM `{$work}` WHERE job_key = %s AND kind = 'meta' AND state = 'meta') AS search_epoch_rows",
+        WP_FTS_Index_Queue::SEARCH_EPOCH_JOB_KEY
+    ));
     if (!is_object($row)) {
         throw new RuntimeException('Could not read FTS table counts.');
     }
@@ -532,24 +536,23 @@ function wp_fts_mysql_proof_db_counts(object $wpdb, array $tables): array
     return [
         'terms' => (int) $row->terms,
         'postings' => (int) $row->postings,
-        'active_docs' => (int) $row->active_docs,
-        'doc_lengths' => (int) $row->doc_lengths,
-        'docmeta' => (int) $row->docmeta,
-        'meta_rows' => (int) $row->meta_rows,
+        'documents' => (int) $row->documents,
+        'pending_work_rows' => (int) $row->pending_work_rows,
+        'search_epoch_rows' => (int) $row->search_epoch_rows,
     ];
 }
 
 /**
- * @return array<int,array{lang:string,docs:int,len_sum:int}>
+ * @return array<int,array{lang:string,docs:int}>
  */
 function wp_fts_mysql_proof_language_counts(object $wpdb, array $tables): array
 {
-    $docLengths = wp_fts_mysql_proof_identifier($tables['doc_lengths']);
+    $documents = wp_fts_mysql_proof_identifier($tables['documents']);
     $rows = $wpdb->get_results(
-        "SELECT lang, COUNT(*) AS docs, COALESCE(SUM(doc_len), 0) AS len_sum
-FROM `{$docLengths}`
-GROUP BY lang
-ORDER BY lang ASC"
+        "SELECT primary_lang AS lang, COUNT(*) AS docs
+FROM `{$documents}`
+GROUP BY primary_lang
+ORDER BY primary_lang ASC"
     );
 
     $counts = [];
@@ -557,7 +560,6 @@ ORDER BY lang ASC"
         $counts[] = [
             'lang' => (string) $row->lang,
             'docs' => (int) $row->docs,
-            'len_sum' => (int) $row->len_sum,
         ];
     }
 
@@ -571,36 +573,35 @@ function wp_fts_mysql_proof_query_plans(object $wpdb, array $tables): array
 {
     $terms = wp_fts_mysql_proof_identifier($tables['terms']);
     $postings = wp_fts_mysql_proof_identifier($tables['postings']);
-    $docs = wp_fts_mysql_proof_identifier($tables['docs']);
-    $docLengths = wp_fts_mysql_proof_identifier($tables['doc_lengths']);
-    $docmeta = wp_fts_mysql_proof_identifier($tables['docmeta']);
+    $documents = wp_fts_mysql_proof_identifier($tables['documents']);
+    $work = wp_fts_mysql_proof_identifier($tables['work']);
 
-    $termHex = (string) $wpdb->get_var("SELECT HEX(term) FROM `{$terms}` ORDER BY doc_freq DESC, HEX(term) ASC LIMIT 1");
-    wp_fts_mysql_proof_assert($termHex !== '', 'At least one indexed term should exist before EXPLAIN probes.');
+    $termId = (int) $wpdb->get_var("SELECT term_id FROM `{$terms}` ORDER BY doc_freq DESC, term_id ASC LIMIT 1");
+    wp_fts_mysql_proof_assert($termId > 0, 'At least one indexed term should exist before EXPLAIN probes.');
 
     return [
-        'postings_by_term' => wp_fts_mysql_proof_explain_json($wpdb,
+        'postings_by_term_id' => wp_fts_mysql_proof_explain_json($wpdb,
             "EXPLAIN FORMAT=JSON
-SELECT term, doc_id, tf
+SELECT term_id, post_id, impact
 FROM `{$postings}`
-WHERE term = UNHEX('{$termHex}')
-ORDER BY term ASC, doc_id ASC"
-        ),
-        'doc_lengths_by_lang' => wp_fts_mysql_proof_explain_json($wpdb,
-            "EXPLAIN FORMAT=JSON
-SELECT dl.doc_id, dl.doc_len
-FROM `{$docLengths}` dl
-JOIN `{$docs}` d ON d.doc_id = dl.doc_id AND d.is_deleted = 0
-WHERE dl.lang = 'en'
-ORDER BY dl.doc_id ASC
+WHERE term_id = {$termId}
+ORDER BY post_id ASC
 LIMIT 20"
         ),
-        'docmeta_filter' => wp_fts_mysql_proof_explain_json($wpdb,
+        'documents_by_language' => wp_fts_mysql_proof_explain_json($wpdb,
             "EXPLAIN FORMAT=JSON
-SELECT doc_id, post_type, post_status, post_date_gmt
-FROM `{$docmeta}`
-WHERE post_type = 'post' AND post_status = 'publish'
-ORDER BY post_date_gmt DESC
+SELECT post_id, primary_lang, indexed_at
+FROM `{$documents}`
+WHERE primary_lang = 'en'
+ORDER BY post_id ASC
+LIMIT 20"
+        ),
+        'ready_work' => wp_fts_mysql_proof_explain_json($wpdb,
+            "EXPLAIN FORMAT=JSON
+SELECT job_key, post_id, generation
+FROM `{$work}`
+WHERE kind = 'post' AND state = 'ready' AND available_at <= 18446744073709551615
+ORDER BY post_id, job_key
 LIMIT 20"
         ),
     ];
@@ -636,15 +637,24 @@ function wp_fts_mysql_proof_cleanup(array $postIds): void
     if (function_exists('delete_option') && class_exists('WP_FTS_Plugin')) {
         delete_option(WP_FTS_Plugin::QUEUE_OPTION);
     }
-    (new WP_FTS_Index_Queue($GLOBALS['wpdb']))->clear();
-
     if (class_exists('WP_FTS_Plugin')) {
-        $storage = WP_FTS_Plugin::storage(false);
-        $indexer = new WP_FTS_Indexer($storage, new WP_FTS_Analyzer());
-        foreach ($postIds as $postId) {
-            $indexer->delete_document($postId);
+        $cleanup = WP_FTS_Plugin::run_index_writer_with_lock(
+            'mysql-proof-cleanup',
+            static function () use ($postIds): int {
+                (new WP_FTS_Index_Queue($GLOBALS['wpdb']))->clear();
+                $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(false), new WP_FTS_Analyzer());
+                foreach ($postIds as $postId) {
+                    $indexer->delete_document($postId);
+                }
+                $indexer->optimize();
+
+                return count($postIds);
+            },
+            ['record_health' => false, 'record_skip' => false]
+        );
+        if (!$cleanup['acquired']) {
+            throw new RuntimeException('Could not acquire the shared writer lease for MySQL proof cleanup.');
         }
-        $indexer->optimize();
     }
 }
 
@@ -679,11 +689,8 @@ function wp_fts_mysql_proof_tables(string $prefix): array
     return [
         'terms' => $prefix . 'fts_terms',
         'postings' => $prefix . 'fts_postings',
-        'docs' => $prefix . 'fts_docs',
-        'doc_lengths' => $prefix . 'fts_doc_lengths',
-        'docmeta' => $prefix . 'fts_docmeta',
-        'meta' => $prefix . 'fts_meta',
-        'queue' => $prefix . 'fts_queue',
+        'documents' => $prefix . 'fts_documents',
+        'work' => $prefix . 'fts_work',
     ];
 }
 
@@ -696,6 +703,70 @@ function wp_fts_mysql_proof_assert_tables(object $wpdb, array $tables): void
         wp_fts_mysql_proof_identifier($table);
         $found = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
         wp_fts_mysql_proof_assert_same($table, (string) $found, "table {$table} should exist.");
+    }
+}
+
+/** @param array<string,string> $tables */
+function wp_fts_mysql_proof_assert_schema(object $wpdb, array $tables): void
+{
+    $contracts = [
+        $tables['terms'] => [
+            'columns' => ['term_id', 'lang', 'kind', 'term', 'doc_freq'],
+            'indexes' => [
+                'PRIMARY' => ['unique' => true, 'columns' => ['term_id']],
+                'empty_terms' => ['unique' => false, 'columns' => ['doc_freq']],
+                'term_identity' => ['unique' => true, 'columns' => ['lang', 'kind', 'term']],
+            ],
+        ],
+        $tables['postings'] => [
+            'columns' => ['term_id', 'post_id', 'impact'],
+            'indexes' => [
+                'PRIMARY' => ['unique' => true, 'columns' => ['term_id', 'post_id']],
+                'post_term_impact' => ['unique' => false, 'columns' => ['post_id', 'term_id', 'impact']],
+            ],
+        ],
+        $tables['documents'] => [
+            'columns' => ['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at'],
+            'indexes' => [
+                'PRIMARY' => ['unique' => true, 'columns' => ['post_id']],
+            ],
+        ],
+        $tables['work'] => [
+            'columns' => ['job_key', 'kind', 'post_id', 'generation', 'state', 'available_at', 'attempts', 'claim_token', 'claimed_generation', 'claim_expires_at', 'cursor_post_id', 'scope_coverage', 'scope_incarnation', 'scope_subject_type', 'scope_subject_id', 'payload', 'last_error_code', 'last_error_at'],
+            'indexes' => [
+                'PRIMARY' => ['unique' => true, 'columns' => ['job_key']],
+                'claim_token' => ['unique' => false, 'columns' => ['claim_token', 'post_id']],
+                'dirty' => ['unique' => false, 'columns' => ['post_id', 'kind']],
+                'kind_job' => ['unique' => false, 'columns' => ['kind', 'job_key']],
+                'ready' => ['unique' => false, 'columns' => ['kind', 'state', 'available_at', 'post_id', 'job_key']],
+                'recoverable' => ['unique' => false, 'columns' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key']],
+                'scope_subject' => ['unique' => false, 'columns' => ['kind', 'scope_coverage', 'scope_subject_type', 'scope_subject_id']],
+            ],
+        ],
+    ];
+
+    foreach ($contracts as $table => $contract) {
+        $identifier = wp_fts_mysql_proof_identifier($table);
+        $columnRows = $wpdb->get_results("SHOW COLUMNS FROM `{$identifier}`");
+        $actualColumns = array_map(static fn(object $row): string => (string) $row->Field, is_array($columnRows) ? $columnRows : []);
+        wp_fts_mysql_proof_assert_same($contract['columns'], $actualColumns, "table {$table} should have only the exact current columns.");
+
+        $indexRows = $wpdb->get_results("SHOW INDEX FROM `{$identifier}`");
+        $actualIndexes = [];
+        foreach (is_array($indexRows) ? $indexRows : [] as $row) {
+            $name = (string) $row->Key_name;
+            $actualIndexes[$name] ??= ['unique' => (int) $row->Non_unique === 0, 'columns' => []];
+            $actualIndexes[$name]['columns'][(int) $row->Seq_in_index] = (string) $row->Column_name;
+        }
+        foreach ($actualIndexes as &$index) {
+            ksort($index['columns'], SORT_NUMERIC);
+            $index['columns'] = array_values($index['columns']);
+        }
+        unset($index);
+        ksort($actualIndexes, SORT_STRING);
+        $expectedIndexes = $contract['indexes'];
+        ksort($expectedIndexes, SORT_STRING);
+        wp_fts_mysql_proof_assert_same($expectedIndexes, $actualIndexes, "table {$table} should have only the exact current indexes.");
     }
 }
 
@@ -740,6 +811,34 @@ ORDER BY TABLE_NAME ASC",
 function wp_fts_mysql_proof_run_wp_cli(array $args): array
 {
     return wp_fts_mysql_proof_process(array_merge(wp_fts_mysql_proof_wp_cli_base_command(), $args));
+}
+
+/** @return array<int,array<string,mixed>> */
+function wp_fts_mysql_proof_drain_reindex_work(): array
+{
+    $passes = [];
+    for ($pass = 1; $pass <= 50; $pass++) {
+        $result = wp_fts_mysql_proof_run_wp_cli([
+            'fts',
+            'process-batch',
+            '--batch_size=100',
+            '--time_budget=20',
+            '--format=json',
+        ]);
+        wp_fts_mysql_proof_assert_success($result, "wp fts process-batch pass {$pass} should complete against MySQL.");
+        $payload = json_decode(trim($result['stdout']), true, 512, JSON_THROW_ON_ERROR);
+        wp_fts_mysql_proof_assert(is_array($payload), "wp fts process-batch pass {$pass} should return a JSON object.");
+        $passes[] = wp_fts_mysql_proof_command_summary($result) + [
+            'pass' => $pass,
+            'processed' => max(0, (int) ($payload['processed'] ?? 0)),
+            'has_more' => !empty($payload['has_more']),
+        ];
+        if (empty($payload['has_more'])) {
+            return $passes;
+        }
+    }
+
+    throw new RuntimeException('Reindex work remained after 50 explicit bounded WP-CLI worker passes.');
 }
 
 function wp_fts_mysql_proof_wp_cli_base_command(): array

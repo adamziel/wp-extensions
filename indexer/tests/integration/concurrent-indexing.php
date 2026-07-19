@@ -5,8 +5,9 @@ declare(strict_types=1);
  * Optional concurrent indexing diagnostic.
  *
  * The script creates worker-specific post types in a disposable WordPress
- * database, starts concurrent `wp fts reindex` processes against one generated
- * FTS table prefix, and verifies the shared term contains every generated post.
+ * database, concurrently coalesces filtered reindex scopes, then starts
+ * contending one-pass workers against one generated FTS table prefix and
+ * verifies the shared term contains every generated post.
  */
 
 try {
@@ -67,7 +68,7 @@ function wp_fts_concurrent_main(): int
                 '--post_type=' . $postType,
                 '--lang=en',
                 '--limit=0',
-                '--batch_size=2',
+                '--format=json',
             ]);
             $workerProcesses[] = wp_fts_concurrent_start_process($command, $env);
         }
@@ -75,7 +76,12 @@ function wp_fts_concurrent_main(): int
         foreach ($workerProcesses as $worker => $process) {
             $result = wp_fts_concurrent_finish_process($process);
             wp_fts_concurrent_must_succeed($result, "worker {$worker} reindex process");
+            if (!str_contains($result['stdout'], '"status":"queued"')) {
+                throw new RuntimeException("worker {$worker} reindex process did not report queued scope acceptance");
+            }
         }
+
+        $drainRounds = wp_fts_concurrent_drain_with_contending_workers($baseCommand, $env, $workers);
 
         wp_fts_concurrent_must_succeed(
             wp_fts_concurrent_process(array_merge($baseCommand, ['eval', wp_fts_concurrent_verify_code()]), $env),
@@ -83,16 +89,69 @@ function wp_fts_concurrent_main(): int
         );
 
         $expectedPosts = $workers * $postsPerWorker;
-        echo "PASS: concurrent indexing preserved {$expectedPosts} shared-term postings with {$workers} workers\n";
+        echo "PASS: concurrent scope enqueue plus {$drainRounds} contended one-pass worker rounds preserved {$expectedPosts} shared-term postings with {$workers} workers\n";
         return 0;
     } finally {
         wp_fts_concurrent_process(array_merge($baseCommand, ['eval', wp_fts_concurrent_cleanup_code()]), $env);
     }
 }
 
+/**
+ * Run bounded worker commands concurrently until every queued scope and post
+ * generation is acknowledged. Each process still performs exactly one pass;
+ * this harness owns the explicit retry rounds and a finite completion guard.
+ */
+function wp_fts_concurrent_drain_with_contending_workers(array $baseCommand, array $env, int $workers): int
+{
+    $maxRounds = ($workers * 3) + 20;
+    for ($round = 1; $round <= $maxRounds; $round++) {
+        $processes = [];
+        for ($worker = 0; $worker < $workers; $worker++) {
+            $processes[] = wp_fts_concurrent_start_process(array_merge($baseCommand, [
+                '--require=' . __DIR__ . '/wpcli-require.php',
+                'fts',
+                'process-batch',
+                '--batch_size=100',
+                '--time_budget=20',
+                '--format=json',
+            ]), $env);
+        }
+        foreach ($processes as $worker => $process) {
+            wp_fts_concurrent_must_succeed(
+                wp_fts_concurrent_finish_process($process),
+                "worker {$worker} process-batch round {$round}"
+            );
+        }
+
+        $status = wp_fts_concurrent_process(array_merge($baseCommand, [
+            '--require=' . __DIR__ . '/wpcli-require.php',
+            'fts',
+            'status',
+            '--format=json',
+        ]), $env);
+        wp_fts_concurrent_must_succeed($status, "status after process-batch round {$round}");
+        $payload = json_decode(trim($status['stdout']), true, 512, JSON_THROW_ON_ERROR);
+        if (empty($payload['has_more'])) {
+            return $round;
+        }
+        usleep(50000);
+    }
+
+    throw new RuntimeException("concurrent worker drain exceeded {$maxRounds} bounded rounds");
+}
+
 function wp_fts_concurrent_setup_code(): string
 {
     return <<<'PHP'
+require_once getenv('WP_FTS_INDEXER_ROOT') . '/src/bootstrap.php';
+global $wpdb;
+$prefix = getenv('WP_FTS_REAL_WPCLI_PREFIX');
+if (!is_string($prefix) || preg_match('/^[A-Za-z0-9_]+$/', $prefix) !== 1) {
+    fwrite(STDERR, "unsafe generated FTS prefix\n");
+    exit(1);
+}
+$wpdb->prefix = $prefix;
+WP_FTS_Plugin::upgrade_schema();
 $token = getenv('WP_FTS_CONCURRENT_TOKEN');
 $workers = max(2, (int) getenv('WP_FTS_CONCURRENT_WORKERS'));
 $postsPerWorker = max(1, (int) getenv('WP_FTS_CONCURRENT_POSTS_PER_WORKER'));
@@ -124,16 +183,29 @@ $prefix = getenv('WP_FTS_REAL_WPCLI_PREFIX');
 $workers = max(2, (int) getenv('WP_FTS_CONCURRENT_WORKERS'));
 $postsPerWorker = max(1, (int) getenv('WP_FTS_CONCURRENT_POSTS_PER_WORKER'));
 $expected = $workers * $postsPerWorker;
-$storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
 $term = WP_FTS_TermNamespace::namespace_term('en', 'concurrentneedle');
-$row = $storage->get_terms([$term])[$term] ?? null;
+if (preg_match('/^[A-Za-z0-9_]+$/', $prefix) !== 1) {
+    fwrite(STDERR, "unsafe generated FTS prefix\n");
+    exit(1);
+}
+$identity = WP_FTS_TermNamespace::split_term($term);
+$terms = $prefix . 'fts_terms';
+$postings = $prefix . 'fts_postings';
+$row = $wpdb->get_row($wpdb->prepare(
+    "SELECT term_id,doc_freq FROM `{$terms}` WHERE lang=%s AND kind=0 AND term=%s LIMIT 1",
+    (string) $identity['lang'],
+    (string) $identity['term']
+));
 if ($row === null) {
     fwrite(STDERR, "shared term was not indexed\n");
     exit(1);
 }
-$postings = WP_FTS_PostingsCodec::decode($row['postings']);
-if (count($postings) !== $expected || (int) $row['df'] !== $expected) {
-    fwrite(STDERR, "expected {$expected} postings, got df={$row['df']} postings=" . count($postings) . "\n");
+$postingCount = (int) $wpdb->get_var($wpdb->prepare(
+    "SELECT COUNT(*) FROM `{$postings}` WHERE term_id=%d",
+    (int) $row->term_id
+));
+if ($postingCount !== $expected || (int) $row->doc_freq !== $expected) {
+    fwrite(STDERR, "expected {$expected} postings, got df={$row->doc_freq} postings={$postingCount}\n");
     exit(1);
 }
 echo "verified {$expected} postings\n";
@@ -156,7 +228,7 @@ for ($worker = 0; $worker < $workers; $worker++) {
 }
 $prefix = getenv('WP_FTS_REAL_WPCLI_PREFIX');
 if (preg_match('/^[A-Za-z0-9_]+$/', $prefix) === 1) {
-    foreach (['fts_terms', 'fts_docs', 'fts_doc_lengths', 'fts_meta', 'fts_queue'] as $suffix) {
+    foreach (['fts_postings', 'fts_terms', 'fts_documents', 'fts_work'] as $suffix) {
         $wpdb->query('DROP TABLE IF EXISTS `' . $prefix . $suffix . '`');
     }
 }

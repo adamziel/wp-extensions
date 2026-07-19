@@ -30,14 +30,18 @@ plugin installs, downloads, service calls, or API integrations:
   report that a later provider changed the FTS output.
 - `jetpack_elasticpress_advisory_signals`: safe option/plugin-signal
   simulations exercise bounded Jetpack Search / Jetpack and ElasticPress
-  advisory labels. The report includes only family labels and counts, not raw
-  plugin basenames or option payloads.
+  advisory labels. This scenario invokes the operator advisory explicitly,
+  outside the search trace; the hot search trace does not perform provider
+  discovery. The report includes only family labels and counts, not raw plugin
+  basenames or option payloads.
 
 Each scenario reports a stable scenario id, simulated provider-family labels,
 compatibility mode, trace status, final ownership status, bounded counts,
-bounded post IDs and compact hashes, and a pass flag. Raw provider objects,
-content titles, raw plugin basenames, option payloads, `.env`, SSH paths, and
-PEM-like values are intentionally excluded from the JSON evidence.
+bounded post IDs and compact hashes, whether provider discovery appeared in the
+hot trace, and a pass flag. A separate `provider_advisory` section is populated
+only for the explicit advisory scenario. Raw provider objects, content titles,
+raw plugin basenames, option payloads, `.env`, SSH paths, and PEM-like values
+are intentionally excluded from the JSON evidence.
 
 ## Deterministic Quality Contract
 
@@ -81,6 +85,9 @@ The contract proves these deterministic cases and the matrix output contract:
   callback labels. They are not promoted to certified provider families.
 - The provider interference matrix exposes stable scenario IDs, bounded family
   labels, and redacted evidence without requiring a live WordPress install.
+- Provider discovery is not performed while collecting a hot search trace; the
+  advisory scenario proves the same labels through a separate explicit
+  operator-advisory call.
 
 ## Optional WordPress Smoke
 
@@ -122,9 +129,10 @@ For disposable roots where a marker file is inconvenient, set
 When configured, the smoke creates one generated post fixture, repairs FTS
 schema, processes the bounded indexing queue for that fixture, and runs the
 provider interference matrix described above. It captures replacement,
-stand-down, final ownership, known-provider family labels, and bounded result
-evidence. It restores request-local hook state, deletes the generated fixture,
-and restores the plugin settings and simulated advisory options before exiting.
+stand-down, final ownership, hot-trace discovery absence, explicit known-provider
+advisory labels, and bounded result evidence. It restores request-local hook
+state, deletes the generated fixture, and restores the plugin settings and
+simulated advisory options before exiting.
 
 Do not run the write-enabled smoke against production or shared staging data.
 It does not download plugins, make external network calls, or require real
@@ -136,6 +144,9 @@ Known-provider detection is advisory. It recognizes bounded family labels for
 Jetpack Search / Jetpack, SearchWP, Relevanssi, and ElasticPress from safe
 activation, network-active plugin, option, class, and function signals. Unknown
 plugins, themes, and custom callbacks appear as generic bounded hook labels.
+Provider discovery runs only on an explicit operator/advisory surface; ordinary
+per-search diagnostics retain compatibility mode and hook ownership without
+reading provider activation or option signals.
 
 The matrix is not a broad version-by-version certification of Jetpack Search,
 Jetpack, SearchWP, Relevanssi, ElasticPress, themes, or custom providers. It is

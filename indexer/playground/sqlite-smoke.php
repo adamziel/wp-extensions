@@ -101,7 +101,15 @@ function wp_fts_playground_index_post(WP_FTS_Indexer $indexer, string $title, st
     $postId = wp_fts_playground_insert_post($title, $content, $postArgs);
     $post = get_post($postId);
     wp_fts_playground_assert($post instanceof WP_Post, 'Could not load inserted smoke post', ['post_id' => $postId]);
-    $indexer->index_post($post, $indexOptions);
+    $post->terms = [];
+    $post->custom_fields = [];
+    $post->fts_language_override = '';
+    $post->fts_integration_language = '';
+    $prepared = $indexer->prepare_post(
+        $post,
+        WP_FTS_Plugin::prepare_post_index_options($post, $indexOptions)
+    );
+    WP_FTS_Plugin::storage(false)->replace_prepared_documents([$prepared]);
 
     return $postId;
 }
@@ -266,7 +274,7 @@ function wp_fts_playground_assert_rest_error(array $params, string $expectedCode
 }
 
 /**
- * Probe public REST query aliases, validation errors, and visibility refill.
+ * Probe public REST query aliases, validation errors, and pre-limit visibility.
  *
  * @return array<string,mixed>
  */
@@ -288,7 +296,7 @@ function wp_fts_playground_rest_smoke(WP_FTS_Indexer $indexer): array
     wp_fts_playground_assert_rest_ids(
         ['q' => 'refillvisibleword', 'lang' => 'en', 'limit' => 2],
         [$visibleOne, $visibleTwo],
-        'REST search should refill visible results after hidden indexed rows'
+        'REST search should apply canonical visibility before ranking and LIMIT'
     );
 
     return [
@@ -296,7 +304,7 @@ function wp_fts_playground_rest_smoke(WP_FTS_Indexer $indexer): array
         'query_alias' => $queryId,
         'invalid_mode' => 'wp_fts_invalid_mode',
         'missing_query' => 'wp_fts_missing_query',
-        'visibility_refill' => [
+        'visibility_before_limit' => [
             'hidden_passworded' => [$hiddenOne, $hiddenTwo],
             'visible' => [$visibleOne, $visibleTwo],
         ],
@@ -304,7 +312,7 @@ function wp_fts_playground_rest_smoke(WP_FTS_Indexer $indexer): array
 }
 
 /**
- * Insert posts that the later WP-CLI reindex command must index.
+ * Insert posts that the later WP-CLI reindex scope and worker passes must index.
  *
  * @return int[]
  */
@@ -320,7 +328,7 @@ function wp_fts_playground_prepare_wpcli_fixture_posts(): array
 }
 
 /**
- * Assert that the preceding `wp fts reindex` command indexed the fixture posts.
+ * Assert that the preceding `wp fts reindex` scope and bounded worker passes indexed the fixture posts.
  */
 function wp_fts_playground_assert_wpcli_reindex_effect(): void
 {
@@ -356,17 +364,40 @@ function wp_fts_playground_run_setup_smoke(): void
 {
     wp_fts_playground_activate_plugin();
 
+    // Direct component indexing below is deliberate smoke-fixture setup. Keep
+    // the normal save hooks from publishing a second dirty generation for the
+    // same posts while the shared writer lease owns the relational writes.
+    $settings = get_option(WP_FTS_Plugin::SETTINGS_OPTION, []);
+    $settings = is_array($settings) ? $settings : [];
+    $settings['auto_index'] = false;
+    update_option(WP_FTS_Plugin::SETTINGS_OPTION, $settings, false);
+
     $sqliteEvidence = wp_fts_playground_sqlite_evidence();
     $storage = WP_FTS_Plugin::storage(true);
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
     $indexer = new WP_FTS_Indexer($storage, $analyzer);
     $searcher = new WP_FTS_Searcher($storage, $analyzer);
 
-    $polishId = wp_fts_playground_index_post($indexer, '', '<p>Wrocław oraz Łódź kotami</p>');
-    $germanId = wp_fts_playground_index_post($indexer, '', '<p>Führung und Straße</p>');
-    $overrideId = wp_fts_playground_index_post($indexer, '', '<p>Wrocław explicit override</p>', ['lang' => 'en']);
-    $fallbackId = wp_fts_playground_index_post($indexer, '', '<p>alpha beta shared</p>');
-    $binaryTermId = wp_fts_playground_index_post($indexer, '', '<p>sqliteprefixqzxv</p>', ['lang' => 'en']);
+    $fixtureWrite = WP_FTS_Plugin::run_index_writer_with_lock(
+        'playground-sqlite-smoke',
+        static function () use ($indexer): array {
+            return [
+                'polish' => wp_fts_playground_index_post($indexer, '', '<p>Wrocław oraz Łódź kotami</p>'),
+                'german' => wp_fts_playground_index_post($indexer, '', '<p>Führung und Straße</p>'),
+                'override' => wp_fts_playground_index_post($indexer, '', '<p>Wrocław explicit override</p>', ['lang' => 'en']),
+                'fallback' => wp_fts_playground_index_post($indexer, '', '<p>alpha beta shared</p>'),
+                'binary' => wp_fts_playground_index_post($indexer, '', '<p>sqliteprefixqzxv</p>', ['lang' => 'en']),
+            ];
+        },
+        ['record_health' => false, 'record_skip' => false]
+    );
+    wp_fts_playground_assert($fixtureWrite['acquired'], 'Could not acquire the shared writer lease for SQLite smoke fixtures', $fixtureWrite['summary']);
+    $fixtures = is_array($fixtureWrite['result']) ? $fixtureWrite['result'] : [];
+    $polishId = (int) ($fixtures['polish'] ?? 0);
+    $germanId = (int) ($fixtures['german'] ?? 0);
+    $overrideId = (int) ($fixtures['override'] ?? 0);
+    $fallbackId = (int) ($fixtures['fallback'] ?? 0);
+    $binaryTermId = (int) ($fixtures['binary'] ?? 0);
 
     wp_fts_playground_assert_search($searcher, 'Wrocław', ['limit' => 10], [$polishId], 'untagged Polish query should meet detected Polish document partition');
     wp_fts_playground_assert_search($searcher, 'kot', ['lang' => 'pl', 'limit' => 10], [$polishId], 'Polish stemming should match kotami with an explicit Polish query');
@@ -378,7 +409,13 @@ function wp_fts_playground_run_setup_smoke(): void
     wp_fts_playground_assert_search($searcher, 'sqliteabsentqzxv', ['lang' => 'en', 'prefix_matching' => false, 'limit' => 10], [], 'SQLite absent binary term lookup should stay empty');
     wp_fts_playground_assert_search($searcher, 'sqliteprefixqzxv sqliteabsentqzxv', ['lang' => 'en', 'mode' => 'OR', 'prefix_matching' => false, 'limit' => 10], [$binaryTermId], 'SQLite mixed exact lookup should return the existing term without scanning for the absent term');
 
-    $rest = wp_fts_playground_rest_smoke($indexer);
+    $restWrite = WP_FTS_Plugin::run_index_writer_with_lock(
+        'playground-rest-smoke',
+        static fn(): array => wp_fts_playground_rest_smoke($indexer),
+        ['record_health' => false, 'record_skip' => false]
+    );
+    wp_fts_playground_assert($restWrite['acquired'], 'Could not acquire the shared writer lease for REST smoke fixtures', $restWrite['summary']);
+    $rest = is_array($restWrite['result']) ? $restWrite['result'] : [];
     $cliFixtureIds = wp_fts_playground_prepare_wpcli_fixture_posts();
 
     $summary = 'WP_FTS_PLAYGROUND_SQLITE_SMOKE ' . json_encode([
@@ -407,7 +444,7 @@ function wp_fts_playground_run_setup_smoke(): void
             'rest_query' => 'restsurfacebeta',
             'rest_invalid_mode' => 'xor',
             'rest_missing_query' => 'blank q/query',
-            'rest_visibility_refill' => 'refillvisibleword',
+            'rest_visibility_before_limit' => 'refillvisibleword',
             'wpcli_reindex_search' => WP_FTS_PLAYGROUND_CLI_QUERY,
         ],
     ], JSON_UNESCAPED_SLASHES);

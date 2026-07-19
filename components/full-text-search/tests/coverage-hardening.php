@@ -638,4 +638,110 @@ $ambiguousIndexer->index_document_fields(804, [
 ], ['lang' => 'en']);
 wp_fts_component_hardening_same(2, $ambiguousStorage->get_doc(804)['lang_lengths']['en'] ?? null, 'alternative positions from separate fields should remain separate source tokens');
 
+$splitAnalyzer = new class {
+    public int $contentAnalysisCalls = 0;
+
+    /** @return array<int,array<string,mixed>> */
+    public function analyze_plain_content(string $text, array $options = []): array
+    {
+        $this->contentAnalysisCalls++;
+
+        return [[
+            'term' => strtolower(str_replace(' ', '-', trim($text))),
+            'lang' => (string) ($options['lang'] ?? 'en'),
+            'position' => 0,
+        ]];
+    }
+
+    public function index_signature(): string
+    {
+        return 'post-source-split-fixture-v1';
+    }
+};
+$splitExtractor = new class {
+    public int $calls = 0;
+
+    /** @return array<string,mixed> */
+    public function extract(object $post, array $options = []): array
+    {
+        $this->calls++;
+
+        return [
+            'fields' => [
+                ['name' => 'title', 'text' => (string) $post->post_title],
+                ['name' => 'content', 'text' => (string) $post->post_content],
+            ],
+            'field_boosts' => ['title' => 4.0, 'content' => 1.0],
+            'metadata' => [
+                'post_id' => (int) $post->ID,
+                'post_type' => 'post',
+                'post_status' => (string) ($post->post_status ?? 'publish'),
+                'title' => (string) $post->post_title,
+            ],
+        ];
+    }
+};
+$splitIndexer = new WP_FTS_Indexer(new WP_FTS_Storage_InMemory(), $splitAnalyzer, $splitExtractor);
+$splitPost = (object) [
+    'ID' => 805,
+    'post_title' => 'Fingerprint first',
+    'post_content' => 'Analyze only after comparison',
+    'post_status' => 'publish',
+];
+$splitSource = $splitIndexer->prepare_post_source($splitPost, ['lang' => 'en']);
+wp_fts_component_hardening_same(1, $splitExtractor->calls, 'post source preparation should extract exactly once');
+wp_fts_component_hardening_same(0, $splitAnalyzer->contentAnalysisCalls, 'post source fingerprinting should not analyze field content');
+wp_fts_component_hardening_check(!isset($splitSource['term_frequencies']), 'post source payload should not pretend analysis already ran');
+$splitPrepared = $splitIndexer->prepare_post_from_source($splitSource);
+wp_fts_component_hardening_same(1, $splitExtractor->calls, 'analyzing prepared source should not repeat post extraction');
+wp_fts_component_hardening_same(2, $splitAnalyzer->contentAnalysisCalls, 'prepared source should analyze each normalized field once');
+wp_fts_component_hardening_same($splitSource['content_hash'], $splitPrepared['content_hash'], 'source and analyzed payload hashes must be identical');
+wp_fts_component_hardening_same(
+    $splitPrepared,
+    $splitIndexer->prepare_post($splitPost, ['lang' => 'en']),
+    'prepare_post should compose the same source and analysis stages without drift'
+);
+$changedSplitPost = clone $splitPost;
+$changedSplitPost->post_content = 'Changed source fingerprint';
+$analysisCallsBeforeChangedFingerprint = $splitAnalyzer->contentAnalysisCalls;
+$changedSplitSource = $splitIndexer->prepare_post_source($changedSplitPost, ['lang' => 'en']);
+wp_fts_component_hardening_check($changedSplitSource['content_hash'] !== $splitSource['content_hash'], 'source-only fingerprint should detect changed extracted fields');
+wp_fts_component_hardening_same($analysisCallsBeforeChangedFingerprint, $splitAnalyzer->contentAnalysisCalls, 'changed-source fingerprinting should still defer analysis to the worker');
+$metadataOnlySplitPost = clone $splitPost;
+$metadataOnlySplitPost->post_status = 'draft';
+$metadataOnlySplitSource = $splitIndexer->prepare_post_source($metadataOnlySplitPost, ['lang' => 'en']);
+wp_fts_component_hardening_same(
+    $splitSource['content_hash'],
+    $metadataOnlySplitSource['content_hash'],
+    'canonical status changes should not force relational text analysis when searchable fields are unchanged'
+);
+
+$analysisCacheStemmer = new class implements WP_FTS_Stemmer {
+    public int $calls = 0;
+
+    public function stem(string $term, string $language): string
+    {
+        $this->calls++;
+
+        return $term;
+    }
+};
+$analysisCachePipeline = new WP_FTS_LanguagePipeline(['stemmer' => $analysisCacheStemmer]);
+$repeatedAnalysis = $analysisCachePipeline->analyze_detailed(str_repeat('repeat ', 1000), 'en');
+wp_fts_component_hardening_same(1000, count($repeatedAnalysis), 'analysis caching must preserve every repeated occurrence');
+wp_fts_component_hardening_same(1, $analysisCacheStemmer->calls, 'one repeated token should be normalized and stemmed once per analyzer request');
+$uniqueAnalysisTokens = [];
+for ($index = 0; $index < 600; $index++) {
+    $uniqueAnalysisTokens[] = 'cachetoken' . $index;
+}
+$analysisCachePipeline->analyze_detailed(implode(' ', $uniqueAnalysisTokens), 'en');
+wp_fts_component_hardening_same(601, $analysisCacheStemmer->calls, 'distinct tokens must still receive their own analysis');
+$analysisCacheProperty = new ReflectionProperty(WP_FTS_LanguagePipeline::class, 'analysisCache');
+$analysisCacheProperty->setAccessible(true);
+wp_fts_component_hardening_same(512, count($analysisCacheProperty->getValue($analysisCachePipeline)), 'request-local token analysis cache must remain bounded');
+$analysisCachePipeline->analyze_detailed('cachetoken599', 'en');
+wp_fts_component_hardening_same(601, $analysisCacheStemmer->calls, 'the newest bounded-cache entry should remain reusable');
+$analysisCachePipeline->analyze_detailed('repeat', 'en');
+wp_fts_component_hardening_same(602, $analysisCacheStemmer->calls, 'evicted token analyses must be recomputed rather than retained without a bound');
+
 return $wp_fts_component_hardening_checks;

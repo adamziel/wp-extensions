@@ -33,7 +33,23 @@
     },
     {
       "step": "wp-cli",
-      "command": "wp fts reindex --post_status=publish --post_type=post --lang=en --batch_size=10"
+      "command": "wp fts reindex --post_status=publish --post_type=post --lang=en --format=json"
+    },
+    {
+      "step": "wp-cli",
+      "command": "wp fts process-batch --batch_size=10 --time_budget=20 --format=json"
+    },
+    {
+      "step": "wp-cli",
+      "command": "wp fts process-batch --batch_size=10 --time_budget=20 --format=json"
+    },
+    {
+      "step": "wp-cli",
+      "command": "wp fts process-batch --batch_size=10 --time_budget=20 --format=json"
+    },
+    {
+      "step": "wp-cli",
+      "command": "wp fts process-batch --batch_size=10 --time_budget=20 --format=json"
     },
     {
       "step": "wp-cli",

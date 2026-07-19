@@ -12,125 +12,125 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import",
-        "indexed-runtime-lookups"
+        "indexed-runtime-lookups",
+        "unimorph-source-import"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
         "normalization": "WP_FTS_Normalizer es with fold_diacritics=true",
         "ambiguity_policy": "ambiguous_surface_noop",
-        "total_rows": 794521,
-        "total_sha256": "c68efa7dfa78f0b1442473c2770ee486965b0a308a63446d653f7929f2dcd54f",
+        "total_rows": 794487,
+        "total_sha256": "334e9f8bac85298967cf7e410f4f81413569f349f3cb77f2ef9745cf93579603",
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "dcb3fc930dd3e5f4cae246cc312eccc351f3c8d9d96fee99aa130dd41c155860",
+                "sha256": "e3e8ffd67b2df69fba911deb60c06141a022b35fbf05084fe1b0ce841166335d",
                 "rows": 100000,
                 "first_surface": "aaleniana",
-                "last_surface": "autoricenme",
+                "last_surface": "autoritarismos",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0001.tsv.gz.lookup",
-                    "sha256": "2859defe02e8a488065c79c815c44080be1c971d60893b9cb6fcce3cac0c0f44",
+                    "sha256": "4933ab81bf74f2392a80b462823f9f88d6dec1b57204db5722186729e4d6ab4e",
                     "blocks": 49
                 }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "01f546cfc4186f14da5f64e4c1ea23b16c31b4f720f6fd437b62648e9bacb465",
+                "sha256": "9b58a7aa1d78291e388b745a8d647bbaa31f6248c52e2c8a86b2d08e1b027e01",
                 "rows": 100000,
-                "first_surface": "autoricennos",
-                "last_surface": "corporizandote",
+                "first_surface": "autoritativa",
+                "last_surface": "corporizaria",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0002.tsv.gz.lookup",
-                    "sha256": "c4cbf59bc7bbf777d0e364a58a6f18f4a2a20673dbbcd5c2db55eec581f62001",
+                    "sha256": "1d7013f18368d81e128e9a5722bb0d6c862c7a27dbd413ed545d43dd94ae4228",
                     "blocks": 49
                 }
             },
             {
                 "path": "runtime/0003.tsv.gz",
-                "sha256": "1d51c85a7ec9e698c60fcc8f124596286e585205cf80245be7494493a450421c",
+                "sha256": "d28463f97bd379d48c8b156d09681b82b4fe780a81ca6b537dd746fdd5485ae4",
                 "rows": 100000,
-                "first_surface": "corporizanos",
-                "last_surface": "dobleteadas",
+                "first_surface": "corporizariais",
+                "last_surface": "dobleteareis",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0003.tsv.gz.lookup",
-                    "sha256": "18e6545673dee582114338710ba51049bdb491b6740de877dd90bb2b6dd078e4",
+                    "sha256": "293e29a6d52af92bcfb530dd88afabd2a7f8da19b28e52ef712e2c25e3792892",
                     "blocks": 49
                 }
             },
             {
                 "path": "runtime/0004.tsv.gz",
-                "sha256": "fb250948cff695b541cf02c54a13c4defddfe235ca461b9e1f6b501e314de662",
+                "sha256": "9593f8bc6df051d7e1eba683b75c89dc6a61a44191ce6d48535776e2fc54a99f",
                 "rows": 100000,
-                "first_surface": "dobleteado",
-                "last_surface": "favelizalas",
+                "first_surface": "dobletearemos",
+                "last_surface": "favelizandolos",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0004.tsv.gz.lookup",
-                    "sha256": "fa6017386a404c43196d7193825124e50145e3604682ffea4e14deae6cec1e5f",
+                    "sha256": "76c9eb9addf52da92a9cc8cf58a970a5bcc38e63a126c51bfddb581e08116c7a",
                     "blocks": 49
                 }
             },
             {
                 "path": "runtime/0005.tsv.gz",
-                "sha256": "56960a3352a84989def369993edeb6046bfcc6cf1f51da7a868eda119fb9a33c",
+                "sha256": "78561d0ffb728539bc6da41a9cf544f379762af705d8b8521853c1f2ee4395d7",
                 "rows": 100000,
-                "first_surface": "favelizale",
-                "last_surface": "malgastenme",
+                "first_surface": "favelizandome",
+                "last_surface": "malherido",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0005.tsv.gz.lookup",
-                    "sha256": "0cffae547565d486466e6e30d1a6f3eb517f46be79cbe7333eb6734743880692",
+                    "sha256": "027ef546de16faa14de3ddc8143bf84beb53a86f9ee11a5a4a64056e1f9da21a",
                     "blocks": 49
                 }
             },
             {
                 "path": "runtime/0006.tsv.gz",
-                "sha256": "0580094a6d43305c881f07c5699e48467138f34862dcb238cc6f1f6cb2d32a38",
+                "sha256": "e8f6385d1e761c2598c9abc4455075fa039d5d4487d7127e76a1f3a33f7957f7",
                 "rows": 100000,
-                "first_surface": "malgastennos",
-                "last_surface": "principaliceis",
+                "first_surface": "malheridos",
+                "last_surface": "principalizaba",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0006.tsv.gz.lookup",
-                    "sha256": "90ec87e783729125d3e62ad61da89057e8650bde80402792c074a5d27cefce26",
+                    "sha256": "b1b199d381f37d77bd7a624a2c6982be4f5fc27c84e7d5e23da377969286e3c3",
                     "blocks": 49
                 }
             },
             {
                 "path": "runtime/0007.tsv.gz",
-                "sha256": "576d533ed7ff1f77a36def1c8b8b68a8eda41d9726593de3268f5c5cadf2e29f",
+                "sha256": "0d1acc38254f1d4bb6586fbd8a24a93aaf33453e942a1b5d9243b7975ee93621",
                 "rows": 100000,
-                "first_surface": "principalicela",
-                "last_surface": "segmentaba",
+                "first_surface": "principalizabais",
+                "last_surface": "segmentandole",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0007.tsv.gz.lookup",
-                    "sha256": "ff2281732b179724d11d6a12e3aa81037a6c4976a9bdfb755221cd7ce7855114",
+                    "sha256": "feb2b399cb0290dacf470b67bea9cff2207997336779863316a63f1af1cbe56c",
                     "blocks": 49
                 }
             },
             {
                 "path": "runtime/0008.tsv.gz",
-                "sha256": "2f94b68a56f365077b714b2d8942abd217ae9edb5b1a65cdd675c8f3f4c7a449",
-                "rows": 94521,
-                "first_surface": "segmentabais",
+                "sha256": "a2f60d7d84d49f830dbfa4b8038b2dd99bd26a81858de63f821ccad06a79eafd",
+                "rows": 94487,
+                "first_surface": "segmentandoles",
                 "last_surface": "zwitterionicos",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0008.tsv.gz.lookup",
-                    "sha256": "b72ba06f7fa146cef6211f1874fb0f93fb41d3179458a5d009c2fccef74eeb6c",
+                    "sha256": "3a17b7f63a06dfc2ff46a49f70bfaec64153a14c224769b767e6236dc383cca3",
                     "blocks": 47
                 }
             }
@@ -170,7 +170,17 @@
             "placeholder_rows": 21,
             "invalid_runtime_token_rows": 33719,
             "rows_with_features": 1162505,
-            "accepted_rows": 1162505
+            "accepted_rows": 1162505,
+            "accepted_source_rows": 1162505,
+            "rows_with_tags": 1162505,
+            "rows_with_source_notes": 1162505,
+            "runtime_rows": 794487,
+            "unique_source_rows": 794521,
+            "deduplicated_rows": 367984,
+            "ambiguous_surfaces": 21140,
+            "unambiguous_surfaces": 751275,
+            "ambiguity_noop_surfaces": 2,
+            "ambiguity_noop_source_pairs": 36
         }
     },
     "license": {

@@ -6,14 +6,14 @@ restore matters.
 
 ## Schema Creation And Upgrade
 
-Activation creates or repairs the index tables, stores the schema contract
-version, and schedules the bounded runtime queue processor. Runtime storage
-access also checks the stored schema version and repairs stale or missing schema
-state before indexing or tombstoning posts.
+Activation and explicit repair create or repair the index tables, store the
+schema contract version, and schedule the bounded runtime queue processor.
+Ordinary search/readiness and worker batches trust durable version/health state
+and never inspect or repair physical schema.
 
 On multisite, activation, the Health-tab repair action, and `wp fts repair`
 operate on the current site's table prefix. When WordPress initializes a new
-site, the plugin switches into that site, creates or repairs the seven FTS tables,
+site, the plugin switches into that site, creates or repairs the four FTS tables,
 schedules bounded queue work, and does not index content or set the activation
 redirect flag.
 
@@ -32,12 +32,83 @@ wp fts status
 wp fts status --format=json
 ```
 
+Normal Health/status trusts the stored schema/readiness state. It does not run
+`SHOW TABLES`, verify indexes, or count the eligible WordPress corpus and whole
+document table. JSON therefore reports `schema_verification=stored`,
+`counts_exact=false`, and `eligible_count`, `indexed_count`, and
+`remaining_count` as `null`. A current-schema status uses one bounded aggregate
+over indexed `fts_work` state; a stale-schema Health render uses zero database
+statements. The explicit support snapshot and `wp fts diagnose <query>` add
+bounded physical schema verification and label it with
+`schema_verification=physical`. They still report `counts_exact=false` and the
+three corpus counts as `null`; no operator diagnostic exhaustively counts
+WordPress posts, FTS documents, or remaining work. Status, support snapshots,
+and diagnose remain read-only when the physical schema is damaged: they do not
+repair it, enqueue work, or schedule the queue processor.
+
+On MySQL/MariaDB, explicit physical verification uses one tiny capability read
+and one table-bounded `information_schema` snapshot for all four FTS tables and
+both selective core-table indexes. Including the bounded work-status aggregate,
+`operator_status(true)` and a support snapshot each execute exactly three plugin
+statements. A healthy diagnose with page hydration executes six: those three,
+then plan, rank, and hydration. SQLite correlates `sqlite_schema` with
+table-valued PRAGMAs and replaces the two MySQL metadata reads with one.
+
+Repair itself is a writer. The Health action and `wp fts repair` acquire the
+same lease as indexing and optimize; under contention they report
+`skipped_locked` and perform zero physical probes or DDL.
+
 Status includes `index_profile_hash`, `accepted_index_profile_hash`,
-`stale_debt_active`, stale-debt reason labels, debt timestamps, the active
-stale-debt cursor, processed count, remaining indexed-row count, and latest
-stale batch count. Stale debt means index-time configuration changed after the
-last accepted profile, so existing rows may need to be rewritten even when
-"Remaining to index" is `0`.
+`reconciliation_active`, `profile_reconciliation_pending`,
+`foreground_owner_guard_blocked`, and the durable `fts_work` post count, scope
+count, and scope cursor. A profile mismatch means
+index-time configuration changed after the last accepted profile. The scope
+row and the post generations it expands are the reconciliation state; there is
+no parallel option cursor or independently maintained debt counter.
+
+Foreground canonical-write boundaries have two durable states, neither of
+which is an ordinary retry or worker lease. A pre-hook that holds the shared
+owner lock writes `guarded`; a pre-hook that cannot prove that capability writes
+operator-only `fenced`. One primary-key UPSERT advances the post generation and
+stores the current request token before canonical SQL. The matching post-SQL
+hook can promote only that token and generation; a later boundary supersedes it
+atomically, so a stale completion cannot expose the old projection. Same-post
+metadata writes retain one boundary until request shutdown. A crashed request
+needs no database-session cleanup or separate recovery API. The `guard:*` token
+is retained for ownership CAS and diagnostics, but worker eligibility never
+parses or scans token text. A free exclusive probe adds the separately indexed
+`guarded` state to the fixed candidate arms. A busy or unavailable probe omits
+both protected states. `fenced` is never auto-claimed: no later file observation
+can prove that the request which failed to acquire a guard has exited.
+Process death closes the descriptor unless application code deliberately forks
+after guard acquisition and leaves the inherited descriptor open; after final
+close, the ordinary bounded worker claim replaces the token by
+`(job_key,generation)` CAS. A second post-write probe catches an owner that
+started between the first probe and claim SQL and re-fences only the worker's
+still-owned generations. If that second probe cannot inspect the path, the
+synthetic guarded fence stays closed and Health stays unhealthy until the path
+is repaired. If the initial foreground acquisition cannot open the file, the
+request instead writes a finite unmarked fallback fence and latches search
+takeover unhealthy so WordPress core search remains authoritative. That row
+becomes due at its finite deadline but remains closed. Its normal post-SQL hook
+promotes it to ready work; if that request dies first, the distinct Health latch
+requires a quiesced operator reset. A free `next_available_at()` query omits
+`fenced` entirely, so operator-only debt cannot create a recurring cron wakeup
+or starve `guarded` work behind a candidate limit. Operators should not edit
+these rows or lock files manually.
+
+Every PHP web, cron, and WP-CLI process connected to the same database must see
+the same lock-file inode with working POSIX `flock()` semantics. MySQL/MariaDB
+sites default to a deterministic mode-`0700` private runtime subdirectory below
+`WP_CONTENT_DIR/uploads`; the
+supported SQLite drop-ins use the directory of canonical `FQDB`. Define an
+absolute `WP_FTS_FOREGROUND_LOCK_DIR` when those defaults are not shared across
+SAPIs. Multi-node local disks and filesystems with ineffective advisory locking
+do not satisfy this deployment contract. The lock file is never renamed or
+unlinked. A foreground acquisition stops retrying an unexpected exclusive
+holder after a 50-millisecond monotonic deadline and fails closed, so a stuck
+external lock cannot hang canonical WordPress writes. Guard acquisition adds
+no database statement.
 
 Status also includes `failure_recovery`, a bounded read-only history of recent
 item-level indexing failures. The records include sanitized post IDs, bounded
@@ -49,8 +120,8 @@ secrets, or unbounded option payloads.
 Status also includes `queue_processor_schedule`, a read-only view of the
 `wp_fts_process_index_queue` WP-Cron event. `scheduled` means WordPress has a
 queue processor event waiting and reports the next UTC run time and delay.
-`missing` means bounded status inputs show pending queue, backfill, or stale
-reindex work but no queue processor event is scheduled. Use the Health tab's
+`missing` means bounded status inputs show pending queue or reconciliation
+work but no queue processor event is scheduled. Use the Health tab's
 queue processor control or `wp fts schedule-queue` to restore the future
 background event, then check for disabled or stalled WP-Cron. Schedule recovery
 only schedules a later background run; it does not index content immediately.
@@ -58,6 +129,18 @@ only schedules a later background run; it does not index content immediately.
 one-pass fallback while cron is investigated. `not_needed` means no pending
 indexing work was detected, and `unavailable` means the current non-WordPress
 context cannot inspect cron helpers.
+
+Each worker persists its one required successor while it still owns the shared
+writer lease. A `false` WP-Cron result is not treated as success: a manual batch
+returns `successor_schedule_failed=true` with the matching stop reason, while a
+WP-Cron callback throws `WP_FTS_Index_Successor_Schedule_Failed` only after its
+durable mutations are complete and its lease is released. The worker does not
+retry or schedule after lease release. Pending work remains visible as the
+`missing` schedule state above, where the Health control or `wp fts
+schedule-queue` provides the bounded recovery path. The same visible failure
+applies when a cron callback skips an active writer lease and cannot persist its
+follow-up: the callback leaves both the queued work and the current lease
+unchanged.
 
 Status also includes `cron_runner`, a read-only environment diagnostic for
 traffic-triggered WP-Cron. `traffic_triggered` means normal WordPress traffic can
@@ -84,9 +167,9 @@ basenames/provider payloads.
 Status also includes `language_pack_status`, a read-only runtime analyzer-pack
 summary for automation and support. JSON output preserves the nested object with
 the current site language, runtime support label/reason, matched base runtime
-language when a locale such as `en-US` is covered by `en`, fallback-language
-state, gzip/runtime-pack availability, bounded active runtime pack summaries,
-bounded fallback/unsupported/license-blocked language summaries, and an operator
+language when a locale such as `en-US` is covered by `en`, the disabled
+query-fanout invariant, gzip/runtime-pack availability, bounded active runtime
+pack summaries, bounded unsupported/license-blocked language summaries, and an operator
 recommendation. Table output keeps the nested row and adds concise flattened
 rows such as `language_pack_site_language`,
 `language_pack_runtime_support`, `language_pack_active_runtime_languages`,
@@ -95,23 +178,25 @@ advisory only: it does not install analyzer packs, change analyzer options,
 create posts or demo content, drain queues, run indexing, or reindex existing
 content.
 
-To create or repair the schema and index content, run:
+Activation creates or repairs the schema. To queue content reconciliation, run:
 
 ```sh
-wp fts reindex --post_type=post
+wp fts reindex --post_type=post --format=json
 ```
 
-The MySQL backend creates seven tables under the active WordPress table prefix:
+This command returns after one durable filtered scope UPSERT. WP-Cron performs
+the bounded indexing passes; `wp fts process-batch --batch_size=100
+--time_budget=20 --format=json` performs one such pass manually.
 
-- `fts_terms`: binary term keys and document frequency.
-- `fts_postings`: row postings keyed by `(term, doc_id)` with term frequency.
-- `fts_docs`: one row per document with primary language, aggregate length,
-  content hash, and tombstone state.
-- `fts_doc_lengths`: per-document, per-language lengths used for BM25.
-- `fts_docmeta`: bounded WordPress result metadata for filters, snippets, and
-  CLI/REST enrichment.
-- `fts_meta`: per-language document counts and length sums.
-- `fts_queue`: coalesced post generations, retry timing, and leased worker
+The MySQL backend creates four tables under the active WordPress table prefix:
+
+- `fts_terms`: typed binary dictionary keys and global document frequency;
+  `kind=0` is analyzed lexical identity and `kind=1` is a complete normalized
+  source surface used by one indexed prefix range, not a row per proper prefix.
+- `fts_postings`: compact rows keyed by `(term_id, post_id)` with precomputed
+  field impact and a post-first probe index.
+- `fts_documents`: one bounded source-hash/snippet row per live document.
+- `fts_work`: coalesced post generations, retry timing, and leased worker
   ownership for pending indexing work.
 
 When WordPress `dbDelta()` is available, schema creation uses it so existing
@@ -120,13 +205,30 @@ are executed. Database write failures are surfaced with the failed operation
 name so activation, repair, and runtime indexing do not silently continue after
 a schema or storage error.
 
-During multisite site deletion, the plugin contributes the target site's seven
+During multisite site deletion, the plugin contributes the target site's four
 `fts_*` table names to WordPress table discovery so core can clean them up with
-the deleted site. Plugin uninstall remains intentionally conservative: it clears
-plugin operational options and pending queue state for each site on multisite,
-but does not drop index tables or delete indexed data. Uninstall does not create
-or delete posts, demo content, terms, users, attachments, uploads, analyzer
-packs, generated packs, or release artifacts.
+the deleted site. Deactivation is reversible: it clears scheduled work and
+retains the index. Uninstall is deliberately destructive: for each site it uses
+one idempotent `DROP TABLE IF EXISTS` statement covering the four current and
+twelve distinct legacy/recoverable table names, then removes operational
+options. The DROP uses the same per-site writer lease as indexing and repair.
+If that lease is active, uninstall leaves that site's tables and options
+untouched and fails so the operator can retry after the writer finishes; an
+expired lease is safely taken over. The lease stays owned until table, schedule,
+and non-lease option cleanup is complete, so another writer cannot enter the
+partially removed site. Before the DROP, uninstall persists an exact
+non-autoloaded one-byte fence (`1`) and retains it after successful or partial
+cleanup. Preloaded repair, indexing, save-hook, and scheduling callbacks do no
+work behind it. Reinstalling the ZIP inactive does not clear the fence. An
+uninstall retry may cross it idempotently; otherwise only explicit activation
+clears it under a writer lease, repairs the four current tables, and queues
+reconciliation. Network activation carries one bounded capability through its
+site pages, so an event preloaded before a later uninstall cannot clear the new
+fence. A multisite uninstall still cleans uncontended siblings
+and reports the number and first ID of blogs that need a retry. Multisite
+discovery holds at most 100 site IDs at a time. Uninstall does not create or
+delete WordPress posts, demo content, terms, users, attachments, uploads,
+analyzer packs, generated packs, or release artifacts.
 
 Disposable lifecycle evidence is available through
 `tools/run-disposable-lifecycle-smoke.sh` for direct-install/operator reviews.
@@ -134,16 +236,23 @@ That smoke creates an isolated Docker WordPress/MariaDB site, installs a source
 copy of the plugin, and proves that activation/repair create or repair schema
 without indexing pre-existing content or creating demo posts. It also proves
 deactivation clears scheduled queue processing while retaining `fts_*` data,
-and uninstall clears plugin-owned operational options and pending queue state while retaining `fts_*` tables/data. Multisite lifecycle proof is explicitly not run by that smoke; the command and release evidence collector
-record the multisite boundary instead of reporting a single-site pass as
-network evidence.
+and uninstall removes plugin-owned current/legacy tables and operational
+options while retaining only the exact non-autoloaded one-byte uninstall fence.
+The smoke network-activates the plugin, creates a real subsite, seeds all
+recoverable legacy table names on both sites, and requires the current and
+legacy tables to be absent from both site prefixes after uninstall. It then
+installs the same source-bound ZIP inactive, proves the two fences still block
+schema recreation, network-reactivates it, runs the one-site provisioning event,
+and requires both fences absent plus exactly four current and zero legacy tables
+per site. Its command and release evidence collector reject missing multisite,
+table-removal, fence-shape, or reactivation proof.
 
 Upgrade release evidence is available through
 `tools/run-disposable-upgrade-multisite-smoke.sh` for direct-install/operator
 reviews when a previous direct-install package is supplied. That smoke creates
 an isolated Docker WordPress/MariaDB multisite network, network-activates the previous direct-install package, indexes generated fixture content, upgrades to
 the current package, checks schema version/status, proves repair idempotence after upgrade, checks search continuity and queue health after upgrade, creates
-an additional disposable site, proves that site's seven `fts_*` tables use its
+an additional disposable site, proves that site's four current `fts_*` tables use its
 own table prefix, proves subsite indexing/search/queue/repair behavior, proves
 the WordPress site-deletion table filter contributes the target site's FTS
 tables, and deletes generated fixture content before the disposable stack is
@@ -168,25 +277,32 @@ Run a full reindex after first activation, after large content imports, and
 after changing language or analyzer behavior.
 
 ```sh
-wp fts reindex --post_type=post --batch_size=500
+wp fts reindex --post_type=post --format=json
 ```
 
-Use a smaller batch size on shared databases:
+Reindex rejects both legacy `--batch_size` and `--batch-size` arguments. It
+canonicalizes the filters, stores exactly one durable scope, schedules the
+worker, and returns without selecting source rows or acquiring the index-writer
+lease. WP-Cron then discovers at most 100 post IDs per worker pass.
+
+Use a smaller one-pass worker batch on shared databases:
 
 ```sh
-wp fts reindex --post_type=post --batch_size=100
+wp fts process-batch --batch_size=100 --time_budget=20 --format=json
 ```
 
 Use `--limit` for smoke tests and staged rollouts:
 
 ```sh
-wp fts reindex --limit=50 --batch_size=10
+wp fts reindex --limit=50 --format=json
 ```
 
-The reindexer pages through posts by ascending ID. A repeated reindex of
+The shared worker discovers posts by ascending-ID keyset. No reindex invocation
+selects the corpus into PHP or emits one corpus-sized queue statement: each pass selects and
+materializes at most 100 post IDs. A requested `--limit` is decremented in the
+same transaction that advances the scope cursor. A repeated reindex of
 unchanged content is cheap at the document level because the content hash lets
-the indexer skip unchanged documents, but the command still reads and counts the
-posts it processes. The hash also includes the analyzer/index signature, so
+the indexer skip unchanged documents. The hash also includes the analyzer/index signature, so
 stemming, language-pipeline, or other analyzer behavior changes rewrite existing
 documents even when their source content is unchanged.
 
@@ -195,22 +311,28 @@ Important current behaviors:
 - `--post_status` defaults to `publish,draft,pending,future,private`.
 - `--post_type` defaults to `post`.
 - comma-separated values are accepted, for example `--post_type=post,page`.
+- each filter is capped before splitting at 4,096 bytes, 32 distinct values,
+  and 64 bytes per value;
+- runtime reconciliation retains those supported operator-visible statuses for
+  every configured searchable post type; front-end visibility still compiles
+  to `publish` only.
 - language can be forced with `--lang=pl-PL`.
 - full reindex and runtime post-save indexing share the same extractor path for
-  title, content, excerpt, taxonomy terms, selected custom fields, optional
-  rendered block deltas, field boosts, and stored product metadata.
+  title, static content, batch-preloaded taxonomy terms and selected custom
+  fields, field boosts, and stored product metadata. Dynamic rendering options
+  are permanently rejected before callbacks execute.
 - save/insert hooks queue bounded indexing work, and status/delete/trash hooks
-  tombstone posts that leave the supported front-end or admin-searchable status
-  scopes.
+  physically delete derived rows for posts that leave the indexed corpus.
 - WordPress taxonomy relationship, term edit/delete, and selected post-meta
   hooks coalesce affected post IDs into the same bounded queue. Direct database
   writes need explicit dependency invalidation or a scoped reindex.
 - password-protected, trashed, deleted, unsupported-status, or otherwise
-  non-searchable posts are tombstoned instead of left visible in search results.
-- posts that no longer match a later manual reindex scope should still be
-  deleted or tombstoned explicitly if no WordPress status/delete hook fires.
+  non-searchable posts are excluded by canonical visibility and physically
+  removed when their queued generation is reconciled.
+- posts that no longer match a later manual reindex scope are removed when the
+  canonical reconciliation scope reaches their retained document row.
 
-Delete a known document from the index:
+Reconcile a known missing or ineligible canonical post:
 
 ```sh
 wp fts delete 123
@@ -222,11 +344,18 @@ For a cleanup list generated by WordPress, pipe post IDs into delete:
 wp post list --post_status=trash --format=ids | xargs -r -n1 wp fts delete
 ```
 
+`wp fts delete` is not a direct derived-row delete. If the ID still belongs to
+an eligible canonical WordPress post, the command refuses the self-reversing
+operation and tells the operator to change/delete the source post. If the source
+is missing or ineligible, it queues exactly one durable post generation; the
+shared worker performs the physical cleanup under its normal lease.
+
 The MySQL backend stores postings as rows and applies document-frequency deltas
 instead of rewriting whole per-term blobs during normal indexing. This removes
-the previous whole-blob lost-update failure mode for different documents, but
-WP-CLI reindex, delete, optimize, and reset jobs now coordinate through the
-plugin's shared writer lock. If one of those commands reports lock contention,
+the previous whole-blob lost-update failure mode for different documents.
+Worker passes, optimize, repair, and reset coordinate through the plugin's
+shared writer lock; `wp fts reindex` only queues one scope. If a writer command
+reports lock contention,
 no overlapping writer was started; check `wp fts status` and try again after
 the active batch finishes. `wp fts status --format=json` reports
 `lock_state=none`, `active`, or `expired` with sanitized mode/start/expiry
@@ -238,8 +367,8 @@ indexing jobs and should be investigated through the latest batch/failure
 diagnostics. There is intentionally no force-unlock control in this slice: a
 manual delete path could clear an active writer's safety token and allow
 overlapping writes. The lock is option-backed rather than an external
-distributed lock, so avoid overlapping full reindex, delete, optimize, and reset
-jobs until the target environment has been load tested.
+distributed lock, so avoid overlapping manual worker, optimize, repair, and
+reset jobs until the target environment has been load tested.
 
 ## Index Reset
 
@@ -254,23 +383,53 @@ wp fts reset-index --yes --format=json
 
 The command requires `--yes`. Without confirmation it reports
 `confirmation_required` and does not mutate FTS storage or plugin options. With
-confirmation it clears the plugin-owned FTS documents, postings, document
-lengths, document metadata, term rows, collection metadata, pending queue, stale
-debt, failed-item recovery metadata, and stale failure/latest-batch state. It
+confirmation it replaces the four current FTS document, posting, dictionary,
+and durable-work relations with an empty generation, then clears legacy queue
+state, failed-item recovery metadata, and failure/latest-batch state. It
 preserves WordPress posts, post meta, terms, unrelated options, plugin settings,
 analyzer-pack options, schema version, and the existing `fts_*` table contract.
-It does not change uninstall behavior; uninstall remains conservative and
-data-retaining.
+It does not change uninstall behavior; uninstall still removes every
+plugin-owned current and legacy FTS table.
+
+This is also the recovery authority for an `owner guard unavailable` Health
+latch. First repair the shared lock path, then stop or drain PHP web, cron, and
+CLI processes that could still be inside a canonical write. While the site is
+quiesced, run `wp fts reset-index --yes`; keep it quiesced until the command has
+published the empty generation and queued reconciliation. Generic maintenance
+never clears this latch, and a worker never guesses that a request represented
+by an operator-only `fenced` row has exited.
+
+MySQL and MariaDB reset by creating four empty `LIKE` tables and publishing all
+four with one atomic `RENAME TABLE`; SQLite uses one transactional schema
+rebuild. Reset therefore does not issue table-wide `DELETE` or `COUNT(*)`
+statements. JSON reports `counts_exact=false` and `null` removed-row/queue
+counts instead of scanning the corpus for cosmetic totals. A successful result
+also reports `reconciliation_queued=true`: reset writes one complete-corpus
+scope and schedules one bounded worker event after publication. Search takeover
+is marked pending before the first DDL statement and remains pending until that
+scope finishes and maintenance verifies the physical schema. An interrupted
+publication, cleanup, scope write, or scheduling attempt fails the command and
+never reports a completed reset.
 
 If another index writer holds the shared lock, reset reports `skipped_locked`
-and leaves storage, queue, stale debt, failure state, and the lock untouched.
+and leaves storage, durable work, failure state, and the lock untouched.
 
-After reset, repopulate the index with bounded batches or a scoped reindex:
+Do not run a second manual reindex just to rebuild after reset. Reset already
+queues the one unfiltered reconciliation scope that can restore readiness;
+filtered CLI scopes cannot prove complete coverage. WP-Cron drains the automatic
+scope in bounded pages. If an operator needs to advance one page manually, run:
 
 ```sh
 wp fts process-batch --batch_size=100 --time_budget=20
-wp fts reindex --post_type=post,page --post_status=publish --batch_size=200
 ```
+
+Canonical WordPress writes that race with staging can enqueue into the retired
+work generation before the atomic rename. They are not lost as content: reset
+queues its complete scope only after publication, so that scope rediscovers the
+then-current canonical posts. Writes after publication enqueue beside it in the
+new work generation. WordPress search remains authoritative until reconciliation
+completes; do not treat a successful reset by itself as a searchable empty-index
+cutover.
 
 ## Search Operation
 
@@ -312,12 +471,19 @@ explain data:
 wp fts search "release notes" --lang=en-US --explain --format=json
 ```
 
-The explain payload includes the analyzed query plan, prefix and fast-mode
-state, a bounded fast-mode decision reason, scoring counts, recency boost
-details, storage metadata availability, and bounded per-result match details,
-including field-specific matches when field metadata is available. It does not
-mutate the index and should be treated as operational diagnostics, not
-a stored audit history.
+The relational explain payload is deliberately flat and bounded. It reports
+the storage path, logical group and resolved-alternative counts, anchor group,
+whether the final term used one dictionary prefix range, the complete statement
+count, unknown-total semantics, canonical page bytes, and normalized recency
+settings with the fixed ranking time when recency is enabled. A metadata or
+snippet request therefore reports three plugin-owned statements: plan, rank,
+and page-bounded hydration. A request without hydration reports two.
+
+Explain does not run a count query or a second posting pass. It does not expose
+candidate lists or counters, exact/fast modes, analyzed-language fanout, or
+per-result match traces. Current visibility is already part of the ranking SQL
+before its limit. Treat explain as operational diagnostics, not stored audit
+history.
 
 When support needs one bounded payload that combines query explain output with
 the surrounding operator state, use the diagnostic bundle:
@@ -330,10 +496,15 @@ wp fts diagnose "release notes" --lang=en-US --format=json
 schema, mutate options, write persistent telemetry, or create log records. The
 JSON bundle includes a schema/tool identifier, the bounded query, effective
 query arguments, `operator_status`, explain-enabled search results, and a
-concise summary with storage, fast-mode, provider-compatibility, language-pack,
-lock, stale-index, pending-work, and result-count signals. Use it for support
-and debugging. It is not persistent telemetry and does not certify public
-submission readiness or third-party search-provider compatibility.
+concise summary with the one query language, flat relational plan, recency
+configuration, provider compatibility, language-pack support, lock,
+stale-index, pending-work, and returned-page signals. The summary does not
+manufacture nullable candidate or scoring fields from the removed retrieval
+pipeline. Its operator status performs bounded physical schema verification but
+keeps `counts_exact=false` and all corpus counts `null`. A damaged schema is
+reported without repair or queue scheduling. Use it for support and debugging.
+It is not persistent telemetry and does not certify public submission readiness
+or third-party search-provider compatibility.
 
 Use a recency boost only when operators want newer posts to receive a small
 query-time ranking lift from indexed `post_date_gmt` metadata:
@@ -354,47 +525,31 @@ operator enables **Settings > Full-Text Search > Public REST search > REST
 endpoint**. Leave it disabled unless a separate client actually needs anonymous
 search.
 
-Once enabled, the endpoint intentionally trades exhaustive recall for bounded
-anonymous work:
+Once enabled, the endpoint uses the same exact relational page as every other
+plugin adapter:
 
-- query text is truncated to 200 bytes and may produce at most 12 analyzed term
-  alternatives;
-- word-beginning expansion is independently disabled by default and, when an
-  operator enables it, may add at most 24 stored terms across the whole query;
-- approximate top-K scoring reads at most 2,000 posting rows and scores at most
-  500 candidate documents in one scoring pass; clients cannot request exact
-  scoring or raise these limits;
-- the search/cache path stops between bounded operations after 32 counted
-  database queries or 250 ms; and
-- clients without operator access receive at most 60 requests per fixed
-  60-second IP window.
+- input is rejected before ranking when it exceeds 4,096 bytes, 12 logical
+  groups, 12 alternatives per group, or 12 alternatives in total;
+- final-word prefix matching is independently disabled by default and, when an
+  operator enables it, executes one complete indexed dictionary range without
+  enumerating completions into PHP;
+- one planning statement, one ranking statement, and at most one page-bounded
+  hydration statement return at most 50 rows plus one lookahead row;
+- current post type, status, password, and dirty-generation visibility is
+  applied in the ranking SQL before its limit; and
+- pages use signed search-after cursors and deliberately report an unknown
+  total rather than running an exhaustive count.
 
-The candidate limits mean a broad REST query can omit a matching or more
-relevant document. Use the PHP or WP-CLI surfaces when exhaustive behavior is
-required. The time circuit is checked between storage and visibility steps; it
-cannot cancel a database statement that is already running.
-
-Successful anonymous responses are cached in a WordPress transient for 30
-seconds. Every cache hit rechecks current post visibility, so a post that
-becomes private is not returned from a stale cache entry. Ranking or newly
-indexed content can remain stale until that short entry expires, and a
-visibility change can make a cached page shorter rather than refill it.
-Authenticated and explain responses are not cached. Attaching a
-`wp_fts_search_results` filter also bypasses the response cache because its
-output can depend on request context that is not safe to encode in a shared
-cache key.
-
-The transient-backed non-operator counter serializes each client/window update
-with an atomic WordPress option lock and rejects a contending request rather
-than allowing a lost increment. On multi-node installations, the counter is
-only shared if the nodes use the same WordPress database and transient backend;
-use an edge or infrastructure rate limiter when a strict traffic guarantee is
-required.
+These structural limits prevent query-shape and round-trip explosion; they do
+not make repeated anonymous traffic free. The plugin does not maintain another
+database-backed response cache or rate-limit subsystem on this hot path. Keep
+the route disabled when it is unnecessary, and use the host/CDN rate limiter
+and response cache when public abuse control is required.
 
 The `prefix_matching` request parameter cannot enable expansion. Operators must
-enable **REST word beginnings** separately from normal site search. Budget
-failures return `400` for excessive query complexity, `429` for the
-non-operator rate limit, or `503` when the runtime circuit stops the request.
+enable **REST word beginnings** separately from normal site search. Invalid or
+excessively complex requests return `400`; unavailable schema/index state or a
+server-side search failure returns `503`.
 
 After enabling the endpoint, call it with:
 
@@ -405,7 +560,7 @@ curl 'https://example.test/wp-json/wp-fts/v1/search?q=release%20notes'
 The default REST response shape is:
 
 ```json
-{"results":[{"doc_id":123,"score":1.25}]}
+{"results":[{"doc_id":123,"score":125000}],"has_more":false,"next_cursor":null,"previous_cursor":null,"total":null,"total_relation":"unknown","query_lang":"en"}
 ```
 
 The PHP helper remains:
@@ -422,12 +577,11 @@ curl -H 'X-WP-Nonce: ...' \
   'https://example.test/wp-json/wp-fts/v1/search?q=release%20notes&explain=1'
 ```
 
-Authorized REST explain responses remain subject to the REST work and runtime
-budgets and add an `explain` object beside `results`.
-That object contains bounded `query_plan`, `fast_mode`, `scoring`, recency, and
-per-result match diagnostics. Per-result explain rows are filtered to the
-returned visible result IDs. Public or unauthorized `explain=1` requests keep
-the normal `results`-only response and do not expose diagnostics.
+Authorized REST explain responses remain subject to the same relational shape
+limits and add an `explain` object beside `results`. It reports the bounded
+logical-group, resolved-alternative, anchor-group, prefix-range, statement-count,
+and unknown-total contract. Public or unauthorized `explain=1` requests keep
+the normal response and do not expose diagnostics.
 
 PHP callers that need parity can use the explicit opt-in helper:
 
@@ -445,13 +599,13 @@ Settings > Full-Text Search exposes Health, Settings, Sandbox, Indexed content,
 and Analyzer packs tabs to users who can `manage_options`. The Settings tab can
 toggle automatic indexing, public search replacement, wp-admin Posts search
 replacement, search-provider compatibility, highlighting, snippets, prefix
-matching, optional public REST search, result limits, language fallback, and
+matching, optional public REST search, result limits, single-plan language routing, and
 indexed post types. Use the documented options and filters for analyzer pack
 paths and custom field selection.
 
 The Health tab shows schema status, stored and expected schema versions, safe
-indexing lock state, indexing counts, stale reindex debt progress, and the
-latest batch summary. Its lock row distinguishes `None`, `Active`, and
+indexing lock state, indexing counts, durable scope/post work and its keyset
+cursor, and the latest batch summary. Its lock row distinguishes `None`, `Active`, and
 `Expired`. Active-lock advice means another writer is running and operators
 should retry shortly or check `wp fts status`; expired-lock advice means the
 stale payload will be replaced automatically by the next indexing writer, while
@@ -473,11 +627,11 @@ diagnostics on the Health tab. These traces live in memory for the current PHP
 request and are capped; they are not persistent logs or historical telemetry.
 
 Successful front-end and wp-admin Posts replacements include an explain summary
-when diagnostics are active. The trace identifies the storage backend, analyzed
-query languages, query surfaces with analyzed storage terms/keys, prefix
-expansion count, fast-mode source, reason, and cap, candidate rows/docs scored,
-exact versus approximate totals, performance-budget status, and bounded
-per-result match reasons for the returned page. The Performance budget row
+when diagnostics are active. The trace identifies the set-oriented storage
+backend, logical-group and resolved-alternative counts, rare-group anchor, whether
+the one final-word prefix range was present, the fixed statement count, unknown
+interactive-total semantics, recency configuration, performance-budget status,
+and request timing/count context. The Performance budget row
 compares the existing trace timings against the configured total and
 `storage/search`
 thresholds, then reports `within_budget`, `over_budget`, `disabled`, or
@@ -510,16 +664,21 @@ false zero-query trace.
 
 ## Optimize And Repair
 
-Deletes are tombstones until compaction. Run optimize after bulk deletes or after
-a large content cleanup:
+Transactional document writers maintain dictionary frequencies as an invariant.
+Run optimize after bulk deletes or a large content cleanup to prune one bounded
+page of empty dictionary rows:
 
 ```sh
 wp fts optimize
 ```
 
-Optimize removes tombstoned document IDs from posting rows, deletes empty term
-rows, purges tombstoned document rows, and rebuilds per-language metadata from
-active document lengths.
+One optimize invocation issues one indexed empty-term delete, ordered by
+`term_id` and limited to 1,000 rows, plus the search-epoch transaction boundary.
+It never rescans the vocabulary or postings to rebuild document frequencies.
+Scheduled worker cleanup marks another pass pending when exactly 1,000 rows are
+removed; an operator using `wp fts optimize` can safely rerun the command.
+There is no production tombstone or per-language collection-statistics table to
+compact.
 
 Use the Health-tab repair action or repair command when schema state is missing
 or stale and you do not want to index content:
@@ -541,7 +700,7 @@ current request or command. If `cron_runner.status=external_required`, confirm a
 host/system cron trigger for `wp-cron.php`; schedule recovery by itself does not
 make traffic-triggered cron run when `DISABLE_WP_CRON` is enabled.
 
-Use one manual lifecycle batch when queue, backfill, or stale reindex work
+Use one manual lifecycle batch when durable post or scope work
 should advance under operator control without draining the whole site in one
 command:
 
@@ -549,14 +708,21 @@ command:
 wp fts process-batch --batch_size=100 --time_budget=20
 ```
 
-Each batch processes queued post updates first, then missing eligible content,
-then uses any remaining batch and time budget to reindex stale active indexed
-rows. Stale processing uses a deterministic post-ID cursor bound to the current
-index profile hash. If the profile changes before completion, the cursor
-restarts for the new profile instead of clearing debt for the old one.
+Each batch claims at most one scope generation and one bounded direct-post
+batch. Scope work keyset-expands with the cursor stored on that `fts_work` row;
+the resulting post generations use the same queue and fencing rules as direct
+post updates. When one claim contains both kinds, a durable marker alternates
+the work: the post turn yields the scope with one generation-fenced statement,
+and the next collision releases the posts before advancing the scope cursor.
+Advancing the cursor clears the marker. The persisted turn guarantees progress
+for both kinds even while direct writes arrive continuously, keeps the complete
+worker at no more than 20 statements, and prevents a scope from materializing
+more than one page of queue work. If the profile changes before completion,
+enqueueing the same scope key advances its generation and resets its durable
+cursor and turn marker.
 
-Repeat `wp fts process-batch` until `wp fts status` reports `has_more` as false
-and `stale_debt_active` as false if you intentionally want to catch up through
+Repeat `wp fts process-batch` until `wp fts status` reports `has_more` and
+`reconciliation_active` as false if you intentionally want to catch up through
 bounded operator steps.
 
 If `wp fts status` reports `last_batch_failures` greater than zero, inspect the
@@ -569,11 +735,18 @@ wp fts failed-items --format=json
 wp fts failed-items --post_id=123 --format=json
 ```
 
-Failed items enter conservative backoff first. After repeated failures they are
-quarantined, and automatic queue, backfill, and stale-debt passes skip them so
-unrelated indexing can continue. Fix the underlying post or environment problem
-before retrying. Retry marks selected recovery records retryable and queues them
-for a later bounded pass; it does not index content directly:
+Failed items enter capped exponential backoff and remain eligible for automatic
+retry; no generation becomes an operator-only dead letter. The delay tops out
+at one hour, and the queue watchdog schedules the next available generation so
+a quiet site does not strand it. Fix the underlying post or environment problem
+before forcing an early retry. Retry resets the selected generation's attempt
+count and queues it for a later bounded pass; it does not index content directly:
+
+Documents that cross a permanent source, dependency, occurrence, or writer
+safety limit are recorded as `rejected` instead. Their stale derived rows are
+deleted and the owned generation is acknowledged, so poison content cannot hot
+loop. Editing the canonical post queues a fresh generation; force a retry only
+after correcting the rejected content.
 
 ```sh
 wp fts retry-failed-item 123 --format=json
@@ -627,17 +800,33 @@ Current storage is intentionally simple and has known scaling limits:
 
 - Each matching term/document pair is stored as a row in `fts_postings`.
 - High-frequency terms create many posting rows and remain the most expensive
-  to search, delete, and optimize.
-- `optimize` scans all terms when tombstones exist.
-- Per-language metadata, document lengths, and product metadata are small
-  compared with postings on most sites.
+  to search and rewrite.
+- Exact broad OR and broad final-word prefix ranking must examine their matching
+  postings. The request still uses only plan/rank/hydrate statements and PHP
+  remains page-sized, but database work is proportional to those matches.
+- Prefix planning reads one complete indexed surface dictionary range, sums
+  its `doc_freq`, and reads no postings or completion payloads. The 20,001-term
+  fixture has a 21,000-row dictionary/control ceiling. Multi-group prefix
+  `AND` compares that cost with every resolved exact group and starts from the
+  cheapest. An exact anchor uses indexed point probes and intersects the
+  prefix range's actual postings without scanning unrelated per-document
+  postings or creating a candidate×dictionary product. Worst-case acceptance
+  keeps one physical 8,000–8,192-posting candidate to make that invariant
+  observable; this exact-anchor shape has 12k/175k/350k rank-row gates in the
+  constructed 2k/50k/100k lanes. Conversely, a one-document prefix against a
+  corpus-wide exact term must select the prefix anchor, avoid materializing the
+  common posting list, remain exactly three statements, and examine at most
+  2,048 rows.
+- `optimize` never scans high-frequency posting lists. It removes at most 1,000
+  indexed zero-frequency term rows with one maintenance statement.
+- Bounded document sidecars are normally small compared with postings.
 
 Practical guidance for this branch:
 
 - Reindex off peak on large sites.
-- Start with `--batch_size=100` to `--batch_size=500`, then adjust based on DB
-  load.
-- Treat a `wp fts reindex`, `wp fts delete`, `wp fts optimize`, or
+- Start manual `wp fts process-batch` passes with `--batch_size=100`, then
+  adjust based on DB load while keeping a finite `--time_budget`.
+- Treat a `wp fts process-batch`, `wp fts optimize`, `wp fts repair`, or
   `wp fts reset-index` lock warning as a safe skip; the command did not mutate
   the index while another writer was active.
 - Keep explicit `--post_type` and `--post_status` scopes narrow.
@@ -650,7 +839,7 @@ Example table inspection:
 wp db query "SHOW TABLES LIKE '%\\_fts\\_%';"
 wp db query "SELECT COUNT(*) AS terms FROM wp_fts_terms;"
 wp db query "SELECT COUNT(*) AS postings FROM wp_fts_postings;"
-wp db query "SELECT COUNT(*) AS docs FROM wp_fts_docs WHERE is_deleted = 0;"
+wp db query "SELECT COUNT(*) AS docs FROM wp_fts_documents;"
 ```
 
 Replace `wp_` with the actual WordPress table prefix.

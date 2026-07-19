@@ -24,6 +24,9 @@
       "src/bootstrap.php"
     ]
   },
+  "config": {
+    "process-timeout": 900
+  },
   "scripts": {
     "test": "php tests/run.php",
     "test:bm25-reference": "php tests/bm25-reference-gate.php --json",

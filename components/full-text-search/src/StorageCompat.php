@@ -14,6 +14,12 @@ final class WP_FTS_StorageCompat
     private const METADATA_SEARCH_FIELD_MAX_FIELDS = 32;
     private const METADATA_SEARCH_FIELD_TEXT_BYTES = 2000;
     private const METADATA_SEARCH_FIELD_HTML_BYTES = 2000;
+    private const METADATA_MAX_DEPTH = 16;
+    private const METADATA_MAX_NODES = 2048;
+    private const METADATA_MAX_TEXT_BYTES = 262144;
+    private const METADATA_MAX_MAP_KEYS = 32;
+    private const METADATA_MAX_KEY_BYTES = 191;
+    private const METADATA_MAX_NUMERIC_BYTES = 64;
 
     /**
      * Replace one document's postings through a row-postings backend when possible.
@@ -23,7 +29,7 @@ final class WP_FTS_StorageCompat
      */
     public static function replace_doc_postings(WP_FTS_Storage $storage, int $docId, array $termFrequencies): bool
     {
-        if (!$storage instanceof WP_FTS_Row_Postings_Storage) {
+        if (!$storage instanceof WP_FTS_Row_Postings_Writer_Storage) {
             return false;
         }
 
@@ -296,7 +302,7 @@ final class WP_FTS_StorageCompat
     }
 
     /**
-     * Store document metadata when the backend supports the optional capability.
+     * Store or explicitly clear document metadata when supported by the backend.
      *
      * @param array<string,mixed> $metadata
      */
@@ -306,7 +312,10 @@ final class WP_FTS_StorageCompat
             return;
         }
 
-        $storage->put_doc_metadata($docId, self::normalize_doc_metadata($metadata));
+        $storage->put_doc_metadata(
+            $docId,
+            $metadata === [] ? [] : self::normalize_doc_metadata($metadata)
+        );
     }
 
     /**
@@ -563,8 +572,18 @@ final class WP_FTS_StorageCompat
      */
     public static function normalize_doc_metadata(array $metadata): array
     {
+        if (count($metadata) > self::METADATA_MAX_MAP_KEYS) {
+            self::throw_metadata_limit('metadata_keys', 'FTS metadata contains more than 32 top-level keys.');
+        }
+        $inputNodes = 0;
+        $inputBytes = 0;
+        self::assert_metadata_input_bounds($metadata, 0, $inputNodes, $inputBytes);
+        $rawPostId = $metadata['post_id'] ?? 0;
+        if (!is_scalar($rawPostId) || (is_string($rawPostId) && strlen($rawPostId) > self::METADATA_MAX_NUMERIC_BYTES)) {
+            self::throw_metadata_limit('metadata_shape', 'FTS metadata post ids must be bounded scalar values.');
+        }
         $normalized = [
-            'post_id' => max(0, (int) ($metadata['post_id'] ?? 0)),
+            'post_id' => max(0, (int) $rawPostId),
             'post_type' => self::metadata_text($metadata['post_type'] ?? ''),
             'post_status' => self::metadata_text($metadata['post_status'] ?? ''),
             'post_date_gmt' => self::metadata_text($metadata['post_date_gmt'] ?? ''),
@@ -577,21 +596,92 @@ final class WP_FTS_StorageCompat
             'search_fields' => self::metadata_search_fields($metadata['search_fields'] ?? []),
         ];
 
-        foreach (($metadata['field_boosts'] ?? []) as $field => $boost) {
-            if (is_scalar($field) && is_numeric($boost)) {
-                $normalized['field_boosts'][(string) $field] = max(0.01, min(100.0, (float) $boost));
+        $fieldBoosts = is_array($metadata['field_boosts'] ?? null) ? $metadata['field_boosts'] : [];
+        if (count($fieldBoosts) > self::METADATA_MAX_MAP_KEYS) {
+            self::throw_metadata_limit('structured_value_nodes', 'FTS metadata contains more than 32 field boosts.');
+        }
+        foreach ($fieldBoosts as $field => $boost) {
+            $field = (string) $field;
+            if (strlen($field) > self::METADATA_MAX_KEY_BYTES) {
+                self::throw_metadata_limit('structured_key_bytes', 'An FTS metadata field-boost key exceeds 191 bytes.');
+            }
+            if (is_string($boost) && strlen($boost) > self::METADATA_MAX_NUMERIC_BYTES) {
+                self::throw_metadata_limit('metadata_shape', 'FTS metadata field boosts must be bounded numeric values.');
+            }
+            if (is_numeric($boost)) {
+                $normalized['field_boosts'][$field] = max(0.01, min(100.0, (float) $boost));
             }
         }
         ksort($normalized['field_boosts'], SORT_STRING);
 
+        $extraNodes = 0;
+        $extraTextBytes = 0;
         foreach ($metadata as $key => $value) {
+            if (strlen((string) $key) > self::METADATA_MAX_KEY_BYTES) {
+                self::throw_metadata_limit('structured_key_bytes', 'An FTS metadata key exceeds 191 bytes.');
+            }
             $metadataKey = WP_FTS_Utf8::repair((string) $key);
             if ($metadataKey !== '' && !array_key_exists($metadataKey, $normalized)) {
-                $normalized[$metadataKey] = self::metadata_extra($value);
+                $extraTextBytes += strlen($metadataKey);
+                if ($extraTextBytes > self::METADATA_MAX_TEXT_BYTES) {
+                    self::throw_metadata_limit('structured_text_bytes', 'FTS metadata exceeds the 256 KiB text limit.');
+                }
+                $normalized[$metadataKey] = self::metadata_extra($value, 0, $extraNodes, $extraTextBytes);
             }
         }
 
         return $normalized;
+    }
+
+    /** Bound the complete raw metadata graph before UTF-8 repair or HTML parsing. */
+    private static function assert_metadata_input_bounds(
+        mixed $value,
+        int $depth,
+        int &$nodes,
+        int &$textBytes
+    ): void {
+        if (++$nodes > self::METADATA_MAX_NODES) {
+            self::throw_metadata_limit('structured_value_nodes', 'FTS metadata exceeds the 2,048-node limit.');
+        }
+        if (is_string($value)) {
+            $textBytes += strlen($value);
+            if ($textBytes > self::METADATA_MAX_TEXT_BYTES) {
+                self::throw_metadata_limit('structured_source_bytes', 'FTS metadata exceeds the 256 KiB source-text limit.');
+            }
+
+            return;
+        }
+        if (is_scalar($value) || $value === null) {
+            return;
+        }
+        if (is_object($value)) {
+            if ($depth >= self::METADATA_MAX_DEPTH) {
+                self::throw_metadata_limit('structured_value_depth', 'FTS metadata exceeds the 16-level nesting limit.');
+            }
+            self::assert_metadata_input_bounds(get_object_vars($value), $depth + 1, $nodes, $textBytes);
+
+            return;
+        }
+        if (!is_array($value)) {
+            return;
+        }
+        if ($depth >= self::METADATA_MAX_DEPTH) {
+            self::throw_metadata_limit('structured_value_depth', 'FTS metadata exceeds the 16-level nesting limit.');
+        }
+        if (count($value) > self::METADATA_MAX_NODES) {
+            self::throw_metadata_limit('structured_value_nodes', 'FTS metadata exceeds the 2,048-node limit.');
+        }
+        foreach ($value as $key => $item) {
+            $key = (string) $key;
+            if (strlen($key) > self::METADATA_MAX_KEY_BYTES) {
+                self::throw_metadata_limit('structured_key_bytes', 'An FTS metadata key exceeds 191 bytes.');
+            }
+            $textBytes += strlen($key);
+            if ($textBytes > self::METADATA_MAX_TEXT_BYTES) {
+                self::throw_metadata_limit('structured_source_bytes', 'FTS metadata exceeds the 256 KiB source-text limit.');
+            }
+            self::assert_metadata_input_bounds($item, $depth + 1, $nodes, $textBytes);
+        }
     }
 
     /**
@@ -602,13 +692,20 @@ final class WP_FTS_StorageCompat
      */
     private static function metadata_search_fields(mixed $fields): array
     {
+        if (is_array($fields) && count($fields) > self::METADATA_SEARCH_FIELD_MAX_FIELDS) {
+            self::throw_metadata_limit('structured_value_nodes', 'FTS metadata contains more than 32 search fields.');
+        }
         $normalized = [];
         foreach (is_array($fields) ? $fields : [] as $field) {
             if (!is_array($field)) {
                 continue;
             }
 
-            $name = self::metadata_text($field['name'] ?? '');
+            $rawName = $field['name'] ?? '';
+            if (!is_scalar($rawName) || strlen((string) $rawName) > self::METADATA_MAX_KEY_BYTES) {
+                self::throw_metadata_limit('structured_key_bytes', 'An FTS metadata search-field name exceeds 191 bytes.');
+            }
+            $name = self::metadata_text($rawName);
             $text = rtrim(WP_FTS_Utf8::truncate_bytes(
                 self::metadata_text($field['text'] ?? ''),
                 self::METADATA_SEARCH_FIELD_TEXT_BYTES
@@ -620,11 +717,15 @@ final class WP_FTS_StorageCompat
                 continue;
             }
 
+            $rawBoost = $field['boost'] ?? 1.0;
+            if (!is_scalar($rawBoost) || (is_string($rawBoost) && strlen($rawBoost) > self::METADATA_MAX_NUMERIC_BYTES)) {
+                self::throw_metadata_limit('metadata_shape', 'FTS metadata search-field boosts must be bounded scalar values.');
+            }
             $row = [
                 'name' => $name,
                 'text' => $text,
-                'boost' => is_numeric($field['boost'] ?? null)
-                    ? max(0.01, min(100.0, (float) $field['boost']))
+                'boost' => is_numeric($rawBoost)
+                    ? max(0.01, min(100.0, (float) $rawBoost))
                     : 1.0,
             ];
             if (trim($html) !== '') {
@@ -648,7 +749,10 @@ final class WP_FTS_StorageCompat
             return '';
         }
 
-        return WP_FTS_Html_Text_Stream::visible_text((string) $value);
+        $text = (string) $value;
+        WP_FTS_Analysis_Limits::assert_source_bytes($text);
+
+        return WP_FTS_Html_Text_Stream::visible_text($text);
     }
 
     /**
@@ -659,18 +763,41 @@ final class WP_FTS_StorageCompat
      */
     private static function metadata_string_lists(mixed $lists): array
     {
+        if (is_array($lists) && count($lists) > self::METADATA_MAX_MAP_KEYS) {
+            self::throw_metadata_limit('structured_value_nodes', 'FTS metadata contains more than 32 structured lists.');
+        }
         $normalized = [];
+        $nodes = 0;
+        $textBytes = 0;
         foreach (is_array($lists) ? $lists : [] as $key => $values) {
+            if (++$nodes > self::METADATA_MAX_NODES) {
+                self::throw_metadata_limit('structured_value_nodes', 'FTS metadata exceeds the 2,048-node limit.');
+            }
+            if (strlen((string) $key) > self::METADATA_MAX_KEY_BYTES) {
+                self::throw_metadata_limit('structured_key_bytes', 'An FTS structured metadata key exceeds 191 bytes.');
+            }
             $key = trim(WP_FTS_Utf8::repair((string) $key));
             if ($key === '') {
                 continue;
             }
+            $textBytes += strlen($key);
 
             $items = [];
-            foreach (is_array($values) ? $values : [$values] as $value) {
+            $values = is_array($values) ? $values : [$values];
+            if (count($values) > self::METADATA_MAX_NODES) {
+                self::throw_metadata_limit('structured_value_nodes', 'FTS metadata exceeds the 2,048-node limit.');
+            }
+            foreach ($values as $value) {
+                if (++$nodes > self::METADATA_MAX_NODES) {
+                    self::throw_metadata_limit('structured_value_nodes', 'FTS metadata exceeds the 2,048-node limit.');
+                }
                 if (is_scalar($value)) {
                     $text = self::metadata_text($value);
                     if ($text !== '') {
+                        $textBytes += strlen($text);
+                        if ($textBytes > self::METADATA_MAX_TEXT_BYTES) {
+                            self::throw_metadata_limit('structured_text_bytes', 'FTS metadata exceeds the 256 KiB text limit.');
+                        }
                         $items[$text] = true;
                     }
                 }
@@ -688,10 +815,19 @@ final class WP_FTS_StorageCompat
     /**
      * Preserve only JSON-serializable metadata extras.
      */
-    private static function metadata_extra(mixed $value): mixed
+    private static function metadata_extra(mixed $value, int $depth, int &$nodes, int &$textBytes): mixed
     {
+        if (++$nodes > self::METADATA_MAX_NODES) {
+            self::throw_metadata_limit('structured_value_nodes', 'FTS metadata exceeds the 2,048-node limit.');
+        }
         if (is_string($value)) {
-            return WP_FTS_Utf8::repair($value);
+            $value = WP_FTS_Utf8::repair($value);
+            $textBytes += strlen($value);
+            if ($textBytes > self::METADATA_MAX_TEXT_BYTES) {
+                self::throw_metadata_limit('structured_text_bytes', 'FTS metadata exceeds the 256 KiB text limit.');
+            }
+
+            return $value;
         }
 
         if (is_scalar($value) || $value === null) {
@@ -699,15 +835,32 @@ final class WP_FTS_StorageCompat
         }
 
         if (!is_array($value)) {
-            return self::metadata_text((string) ($value->name ?? $value->value ?? ''));
+            $properties = is_object($value) ? get_object_vars($value) : [];
+            return self::metadata_extra($properties['name'] ?? $properties['value'] ?? '', $depth, $nodes, $textBytes);
+        }
+        if ($depth >= self::METADATA_MAX_DEPTH) {
+            self::throw_metadata_limit('structured_value_depth', 'FTS metadata exceeds the 16-level nesting limit.');
+        }
+        if (count($value) > self::METADATA_MAX_NODES) {
+            self::throw_metadata_limit('structured_value_nodes', 'FTS metadata exceeds the 2,048-node limit.');
         }
 
         $normalized = [];
         foreach ($value as $key => $item) {
-            $normalized[WP_FTS_Utf8::repair((string) $key)] = self::metadata_extra($item);
+            $normalizedKey = WP_FTS_Utf8::repair((string) $key);
+            $textBytes += strlen($normalizedKey);
+            if ($textBytes > self::METADATA_MAX_TEXT_BYTES) {
+                self::throw_metadata_limit('structured_text_bytes', 'FTS metadata exceeds the 256 KiB text limit.');
+            }
+            $normalized[$normalizedKey] = self::metadata_extra($item, $depth + 1, $nodes, $textBytes);
         }
 
         return $normalized;
+    }
+
+    private static function throw_metadata_limit(string $reason, string $message): never
+    {
+        throw new WP_FTS_Analysis_Limit_Exceeded($reason, $message);
     }
 
     /**

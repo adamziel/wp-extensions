@@ -106,13 +106,14 @@ function wp_fts_real_integration_run_inside_wordpress(): void
 function wp_fts_real_integration_db_delta_migration(object $wpdb, string $prefix): void
 {
     $tables = wp_fts_real_integration_tables($prefix);
-    $docs = wp_fts_real_integration_identifier($tables['docs']);
+    $terms = wp_fts_real_integration_identifier($tables['terms']);
 
-    wp_fts_real_integration_query($wpdb, "CREATE TABLE `{$docs}` (
-doc_id bigint unsigned NOT NULL,
-lang varchar(16) NOT NULL DEFAULT 'und',
-doc_len int unsigned NOT NULL DEFAULT 0,
-PRIMARY KEY  (doc_id)
+    // Seed an incompatible pre-v4 derived table. The current migration must
+    // replace it rather than leave a half-converted dictionary in service.
+    wp_fts_real_integration_query($wpdb, "CREATE TABLE `{$terms}` (
+term varbinary(255) NOT NULL,
+doc_freq int unsigned NOT NULL DEFAULT 0,
+PRIMARY KEY  (term)
 ) ENGINE=InnoDB DEFAULT CHARSET=binary");
 
     $storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
@@ -124,28 +125,10 @@ PRIMARY KEY  (doc_id)
         wp_fts_real_integration_assert_table_exists($wpdb, $table);
     }
 
-    wp_fts_real_integration_assert_column($wpdb, $tables['terms'], 'doc_freq');
-    wp_fts_real_integration_assert_column($wpdb, $tables['postings'], 'term');
-    wp_fts_real_integration_assert_column($wpdb, $tables['postings'], 'doc_id');
-    wp_fts_real_integration_assert_column($wpdb, $tables['postings'], 'tf');
-    wp_fts_real_integration_assert_index($wpdb, $tables['postings'], 'doc_id');
-    wp_fts_real_integration_assert_column($wpdb, $tables['docs'], 'content_hash');
-    wp_fts_real_integration_assert_column($wpdb, $tables['docs'], 'is_deleted');
-    wp_fts_real_integration_assert_index($wpdb, $tables['docs'], 'lang');
-    wp_fts_real_integration_assert_index($wpdb, $tables['docs'], 'is_deleted');
-    wp_fts_real_integration_assert_column($wpdb, $tables['doc_lengths'], 'doc_len');
-    wp_fts_real_integration_assert_index($wpdb, $tables['doc_lengths'], 'lang');
-    wp_fts_real_integration_assert_column($wpdb, $tables['docmeta'], 'post_type');
-    wp_fts_real_integration_assert_column($wpdb, $tables['docmeta'], 'post_status');
-    wp_fts_real_integration_assert_column($wpdb, $tables['docmeta'], 'post_date_gmt');
-    wp_fts_real_integration_assert_index($wpdb, $tables['docmeta'], 'post_type_status_date');
-    wp_fts_real_integration_assert_column($wpdb, $tables['meta'], 'k');
-    wp_fts_real_integration_assert_column($wpdb, $tables['meta'], 'v');
-    wp_fts_real_integration_assert_column($wpdb, $tables['queue'], 'generation');
-    wp_fts_real_integration_assert_column($wpdb, $tables['queue'], 'claim_token');
-    wp_fts_real_integration_assert_index($wpdb, $tables['queue'], 'ready');
+    wp_fts_real_integration_assert_schema($wpdb, $tables);
+    wp_fts_real_integration_assert_same(true, $storage->verify_schema()['valid'] ?? null, 'physical current schema should satisfy the production verifier.');
 
-    echo "ok dbDelta created and migrated seven FTS row-postings tables\n";
+    echo "ok dbDelta replaced an incompatible index with the exact four-table current schema\n";
 }
 
 function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix): void
@@ -153,49 +136,63 @@ function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix
     $storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
     $tables = wp_fts_real_integration_tables($prefix);
     $termsTable = wp_fts_real_integration_identifier($tables['terms']);
-    $postingsTable = wp_fts_real_integration_identifier($tables['postings']);
 
     $binaryTerm = "pl\x1ebin\x00term\xff";
     $binaryPostingMap = [7 => 1, 130 => 300];
-    $binaryPostings = WP_FTS_PostingsCodec::encode($binaryPostingMap);
-    $storage->put_term($binaryTerm, count($binaryPostingMap), $binaryPostings);
+    $binaryDocuments = [];
+    foreach ($binaryPostingMap as $postId => $frequency) {
+        $binaryDocuments[] = [
+            'doc_id' => $postId,
+            'primary_lang' => 'pl',
+            'content_hash' => hash('sha256', "binary:{$postId}"),
+            'term_frequencies' => [$binaryTerm => $frequency],
+            'surface_frequencies' => [],
+        ];
+    }
+    $binaryWrite = $storage->replace_prepared_documents($binaryDocuments);
+    wp_fts_real_integration_assert_same(2, $binaryWrite['postings'] ?? null, 'the bounded writer should persist both binary posting rows.');
 
-    $row = $storage->get_terms([$binaryTerm])[$binaryTerm] ?? null;
-    wp_fts_real_integration_assert($row !== null, 'binary term should be readable after put_term().');
+    $row = wp_fts_real_integration_term_state($wpdb, $prefix, $binaryTerm, 10);
+    wp_fts_real_integration_assert($row !== null, 'binary term should be readable after a bounded prepared replacement.');
     wp_fts_real_integration_assert_same(count($binaryPostingMap), $row['df'], 'binary term doc frequency should round trip.');
-    wp_fts_real_integration_assert_same($binaryPostings, $row['postings'], 'binary postings should round trip through the compatibility blob API.');
+    wp_fts_real_integration_assert_same([
+        7 => wp_fts_real_integration_impact(1),
+        130 => wp_fts_real_integration_impact(300),
+    ], $row['postings'], 'bounded relational inspection should preserve every quantized posting impact.');
 
+    $identity = WP_FTS_TermNamespace::split_term($binaryTerm);
     $termRow = $wpdb->get_row($wpdb->prepare(
-        "SELECT HEX(term) AS term_hex, doc_freq FROM `{$termsTable}` WHERE term = %s",
-        $binaryTerm
+        "SELECT HEX(lang) AS lang_hex, HEX(term) AS term_hex, doc_freq FROM `{$termsTable}` WHERE lang = UNHEX(%s) AND kind = 0 AND term = UNHEX(%s) LIMIT 1",
+        bin2hex((string) $identity['lang']),
+        bin2hex((string) $identity['term'])
     ));
     wp_fts_real_integration_assert($termRow !== null, 'binary term row should be selectable with a prepared term predicate.');
-    wp_fts_real_integration_assert_same(strtoupper(bin2hex($binaryTerm)), (string) $termRow->term_hex, 'VARBINARY term bytes should be stored exactly.');
+    wp_fts_real_integration_assert_same(strtoupper(bin2hex((string) $identity['lang'])), (string) $termRow->lang_hex, 'VARBINARY language bytes should be stored exactly.');
+    wp_fts_real_integration_assert_same(strtoupper(bin2hex((string) $identity['term'])), (string) $termRow->term_hex, 'VARBINARY lexical term bytes should be stored exactly.');
     wp_fts_real_integration_assert_same(count($binaryPostingMap), (int) $termRow->doc_freq, 'terms table should store document frequency only.');
 
-    $postingRows = $wpdb->get_results($wpdb->prepare(
-        "SELECT HEX(term) AS term_hex, doc_id, tf FROM `{$postingsTable}` WHERE term = %s ORDER BY doc_id ASC",
-        $binaryTerm
-    ));
-    $postingRows = is_array($postingRows) ? $postingRows : [];
-    wp_fts_real_integration_assert_same(count($binaryPostingMap), count($postingRows), 'row postings table should store one row per document.');
-
-    $actualPostingMap = [];
-    foreach ($postingRows as $postingRow) {
-        wp_fts_real_integration_assert_same(strtoupper(bin2hex($binaryTerm)), (string) $postingRow->term_hex, 'row posting term bytes should be stored exactly.');
-        $actualPostingMap[(int) $postingRow->doc_id] = (int) $postingRow->tf;
-    }
-    wp_fts_real_integration_assert_same($binaryPostingMap, $actualPostingMap, 'row postings should store decoded document frequencies exactly.');
-
     $codecTerm = WP_FTS_TermNamespace::namespace_term('pl', 'zamek');
-    $codecPostings = WP_FTS_PostingsCodec::encode([1001 => 2, 1005 => 7]);
-    $storage->put_term($codecTerm, 2, $codecPostings);
-    $codecRow = $storage->get_terms([$codecTerm])[$codecTerm] ?? null;
+    $codecDocuments = [];
+    foreach ([1001 => 2, 1005 => 7] as $postId => $frequency) {
+        $codecDocuments[] = [
+            'doc_id' => $postId,
+            'primary_lang' => 'pl',
+            'content_hash' => hash('sha256', "codec:{$postId}"),
+            'term_frequencies' => [$codecTerm => $frequency],
+            'surface_frequencies' => [],
+        ];
+    }
+    $storage->replace_prepared_documents($codecDocuments);
+    $codecRow = wp_fts_real_integration_term_state($wpdb, $prefix, $codecTerm, 10);
     wp_fts_real_integration_assert($codecRow !== null, 'codec term should be readable.');
-    wp_fts_real_integration_assert_same([1001 => 2, 1005 => 7], WP_FTS_PostingsCodec::decode($codecRow['postings']), 'encoded postings should decode after MySQL storage.');
-    wp_fts_real_integration_assert_same([1001 => 2, 1005 => 7], $storage->get_postings([$codecTerm])[$codecTerm] ?? null, 'encoded postings should be readable from the row postings table.');
+    wp_fts_real_integration_assert_same([
+        1001 => wp_fts_real_integration_impact(2),
+        1005 => wp_fts_real_integration_impact(7),
+    ], $codecRow['postings'], 'encoded compatibility writes should become quantized relational posting rows.');
 
-    echo "ok binary VARBINARY terms and row postings round trip\n";
+    wp_fts_real_integration_assert_legacy_reads_fail_closed($storage, $wpdb, $codecTerm);
+
+    echo "ok binary dictionary identities and bounded prepared posting writes round trip\n";
 }
 
 function wp_fts_real_integration_transactions(object $wpdb, string $prefix): void
@@ -205,22 +202,32 @@ function wp_fts_real_integration_transactions(object $wpdb, string $prefix): voi
     $committedTerm = WP_FTS_TermNamespace::namespace_term('en', 'commit');
 
     $storage->begin_transaction();
-    $storage->put_doc(2001, 'en', ['en' => 3], sha1('rollback'));
-    $storage->put_term($rolledBackTerm, 1, WP_FTS_PostingsCodec::encode([2001 => 1]));
+    $storage->replace_prepared_documents([[
+        'doc_id' => 2001,
+        'primary_lang' => 'en',
+        'content_hash' => sha1('rollback'),
+        'term_frequencies' => [$rolledBackTerm => 1],
+        'surface_frequencies' => [],
+    ]]);
     $storage->rollback();
 
     wp_fts_real_integration_assert($storage->get_doc(2001) === null, 'rolled back document should not persist.');
-    wp_fts_real_integration_assert_same([], $storage->get_terms([$rolledBackTerm]), 'rolled back term should not persist.');
+    wp_fts_real_integration_assert_same(null, wp_fts_real_integration_term_state($wpdb, $prefix, $rolledBackTerm, 10), 'rolled back term should not persist.');
 
     $storage->begin_transaction();
-    $storage->put_doc(2002, 'en', ['en' => 4], sha1('commit'));
-    $storage->put_term($committedTerm, 1, WP_FTS_PostingsCodec::encode([2002 => 4]));
-    $storage->add_meta('en', 1, 4);
+    $storage->replace_prepared_documents([[
+        'doc_id' => 2002,
+        'primary_lang' => 'en',
+        'content_hash' => sha1('commit'),
+        'term_frequencies' => [$committedTerm => 4],
+        'surface_frequencies' => [],
+    ]]);
     $storage->commit();
 
     wp_fts_real_integration_assert($storage->get_doc(2002) !== null, 'committed document should persist.');
-    wp_fts_real_integration_assert(isset($storage->get_terms([$committedTerm])[$committedTerm]), 'committed term should persist.');
-    wp_fts_real_integration_assert_same(['doc_count' => 1, 'len_sum' => 4], $storage->get_meta('en'), 'committed metadata should persist.');
+    wp_fts_real_integration_assert(wp_fts_real_integration_term_state($wpdb, $prefix, $committedTerm, 10) !== null, 'committed term should persist.');
+    $documents = wp_fts_real_integration_identifier(wp_fts_real_integration_tables($prefix)['documents']);
+    wp_fts_real_integration_assert_same(1, (int) $wpdb->get_var("SELECT COUNT(*) FROM `{$documents}`"), 'rollback should leave only the committed document row.');
 
     echo "ok MySQL transaction commit and rollback behavior verified\n";
 }
@@ -280,7 +287,7 @@ function wp_fts_real_integration_wp_cli_process(object $wpdb, string $prefix, st
         '--post_type=' . $postType,
         '--lang=pl',
         '--limit=1',
-        '--batch_size=1',
+        '--format=json',
     ]);
     $result = wp_fts_real_integration_process($command, ['WP_FTS_REAL_WPCLI_PREFIX' => $prefix]);
     $output = trim($result['stdout'] . "\n" . $result['stderr']);
@@ -290,21 +297,49 @@ function wp_fts_real_integration_wp_cli_process(object $wpdb, string $prefix, st
         "wp fts reindex process should exit cleanly. Output: {$output}"
     );
     wp_fts_real_integration_assert(
-        str_contains($output, 'Indexed 1 posts in pl.'),
-        "wp fts reindex process should report one indexed post. Output: {$output}"
+        str_contains($output, '"status":"queued"') && str_contains($output, '"language":"pl"'),
+        "wp fts reindex process should report one queued language scope. Output: {$output}"
     );
+
+    $workerOutput = [];
+    $hasMore = true;
+    for ($pass = 1; $pass <= 10 && $hasMore; $pass++) {
+        $worker = wp_fts_real_integration_process(array_merge(wp_fts_real_integration_wp_cli_base_command(), [
+            '--require=' . __DIR__ . '/wpcli-require.php',
+            'fts',
+            'process-batch',
+            '--batch_size=100',
+            '--time_budget=20',
+            '--format=json',
+        ]), ['WP_FTS_REAL_WPCLI_PREFIX' => $prefix]);
+        $workerCombined = trim($worker['stdout'] . "\n" . $worker['stderr']);
+        wp_fts_real_integration_assert(
+            $worker['exit'] === 0,
+            "wp fts process-batch pass {$pass} should exit cleanly. Output: {$workerCombined}"
+        );
+        $workerPayload = json_decode(trim($worker['stdout']), true, 512, JSON_THROW_ON_ERROR);
+        $hasMore = !empty($workerPayload['has_more']);
+        $workerOutput[] = $workerPayload;
+    }
+    wp_fts_real_integration_assert(!$hasMore, 'Ten explicit bounded worker passes should be sufficient for the one-post integration scope.');
 
     $storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
     $doc = $storage->get_doc($postId);
     wp_fts_real_integration_assert($doc !== null, 'WP-CLI reindex should write the inserted post.');
     wp_fts_real_integration_assert_same('pl', $doc['primary_lang'], 'WP-CLI reindex should store the requested language.');
-    wp_fts_real_integration_assert($doc['doc_len'] > 0, 'WP-CLI reindex should store a non-empty document length.');
+    wp_fts_real_integration_assert_same(0, $doc['doc_len'], 'v4 should not recreate the removed document-length projection.');
+    wp_fts_real_integration_assert(is_string($doc['content_hash']) && $doc['content_hash'] !== '', 'WP-CLI reindex should store a content fingerprint.');
 
     $searcher = new WP_FTS_Searcher($storage, new WP_FTS_Analyzer());
-    $results = $searcher->search('wpftsneedle', ['lang' => 'pl', 'limit' => 3]);
-    wp_fts_real_integration_assert_same($postId, $results[0]['doc_id'] ?? null, 'WP-CLI indexed document should be searchable.');
+    $payload = $searcher->search('wpftsneedle', [
+        'lang' => 'pl',
+        'limit' => 3,
+        'post_type' => $postType,
+        'post_status' => 'publish',
+    ]);
+    wp_fts_real_integration_assert_same($postId, $payload['results'][0]['doc_id'] ?? null, 'WP-CLI indexed document should be searchable.');
 
-    echo "ok WP-CLI command process reindexed and searched a real WordPress post\n";
+    echo 'ok WP-CLI queued one scope, drained it in ' . count($workerOutput) . " bounded passes, and searched a real WordPress post\n";
 
     return [$postId];
 }
@@ -317,11 +352,8 @@ function wp_fts_real_integration_tables(string $prefix): array
     return [
         'terms' => $prefix . 'fts_terms',
         'postings' => $prefix . 'fts_postings',
-        'docs' => $prefix . 'fts_docs',
-        'doc_lengths' => $prefix . 'fts_doc_lengths',
-        'docmeta' => $prefix . 'fts_docmeta',
-        'meta' => $prefix . 'fts_meta',
-        'queue' => $prefix . 'fts_queue',
+        'documents' => $prefix . 'fts_documents',
+        'work' => $prefix . 'fts_work',
     ];
 }
 
@@ -410,18 +442,129 @@ function wp_fts_real_integration_assert_table_exists(object $wpdb, string $table
     wp_fts_real_integration_assert_same($table, (string) $found, "table {$table} should exist.");
 }
 
-function wp_fts_real_integration_assert_column(object $wpdb, string $table, string $column): void
+/** @param array<string,string> $tables */
+function wp_fts_real_integration_assert_schema(object $wpdb, array $tables): void
 {
-    $identifier = wp_fts_real_integration_identifier($table);
-    $row = $wpdb->get_row($wpdb->prepare("SHOW COLUMNS FROM `{$identifier}` LIKE %s", $column));
-    wp_fts_real_integration_assert($row !== null, "column {$table}.{$column} should exist.");
+    $contracts = [
+        $tables['terms'] => [
+            'columns' => ['term_id', 'lang', 'kind', 'term', 'doc_freq'],
+            'indexes' => [
+                'PRIMARY' => ['unique' => true, 'columns' => ['term_id']],
+                'empty_terms' => ['unique' => false, 'columns' => ['doc_freq']],
+                'term_identity' => ['unique' => true, 'columns' => ['lang', 'kind', 'term']],
+            ],
+        ],
+        $tables['postings'] => [
+            'columns' => ['term_id', 'post_id', 'impact'],
+            'indexes' => [
+                'PRIMARY' => ['unique' => true, 'columns' => ['term_id', 'post_id']],
+                'post_term_impact' => ['unique' => false, 'columns' => ['post_id', 'term_id', 'impact']],
+            ],
+        ],
+        $tables['documents'] => [
+            'columns' => ['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at'],
+            'indexes' => [
+                'PRIMARY' => ['unique' => true, 'columns' => ['post_id']],
+            ],
+        ],
+        $tables['work'] => [
+            'columns' => ['job_key', 'kind', 'post_id', 'generation', 'state', 'available_at', 'attempts', 'claim_token', 'claimed_generation', 'claim_expires_at', 'cursor_post_id', 'scope_coverage', 'scope_incarnation', 'scope_subject_type', 'scope_subject_id', 'payload', 'last_error_code', 'last_error_at'],
+            'indexes' => [
+                'PRIMARY' => ['unique' => true, 'columns' => ['job_key']],
+                'claim_token' => ['unique' => false, 'columns' => ['claim_token', 'post_id']],
+                'dirty' => ['unique' => false, 'columns' => ['post_id', 'kind']],
+                'kind_job' => ['unique' => false, 'columns' => ['kind', 'job_key']],
+                'ready' => ['unique' => false, 'columns' => ['kind', 'state', 'available_at', 'post_id', 'job_key']],
+                'recoverable' => ['unique' => false, 'columns' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key']],
+                'scope_subject' => ['unique' => false, 'columns' => ['kind', 'scope_coverage', 'scope_subject_type', 'scope_subject_id']],
+            ],
+        ],
+    ];
+
+    foreach ($contracts as $table => $contract) {
+        $identifier = wp_fts_real_integration_identifier($table);
+        $columnRows = $wpdb->get_results("SHOW COLUMNS FROM `{$identifier}`");
+        $actualColumns = array_map(static fn(object $row): string => (string) $row->Field, is_array($columnRows) ? $columnRows : []);
+        wp_fts_real_integration_assert_same($contract['columns'], $actualColumns, "table {$table} should have only the exact current columns.");
+
+        $indexRows = $wpdb->get_results("SHOW INDEX FROM `{$identifier}`");
+        $actualIndexes = [];
+        foreach (is_array($indexRows) ? $indexRows : [] as $row) {
+            $name = (string) $row->Key_name;
+            $actualIndexes[$name] ??= ['unique' => (int) $row->Non_unique === 0, 'columns' => []];
+            $actualIndexes[$name]['columns'][(int) $row->Seq_in_index] = (string) $row->Column_name;
+        }
+        foreach ($actualIndexes as &$index) {
+            ksort($index['columns'], SORT_NUMERIC);
+            $index['columns'] = array_values($index['columns']);
+        }
+        unset($index);
+        ksort($actualIndexes, SORT_STRING);
+        $expectedIndexes = $contract['indexes'];
+        ksort($expectedIndexes, SORT_STRING);
+        wp_fts_real_integration_assert_same($expectedIndexes, $actualIndexes, "table {$table} should have only the exact current indexes.");
+    }
 }
 
-function wp_fts_real_integration_assert_index(object $wpdb, string $table, string $index): void
+/** @return array{df:int,postings:array<int,int>}|null */
+function wp_fts_real_integration_term_state(object $wpdb, string $prefix, string $termKey, int $rowCap): ?array
 {
-    $identifier = wp_fts_real_integration_identifier($table);
-    $rows = $wpdb->get_results($wpdb->prepare("SHOW INDEX FROM `{$identifier}` WHERE Key_name = %s", $index));
-    wp_fts_real_integration_assert($rows !== [], "index {$table}.{$index} should exist.");
+    $tables = wp_fts_real_integration_tables($prefix);
+    $terms = wp_fts_real_integration_identifier($tables['terms']);
+    $postings = wp_fts_real_integration_identifier($tables['postings']);
+    $identity = WP_FTS_TermNamespace::split_term($termKey);
+    $termRow = $wpdb->get_row($wpdb->prepare(
+        "SELECT term_id,doc_freq FROM `{$terms}` WHERE lang=UNHEX(%s) AND kind=0 AND term=UNHEX(%s) LIMIT 1",
+        bin2hex((string) $identity['lang']),
+        bin2hex((string) $identity['term'])
+    ));
+    if ($termRow === null) {
+        wp_fts_real_integration_assert_same('', trim((string) ($wpdb->last_error ?? '')), 'exact dictionary inspection should not fail.');
+        return null;
+    }
+
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT post_id,impact FROM `{$postings}` WHERE term_id=%d ORDER BY post_id LIMIT %d",
+        (int) $termRow->term_id,
+        $rowCap + 1
+    ));
+    wp_fts_real_integration_assert_same('', trim((string) ($wpdb->last_error ?? '')), 'bounded posting inspection should not fail.');
+    $rows = is_array($rows) ? $rows : [];
+    wp_fts_real_integration_assert(count($rows) <= $rowCap, "test-only posting inspection should stay within {$rowCap} rows.");
+    $result = [];
+    foreach ($rows as $row) {
+        $result[(int) $row->post_id] = (int) $row->impact;
+    }
+
+    return ['df' => (int) $termRow->doc_freq, 'postings' => $result];
+}
+
+function wp_fts_real_integration_assert_legacy_reads_fail_closed(WP_FTS_Storage_Mysql $storage, object $wpdb, string $termKey): void
+{
+    $operations = [
+        static fn(): array => $storage->get_terms([$termKey]),
+        static fn(): array => $storage->get_postings([$termKey]),
+        static fn(): array => $storage->get_capped_postings([$termKey], 1),
+        static fn(): array => $storage->get_budgeted_postings([$termKey], 1, 1),
+    ];
+    foreach ($operations as $operation) {
+        $queriesBefore = (int) ($wpdb->num_queries ?? 0);
+        $failure = null;
+        try {
+            $operation();
+        } catch (BadMethodCallException $error) {
+            $failure = $error;
+        }
+        wp_fts_real_integration_assert($failure instanceof BadMethodCallException, 'production posting-list reads should fail closed.');
+        wp_fts_real_integration_assert_same($queriesBefore, (int) ($wpdb->num_queries ?? 0), 'production posting-list rejection should happen before SQL.');
+    }
+}
+
+function wp_fts_real_integration_impact(int $weightedTf): int
+{
+    $tf = max(1, $weightedTf);
+
+    return max(1, min(65535, (int) round(4096.0 * ((2.2 * $tf) / (1.2 + $tf)))));
 }
 
 function wp_fts_real_integration_identifier(string $identifier): string

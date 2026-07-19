@@ -1,0 +1,285 @@
+name: Relational FTS worst-case
+
+on:
+  pull_request:
+    paths:
+      - 'components/full-text-search/src/**'
+      - 'components/full-text-search/composer.json'
+      - 'components/full-text-search/composer.lock'
+      - 'components/full-text-search/resources/**'
+      - 'indexer/*.php'
+      - 'indexer/composer.json'
+      - 'indexer/composer.lock'
+      - 'indexer/resources/**'
+      - 'indexer/src/**'
+      - 'indexer/tests/fixtures/**'
+      - 'indexer/tests/integration/**'
+      - 'indexer/tests/quality/relational-fts-worst-case-contracts.php'
+      - 'indexer/tools/**'
+      - 'indexer/docs/relational-search-acceptance.md'
+      - '.gitmodules'
+      - '.github/workflows/relational-fts-worst-case.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relational-fts-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pull-request-50k:
+    name: 50k / ${{ matrix.engine }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        engine:
+          - mariadb-10.11
+          - mysql-8.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4.5'
+          extensions: zip
+          coverage: none
+          tools: composer:2.9.7
+      - name: Run constrained real-WordPress 50k proof
+        timeout-minutes: 345
+        run: |
+          indexer/tools/run-relational-fts-worst-case.sh \
+            --engine='${{ matrix.engine }}' \
+            --profile=50k \
+            --output=".context/evidence-${{ matrix.engine }}-50k.json"
+      - name: Upload evidence even after failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relational-fts-${{ matrix.engine }}-50k
+          path: .context/evidence-${{ matrix.engine }}-50k.json*
+          if-no-files-found: error
+          include-hidden-files: true
+
+  pull-request-100k:
+    name: 100k / MariaDB 10.11
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4.5'
+          extensions: zip
+          coverage: none
+          tools: composer:2.9.7
+      - name: Initialize and attest the pinned Jieba source
+        env:
+          JIEBA_PATH: components/full-text-search/resources/sources/jieba
+          JIEBA_GITLINK: 67fa2e36e72f69d9134b8a1037b83fbb070b9775
+          JIEBA_URL: https://github.com/fxsjy/jieba
+          JIEBA_DICTIONARY_SHA256: 7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8
+          JIEBA_DICTIONARY_BYTES: '5071852'
+          JIEBA_LICENSE_SHA256: 18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37
+          JIEBA_LICENSE_BYTES: '1075'
+        run: |
+          set -euo pipefail
+          mkdir -p .context
+          cat > .context/jieba-source-attestation.json <<JSON
+          {"schema":"jieba-source-attestation-v1","status":"RUNNING","path":"${JIEBA_PATH}"}
+          JSON
+
+          indexed_entry="$(git ls-files --stage -- "${JIEBA_PATH}")"
+          test "$(printf '%s\n' "${indexed_entry}" | grep -c .)" -eq 1
+          read -r indexed_mode indexed_gitlink indexed_stage indexed_path <<< "${indexed_entry}"
+          test "${indexed_mode}" = 160000
+          test "${indexed_stage}" = 0
+          test "${indexed_path}" = "${JIEBA_PATH}"
+          test "${indexed_gitlink}" = "${JIEBA_GITLINK}"
+          test "$(git config -f .gitmodules --get "submodule.${JIEBA_PATH}.path")" = "${JIEBA_PATH}"
+          test "$(git config -f .gitmodules --get "submodule.${JIEBA_PATH}.url")" = "${JIEBA_URL}"
+
+          git submodule sync -- "${JIEBA_PATH}"
+          git -c protocol.version=2 submodule update --init --depth 1 -- "${JIEBA_PATH}"
+          actual_gitlink="$(git -C "${JIEBA_PATH}" rev-parse HEAD)"
+          test "${actual_gitlink}" = "${JIEBA_GITLINK}"
+          test -z "$(git -C "${JIEBA_PATH}" status --porcelain --untracked-files=all)"
+
+          dictionary="${JIEBA_PATH}/jieba/dict.txt"
+          license="${JIEBA_PATH}/LICENSE"
+          dictionary_sha256="$(sha256sum "${dictionary}" | cut -d ' ' -f 1)"
+          dictionary_bytes="$(stat -c %s "${dictionary}")"
+          license_sha256="$(sha256sum "${license}" | cut -d ' ' -f 1)"
+          license_bytes="$(stat -c %s "${license}")"
+          test "${dictionary_sha256}" = "${JIEBA_DICTIONARY_SHA256}"
+          test "${dictionary_bytes}" = "${JIEBA_DICTIONARY_BYTES}"
+          test "${license_sha256}" = "${JIEBA_LICENSE_SHA256}"
+          test "${license_bytes}" = "${JIEBA_LICENSE_BYTES}"
+
+          cat > .context/jieba-source-attestation.json <<JSON
+          {
+            "schema": "jieba-source-attestation-v1",
+            "status": "PASS",
+            "path": "${JIEBA_PATH}",
+            "url": "${JIEBA_URL}",
+            "gitlink": "${actual_gitlink}",
+            "dictionary": {"bytes": ${dictionary_bytes}, "sha256": "${dictionary_sha256}"},
+            "license": {"bytes": ${license_bytes}, "sha256": "${license_sha256}"}
+          }
+          JSON
+      - name: Prove indexed Jieba multi-run work stays bounded
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 60s \
+            php -d memory_limit=128M components/full-text-search/tools/build-jieba-lookup-index.php --check \
+            > .context/jieba-lookup-index-check.json
+          evidence=.context/jieba-indexed-multi-run.json
+          temporary="${evidence}.tmp"
+          time_evidence=.context/jieba-indexed-multi-run.time.txt
+          printf '%s\n' '{"status":"RUNNING"}' > "${evidence}"
+          /usr/bin/time -v -o "${time_evidence}" \
+            timeout --signal=TERM --kill-after=10s 60s \
+            php -d memory_limit=128M indexer/tests/quality/jieba-indexed-multi-run.php \
+            > "${temporary}"
+          php -r '
+          $e=json_decode((string)file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
+          $m=$e["measurements"]??[];$cold=$m["cold"]??[];$saturated=$m["saturated"]??[];
+          $wideCold=$m["repeated_wide_cold"]??[];$wideSaturated=$m["repeated_wide_saturated"]??[];
+          $permuted=$m["permuted_wide"]??[];$changing=$m["changing_prefix"]??[];
+          $distinctSets=$m["distinct_prefix_sets"]??[];$maximum=$m["maximum_distinct"]??[];
+          $fanoutEvidence=$m["maximum_fanout_evidence"]??[];$maximumFanout=$m["maximum_fanout"]??[];
+          $completeEvidence=$m["complete_pinned_cache_evidence"]??[];$completeCache=$m["complete_pinned_cache"]??[];
+          $valid=($e["status"]??null)==="pass"
+            &&($e["memory_limit"]??null)==="128M"
+            &&is_int($e["checks"]??null)&&$e["checks"]>=99
+            &&($m["dictionary_bytes"]??null)===5071852
+            &&($m["lookup_bytes"]??null)===329972
+            &&($m["lookup_ranges"]??null)===11783
+            &&($m["distinct_runs"]??null)===256
+            &&($m["source_hash_scans_per_pinned_construction"]??null)===0;
+          foreach([$cold,$saturated] as $run){
+            $valid=$valid&&($run["complete_dictionary_scans"]??null)===0
+              &&($run["indexed_range_reads"]??PHP_INT_MAX)<=256
+              &&($run["elapsed_seconds"]??INF)<5.0
+              &&($run["php_peak_delta_bytes"]??PHP_INT_MAX)<=25165824
+              &&($run["rss_delta_bytes"]??PHP_INT_MAX)<=25165824
+              &&($run["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
+          }
+          foreach([$wideCold,$wideSaturated] as $run){
+            $valid=$valid&&($run["term_count"]??null)===18600
+              &&($run["complete_dictionary_scans"]??null)===0
+              &&($run["indexed_range_reads"]??PHP_INT_MAX)<=20
+              &&($run["elapsed_seconds"]??INF)<2.0
+              &&($run["php_peak_delta_bytes"]??PHP_INT_MAX)<=25165824
+              &&($run["rss_delta_bytes"]??PHP_INT_MAX)<=25165824
+              &&($run["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
+          }
+          $valid=$valid&&($permuted["term_count"]??null)===18600
+            &&($permuted["complete_dictionary_scans"]??null)===0
+            &&($permuted["indexed_range_reads"]??PHP_INT_MAX)<=20
+            &&($permuted["elapsed_seconds"]??INF)<2.0
+            &&($permuted["php_peak_delta_bytes"]??PHP_INT_MAX)<=25165824
+            &&($permuted["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
+          $valid=$valid&&($changing["term_count"]??null)===18600
+            &&($changing["complete_dictionary_scans"]??null)===0
+            &&($changing["indexed_range_reads"]??PHP_INT_MAX)<=350
+            &&($changing["elapsed_seconds"]??INF)<2.0
+            &&($changing["php_peak_delta_bytes"]??PHP_INT_MAX)<=25165824
+            &&($changing["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
+          $valid=$valid&&($distinctSets["term_count"]??null)===18600
+            &&($distinctSets["complete_dictionary_scans"]??null)===0
+            &&($distinctSets["indexed_range_reads"]??PHP_INT_MAX)<=4000
+            &&($distinctSets["elapsed_seconds"]??INF)<3.0
+            &&($distinctSets["php_peak_delta_bytes"]??PHP_INT_MAX)<=41943040
+            &&($distinctSets["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
+          $valid=$valid&&($maximum["term_count"]??null)===20000
+            &&($maximum["complete_dictionary_scans"]??null)===0
+            &&($maximum["indexed_range_reads"]??null)===0
+            &&($maximum["elapsed_seconds"]??INF)<15.0
+            &&($maximum["php_peak_delta_bytes"]??PHP_INT_MAX)<=25165824
+            &&($maximum["rss_delta_bytes"]??PHP_INT_MAX)<=25165824
+            &&($maximum["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
+          $valid=$valid&&($fanoutEvidence["prefix_count"]??null)===1365
+            &&($fanoutEvidence["candidate_count"]??null)===285075
+            &&($fanoutEvidence["candidate_bytes"]??null)===2581996
+            &&($fanoutEvidence["run_bytes"]??null)===4095
+            &&($maximumFanout["term_count"]??null)===5454
+            &&($maximumFanout["complete_dictionary_scans"]??null)===0
+            &&($maximumFanout["indexed_range_reads"]??PHP_INT_MAX)<=1600
+            &&($maximumFanout["elapsed_seconds"]??INF)<5.0
+            &&($maximumFanout["php_peak_delta_bytes"]??PHP_INT_MAX)<=67108864
+            &&($maximumFanout["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
+          $valid=$valid&&($completeEvidence["prefix_count"]??null)===5628
+            &&($completeEvidence["candidate_count"]??null)===337399
+            &&($completeEvidence["candidate_bytes"]??null)===3013489
+            &&($completeEvidence["source_prefix_count"]??null)===5652
+            &&($completeEvidence["source_candidate_count"]??null)===337461
+            &&($completeEvidence["source_candidate_bytes"]??null)===3013799
+            &&($completeCache["run_count"]??null)===5
+            &&($completeCache["term_count"]??0)>0
+            &&($completeCache["complete_dictionary_scans"]??null)===0
+            &&($completeCache["indexed_range_reads"]??null)===5632
+            &&($completeCache["elapsed_seconds"]??INF)<5.0
+            &&($completeCache["php_peak_delta_bytes"]??PHP_INT_MAX)<=67108864
+            &&($completeCache["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
+          if(!$valid){fwrite(STDERR,"Jieba indexed multi-run evidence failed its external schema and ceiling validation.\n");exit(1);}
+          ' "${temporary}"
+          mv "${temporary}" "${evidence}"
+      - name: Run constrained real-WordPress 100k boundary proof
+        timeout-minutes: 345
+        run: |
+          indexer/tools/run-relational-fts-worst-case.sh \
+            --engine=mariadb-10.11 \
+            --profile=100k \
+            --output=.context/evidence-mariadb-100k.json
+      - name: Upload evidence even after failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relational-fts-mariadb-100k
+          path: |
+            .context/evidence-mariadb-100k.json*
+            .context/jieba-*
+          if-no-files-found: error
+          include-hidden-files: true
+
+  pull-request-mysql57-smoke:
+    name: 2k / MySQL 5.7 compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4.5'
+          extensions: zip
+          coverage: none
+          tools: composer:2.9.7
+      - name: Run real-WordPress MySQL 5.7 compatibility proof
+        timeout-minutes: 345
+        run: |
+          indexer/tools/run-relational-fts-worst-case.sh \
+            --engine=mysql-5.7 \
+            --profile=2k \
+            --output=.context/evidence-mysql-5.7-2k.json
+      - name: Upload evidence even after failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relational-fts-mysql-5.7-2k
+          path: .context/evidence-mysql-5.7-2k.json*
+          if-no-files-found: error
+          include-hidden-files: true

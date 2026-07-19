@@ -449,9 +449,8 @@ test_case('provider compatibility certification bounds known labels and keeps cu
         'raw-provider-option-payload-must-not-leak',
     ];
 
-    $advisoryMethod = new ReflectionMethod(WP_FTS_Plugin::class, 'known_search_provider_advisory');
-    $advisoryMethod->setAccessible(true);
-    $advisory = $advisoryMethod->invoke(null, wp_fts_provider_certification_settings());
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = wp_fts_provider_certification_settings();
+    $advisory = wp_fts_provider_compatibility_wordpress_explicit_provider_advisory();
     $names = is_array($advisory['provider_names'] ?? null) ? $advisory['provider_names'] : [];
     assert_same(
         ['Jetpack Search / Jetpack', 'SearchWP', 'Relevanssi', 'ElasticPress'],
@@ -503,9 +502,15 @@ test_case('provider compatibility certification bounds known labels and keeps cu
         ],
     ]);
 
-    $advisoryWithoutSignals = $advisoryMethod->invoke(null, wp_fts_provider_certification_settings());
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = wp_fts_provider_certification_settings();
+    $advisoryWithoutSignals = wp_fts_provider_compatibility_wordpress_explicit_provider_advisory();
     assert_same([], $advisoryWithoutSignals['provider_names'] ?? null, 'callback names alone should not certify known provider families');
 
+    $optionReads = [];
+    $GLOBALS['wp_fts_test_after_get_option'] = static function (string $name) use (&$optionReads): void {
+        $optionReads[] = $name;
+    };
+    $GLOBALS['wp_fts_test_get_site_option_calls'] = [];
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = wp_fts_provider_certification_settings([
         'search_provider_compatibility' => 'respect_existing',
     ]);
@@ -517,8 +522,11 @@ test_case('provider compatibility certification bounds known labels and keeps cu
     WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query);
     $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
     $settings = is_array($trace['settings'] ?? null) ? $trace['settings'] : [];
-    assert_same('none', $settings['known_search_providers'] ?? null, 'diagnostics should not promote custom callbacks to known-provider families');
-    assert_same(0, (int) ($settings['known_search_provider_count'] ?? -1), 'diagnostics should keep custom callback provider count at zero');
+    assert_true(!array_key_exists('known_search_providers', $settings), 'per-search diagnostics should leave provider discovery to explicit operator surfaces');
+    assert_true(!array_key_exists('known_search_provider_count', $settings), 'per-search diagnostics should not carry a provider-discovery count');
+    assert_true(!in_array('active_plugins', $optionReads, true), 'per-search diagnostics should not probe active plugin options');
+    assert_true(!in_array('jetpack_active_modules', $optionReads, true), 'per-search diagnostics should not probe Jetpack options');
+    assert_same([], $GLOBALS['wp_fts_test_get_site_option_calls'], 'per-search diagnostics should not probe network-active plugin options');
     $pipelineJson = json_encode($trace['search_hook_pipeline'] ?? [], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
     assert_contains('function: wp_fts_provider_certification_theme_posts_pre_query', $pipelineJson, 'theme callbacks should remain generic bounded hook labels');
     assert_contains('closure', $pipelineJson, 'closure callbacks should remain generic bounded hook labels');
@@ -528,6 +536,28 @@ test_case('provider compatibility certification bounds known labels and keeps cu
         ['custom-callback-provider-title', 'secret-basename.php', 'raw-provider-option-payload-must-not-leak'],
         'generic callback diagnostics'
     );
+});
+
+test_case('provider compatibility certification keeps analyzer integrity scans off search traces', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_provider_certification_enable_debug();
+
+    $analyzerFilterCalls = 0;
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER] = static function (mixed $options) use (&$analyzerFilterCalls): mixed {
+        $analyzerFilterCalls++;
+        return $options;
+    };
+
+    $startTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_start_trace');
+    $traceId = (int) $startTrace->invoke(null, 'frontend search', 'tracepackneedle', []);
+    $setLanguage = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_set_query_language');
+    $setLanguage->invoke(null, $traceId, 'pl');
+
+    $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+    assert_same($traceId, (int) ($trace['id'] ?? 0), 'the analyzer trace proof should inspect the trace it created');
+    assert_same('pl', $trace['query_lang'] ?? null, 'search traces should retain the resolved query language');
+    assert_same([], $trace['analyzer_pack_status'] ?? null, 'search traces should leave strict pack status to explicit operator surfaces');
+    assert_same(0, $analyzerFilterCalls, 'recording a search trace must not enumerate or hash configured analyzer packs');
 });
 
 test_case('provider compatibility certification exposes a bounded provider interference matrix contract', function (): void {
@@ -597,8 +627,6 @@ test_case('provider compatibility certification matrix evidence is structured an
                 'prior_provider_responses_replaced' => 1,
             ],
             'settings' => [
-                'known_search_providers' => 'none',
-                'known_search_provider_count' => 0,
                 'raw_provider_payload' => 'provider-secret-must-not-leak',
             ],
             'search_final_ownership' => [
@@ -623,6 +651,8 @@ test_case('provider compatibility certification matrix evidence is structured an
     $trace = is_array($searchwp['trace'] ?? null) ? $searchwp['trace'] : [];
     assert_same(2, (int) ($trace['incoming_provider_results'] ?? 0), 'matrix evidence should expose incoming provider result count');
     assert_same(1, (int) ($trace['prior_provider_responses_replaced'] ?? 0), 'matrix evidence should expose prior replacement count');
+    assert_same(false, $trace['known_provider_discovery_present'] ?? null, 'ordinary matrix traces should not perform provider discovery');
+    assert_same(false, $searchwp['provider_advisory']['performed'] ?? null, 'ordinary matrix scenarios should not run the explicit provider advisory');
     $ownership = is_array($searchwp['final_ownership'] ?? null) ? $searchwp['final_ownership'] : [];
     assert_same('language_fts_survived', $ownership['status'] ?? null, 'matrix evidence should expose final ownership status');
     assert_same([912], $ownership['final_post_ids'] ?? null, 'matrix evidence should expose bounded final IDs');
@@ -652,11 +682,7 @@ test_case('provider compatibility certification matrix evidence is structured an
                 'incoming_provider_results' => 0,
                 'prior_provider_responses_replaced' => 0,
             ],
-            'settings' => [
-                'known_search_providers' => 'Jetpack Search / Jetpack, ElasticPress',
-                'known_search_provider_count' => 2,
-                'active_plugins' => ['jetpack/jetpack.php', 'elasticpress/elasticpress.php'],
-            ],
+            'settings' => [],
             'search_final_ownership' => [
                 'status' => 'language_fts_survived',
                 'owner' => 'language_fts',
@@ -668,17 +694,43 @@ test_case('provider compatibility certification matrix evidence is structured an
                 'expected_hash' => 'abcdef1234567890',
                 'final_hash' => 'abcdef1234567890',
             ],
+        ],
+        [
+            'provider_names' => ['Jetpack Search / Jetpack', 'ElasticPress'],
+            'detected_count' => 2,
+            'providers' => [
+                ['key' => 'jetpack', 'signals' => ['raw-provider-option-payload-must-not-leak']],
+                ['key' => 'elasticpress', 'signals' => ['elasticpress/elasticpress.php']],
+            ],
         ]
     );
 
     assert_same(true, $advisory['passed'] ?? null, 'Jetpack/ElasticPress advisory matrix evidence fixture should pass');
     $advisoryTrace = is_array($advisory['trace'] ?? null) ? $advisory['trace'] : [];
+    assert_same(false, $advisoryTrace['known_provider_discovery_present'] ?? null, 'advisory matrix hot trace should not perform provider discovery');
+    $providerAdvisory = is_array($advisory['provider_advisory'] ?? null) ? $advisory['provider_advisory'] : [];
+    assert_same(true, $providerAdvisory['performed'] ?? null, 'advisory matrix scenario should run provider discovery explicitly');
+    assert_same('explicit_operator_advisory', $providerAdvisory['source'] ?? null, 'advisory matrix evidence should identify its explicit operator source');
     assert_same(
         ['Jetpack Search / Jetpack', 'ElasticPress'],
-        $advisoryTrace['known_provider_family_labels'] ?? null,
+        $providerAdvisory['provider_family_labels'] ?? null,
         'advisory matrix evidence should expose bounded known-provider labels'
     );
-    assert_same(2, (int) ($advisoryTrace['known_provider_family_count'] ?? 0), 'advisory matrix evidence should expose bounded known-provider count');
+    assert_same(2, (int) ($providerAdvisory['provider_family_count'] ?? 0), 'advisory matrix evidence should expose bounded known-provider count');
+    $hotTraceDiscoveryLeak = $advisory;
+    $hotTraceDiscoveryLeak['trace']['known_provider_discovery_present'] = true;
+    assert_same(
+        false,
+        wp_fts_provider_compatibility_wordpress_scenario_passed($hotTraceDiscoveryLeak),
+        'advisory matrix evidence must fail if provider discovery moves back into the hot search trace'
+    );
+    $unexpectedOrdinaryAdvisory = $searchwp;
+    $unexpectedOrdinaryAdvisory['provider_advisory']['performed'] = true;
+    assert_same(
+        false,
+        wp_fts_provider_compatibility_wordpress_scenario_passed($unexpectedOrdinaryAdvisory),
+        'ordinary matrix evidence must fail if it starts invoking the explicit advisory'
+    );
     wp_fts_provider_certification_assert_redacted(
         json_encode($advisory, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
         ['jetpack/jetpack.php', 'elasticpress/elasticpress.php', 'advisory result title'],
@@ -710,6 +762,7 @@ test_case('provider compatibility certification smoke and documentation are disc
     assert_contains('repo-owned provider-family simulations', $doc, 'provider compatibility docs should explain simulation scope');
     assert_contains('not a broad version-by-version certification', $doc, 'provider compatibility docs should preserve the certification boundary');
     assert_contains('not persistent telemetry', $doc, 'provider compatibility docs should state the request-local telemetry boundary');
+    assert_contains('Provider discovery is not performed while collecting a hot search trace', $doc, 'provider compatibility docs should separate hot search traces from explicit advisory discovery');
     assert_contains('No third-party provider APIs are called by wp fts status', $doc, 'provider compatibility docs should state status/advisory provider API boundaries');
     assert_contains('Provider Compatibility Evidence', $testing, 'testing docs should link the provider compatibility evidence lane');
     assert_contains('provider interference matrix', $testing, 'testing docs should mention the provider interference matrix');

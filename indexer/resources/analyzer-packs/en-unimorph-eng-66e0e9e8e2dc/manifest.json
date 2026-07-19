@@ -12,98 +12,98 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import",
-        "indexed-runtime-lookups"
+        "indexed-runtime-lookups",
+        "unimorph-source-import"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
-        "normalization": "WP_FTS_Normalizer NFKC en with fold_diacritics=true",
+        "normalization": "WP_FTS_Normalizer en with fold_diacritics=true",
         "ambiguity_policy": "ambiguous_surface_noop",
-        "total_rows": 566752,
-        "total_sha256": "4224435548bb7263b365f2cecad908a934d8b53333c2515e26b62325e49263f4",
+        "total_rows": 564805,
+        "total_sha256": "5c92e9fba1ead8d48693a9e5bb5a054f74dd5e8273a2d2ef154c1387af5231d2",
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "2f83a97fe1148ac457348ec6c392700815278d7b8585ae6e2247698093e46dbb",
-                "rows": 100001,
+                "sha256": "6c985f194672d0ff4b3453fe2f674d50394054768fea776e9eb4125d60bd14ee",
+                "rows": 100000,
                 "first_surface": "0",
-                "last_surface": "confuzzled",
+                "last_surface": "confuzzle",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0001.tsv.gz.lookup",
-                    "sha256": "381ed3bcb76c9d2c806b96f047516e1937661f613c939487fdb86e342d81a0d4",
+                    "sha256": "cb430f8b03ca8b9f7c201b134d6a2841d210686080f21fbe0395fad907214cb2",
                     "blocks": 49
                 }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "2ec4583bd22289bd86c3f850c448a2cf6f2698ed1a32ba0e14753bcb82e4c966",
-                "rows": 99998,
-                "first_surface": "confuzzlement",
-                "last_surface": "glomangiomyoma",
+                "sha256": "8fabf3b584204445d70d08bce6476d9f86a86719384c27dee0e68a2be3dca5eb",
+                "rows": 100000,
+                "first_surface": "confuzzled",
+                "last_surface": "glycopyranoses",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0002.tsv.gz.lookup",
-                    "sha256": "532456a56df1d5d5d434f7b407f8e15e976a03b5e04bdaf9de3d774d1aaac831",
+                    "sha256": "aeee3eae15b746fcb765534c58cb674ff368692dfbf3c290ad07c739a83d4cad",
                     "blocks": 49
                 }
             },
             {
                 "path": "runtime/0003.tsv.gz",
-                "sha256": "6f50eebe31a459d10cce582c1c2c55927e5d726c697e49a020251696bd66284b",
-                "rows": 99997,
-                "first_surface": "glomangiomyomas",
-                "last_surface": "minireview",
+                "sha256": "72c56564e1d7982e24dd7b3091d983fbf2644d69ded586b89cdfe6dd5a80da9e",
+                "rows": 100000,
+                "first_surface": "glycopyranoside",
+                "last_surface": "misconceptualizing",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0003.tsv.gz.lookup",
-                    "sha256": "684691cd950795b2610a2f6a38719a96944c5aa722ff1567b4fa236fc83058a5",
+                    "sha256": "e1f1226bd9ada54010ffd6b68fc16eb70f1616cc9f5e462a26314de56960dce1",
                     "blocks": 49
                 }
             },
             {
                 "path": "runtime/0004.tsv.gz",
-                "sha256": "8629fd7fe267307fd6eef6c37bfdec4a7753de63f72169a202bfc66d4ea38daa",
+                "sha256": "6d90be045a9a5b41b72f3be4617d630f782c6f57ddbc3cd4357d8f4a6f73ac6e",
                 "rows": 100000,
-                "first_surface": "minireviews",
-                "last_surface": "prohypertrophic",
+                "first_surface": "misconcern",
+                "last_surface": "prosaccade",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0004.tsv.gz.lookup",
-                    "sha256": "39becfd3a44b2a4be8426372944a66a629aa35bd5903a6b03ab62aad59da769f",
+                    "sha256": "3ab1188b45a35467d1da5afc3b80880230ba350e24b85b9cbf8c0f5fe7ef473e",
                     "blocks": 49
                 }
             },
             {
                 "path": "runtime/0005.tsv.gz",
-                "sha256": "10613c819bbf5b92cb1c1626446736957b92fef09b26251271865c243ca22ede",
+                "sha256": "a9d6cc4ae58d1fd7238a22a78fe9f69acc5e6123b542442204cc6a8cf8fff8cb",
                 "rows": 100000,
-                "first_surface": "proictogenic",
-                "last_surface": "terguride",
+                "first_surface": "prosaccades",
+                "last_surface": "tetranitrobenzene",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0005.tsv.gz.lookup",
-                    "sha256": "6bb495e4764439aace5b51d059459a6b41fd8228383d2a0cb80bb258f032efba",
+                    "sha256": "ddee3a8127566240ba5efa8dd957b11524b76de49f95d76866e3979ca8cf9512",
                     "blocks": 49
                 }
             },
             {
                 "path": "runtime/0006.tsv.gz",
-                "sha256": "959430bc75bcc44f2aedab24d2e81d13b331940cacabb0429f01adb6bae433c3",
-                "rows": 66756,
-                "first_surface": "teriflunomide",
+                "sha256": "b9b887393aa065722cc9b519e2c2b20062df17c33644ea56ea03ffb63b5dda30",
+                "rows": 64805,
+                "first_surface": "tetranitrobenzenes",
                 "last_surface": "ṛgvedic",
                 "compression": "gzip",
                 "lookup": {
                     "format": "wp-fts-lemma-block-index-v1",
                     "path": "runtime/0006.tsv.gz.lookup",
-                    "sha256": "533b7bd864f1a95f2b6917394c147a98b7c5363197c9269d160c60d66e280b4f",
-                    "blocks": 33
+                    "sha256": "7b1f43a86c129711edc8c52670601ae446e709ecb29c13f90b20312be6e36a8b",
+                    "blocks": 32
                 }
             }
         ]
@@ -140,9 +140,19 @@
             "blank_lines": 0,
             "comment_lines": 5,
             "placeholder_rows": 0,
-            "invalid_runtime_token_rows": 24276,
-            "rows_with_features": 628196,
-            "accepted_rows": 628196
+            "invalid_runtime_token_rows": 24277,
+            "rows_with_features": 628195,
+            "accepted_rows": 628195,
+            "accepted_source_rows": 628195,
+            "rows_with_tags": 628195,
+            "rows_with_source_notes": 628195,
+            "runtime_rows": 564805,
+            "unique_source_rows": 566757,
+            "deduplicated_rows": 61438,
+            "ambiguous_surfaces": 10993,
+            "unambiguous_surfaces": 542623,
+            "ambiguity_noop_surfaces": 2,
+            "ambiguity_noop_source_pairs": 1954
         }
     },
     "license": {

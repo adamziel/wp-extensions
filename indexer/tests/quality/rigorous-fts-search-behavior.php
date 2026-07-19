@@ -1091,7 +1091,7 @@ test_case('quality rigorous FTS plugin boundary requires REST opt-in and sanitiz
     assert_same('AND', $settings['match_mode'], 'settings sanitizer should preserve valid AND mode');
     assert_same(WP_FTS_Plugin::MAX_SEARCH_LIMIT, $settings['result_limit'], 'settings sanitizer should clamp result limit');
     assert_same(false, $settings['highlight'], 'settings sanitizer should parse false-like highlight values');
-    assert_same(false, $settings['language_fallback'], 'settings sanitizer should parse false-like language fallback values');
+    assert_true(!array_key_exists('language_fallback', $settings), 'settings sanitizer should discard the removed language-fanout option');
     assert_same(false, $settings['replace_frontend_search'], 'settings sanitizer should honor admin-only replacement scope');
     assert_same(true, $settings['replace_admin_post_search'], 'settings sanitizer should enable admin replacement for admin-only scope');
 
@@ -1119,7 +1119,7 @@ test_case('quality rigorous FTS plugin boundary requires REST opt-in and sanitiz
     assert_same(WP_FTS_Plugin::MAX_SEARCH_LIMIT, $controls['limit'], 'admin sandbox controls should clamp result limit');
     assert_same(40, $controls['snippet_length'], 'admin sandbox controls should clamp snippet length to the public minimum');
     assert_same(false, $controls['highlight'], 'admin sandbox controls should parse highlight checkbox value');
-    assert_same(true, $controls['language_fallback'], 'admin sandbox controls should parse language fallback radio value');
+    assert_true(!array_key_exists('language_fallback', $controls), 'admin sandbox controls should not accept a removed query-fanout control');
     assert_same(['page', 'post'], $controls['post_types'], 'admin sandbox controls should keep only allowed post types');
     assert_same(['draft', 'publish'], $controls['post_statuses'], 'admin sandbox controls should keep only allowed statuses');
     assert_same('2026-06-01', $controls['date_after'], 'admin sandbox controls should preserve valid date filters');

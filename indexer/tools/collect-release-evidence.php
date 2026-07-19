@@ -461,7 +461,7 @@ final class WP_FTS_ReleaseEvidenceCollector
                     'artifact_policy' => 'requires_explicit_collector_opt_in',
                     'enable_with' => '--run-docker-lifecycle-smokes',
                     'target_policy' => 'direct-install/operator lifecycle evidence only; not public-submission readiness',
-                    'multisite_policy' => 'single-site Docker lifecycle proof only; multisite lifecycle proof is explicitly not run by this lane',
+                    'multisite_policy' => 'Docker lifecycle proof uses network activation, a real subsite, exact bounded uninstall fences, and all-site reactivation after current/legacy table removal',
                 ],
                 'required' => false,
             ];
@@ -486,8 +486,12 @@ final class WP_FTS_ReleaseEvidenceCollector
                 'timed_out' => !empty($result['timed_out']),
                 'lifecycle_report_schema' => is_array($lifecycleReport) ? ($lifecycleReport['schema'] ?? null) : null,
                 'lifecycle_report_status' => is_array($lifecycleReport) ? ($lifecycleReport['status'] ?? null) : null,
+                'multisite_evidence_status' => is_array($lifecycleReport) ? ($lifecycleReport['multisite_evidence_status'] ?? null) : null,
+                'uninstall_table_cleanup' => is_array($lifecycleReport) ? ($lifecycleReport['uninstall_table_cleanup'] ?? null) : null,
+                'uninstall_fence' => is_array($lifecycleReport) ? ($lifecycleReport['uninstall_fence'] ?? null) : null,
+                'network_reactivation' => is_array($lifecycleReport) ? ($lifecycleReport['network_reactivation'] ?? null) : null,
                 'target_policy' => 'direct-install/operator lifecycle evidence only; not public-submission readiness',
-                'multisite_policy' => 'single-site Docker lifecycle proof only; multisite lifecycle proof is explicitly not run by this lane',
+                'multisite_policy' => 'requires passed network activation, current/legacy table removal, exact uninstall-fence shape, and reactivation reprovisioning on both disposable sites',
             ],
             'required' => false,
         ];
@@ -826,6 +830,20 @@ final class WP_FTS_ReleaseEvidenceCollector
                 );
             }
 
+            $archivedSymlinks = self::find_symbolic_link_paths($checkoutRoot);
+            if ($archivedSymlinks !== []) {
+                return [
+                    'ok' => false,
+                    'status' => 'unavailable',
+                    'summary' => 'Previous direct-install package source contains symbolic links; no historical builder or Composer process was executed.',
+                    'previous_package_policy' => 'previous_ref_contains_symbolic_links',
+                    'previous_package_ref' => $ref,
+                    'previous_package_sha' => $resolvedSha,
+                    'previous_package_build_status' => 'unavailable',
+                    'symbolic_link_paths' => $archivedSymlinks,
+                ];
+            }
+
             $zipPath = $tempRoot . '/previous-wp-fts-indexer.zip';
             $buildEnv = self::previous_package_build_environment(
                 $this->env,
@@ -843,6 +861,9 @@ final class WP_FTS_ReleaseEvidenceCollector
                 '--build-dir=' . $tempRoot . '/build',
                 '--output=' . $zipPath,
             ];
+            if (self::release_builder_supports_explicit_composer_cache($checkoutRoot . '/indexer/tools/build-release-zip.php')) {
+                $buildCommand[] = '--composer-cache-dir=' . $composerCacheDir;
+            }
             $build = $this->run_raw_command($buildCommand, $checkoutRoot . '/indexer', $timeout);
             if (($build['exit'] ?? 1) !== 0) {
                 return $this->previous_package_command_failure(
@@ -1395,12 +1416,23 @@ final class WP_FTS_ReleaseEvidenceCollector
     {
         foreach (self::decode_json_objects($output) as $decoded) {
             if (($decoded['schema'] ?? null) === 'wp-fts-disposable-lifecycle-smoke-v1') {
-                return $decoded;
+                return [
+                    'schema' => $decoded['schema'],
+                    'status' => $decoded['status'] ?? null,
+                    'multisite_evidence_status' => $decoded['multisite_evidence']['status'] ?? null,
+                    'uninstall_table_cleanup' => $decoded['covered_behaviors']['uninstall_removes_current_and_legacy_fts_tables'] ?? null,
+                    'uninstall_fence' => $decoded['covered_behaviors']['uninstall_retains_exact_bounded_lifecycle_fence'] ?? null,
+                    'network_reactivation' => $decoded['covered_behaviors']['multisite_reactivation_clears_all_site_fences_and_reprovisions'] ?? null,
+                ];
             }
             if (($decoded['schema'] ?? null) === 'wp-fts-disposable-lifecycle-wrapper-proof-v1') {
                 return [
                     'schema' => $decoded['inner_report_schema'] ?? null,
                     'status' => $decoded['inner_report_status'] ?? null,
+                    'multisite_evidence_status' => $decoded['multisite_evidence_status'] ?? null,
+                    'uninstall_table_cleanup' => $decoded['uninstall_table_cleanup'] ?? null,
+                    'uninstall_fence' => $decoded['uninstall_fence'] ?? null,
+                    'network_reactivation' => $decoded['network_reactivation'] ?? null,
                     'wrapper_proof_schema' => $decoded['schema'],
                 ];
             }
@@ -1538,7 +1570,17 @@ final class WP_FTS_ReleaseEvidenceCollector
 
         $reportStatus = is_array($lifecycleReport) ? (string) ($lifecycleReport['status'] ?? '') : '';
         if ($reportStatus === 'passed') {
-            return $result['exit'] === 0 ? 'pass' : 'fail';
+            $multisiteStatus = (string) ($lifecycleReport['multisite_evidence_status'] ?? '');
+            $cleanupPassed = ($lifecycleReport['uninstall_table_cleanup'] ?? null) === true;
+            $fencePassed = ($lifecycleReport['uninstall_fence'] ?? null) === true;
+            $reactivationPassed = ($lifecycleReport['network_reactivation'] ?? null) === true;
+            return $result['exit'] === 0
+                && $multisiteStatus === 'passed'
+                && $cleanupPassed
+                && $fencePassed
+                && $reactivationPassed
+                ? 'pass'
+                : 'fail';
         }
         if (in_array($reportStatus, ['skipped', 'skip', 'unavailable'], true)) {
             return 'skip';
@@ -1600,13 +1642,24 @@ final class WP_FTS_ReleaseEvidenceCollector
     {
         $reportStatus = is_array($lifecycleReport) ? (string) ($lifecycleReport['status'] ?? '') : '';
         if ($status === 'pass') {
-            return 'Docker lifecycle smoke completed with inner lifecycle report status passed.';
+            return 'Docker lifecycle smoke completed with network uninstall cleanup, exact bounded fences, and all-site reactivation evidence.';
         }
         if (in_array($reportStatus, ['skipped', 'skip', 'unavailable'], true)) {
             return 'Inner lifecycle smoke reported status ' . self::sanitize_text($reportStatus, 80) . '; not treated as lifecycle proof.';
         }
         if ($status === 'fail' && $reportStatus === '') {
             return 'Docker lifecycle smoke did not emit a parseable inner lifecycle report with status passed.';
+        }
+        if ($status === 'fail' && $reportStatus === 'passed') {
+            $multisiteStatus = (string) ($lifecycleReport['multisite_evidence_status'] ?? '');
+            $cleanupStatus = ($lifecycleReport['uninstall_table_cleanup'] ?? null) === true ? 'passed' : 'missing';
+            $fenceStatus = ($lifecycleReport['uninstall_fence'] ?? null) === true ? 'passed' : 'missing';
+            $reactivationStatus = ($lifecycleReport['network_reactivation'] ?? null) === true ? 'passed' : 'missing';
+            return 'Docker lifecycle smoke reported lifecycle status passed but multisite evidence status '
+                . self::sanitize_text($multisiteStatus !== '' ? $multisiteStatus : 'missing', 80)
+                . ', uninstall table cleanup status ' . $cleanupStatus
+                . ', uninstall fence status ' . $fenceStatus
+                . ', and network reactivation status ' . $reactivationStatus . '.';
         }
 
         return $this->command_summary($status, $result);
@@ -1850,6 +1903,7 @@ final class WP_FTS_ReleaseEvidenceCollector
                 || str_starts_with($arg, '--plugin-src=')
                 || str_starts_with($arg, '--monorepo-root=')
                 || str_starts_with($arg, '--build-dir=')
+                || str_starts_with($arg, '--composer-cache-dir=')
             ) {
                 [$name] = explode('=', $arg, 2);
                 $parts[] = $name . '=[path]';
@@ -2004,6 +2058,60 @@ final class WP_FTS_ReleaseEvidenceCollector
             'COMPOSER_CACHE_DIR' => $composerCacheDir,
             'COMPOSER_DISABLE_NETWORK' => '1',
         ]);
+    }
+
+    /**
+     * Older archived builders reject unknown CLI options. Inspect PHP string
+     * tokens so those builders keep using their already isolated env cache,
+     * while newer builders receive the same cache as an explicit option.
+     */
+    private static function release_builder_supports_explicit_composer_cache(string $builderPath): bool
+    {
+        if (!is_file($builderPath)) {
+            return false;
+        }
+        $source = file_get_contents($builderPath);
+        if (!is_string($source)) {
+            return false;
+        }
+
+        foreach (token_get_all($source) as $token) {
+            if (
+                is_array($token)
+                && $token[0] === T_CONSTANT_ENCAPSED_STRING
+                && in_array($token[1], ["'composer-cache-dir'", '"composer-cache-dir"'], true)
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @return string[] */
+    private static function find_symbolic_link_paths(string $root): array
+    {
+        if (!is_dir($root)) {
+            return [];
+        }
+
+        $paths = [];
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::SELF_FIRST
+        );
+        foreach ($iterator as $item) {
+            if (!$item->isLink()) {
+                continue;
+            }
+            $paths[] = self::relative_path($root, $item->getPathname());
+            if (count($paths) === 50) {
+                break;
+            }
+        }
+        sort($paths, SORT_STRING);
+
+        return $paths;
     }
 
     /**

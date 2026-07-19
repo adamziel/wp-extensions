@@ -315,6 +315,14 @@ final class WP_FTS_UnimorphLemmaPackImporter
         $licenseEvidencePath = is_scalar($options['license_evidence_path'] ?? null) ? trim((string) $options['license_evidence_path']) : '';
         $licenseEvidenceSha = is_scalar($options['license_evidence_sha256'] ?? null) ? trim((string) $options['license_evidence_sha256']) : '';
         $publishedStats = $stats;
+        $delegatedStats = $manifest['source']['parse_stats'] ?? [];
+        if (is_array($delegatedStats)) {
+            // UniMorph owns upstream parsing counts while the delegated TSV
+            // compiler owns deduplication and bounded-ambiguity counts. Keep
+            // both so a shipped manifest explains every source-to-runtime row
+            // difference instead of publishing only the first phase.
+            $publishedStats += $delegatedStats;
+        }
         $publishedStats['source_path'] = $declaredSourceFile !== '' ? $declaredSourceFile : implode(',', array_column($sourceEvidence['files'], 'path'));
 
         $capabilities = $manifest['capabilities'] ?? [];

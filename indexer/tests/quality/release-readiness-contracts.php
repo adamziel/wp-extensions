@@ -1070,6 +1070,7 @@ function wp_fts_release_readiness_contract_prohibited_package_paths(): void
         wp_fts_release_readiness_contract_write_file($package . '/tests/smoke.php', "<?php\n");
         wp_fts_release_readiness_contract_write_file($package . '/vendor/bin/phpunit', "#!/usr/bin/env php\n");
         wp_fts_release_readiness_contract_write_file($package . '/vendor/example/library/coverage/report.xml', "<xml />\n");
+        wp_fts_release_readiness_contract_write_file($package . '/vendor/wp-php-toolkit/full-text-search/resources/sources/jieba/jieba/dict.txt', "raw source fixture\n");
         wp_fts_release_readiness_contract_write_file($package . '/playground/indexer-preview.zip', "zip fixture\n");
         wp_fts_release_readiness_contract_write_file($package . '/cache/object-cache.bin', "cache fixture\n");
         wp_fts_release_readiness_contract_write_file($package . '/.gitignore', "*\n");
@@ -1085,7 +1086,7 @@ function wp_fts_release_readiness_contract_prohibited_package_paths(): void
         wp_fts_release_readiness_contract_same('blocked', $report['status'] ?? null, 'prohibited staged package paths should block direct-install readiness');
         wp_fts_release_readiness_contract_true(in_array('direct_package_prohibited_paths', $ids, true), 'prohibited paths should report the package boundary blocker');
         $json = WP_FTS_ReleaseReadinessChecker::render_json($report);
-        foreach (['indexer/tests', 'indexer/vendor/bin', 'indexer/vendor/example/library/coverage', 'indexer/playground/indexer-preview.zip'] as $path) {
+        foreach (['indexer/tests', 'indexer/vendor/bin', 'indexer/vendor/example/library/coverage', 'indexer/vendor/wp-php-toolkit/full-text-search/resources/sources', 'indexer/playground/indexer-preview.zip'] as $path) {
             wp_fts_release_readiness_contract_contains($path, $json, "prohibited path report should include {$path}");
         }
     } finally {

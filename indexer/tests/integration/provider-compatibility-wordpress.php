@@ -117,9 +117,10 @@ function wp_fts_provider_compatibility_wordpress_inside(): void
             $failedSummaries = array_map(
                 static function (array $scenario): string {
                     $trace = is_array($scenario['trace'] ?? null) ? $scenario['trace'] : [];
+                    $advisory = is_array($scenario['provider_advisory'] ?? null) ? $scenario['provider_advisory'] : [];
                     $ownership = is_array($scenario['final_ownership'] ?? null) ? $scenario['final_ownership'] : [];
-                    $labels = is_array($trace['known_provider_family_labels'] ?? null)
-                        ? implode('|', wp_fts_provider_compatibility_wordpress_bounded_string_list($trace['known_provider_family_labels']))
+                    $labels = is_array($advisory['provider_family_labels'] ?? null)
+                        ? implode('|', wp_fts_provider_compatibility_wordpress_bounded_string_list($advisory['provider_family_labels']))
                         : '';
 
                     return (is_string($scenario['scenario_id'] ?? null) ? $scenario['scenario_id'] : 'unknown')
@@ -325,6 +326,12 @@ function wp_fts_provider_compatibility_wordpress_scenario(
         if ($configureSignals !== null) {
             $configureSignals();
         }
+        // Provider discovery is an explicit operator action. Keep it outside
+        // the hot trace so this evidence cannot normalize per-search option
+        // and network-option reads as part of diagnostics.
+        $providerAdvisory = (string) ($definition['scenario_id'] ?? '') === 'jetpack_elasticpress_advisory_signals'
+            ? wp_fts_provider_compatibility_wordpress_explicit_provider_advisory()
+            : [];
         add_filter('wp_fts_debug_enabled', static fn(mixed $enabled, string $context): bool => true, 10, 2);
         if ($earlierProvider !== null) {
             add_filter('posts_pre_query', $earlierProvider, 20, 2);
@@ -340,7 +347,12 @@ function wp_fts_provider_compatibility_wordpress_scenario(
         $posts = apply_filters('posts_pre_query', null, $query);
         $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
 
-        return wp_fts_provider_compatibility_wordpress_build_scenario_evidence($definition, $posts, is_array($trace) ? $trace : []);
+        return wp_fts_provider_compatibility_wordpress_build_scenario_evidence(
+            $definition,
+            $posts,
+            is_array($trace) ? $trace : [],
+            $providerAdvisory
+        );
     } finally {
         wp_fts_provider_compatibility_wordpress_restore_hooks($oldHooks);
     }
@@ -349,14 +361,24 @@ function wp_fts_provider_compatibility_wordpress_scenario(
 /**
  * @param array<string,mixed> $definition
  * @param array<string,mixed> $trace
+ * @param array<string,mixed> $providerAdvisory
  * @return array<string,mixed>
  */
-function wp_fts_provider_compatibility_wordpress_build_scenario_evidence(array $definition, mixed $posts, array $trace): array
+function wp_fts_provider_compatibility_wordpress_build_scenario_evidence(
+    array $definition,
+    mixed $posts,
+    array $trace,
+    array $providerAdvisory = []
+): array
 {
     $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
     $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
     $settings = is_array($trace['settings'] ?? null) ? $trace['settings'] : [];
-    $knownProviderLabels = wp_fts_provider_compatibility_wordpress_known_provider_labels_from_trace($settings);
+    $providerNames = wp_fts_provider_compatibility_wordpress_bounded_string_list(
+        is_array($providerAdvisory['provider_names'] ?? null) ? $providerAdvisory['provider_names'] : []
+    );
+    $hotTraceProviderDiscoveryPresent = array_key_exists('known_search_providers', $settings)
+        || array_key_exists('known_search_provider_count', $settings);
 
     $evidence = [
         'scenario_id' => is_string($definition['scenario_id'] ?? null) ? $definition['scenario_id'] : 'unknown',
@@ -368,8 +390,13 @@ function wp_fts_provider_compatibility_wordpress_build_scenario_evidence(array $
             'status' => is_scalar($trace['status'] ?? null) ? (string) $trace['status'] : '',
             'incoming_provider_results' => (int) ($counts['incoming_provider_results'] ?? 0),
             'prior_provider_responses_replaced' => (int) ($counts['prior_provider_responses_replaced'] ?? 0),
-            'known_provider_family_labels' => $knownProviderLabels,
-            'known_provider_family_count' => max(0, (int) ($settings['known_search_provider_count'] ?? count($knownProviderLabels))),
+            'known_provider_discovery_present' => $hotTraceProviderDiscoveryPresent,
+        ],
+        'provider_advisory' => [
+            'performed' => $providerAdvisory !== [],
+            'source' => $providerAdvisory !== [] ? 'explicit_operator_advisory' : 'not_run',
+            'provider_family_labels' => $providerNames,
+            'provider_family_count' => count($providerNames),
         ],
         'final_ownership' => [
             'status' => is_scalar($ownership['status'] ?? null) ? (string) $ownership['status'] : '',
@@ -397,7 +424,17 @@ function wp_fts_provider_compatibility_wordpress_scenario_passed(array $evidence
     $scenarioId = (string) ($evidence['scenario_id'] ?? '');
     $trace = is_array($evidence['trace'] ?? null) ? $evidence['trace'] : [];
     $ownership = is_array($evidence['final_ownership'] ?? null) ? $evidence['final_ownership'] : [];
+    $providerAdvisory = is_array($evidence['provider_advisory'] ?? null) ? $evidence['provider_advisory'] : [];
     $resultIds = is_array($evidence['result_ids'] ?? null) ? array_values($evidence['result_ids']) : [];
+
+    if (($trace['known_provider_discovery_present'] ?? true) !== false) {
+        return false;
+    }
+
+    $expectsAdvisory = $scenarioId === 'jetpack_elasticpress_advisory_signals';
+    if (($providerAdvisory['performed'] ?? false) !== $expectsAdvisory) {
+        return false;
+    }
 
     if ($scenarioId === 'theme_custom_earlier_respect_existing') {
         return $evidence['compatibility_mode'] === 'respect_existing'
@@ -430,13 +467,16 @@ function wp_fts_provider_compatibility_wordpress_scenario_passed(array $evidence
     }
 
     if ($scenarioId === 'jetpack_elasticpress_advisory_signals') {
-        $knownLabels = is_array($trace['known_provider_family_labels'] ?? null) ? $trace['known_provider_family_labels'] : [];
+        $knownLabels = is_array($providerAdvisory['provider_family_labels'] ?? null)
+            ? $providerAdvisory['provider_family_labels']
+            : [];
 
         return $evidence['compatibility_mode'] === 'prefer_fts'
             && $trace['status'] === 'ran'
+            && ($providerAdvisory['source'] ?? '') === 'explicit_operator_advisory'
             && in_array('Jetpack Search / Jetpack', $knownLabels, true)
             && in_array('ElasticPress', $knownLabels, true)
-            && (int) ($trace['known_provider_family_count'] ?? 0) === 2
+            && (int) ($providerAdvisory['provider_family_count'] ?? 0) === 2
             && in_array($ownership['status'] ?? null, ['language_fts_survived', 'language_fts_replaced_null'], true)
             && $ownership['owner'] === 'language_fts'
             && $resultIds !== [];
@@ -445,18 +485,14 @@ function wp_fts_provider_compatibility_wordpress_scenario_passed(array $evidence
     return false;
 }
 
-/**
- * @param array<string,mixed> $settings
- * @return string[]
- */
-function wp_fts_provider_compatibility_wordpress_known_provider_labels_from_trace(array $settings): array
+/** @return array<string,mixed> */
+function wp_fts_provider_compatibility_wordpress_explicit_provider_advisory(): array
 {
-    $summary = is_scalar($settings['known_search_providers'] ?? null) ? trim((string) $settings['known_search_providers']) : '';
-    if ($summary === '' || strtolower($summary) === 'none') {
-        return [];
-    }
+    $method = new ReflectionMethod(WP_FTS_Plugin::class, 'known_search_provider_advisory');
+    $method->setAccessible(true);
+    $advisory = $method->invoke(null);
 
-    return wp_fts_provider_compatibility_wordpress_bounded_string_list(explode(', ', $summary));
+    return is_array($advisory) ? $advisory : [];
 }
 
 /**

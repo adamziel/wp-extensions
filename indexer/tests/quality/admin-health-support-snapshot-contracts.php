@@ -127,7 +127,6 @@ function wp_fts_support_snapshot_seed_state(WP_FTS_Test_WPDB $fake): void
         'last_batch_processed' => 3,
         'last_batch_queue_processed' => 1,
         'last_batch_backfill_processed' => 2,
-        'last_batch_stale_processed' => 0,
         'has_more' => true,
         'last_indexed_post_id' => 901,
         'last_indexed_post_title' => 'Support Snapshot Indexed',
@@ -227,7 +226,7 @@ test_case('admin health support snapshot schema is bounded redacted and read-onl
         $optionsBefore = $GLOBALS['wp_fts_test_options'];
         $scheduledBefore = $GLOBALS['wp_fts_test_scheduled'];
         $docsBefore = $fake->docs;
-        $termsBefore = $fake->terms;
+        $termsBefore = $fake->ftsTerms;
 
         $json = WP_FTS_Plugin::support_snapshot_json();
         $payload = wp_fts_support_snapshot_decode($json);
@@ -272,7 +271,7 @@ test_case('admin health support snapshot schema is bounded redacted and read-onl
         assert_same([], $GLOBALS['wp_fts_test_updated_options'], 'admin health support snapshot should not update options');
         assert_same([], $GLOBALS['wp_fts_test_deleted_options'], 'admin health support snapshot should not delete options');
         assert_same($docsBefore, $fake->docs, 'admin health support snapshot should not index content');
-        assert_same($termsBefore, $fake->terms, 'admin health support snapshot should not write terms');
+        assert_same($termsBefore, $fake->ftsTerms, 'admin health support snapshot should not write terms');
         assert_same(0, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'admin health support snapshot should not repair schema');
     } finally {
         $wpdb = $oldWpdb;
@@ -291,7 +290,7 @@ test_case('admin health support snapshot POST requires capability and nonce befo
     try {
         wp_fts_support_snapshot_seed_state($fake);
         $docsBefore = $fake->docs;
-        $termsBefore = $fake->terms;
+        $termsBefore = $fake->ftsTerms;
 
         $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
         $_POST = [
@@ -316,7 +315,7 @@ test_case('admin health support snapshot POST requires capability and nonce befo
         assert_same([], $GLOBALS['wp_fts_test_updated_options'], 'rejected support snapshot POSTs should not update options');
         assert_same([], $GLOBALS['wp_fts_test_deleted_options'], 'rejected support snapshot POSTs should not delete options');
         assert_same($docsBefore, $fake->docs, 'rejected support snapshot POSTs should not index content');
-        assert_same($termsBefore, $fake->terms, 'rejected support snapshot POSTs should not write terms');
+        assert_same($termsBefore, $fake->ftsTerms, 'rejected support snapshot POSTs should not write terms');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
@@ -339,7 +338,7 @@ test_case('admin health support snapshot POST exposes copyable JSON without muta
         $optionsBefore = $GLOBALS['wp_fts_test_options'];
         $scheduledBefore = $GLOBALS['wp_fts_test_scheduled'];
         $docsBefore = $fake->docs;
-        $termsBefore = $fake->terms;
+        $termsBefore = $fake->ftsTerms;
 
         $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
         $_POST = [
@@ -371,7 +370,7 @@ test_case('admin health support snapshot POST exposes copyable JSON without muta
         assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'valid support snapshot POST should not call the scheduler');
         assert_same([], $GLOBALS['wp_fts_test_cleared_hooks'], 'valid support snapshot POST should not clear scheduled hooks');
         assert_same($docsBefore, $fake->docs, 'valid support snapshot POST should not index content');
-        assert_same($termsBefore, $fake->terms, 'valid support snapshot POST should not write terms');
+        assert_same($termsBefore, $fake->ftsTerms, 'valid support snapshot POST should not write terms');
         assert_same(0, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'valid support snapshot POST should not repair schema');
     } finally {
         $_GET = $oldGet;

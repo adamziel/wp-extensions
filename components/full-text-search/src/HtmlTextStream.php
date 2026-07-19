@@ -12,6 +12,10 @@ declare(strict_types=1);
  */
 final class WP_FTS_Html_Text_Stream
 {
+    // The longest HTML5 named character reference is far shorter than this.
+    // A fixed lexical lookahead keeps malformed ampersand runs linear.
+    private const MAX_ENTITY_REFERENCE_BYTES = 64;
+
     /** @var array<string,bool> */
     private const HIDDEN_TAGS = [
         'ASIDE' => true,
@@ -93,18 +97,89 @@ final class WP_FTS_Html_Text_Stream
     ];
 
     /**
+     * Reject hostile HTML syntax before either parser builds breadcrumb or
+     * segment arrays. This one byte-stream pass is shared by the WordPress HTML
+     * processor and the component fallback parser.
+     */
+    public static function assert_analysis_markup_limits(string $html): void
+    {
+        $stack = [];
+        $stackPositions = [];
+        $tokens = 0;
+        $length = strlen($html);
+        $offset = 0;
+
+        while ($offset < $length) {
+            $tagStart = strpos($html, '<', $offset);
+            if ($tagStart === false) {
+                break;
+            }
+
+            if (substr_compare($html, '<!--', $tagStart, 4) === 0) {
+                $end = strpos($html, '-->', $tagStart + 4);
+                $offset = $end === false ? $length : $end + 3;
+                WP_FTS_Analysis_Limits::assert_html_markup_tokens(++$tokens);
+                continue;
+            }
+            if (substr_compare($html, '<![CDATA[', $tagStart, 9) === 0) {
+                $end = strpos($html, ']]>', $tagStart + 9);
+                $offset = $end === false ? $length : $end + 3;
+                WP_FTS_Analysis_Limits::assert_html_markup_tokens(++$tokens);
+                continue;
+            }
+
+            $marker = $html[$tagStart + 1] ?? '';
+            if ($marker === '!' || $marker === '?') {
+                $end = self::declaration_end_offset($html, $tagStart + 2);
+                $offset = $end === null ? $length : $end + 1;
+                WP_FTS_Analysis_Limits::assert_html_markup_tokens(++$tokens);
+                continue;
+            }
+
+            $tag = self::read_tag($html, $tagStart, true);
+            if ($tag === null) {
+                $offset = $tagStart + 1;
+                continue;
+            }
+
+            WP_FTS_Analysis_Limits::assert_html_markup_tokens(++$tokens);
+            $name = $tag['name'];
+            if ($name !== '') {
+                if ($tag['closing']) {
+                    self::pop_tag($stack, $stackPositions, $name);
+                } elseif (!isset(self::VOID_TAGS[$name]) && !$tag['self_closing']) {
+                    self::push_tag($stack, $stackPositions, $name);
+                    WP_FTS_Analysis_Limits::assert_html_element_depth(count($stack));
+                }
+            }
+            $offset = $tag['end'];
+        }
+    }
+
+    /**
      * Extract rendered text, preserving inline adjacency and separating blocks.
      */
     public static function visible_text(string $html): string
     {
         $text = '';
         $lastGroup = null;
+        $lastCharacter = '';
         foreach (self::visible_characters($html) as $char) {
-            if ($lastGroup !== null && $char['group'] !== $lastGroup && $text !== '' && !self::ends_with_whitespace($text)) {
+            if (
+                $lastGroup !== null
+                && $char['group'] !== $lastGroup
+                && $text !== ''
+                && !self::is_whitespace_character($lastCharacter)
+            ) {
                 $text .= ' ';
             }
 
             $text .= $char['text'];
+            // `visible_characters()` yields one repaired codepoint at a time.
+            // Retaining that bounded tail preserves PCRE's Unicode whitespace
+            // semantics without rescanning the complete growing output when a
+            // later block boundary is encountered.
+            $lastCharacter = $char['text'];
             $lastGroup = $char['group'];
         }
 
@@ -121,7 +196,20 @@ final class WP_FTS_Html_Text_Stream
      */
     public static function visible_words(string $html): array
     {
-        $words = [];
+        return iterator_to_array(self::visible_word_stream($html), false);
+    }
+
+    /**
+     * Stream visible lexical words with their original source byte ranges.
+     *
+     * Indexing uses this form so source size does not create one PHP array per
+     * decoded character and then another per word. `visible_words()` remains
+     * the backwards-compatible materializing adapter for existing callers.
+     *
+     * @return iterable<int,array{text:string,source_start:int,source_end:int,group:int,visible_start:int,visible_end:int}>
+     */
+    public static function visible_word_stream(string $html): iterable
+    {
         $current = null;
         $visibleOffset = 0;
 
@@ -130,13 +218,15 @@ final class WP_FTS_Html_Text_Stream
             $visibleOffset++;
             if (!self::is_word_character($char['text'])) {
                 if ($current !== null) {
-                    $words[] = $current;
+                    yield $current;
                     $current = null;
                 }
                 continue;
             }
 
             if ($current !== null && $current['group'] === $char['group']) {
+                $nextBytes = strlen($current['text']) + strlen($char['text']);
+                WP_FTS_Analysis_Limits::assert_lexical_run_bytes($nextBytes);
                 $current['text'] .= $char['text'];
                 $current['source_end'] = $char['source_end'];
                 $current['visible_end'] = $charVisibleStart + 1;
@@ -144,7 +234,7 @@ final class WP_FTS_Html_Text_Stream
             }
 
             if ($current !== null) {
-                $words[] = $current;
+                yield $current;
             }
             $current = [
                 'text' => $char['text'],
@@ -157,10 +247,8 @@ final class WP_FTS_Html_Text_Stream
         }
 
         if ($current !== null) {
-            $words[] = $current;
+            yield $current;
         }
-
-        return $words;
     }
 
     /**
@@ -170,25 +258,20 @@ final class WP_FTS_Html_Text_Stream
      */
     public static function visible_source_window(string $html, int $visibleStart, int $visibleEnd): ?array
     {
-        $characters = self::visible_characters($html);
-        $total = count($characters);
-        if ($total === 0) {
-            return null;
-        }
-
-        $visibleStart = max(0, min($total - 1, $visibleStart));
-        $visibleEnd = max($visibleStart + 1, min($total, $visibleEnd));
+        $requestedStart = max(0, $visibleStart);
+        $requestedEnd = max($requestedStart + 1, $visibleEnd);
         $sourceStart = null;
         $sourceEnd = null;
         $actualVisibleStart = null;
         $actualVisibleEnd = null;
+        $lastCharacter = null;
+        $total = 0;
 
-        foreach ($characters as $index => $char) {
-            if ($index < $visibleStart) {
+        foreach (self::visible_characters($html) as $char) {
+            $index = $total++;
+            $lastCharacter = $char;
+            if ($index < $requestedStart || $index >= $requestedEnd) {
                 continue;
-            }
-            if ($index >= $visibleEnd) {
-                break;
             }
 
             if ($sourceStart === null) {
@@ -197,6 +280,15 @@ final class WP_FTS_Html_Text_Stream
             }
             $sourceEnd = (int) $char['source_end'];
             $actualVisibleEnd = $index + 1;
+        }
+
+        // Preserve the old clamping behavior when the requested start lies
+        // beyond the end: return a window covering the final visible codepoint.
+        if ($sourceStart === null && $lastCharacter !== null && $requestedStart >= $total) {
+            $sourceStart = (int) $lastCharacter['source_start'];
+            $sourceEnd = (int) $lastCharacter['source_end'];
+            $actualVisibleStart = $total - 1;
+            $actualVisibleEnd = $total;
         }
 
         if ($sourceStart === null || $sourceEnd === null || $actualVisibleStart === null || $actualVisibleEnd === null) {
@@ -271,13 +363,13 @@ final class WP_FTS_Html_Text_Stream
     }
 
     /**
-     * @return array<int,array{text:string,source_start:int,source_end:int,group:int}>
+     * @return iterable<int,array{text:string,source_start:int,source_end:int,group:int}>
      */
-    private static function visible_characters(string $html): array
+    private static function visible_characters(string $html): iterable
     {
         $html = WP_FTS_Utf8::repair($html);
-        $characters = [];
         $stack = [];
+        $stackPositions = [];
         $hiddenDepth = 0;
         $group = 1;
         $length = strlen($html);
@@ -291,9 +383,10 @@ final class WP_FTS_Html_Text_Stream
             }
 
             if ($offset > $textStart && $hiddenDepth === 0) {
-                array_push(
-                    $characters,
-                    ...self::decoded_characters(substr($html, $textStart, $offset - $textStart), $textStart, $group)
+                yield from self::decoded_characters(
+                    substr($html, $textStart, $offset - $textStart),
+                    $textStart,
+                    $group
                 );
             }
 
@@ -314,9 +407,9 @@ final class WP_FTS_Html_Text_Stream
             $name = $tag['name'];
             if ($name !== '') {
                 if ($tag['closing']) {
-                    $popped = self::pop_tag($stack, $name);
-                    if ($popped !== null && isset(self::HIDDEN_TAGS[$popped])) {
-                        $hiddenDepth = max(0, $hiddenDepth - 1);
+                    $poppedHidden = self::pop_tag($stack, $stackPositions, $name);
+                    if ($poppedHidden !== null) {
+                        $hiddenDepth = max(0, $hiddenDepth - $poppedHidden);
                     }
                     if (isset(self::BOUNDARY_TAGS[$name])) {
                         $group++;
@@ -326,7 +419,7 @@ final class WP_FTS_Html_Text_Stream
                         $group++;
                     }
                     if (!isset(self::VOID_TAGS[$name]) && !$tag['self_closing']) {
-                        $stack[] = $name;
+                        self::push_tag($stack, $stackPositions, $name);
                         if (isset(self::HIDDEN_TAGS[$name])) {
                             $hiddenDepth++;
                         }
@@ -339,19 +432,18 @@ final class WP_FTS_Html_Text_Stream
         }
 
         if ($offset > $textStart && $hiddenDepth === 0) {
-            array_push(
-                $characters,
-                ...self::decoded_characters(substr($html, $textStart, $offset - $textStart), $textStart, $group)
+            yield from self::decoded_characters(
+                substr($html, $textStart, $offset - $textStart),
+                $textStart,
+                $group
             );
         }
-
-        return $characters;
     }
 
     /**
      * @return array{name:string,closing:bool,self_closing:bool,end:int}|null
      */
-    private static function read_tag(string $html, int $offset): ?array
+    private static function read_tag(string $html, int $offset, bool $enforceAnalysisLimits = false): ?array
     {
         $length = strlen($html);
         if ($offset >= $length || $html[$offset] !== '<') {
@@ -361,6 +453,9 @@ final class WP_FTS_Html_Text_Stream
         $cursor = $offset + 1;
         while ($cursor < $length && self::is_html_whitespace($html[$cursor])) {
             $cursor++;
+            if ($enforceAnalysisLimits) {
+                WP_FTS_Analysis_Limits::assert_html_tag_bytes($cursor - $offset);
+            }
         }
 
         $closing = false;
@@ -369,49 +464,194 @@ final class WP_FTS_Html_Text_Stream
             $cursor++;
             while ($cursor < $length && self::is_html_whitespace($html[$cursor])) {
                 $cursor++;
+                if ($enforceAnalysisLimits) {
+                    WP_FTS_Analysis_Limits::assert_html_tag_bytes($cursor - $offset);
+                }
             }
         }
 
         $nameStart = $cursor;
         while ($cursor < $length && self::is_tag_name_character($html[$cursor])) {
             $cursor++;
+            if ($enforceAnalysisLimits) {
+                WP_FTS_Analysis_Limits::assert_html_tag_bytes($cursor - $offset);
+            }
         }
         if ($cursor === $nameStart) {
             return null;
         }
 
         $name = strtoupper(substr($html, $nameStart, $cursor - $nameStart));
-        $quote = null;
+        $attributeCount = 0;
         while ($cursor < $length) {
+            if ($enforceAnalysisLimits) {
+                WP_FTS_Analysis_Limits::assert_html_tag_bytes($cursor - $offset + 1);
+            }
+
+            while ($cursor < $length && self::is_html_whitespace($html[$cursor])) {
+                $cursor++;
+                if ($enforceAnalysisLimits) {
+                    WP_FTS_Analysis_Limits::assert_html_tag_bytes($cursor - $offset);
+                }
+            }
+            if ($cursor >= $length) {
+                return null;
+            }
+
             $char = $html[$cursor];
+            if ($char === '<') {
+                // A literal '<' cannot continue an HTML tag token. Stopping
+                // also keeps "<a<a<a..." from rescanning to EOF.
+                return null;
+            }
+            if ($char === '>') {
+                if ($enforceAnalysisLimits) {
+                    WP_FTS_Analysis_Limits::assert_html_tag_bytes($cursor - $offset + 1);
+                }
+                return [
+                    'name' => $name,
+                    'closing' => $closing,
+                    'self_closing' => !$closing && self::tag_is_self_closing_at($html, $offset, $cursor),
+                    'end' => $cursor + 1,
+                ];
+            }
+            if ($char === '/') {
+                $cursor++;
+                continue;
+            }
+
+            $attributeStart = $cursor;
+            $attributeNameStart = $cursor;
+            while ($cursor < $length && !self::is_attribute_name_delimiter($html[$cursor])) {
+                if ($html[$cursor] === '<') {
+                    return null;
+                }
+                $cursor++;
+                if ($enforceAnalysisLimits) {
+                    WP_FTS_Analysis_Limits::assert_html_tag_bytes($cursor - $offset);
+                    WP_FTS_Analysis_Limits::assert_html_attribute_bytes($cursor - $attributeStart);
+                }
+            }
+            if ($cursor === $attributeNameStart) {
+                $cursor++;
+                continue;
+            }
+
+            $attributeName = $enforceAnalysisLimits
+                ? strtolower(substr($html, $attributeNameStart, $cursor - $attributeNameStart))
+                : '';
+            $languageAttribute = $attributeName === 'lang' || $attributeName === 'xml:lang';
+            if ($enforceAnalysisLimits) {
+                WP_FTS_Analysis_Limits::assert_html_attributes_per_tag(++$attributeCount);
+            }
+
+            while ($cursor < $length && self::is_html_whitespace($html[$cursor])) {
+                $cursor++;
+                if ($enforceAnalysisLimits) {
+                    WP_FTS_Analysis_Limits::assert_html_tag_bytes($cursor - $offset);
+                    WP_FTS_Analysis_Limits::assert_html_attribute_bytes($cursor - $attributeStart);
+                }
+            }
+
+            $valueStart = $cursor;
+            $valueEnd = $cursor;
+            if ($cursor < $length && $html[$cursor] === '=') {
+                $cursor++;
+                while ($cursor < $length && self::is_html_whitespace($html[$cursor])) {
+                    $cursor++;
+                    if ($enforceAnalysisLimits) {
+                        WP_FTS_Analysis_Limits::assert_html_tag_bytes($cursor - $offset);
+                        WP_FTS_Analysis_Limits::assert_html_attribute_bytes($cursor - $attributeStart);
+                    }
+                }
+
+                if ($cursor < $length && ($html[$cursor] === '"' || $html[$cursor] === "'")) {
+                    $quote = $html[$cursor++];
+                    $valueStart = $cursor;
+                    while ($cursor < $length && $html[$cursor] !== $quote) {
+                        if ($html[$cursor] === '<') {
+                            return null;
+                        }
+                        $cursor++;
+                        if ($enforceAnalysisLimits) {
+                            WP_FTS_Analysis_Limits::assert_html_tag_bytes($cursor - $offset);
+                            WP_FTS_Analysis_Limits::assert_html_attribute_bytes($cursor - $attributeStart);
+                            if ($languageAttribute) {
+                                WP_FTS_Analysis_Limits::assert_html_language_attribute_bytes($cursor - $valueStart);
+                            }
+                        }
+                    }
+                    if ($cursor >= $length) {
+                        return null;
+                    }
+                    $valueEnd = $cursor;
+                    $cursor++;
+                } else {
+                    $valueStart = $cursor;
+                    while (
+                        $cursor < $length
+                        && !self::is_html_whitespace($html[$cursor])
+                        && $html[$cursor] !== '>'
+                    ) {
+                        if ($html[$cursor] === '<') {
+                            return null;
+                        }
+                        $cursor++;
+                        if ($enforceAnalysisLimits) {
+                            WP_FTS_Analysis_Limits::assert_html_tag_bytes($cursor - $offset);
+                            WP_FTS_Analysis_Limits::assert_html_attribute_bytes($cursor - $attributeStart);
+                            if ($languageAttribute) {
+                                WP_FTS_Analysis_Limits::assert_html_language_attribute_bytes($cursor - $valueStart);
+                            }
+                        }
+                    }
+                    $valueEnd = $cursor;
+                }
+            }
+
+            if ($enforceAnalysisLimits) {
+                WP_FTS_Analysis_Limits::assert_html_attribute_bytes($cursor - $attributeStart);
+                if ($languageAttribute) {
+                    WP_FTS_Analysis_Limits::assert_html_language_attribute(
+                        substr($html, $valueStart, $valueEnd - $valueStart)
+                    );
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static function declaration_end_offset(string $html, int $offset): ?int
+    {
+        $quote = null;
+        $length = strlen($html);
+        for (; $offset < $length; $offset++) {
+            $char = $html[$offset];
             if ($quote !== null) {
                 if ($char === $quote) {
                     $quote = null;
                 }
-                $cursor++;
                 continue;
             }
-
             if ($char === '"' || $char === "'") {
                 $quote = $char;
-                $cursor++;
                 continue;
             }
-
             if ($char === '>') {
-                $raw = substr($html, $offset, $cursor - $offset);
-                return [
-                    'name' => $name,
-                    'closing' => $closing,
-                    'self_closing' => !$closing && self::raw_tag_is_self_closing($raw),
-                    'end' => $cursor + 1,
-                ];
+                return $offset;
             }
-
-            $cursor++;
         }
 
         return null;
+    }
+
+    private static function is_attribute_name_delimiter(string $char): bool
+    {
+        return self::is_html_whitespace($char)
+            || $char === '/'
+            || $char === '='
+            || $char === '>';
     }
 
     /**
@@ -466,43 +706,60 @@ final class WP_FTS_Html_Text_Stream
 
     /**
      * @param string[] $stack
+     * @param array<string,int[]> $positions
      */
-    private static function pop_tag(array &$stack, string $name): ?string
+    private static function pop_tag(array &$stack, array &$positions, string $name): ?int
     {
-        for ($i = count($stack) - 1; $i >= 0; $i--) {
-            if ($stack[$i] !== $name) {
-                continue;
-            }
-
-            $popped = null;
-            while (count($stack) > $i) {
-                $popped = array_pop($stack);
-            }
-
-            return $popped;
+        if (($positions[$name] ?? []) === []) {
+            return null;
         }
 
-        return null;
+        $index = $positions[$name][array_key_last($positions[$name])];
+        $hidden = 0;
+        while (count($stack) > $index) {
+            $popped = array_pop($stack);
+            if (!is_string($popped)) {
+                continue;
+            }
+            array_pop($positions[$popped]);
+            if ($positions[$popped] === []) {
+                unset($positions[$popped]);
+            }
+            if (isset(self::HIDDEN_TAGS[$popped])) {
+                $hidden++;
+            }
+        }
+
+        return $hidden;
     }
 
     /**
-     * @return array<int,array{text:string,source_start:int,source_end:int,group:int}>
+     * @param string[] $stack
+     * @param array<string,int[]> $positions
      */
-    private static function decoded_characters(string $raw, int $sourceOffset, int $group): array
+    private static function push_tag(array &$stack, array &$positions, string $name): void
     {
-        $characters = [];
+        $positions[$name][] = count($stack);
+        $stack[] = $name;
+    }
+
+    /**
+     * @return iterable<int,array{text:string,source_start:int,source_end:int,group:int}>
+     */
+    private static function decoded_characters(string $raw, int $sourceOffset, int $group): iterable
+    {
         $length = strlen($raw);
         $offset = 0;
 
         while ($offset < $length) {
             if ($raw[$offset] === '&') {
-                $semicolon = strpos($raw, ';', $offset + 1);
-                if ($semicolon !== false) {
+                $semicolon = self::entity_semicolon_offset($raw, $offset);
+                if ($semicolon !== null) {
                     $entity = substr($raw, $offset, $semicolon - $offset + 1);
                     $decoded = html_entity_decode($entity, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
                     if ($decoded !== $entity) {
                         foreach (self::utf8_characters($decoded) as $decodedChar) {
-                            $characters[] = [
+                            yield [
                                 'text' => $decodedChar,
                                 'source_start' => $sourceOffset + $offset,
                                 'source_end' => $sourceOffset + $semicolon + 1,
@@ -516,7 +773,7 @@ final class WP_FTS_Html_Text_Stream
             }
 
             $charLength = self::utf8_char_length($raw, $offset);
-            $characters[] = [
+            yield [
                 'text' => substr($raw, $offset, $charLength),
                 'source_start' => $sourceOffset + $offset,
                 'source_end' => $sourceOffset + $offset + $charLength,
@@ -524,8 +781,22 @@ final class WP_FTS_Html_Text_Stream
             ];
             $offset += $charLength;
         }
+    }
 
-        return $characters;
+    private static function entity_semicolon_offset(string $raw, int $ampersandOffset): ?int
+    {
+        $end = min(strlen($raw), $ampersandOffset + self::MAX_ENTITY_REFERENCE_BYTES);
+        for ($cursor = $ampersandOffset + 1; $cursor < $end; $cursor++) {
+            $char = $raw[$cursor];
+            if ($char === ';') {
+                return $cursor;
+            }
+            if ($char === '&' || $char === '<' || self::is_html_whitespace($char)) {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -564,14 +835,14 @@ final class WP_FTS_Html_Text_Stream
         return $char !== '' && preg_match('/^[\p{L}\p{M}\p{N}_]$/u', $char) === 1;
     }
 
-    private static function raw_tag_is_self_closing(string $raw): bool
+    private static function tag_is_self_closing_at(string $html, int $tagStart, int $tagEnd): bool
     {
-        $offset = strlen($raw) - 1;
-        while ($offset >= 0 && self::is_html_whitespace($raw[$offset])) {
+        $offset = $tagEnd - 1;
+        while ($offset > $tagStart && self::is_html_whitespace($html[$offset])) {
             $offset--;
         }
 
-        return $offset >= 0 && $raw[$offset] === '/';
+        return $offset > $tagStart && $html[$offset] === '/';
     }
 
     private static function is_tag_name_character(string $char): bool
@@ -594,12 +865,12 @@ final class WP_FTS_Html_Text_Stream
             || $char === "\f";
     }
 
-    private static function ends_with_whitespace(string $text): bool
+    private static function is_whitespace_character(string $character): bool
     {
-        if ($text === '') {
+        if ($character === '') {
             return false;
         }
 
-        return preg_match('/\s$/u', $text) === 1;
+        return preg_match('/^\s$/u', $character) === 1;
     }
 }

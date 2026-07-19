@@ -4,11 +4,11 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/bootstrap.php';
 
 /**
- * Deterministic generated-corpus scale gate for the native indexer pipeline.
+ * Deterministic generated-corpus scale fixture for the legacy component path.
  *
- * This intentionally stays pure PHP: it exercises the production analyzer,
- * indexer, in-memory storage, and searcher, but it does not use WordPress,
- * MySQL, live content, production traffic, or persisted generated corpora.
+ * This intentionally stays pure PHP: it exercises the component analyzer,
+ * indexer, in-memory storage, and posting-list searcher. It is not evidence for
+ * WordPress, relational MySQL/MariaDB, or production traffic.
  */
 final class WP_FTS_Production_Scale_Benchmark
 {

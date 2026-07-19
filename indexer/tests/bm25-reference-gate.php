@@ -4,12 +4,14 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/bootstrap.php';
 
 /**
- * Deterministic local BM25 reference gate for the native PHP searcher.
+ * Deterministic local BM25 reference fixture for the legacy component searcher.
  *
  * The fixture is intentionally small enough to audit by hand, but it still uses
- * the production indexer/searcher path so field boosts, weighted term
+ * the in-memory component indexer/searcher path so field boosts, weighted term
  * frequencies, document length normalization, missing terms, and boolean
- * narrowing are all covered by the comparison.
+ * narrowing are all covered by the comparison. Production WordPress uses the
+ * relational impact ranker; this fixture must not be cited as its acceptance
+ * or performance evidence.
  */
 final class WP_FTS_BM25_Reference_Gate
 {

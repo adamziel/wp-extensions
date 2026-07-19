@@ -17,8 +17,13 @@ final class WP_FTS_LemmaPackLookupIndex
 
     private const MAGIC = "WPFTSLI1";
     private const HEADER_PREFIX_BYTES = 12;
-    private const MAX_HEADER_BYTES = 8388608;
+    private const MAX_HEADER_BYTES = 65536;
     private const MAX_BLOCK_DECODED_BYTES = 1048576;
+    private const MAX_DECODED_BLOCK_CACHE_BYTES = 4194304;
+
+    /** @var array<string,string> */
+    private static array $decodedBlockCache = [];
+    private static int $decodedBlockCacheBytes = 0;
 
     /**
      * Repack one sorted gzip runtime shard into independently compressed members
@@ -101,6 +106,12 @@ final class WP_FTS_LemmaPackLookupIndex
             if ($blockLines === []) {
                 return;
             }
+            if (count($blocks) >= WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_FILE) {
+                throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                    'lookup_blocks',
+                    'Lemma lookup index exceeds the 256-block per-file limit.'
+                );
+            }
 
             $plain = implode('', $blockLines);
             if (strlen($plain) > self::MAX_BLOCK_DECODED_BYTES) {
@@ -130,7 +141,7 @@ final class WP_FTS_LemmaPackLookupIndex
 
         try {
             try {
-                while (($line = self::read_runtime_line($runtimeHandle, $compression)) !== false) {
+                while (($line = WP_FTS_LemmaPackLimits::read_runtime_line($runtimeHandle, $compression)) !== false) {
                     $line = rtrim(rtrim((string) $line, "\n"), "\r");
                     if ($line === '' || $line[0] === '#') {
                         continue;
@@ -144,7 +155,6 @@ final class WP_FTS_LemmaPackLookupIndex
                     if ($previousKey !== null && strcmp($previousKey, $key) >= 0) {
                         throw new RuntimeException("Runtime rows in {$runtimePath} must be unique and sorted.");
                     }
-
                     if (
                         count($blockLines) >= $blockRows
                         && $blockLastSurface !== null
@@ -296,10 +306,16 @@ final class WP_FTS_LemmaPackLookupIndex
             fclose($handle);
         }
 
-        $header = json_decode($headerJson, true, 512, JSON_THROW_ON_ERROR);
+        $header = json_decode(
+            $headerJson,
+            true,
+            WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_GRAPH_DEPTH + 2,
+            JSON_THROW_ON_ERROR
+        );
         if (!is_array($header) || ($header['format'] ?? null) !== self::FORMAT) {
             throw new RuntimeException('Lemma lookup index format is invalid.');
         }
+        WP_FTS_Analyzer_Config_Limits::assert_manifest_graph($header);
         if (!is_string($header['runtime_sha256'] ?? null) || !hash_equals(strtolower($expectedRuntimeSha256), strtolower($header['runtime_sha256']))) {
             throw new RuntimeException('Lemma lookup index does not attest the runtime shard digest.');
         }
@@ -313,6 +329,12 @@ final class WP_FTS_LemmaPackLookupIndex
         }
         if (!is_int($header['block_rows'] ?? null) || $header['block_rows'] < 1 || !is_array($header['blocks'] ?? null) || $header['blocks'] === []) {
             throw new RuntimeException('Lemma lookup index block metadata is invalid.');
+        }
+        if (count($header['blocks']) > WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_FILE) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'lookup_blocks',
+                'Lemma lookup index exceeds the 256-block per-file limit.'
+            );
         }
 
         $indexSize = @filesize($path);
@@ -453,12 +475,19 @@ final class WP_FTS_LemmaPackLookupIndex
         $decoded = self::read_decoded_block($metadata, $candidate);
         $lemmas = [];
         $linesRead = 0;
-        foreach (self::decoded_lines($decoded) as $line) {
+        $offset = self::first_surface_offset($decoded, $term, $linesRead);
+        $decodedLength = strlen($decoded);
+        while ($offset !== null && $offset < $decodedLength) {
+            $line = self::decoded_line_at_or_after($decoded, $offset);
+            if ($line === null) {
+                break;
+            }
             $linesRead++;
-            $pair = self::parse_pair($line);
+            $pair = self::parse_pair($line['line']);
             if ($pair === null) {
                 throw new RuntimeException('Lemma lookup index block contains an invalid TSV row.');
             }
+            $offset = $line['end'] + 1;
             $comparison = strcmp($pair['surface'], $term);
             if ($comparison < 0) {
                 continue;
@@ -467,6 +496,7 @@ final class WP_FTS_LemmaPackLookupIndex
                 break;
             }
             $lemmas[$pair['lemma']] = true;
+            WP_FTS_LemmaPackLimits::assert_surface_lemma_count($term, count($lemmas));
         }
 
         return [
@@ -500,6 +530,16 @@ final class WP_FTS_LemmaPackLookupIndex
             throw new RuntimeException('Lemma lookup index loading requires PHP zlib support.');
         }
 
+        $cacheKey = hash('sha256', implode("\0", [
+            (string) $metadata['runtime_path'],
+            (string) ($metadata['runtime_sha256'] ?? ''),
+            (string) $block['offset'],
+            (string) $block['length'],
+        ]));
+        if (isset(self::$decodedBlockCache[$cacheKey])) {
+            return self::$decodedBlockCache[$cacheKey];
+        }
+
         $handle = @fopen($metadata['runtime_path'], 'rb');
         if (!is_resource($handle)) {
             throw new RuntimeException('Could not open indexed lemma runtime payload.');
@@ -518,8 +558,121 @@ final class WP_FTS_LemmaPackLookupIndex
         if (!is_string($decoded) || strlen($decoded) > self::MAX_BLOCK_DECODED_BYTES) {
             throw new RuntimeException('Could not decode lemma lookup index block.');
         }
+        WP_FTS_LemmaPackLimits::assert_runtime_buffer_lines($decoded);
+
+        self::cache_decoded_block($cacheKey, $decoded);
 
         return $decoded;
+    }
+
+    /**
+     * Locate the first row whose surface is greater than or equal to a term.
+     *
+     * @param int $linesRead Number of rows inspected by the binary search.
+     */
+    private static function first_surface_offset(string $data, string $term, int &$linesRead): ?int
+    {
+        $low = 0;
+        $high = strlen($data);
+        while ($low < $high) {
+            $mid = intdiv($low + $high, 2);
+            $line = self::decoded_line_at_or_after($data, $mid);
+            if ($line === null) {
+                $high = $mid;
+                continue;
+            }
+            $linesRead++;
+
+            $pair = self::parse_pair($line['line']);
+            if ($pair === null) {
+                throw new RuntimeException('Lemma lookup index block contains an invalid TSV row.');
+            }
+            if (strcmp($pair['surface'], $term) < 0) {
+                $next = $line['end'] + 1;
+                if ($next <= $low) {
+                    break;
+                }
+                $low = $next;
+                continue;
+            }
+
+            $high = $mid;
+        }
+
+        $line = self::decoded_line_at_or_after($data, $low);
+        while ($line !== null) {
+            $pair = self::parse_pair($line['line']);
+            if ($pair === null) {
+                throw new RuntimeException('Lemma lookup index block contains an invalid TSV row.');
+            }
+            if (strcmp($pair['surface'], $term) >= 0) {
+                return $line['start'];
+            }
+
+            $next = $line['end'] + 1;
+            if ($next <= $low) {
+                return null;
+            }
+            $low = $next;
+            $line = self::decoded_line_at_or_after($data, $low);
+        }
+
+        return null;
+    }
+
+    /** @return array{start:int,end:int,line:string}|null */
+    private static function decoded_line_at_or_after(string $data, int $offset): ?array
+    {
+        $length = strlen($data);
+        $offset = max(0, min($offset, $length));
+        if ($offset >= $length) {
+            return null;
+        }
+
+        if ($offset === 0 || $data[$offset - 1] === "\n") {
+            $start = $offset;
+        } else {
+            $newline = strpos($data, "\n", $offset);
+            if ($newline === false) {
+                return null;
+            }
+            $start = $newline + 1;
+        }
+        if ($start >= $length) {
+            return null;
+        }
+
+        $end = strpos($data, "\n", $start);
+        if ($end === false) {
+            $end = $length;
+        }
+        WP_FTS_LemmaPackLimits::assert_runtime_line_bytes($end - $start);
+
+        return [
+            'start' => $start,
+            'end' => $end,
+            'line' => rtrim(substr($data, $start, $end - $start), "\r"),
+        ];
+    }
+
+    /** Keep only a few decoded blocks alive for adjacent dictionary lookups. */
+    private static function cache_decoded_block(string $cacheKey, string $decoded): void
+    {
+        $bytes = strlen($decoded);
+        if ($bytes > self::MAX_DECODED_BLOCK_CACHE_BYTES || isset(self::$decodedBlockCache[$cacheKey])) {
+            return;
+        }
+
+        self::$decodedBlockCache[$cacheKey] = $decoded;
+        self::$decodedBlockCacheBytes += $bytes;
+        while (self::$decodedBlockCacheBytes > self::MAX_DECODED_BLOCK_CACHE_BYTES) {
+            $oldest = array_key_first(self::$decodedBlockCache);
+            if (!is_string($oldest) || !isset(self::$decodedBlockCache[$oldest])) {
+                break;
+            }
+            self::$decodedBlockCacheBytes -= strlen(self::$decodedBlockCache[$oldest]);
+            unset(self::$decodedBlockCache[$oldest]);
+        }
     }
 
     private static function decode_gzip(string $encoded): string|false
@@ -566,14 +719,6 @@ final class WP_FTS_LemmaPackLookupIndex
         }
 
         return $handle;
-    }
-
-    /**
-     * @param resource $handle
-     */
-    private static function read_runtime_line(mixed $handle, ?string $compression): string|false
-    {
-        return $compression === 'gzip' ? @gzgets($handle) : fgets($handle);
     }
 
     /**
@@ -628,6 +773,7 @@ final class WP_FTS_LemmaPackLookupIndex
 
     private static function canonical_file(string $path, string $label): string
     {
+        WP_FTS_Analyzer_Config_Limits::assert_path($path, "Lemma {$label} path");
         $real = realpath($path);
         if (!is_string($real) || !is_file($real)) {
             throw new RuntimeException("Lemma {$label} does not exist: {$path}");

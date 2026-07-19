@@ -40,6 +40,8 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     private bool $lazy;
     private string $indexSignature;
     private string $packLanguage;
+    private int $runtimeFileCount;
+    private int $lookupBlockCount;
 
     /**
      * @param array<string,mixed> $validation Result from WP_FTS_AnalyzerPackValidator::validate().
@@ -52,6 +54,13 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     {
         $this->lazy = $lazy;
         $this->packLanguage = self::base_language((string) $validation['manifest']['language']);
+        $this->runtimeFileCount = count($validation['runtime_files']);
+        $this->lookupBlockCount = 0;
+        foreach ($validation['runtime_files'] as $file) {
+            $this->lookupBlockCount += isset($file['lookup']['blocks']) && is_array($file['lookup']['blocks'])
+                ? count($file['lookup']['blocks'])
+                : 0;
+        }
         if (!$lazy) {
             $this->build_eager_lookup($validation['rows']);
         }
@@ -67,6 +76,13 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         ?WP_FTS_AnalyzerPackValidator $validator = null,
         ?string $expectedLanguage = null
     ): self {
+        WP_FTS_Analyzer_Config_Limits::assert_path($manifestPath, 'Lemma-pack manifest path');
+        if ($expectedLanguage !== null && strlen($expectedLanguage) > WP_FTS_Analyzer_Config_Limits::MAX_LANGUAGE_BYTES) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'language_bytes',
+                'Expected lemma-pack language exceeds the 64-byte limit.'
+            );
+        }
         $validator ??= new WP_FTS_AnalyzerPackValidator();
         $metadata = $validator->validate_metadata($manifestPath, false);
         self::assert_expected_language($metadata, $expectedLanguage);
@@ -102,6 +118,8 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
 
         try {
             return self::from_manifest_file($manifestPath, null, $expectedLanguage);
+        } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
+            throw $error;
         } catch (Throwable) {
             return null;
         }
@@ -198,6 +216,18 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         return (bool) $this->validation['manifest']['fixture_only'];
     }
 
+    /** Number of runtime shards retained by this configured pack. */
+    public function runtime_file_count(): int
+    {
+        return $this->runtimeFileCount;
+    }
+
+    /** Number of seek metadata blocks retained by this configured pack. */
+    public function lookup_block_count(): int
+    {
+        return $this->lookupBlockCount;
+    }
+
     /**
      * Expose the last lazy lookup shape for deterministic performance tests.
      *
@@ -213,6 +243,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
      */
     public static function manifest_path_from_option(mixed $option, ?string $defaultManifestPath = null): ?string
     {
+        WP_FTS_Analyzer_Config_Limits::assert_pack_option($option, 'Lemma-pack option');
         if ($option === false || $option === null) {
             return null;
         }
@@ -227,6 +258,9 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         }
 
         if ($option === true) {
+            if ($defaultManifestPath !== null) {
+                WP_FTS_Analyzer_Config_Limits::assert_path($defaultManifestPath, 'Default lemma-pack manifest path');
+            }
             return $defaultManifestPath;
         }
 
@@ -336,6 +370,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         foreach ($files as $file) {
             foreach ($this->lookup_term_in_runtime_file($term, $file) as $lemma => $_) {
                 $lemmas[$lemma] = true;
+                WP_FTS_LemmaPackLimits::assert_surface_lemma_count($term, count($lemmas));
             }
         }
 
@@ -348,16 +383,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
      */
     private function ordered_lemmas_for_surface(string $surface, array $lemmas): array
     {
-        $lemmas = array_values(array_unique(array_map('strval', $lemmas)));
-        sort($lemmas, SORT_STRING);
-        if (!in_array($surface, $lemmas, true)) {
-            return $lemmas;
-        }
-
-        return array_values(array_merge(
-            [$surface],
-            array_filter($lemmas, static fn(string $lemma): bool => $lemma !== $surface)
-        ));
+        return WP_FTS_LemmaPackLimits::ordered_lemmas_for_surface($surface, $lemmas);
     }
 
     /**
@@ -377,17 +403,41 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
      */
     private function candidate_runtime_files(string $term): array
     {
-        $candidates = [];
-        foreach ($this->validation['runtime_files'] as $file) {
+        $files = array_values($this->validation['runtime_files']);
+        if (count($files) <= 1) {
+            $file = $files[0] ?? null;
+            if (!is_array($file)) {
+                return [];
+            }
             $first = $file['first_surface'] ?? null;
             $last = $file['last_surface'] ?? null;
             if (is_string($first) && is_string($last) && (strcmp($term, $first) < 0 || strcmp($term, $last) > 0)) {
-                continue;
+                return [];
             }
-            $candidates[] = $file;
+
+            return [$file];
         }
 
-        return $candidates;
+        $low = 0;
+        $high = count($files) - 1;
+        while ($low <= $high) {
+            $middle = intdiv($low + $high, 2);
+            $file = $files[$middle];
+            $first = (string) $file['first_surface'];
+            $last = (string) $file['last_surface'];
+            if (strcmp($term, $first) < 0) {
+                $high = $middle - 1;
+                continue;
+            }
+            if (strcmp($term, $last) > 0) {
+                $low = $middle + 1;
+                continue;
+            }
+
+            return [$file];
+        }
+
+        return [];
     }
 
     /**
@@ -422,10 +472,20 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         }
 
         $lemmas = [];
+        $decodedBytes = 0;
         $this->record_lookup_mode('stream-scan');
         $this->lastLookupStats['files_opened']++;
         try {
-            while (($line = $this->read_runtime_line($handle, $compression)) !== false) {
+            while (($line = WP_FTS_LemmaPackLimits::read_runtime_line($handle, $compression)) !== false) {
+                $lineBytes = strlen($line);
+                $decodedBytes += $lineBytes;
+                $this->lastLookupStats['bytes_loaded'] += $lineBytes;
+                if ($decodedBytes > WP_FTS_LemmaPackLimits::MAX_RUNTIME_LOOKUP_DECODED_BYTES) {
+                    throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                        'runtime_lookup_decoded_bytes',
+                        'A lemma-pack lookup may scan at most 8 MiB without a seek index.'
+                    );
+                }
                 $this->lastLookupStats['lines_read']++;
                 $line = rtrim((string) $line, "\n");
                 $line = rtrim($line, "\r");
@@ -448,6 +508,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
                 }
 
                 $lemmas[$columns[1]] = true;
+                WP_FTS_LemmaPackLimits::assert_surface_lemma_count($term, count($lemmas));
             }
         } finally {
             $this->close_runtime_file($handle, $compression);
@@ -502,6 +563,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
             }
 
             $lemmas[$parsed['lemma']] = true;
+            WP_FTS_LemmaPackLimits::assert_surface_lemma_count($term, count($lemmas));
         }
 
         return $lemmas;
@@ -591,6 +653,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
             if ($end === false) {
                 $end = $length;
             }
+            WP_FTS_LemmaPackLimits::assert_runtime_line_bytes($end - $start);
             $line = rtrim(substr($data, $start, $end - $start), "\r");
             if ($line !== '' && $line[0] !== '#') {
                 return [
@@ -646,20 +709,36 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
             return self::$decodedRuntimeFileCache[$cacheKey];
         }
 
-        $compressed = @file_get_contents($path);
-        if (!is_string($compressed)) {
+        $handle = @gzopen($path, 'rb');
+        if (!is_resource($handle)) {
             return null;
         }
-
-        set_error_handler(static fn(): bool => true);
+        $decoded = '';
         try {
-            $decoded = gzdecode($compressed);
+            while (!gzeof($handle)) {
+                $remaining = WP_FTS_LemmaPackLimits::MAX_RUNTIME_LOOKUP_DECODED_BYTES + 1 - strlen($decoded);
+                if ($remaining <= 0) {
+                    break;
+                }
+                $chunk = @gzread($handle, min(65536, $remaining));
+                if (!is_string($chunk)) {
+                    return null;
+                }
+                if ($chunk === '') {
+                    break;
+                }
+                $decoded .= $chunk;
+            }
         } finally {
-            restore_error_handler();
+            gzclose($handle);
         }
-        if (!is_string($decoded)) {
-            return null;
+        if (strlen($decoded) > WP_FTS_LemmaPackLimits::MAX_RUNTIME_LOOKUP_DECODED_BYTES) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'runtime_lookup_decoded_bytes',
+                'A decoded lemma-pack lookup shard may contain at most 8 MiB without a seek index.'
+            );
         }
+        WP_FTS_LemmaPackLimits::assert_runtime_buffer_lines($decoded);
 
         $this->cache_decoded_runtime_file($cacheKey, $decoded);
 
@@ -738,18 +817,6 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         $handle = fopen($path, 'rb');
 
         return is_resource($handle) ? $handle : null;
-    }
-
-    /**
-     * @param resource $handle
-     */
-    private function read_runtime_line(mixed $handle, ?string $compression): string|false
-    {
-        if ($compression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
-            return @gzgets($handle);
-        }
-
-        return fgets($handle);
     }
 
     /**

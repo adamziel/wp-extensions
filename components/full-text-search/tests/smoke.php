@@ -25,5 +25,13 @@ if (($results[0]['doc_id'] ?? null) !== 1) {
 }
 
 $hardeningChecks = require __DIR__ . '/coverage-hardening.php';
+$hardeningChecks += require __DIR__ . '/lemma-pack-limits.php';
+$hardeningChecks += require __DIR__ . '/jieba-scan-bounds.php';
+$hardeningChecks += require __DIR__ . '/jieba-line-bounds.php';
+$hardeningChecks += require __DIR__ . '/jieba-cache-bounds.php';
+$hardeningChecks += require __DIR__ . '/jieba-indexed-multi-run.php';
+$hardeningChecks += require __DIR__ . '/tokenizer-yield-bounds.php';
+$hardeningChecks += require __DIR__ . '/extension-output-bounds.php';
+$hardeningChecks += require __DIR__ . '/html-text-stream-boundary-bounds.php';
 
 echo "Full-text search component smoke passed ({$hardeningChecks} hardening checks).\n";

@@ -7,14 +7,16 @@ runs emit character unigrams plus deterministic overlapping n-grams up to 4
 characters. That default path is retrieval-oriented n-gram tokenization, not
 dictionary word segmentation.
 
-Chinese (`zh`) has a narrow optional exception: a source-backed Jieba adapter can
-read `jieba/dict.txt` from the pinned `indexer/resources/sources/jieba`
-submodule when configured through `segmenter_packs_by_lang`. The main repository
-commits only `.gitmodules` and the gitlink. It does not copy Jieba dictionary
-rows, HMM/POS/IDF/model files, or generated tokenizer archives. Runtime use
-requires the file to match commit `67fa2e36e72f69d9134b8a1037b83fbb070b9775`,
-SHA-256 `7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`, and
-byte size `5071852`; otherwise Chinese falls back to CJK n-grams.
+Chinese (`zh`) has a narrow optional exception: the source tree commits a compact
+attested lookup beside the pinned
+`components/full-text-search/resources/sources/jieba` gitlink. Release builds
+verify that checkout and stage only `dict.txt`, its MIT license, and the lookup
+under the curated runtime path; HMM/POS/IDF/model files and the raw checkout are
+not packaged. Runtime use requires the dictionary to match commit
+`67fa2e36e72f69d9134b8a1037b83fbb070b9775`, SHA-256
+`7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`, and byte
+size `5071852`; otherwise Chinese falls back to CJK n-grams. Source-only custom
+dictionaries are fixture-only and are omitted by the WordPress runtime.
 
 Future support for `thai_dictionary_tcc_v1` must start with a reviewed source
 lock before any adapter, importer, bundled Thai dictionary, generated TCC rules,

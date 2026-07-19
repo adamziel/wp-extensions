@@ -90,6 +90,7 @@ final class WP_FTS_ReleaseReadinessChecker
         'review-artifacts',
         'tests',
         'vendor/bin',
+        'vendor/wp-php-toolkit/full-text-search/resources/sources',
     ];
 
     private const VENDOR_DEVELOPMENT_DIRS = ['test', 'tests', 'Tests', 'coverage'];
@@ -298,7 +299,7 @@ final class WP_FTS_ReleaseReadinessChecker
             $lockedBuildOptions = $buildOptions;
             $lockedBuildOptions['skip_build_lock'] = true;
 
-            /** @var array{build_dir:string,zip_path:string,sha256:string,removed_paths:string[],prohibited_paths:string[]} $build */
+            /** @var array{build_dir:string,zip_path:string,sha256:string,removed_paths:string[],prohibited_paths:string[],composer_home:string,composer_cache_dir:string,composer_plugins:bool,composer_scripts:bool} $build */
             $build = (new WP_FTS_ReleasePackageBuilder())->build($lockedBuildOptions);
             $this->record($checks, $blockers, 'direct_package_build', 'pass', 'Direct-install ZIP builder completed.', [
                 'zip_path' => self::display_path($build['zip_path']),
