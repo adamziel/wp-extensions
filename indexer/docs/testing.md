@@ -556,6 +556,11 @@ Required clean-source evidence:
 
 ```sh
 tools/run-relational-fts-worst-case.sh \
+  --engine=mysql-5.7 \
+  --profile=2k \
+  --output=../.context/evidence/relational-mysql-5.7-2k.json
+
+tools/run-relational-fts-worst-case.sh \
   --engine=mariadb-10.11 \
   --profile=50k \
   --output=../.context/evidence/relational-mariadb-50k.json
@@ -569,6 +574,11 @@ tools/run-relational-fts-worst-case.sh \
   --engine=mariadb-10.11 \
   --profile=100k \
   --output=../.context/evidence/relational-mariadb-100k.json
+
+tools/run-relational-fts-worst-case.sh \
+  --engine=mysql-8.0 \
+  --profile=100k \
+  --output=../.context/evidence/relational-mysql-100k.json
 ```
 
 Do not add this multi-hour real-database lane to `tests/run.php`, reduce the

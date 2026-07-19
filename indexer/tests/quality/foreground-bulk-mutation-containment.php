@@ -870,6 +870,94 @@ test_case('foreground bulk mutation post lifecycles stay constant at 1 2 1000 an
     }
 });
 
+test_case('foreground bulk mutation no-op taxonomy save uses only fence and promotion', function (): void {
+    global $wpdb, $wp_current_filter;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldCurrentFilter = $wp_current_filter ?? null;
+    try {
+        $fake = new WP_FTS_Test_WPDB();
+        $fake->recordReadQueries = true;
+        $wpdb = $fake;
+        wp_fts_test_reset_wordpress_fakes();
+        WP_FTS_Plugin::runtime_analyzer();
+        $fake->queries = [];
+        $epochBefore = $fake->searchEpoch;
+
+        $postId = 30101;
+        WP_FTS_Plugin::handle_post_pre_update($postId, []);
+        $wp_current_filter = ['set_object_terms'];
+        WP_FTS_Plugin::handle_term_relationship_change($postId);
+        $wp_current_filter = ['wp_after_insert_post'];
+        WP_FTS_Plugin::handle_post_save($postId, (object) ['ID' => $postId]);
+
+        $writes = wp_fts_foreground_bulk_work_writes($fake);
+        assert_same(2, count($writes), 'an unchanged taxonomy callback nested in a post save must add no third FTS generation');
+        assert_contains('wp_fts:mutation-fence', $writes[0] ?? '', 'the canonical save must cross one pre-SQL mutation fence');
+        assert_contains('wp_fts:mutation-promote', $writes[1] ?? '', 'the final post hook must perform the one matching promotion');
+        assert_same('ready', $fake->queue[$postId]['state'] ?? null, 'the promoted post generation must remain immediately claimable');
+        assert_same(1, (int) ($fake->queue[$postId]['generation'] ?? 0), 'promotion must make the one fenced post generation claimable without inventing another generation');
+        assert_same(2, $fake->searchEpoch - $epochBefore, 'the fence and promotion must each advance the cursor epoch exactly once');
+        assert_same([], wp_fts_foreground_bulk_static('relationship_post_mutations'), 'a no-op taxonomy callback must not claim a relationship mutation lifecycle');
+    } finally {
+        WP_FTS_Plugin::reset_request_caches();
+        $wpdb = $oldWpdb;
+        if ($oldCurrentFilter === null) {
+            unset($wp_current_filter);
+        } else {
+            $wp_current_filter = $oldCurrentFilter;
+        }
+    }
+    record_check('foreground no-op taxonomy save statement invariant', 7);
+});
+
+test_case('foreground bulk mutation changed taxonomy save retains the outer post fence', function (): void {
+    global $wpdb, $wp_current_filter;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldCurrentFilter = $wp_current_filter ?? null;
+    try {
+        $fake = new WP_FTS_Test_WPDB();
+        $fake->recordReadQueries = true;
+        $wpdb = $fake;
+        wp_fts_test_reset_wordpress_fakes();
+        WP_FTS_Plugin::runtime_analyzer();
+        $fake->queries = [];
+        $epochBefore = $fake->searchEpoch;
+
+        $postId = 30102;
+        WP_FTS_Plugin::handle_post_pre_update($postId, []);
+        $wp_current_filter = ['add_term_relationship'];
+        WP_FTS_Plugin::handle_term_relationship_pre_change($postId);
+        $wp_current_filter = ['set_object_terms'];
+        WP_FTS_Plugin::handle_term_relationship_change($postId);
+
+        $afterRelationship = $fake->queue[$postId] ?? [];
+        assert_same('guarded', $afterRelationship['state'] ?? null, 'a changed taxonomy callback must consume only its nested depth and retain the outer post fence');
+        assert_same(1, count(wp_fts_foreground_bulk_work_writes($fake)), 'relationship hooks nested in a post save must not publish before the outer post hook');
+
+        $wp_current_filter = ['wp_after_insert_post'];
+        WP_FTS_Plugin::handle_post_save($postId, (object) ['ID' => $postId]);
+
+        $writes = wp_fts_foreground_bulk_work_writes($fake);
+        assert_same(2, count($writes), 'a changed taxonomy callback nested in a post save must add no third FTS generation');
+        assert_contains('wp_fts:mutation-fence', $writes[0] ?? '', 'the canonical save must cross one pre-SQL mutation fence');
+        assert_contains('wp_fts:mutation-promote', $writes[1] ?? '', 'the outer post hook must perform the one matching promotion');
+        assert_same('ready', $fake->queue[$postId]['state'] ?? null, 'the outer post hook must make the changed taxonomy generation immediately claimable');
+        assert_same(1, (int) ($fake->queue[$postId]['generation'] ?? 0), 'the changed taxonomy save must retain one fenced generation without inventing a successor');
+        assert_same(2, $fake->searchEpoch - $epochBefore, 'the changed taxonomy save must advance the cursor epoch only for its fence and promotion');
+    } finally {
+        WP_FTS_Plugin::reset_request_caches();
+        $wpdb = $oldWpdb;
+        if ($oldCurrentFilter === null) {
+            unset($wp_current_filter);
+        } else {
+            $wp_current_filter = $oldCurrentFilter;
+        }
+    }
+    record_check('foreground changed taxonomy save statement invariant', 8);
+});
+
 test_case('foreground bulk mutation taxonomy scopes stay constant at 1 2 1000 and 1001 targets', function (): void {
     global $wpdb;
 

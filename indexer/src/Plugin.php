@@ -2650,6 +2650,18 @@ WHERE kind = 'scope' AND scope_coverage = ''"
             }
             return;
         }
+        if (
+            $hook === 'set_object_terms'
+            && empty(self::$relationship_pre_mutations[$object_id])
+            && isset(self::$mutation_fence_tokens['post:' . $object_id])
+        ) {
+            // wp_insert_post() emits set_object_terms even when its taxonomy
+            // set is unchanged. With no relationship pre-boundary, the outer
+            // post fence already covers the canonical save; let its final hook
+            // perform the one promotion instead of consuming it here and
+            // forcing wp_after_insert_post to enqueue a third generation.
+            return;
+        }
         if (!empty(self::$relationship_post_mutations[$object_id])) {
             return;
         }

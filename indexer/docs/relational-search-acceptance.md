@@ -7,10 +7,9 @@ sites with up to 100,000 searchable posts on a low-end WordPress host backed by
 MySQL or MariaDB; larger installations should use a dedicated search service.
 WordPress Playground's
 SQLite adapter remains a functional single-request smoke target, not a claimed
-multi-request production-concurrency backend. The generation-CAS mutation proof
-and 50,000-document compatibility lane run on both supported database families;
-the 100,000-document boundary lane runs on MariaDB. None uses an in-memory
-substitute.
+multi-request production-concurrency backend. The generation-CAS mutation proof,
+50,000-document compatibility lane, and 100,000-document boundary lane run on
+both supported database families. None uses an in-memory substitute.
 
 A change passes only when the machine-readable real-database evidence described
 below passes. A missing dependency, `SKIP`, `PENDING`, timeout, OOM, absent
@@ -39,12 +38,15 @@ WordPress adapter from bypassing that factory.
    executes at most one statement. That planning statement must still read the
    mutation epoch and authenticate any supplied cursor before the impossible
    result returns; an analyzer-empty cursor request is rejected before SQL. An
-   unexpected database failure is a separate fail-closed control path: it
-   executes exactly one failed search statement, then at most four bounded
-   option/cron statements to revoke publication, persist unhealthy state, reload
-   the invalidated option cache, and persist a repair event. Its complete
-   failure-request ceiling is five plugin-owned statements; it never continues
-   to ranking or hydration.
+   unexpected database failure is a separate fail-closed control path. The
+   failed stage is terminal: no later search stage or core `LIKE` fallback may
+   run. The request then executes two to four bounded option/cron controls to
+   revoke publication, persist unhealthy state, reload invalidated option state,
+   and retain one repair event. A plan failure therefore executes at most five
+   plugin-owned statements, a rank failure at most six, and a hydration failure
+   at most seven. These stage-aware ceilings include the successful search
+   statements that necessarily preceded the failed stage; they do not relax the
+   three-statement ceiling for a successful ready search.
 6. Keep statement count unchanged at 2,000, 50,000, and 100,000 documents, with
    one pack or all distributable packs active.
 7. Execute no SQL in term, alternative, prefix, language, candidate, or result
@@ -612,15 +614,21 @@ and indexes them through the production WP-CLI/worker path. It supports:
 | --- | ---: | --- |
 | `2k` | 2,000 | small-site oracle, failure smoke, and required MySQL 5.7 compatibility |
 | `50k` | 50,000 | required pull-request MariaDB/MySQL evidence |
-| `100k` | 100,000 | required boundary/release evidence |
+| `100k` | 100,000 | required pull-request boundary/release MariaDB/MySQL evidence |
 
 Only these clean profile/engine tuples are acceptance lanes, with stable lane
 identities: `2k/mysql-5.7` (`mysql57-2k`), `50k/mariadb-10.11`
-(`mariadb1011-50k`), `50k/mysql-8.0` (`mysql80-50k`), and
-`100k/mariadb-10.11` (`mariadb1011-100k`). Every other tuple is rejected before
-Docker starts unless `--allow-dirty` explicitly marks it diagnostic. A clean
-report must carry the exact expected lane ID; success from a cheaper arbitrary
-profile/engine combination cannot substitute for one of these four lanes.
+(`mariadb1011-50k`), `50k/mysql-8.0` (`mysql80-50k`),
+`100k/mariadb-10.11` (`mariadb1011-100k`), and `100k/mysql-8.0`
+(`mysql80-100k`). Every other tuple is rejected before Docker starts unless
+`--allow-dirty` explicitly marks it diagnostic. A clean report must carry the
+exact expected lane ID; success from a cheaper arbitrary profile/engine
+combination cannot substitute for one of these five lanes.
+
+The 100k pull-request job is one two-engine matrix. MariaDB 10.11 and MySQL 8.0
+therefore execute the identical structural, performance, memory, concurrency,
+migration, evidence, finalization, and failure-artifact requirements; neither
+engine has a reduced boundary path.
 
 The 2,000-document lane is the explicit small-site validation profile, not a
 lower production-size boundary. The 50k/100k lanes prove that the same bounded
@@ -736,18 +744,22 @@ the production analyzer, indexer, MySQL storage, searcher, and queue:
   either a 256-block or 64-KiB header boundary. The measured packs use six
   runtime files and 532 blocks, with at most 98 blocks per file and at most
   16,128 / 16,192 decoded bytes in one block; combined encoded-runtime plus
-  lookup evidence is 441,557 / 442,622 bytes. Each completes below 0.7 seconds,
-  30 MiB PHP, and 128 MiB RSS. Two more fresh children force 15,000
+  lookup evidence is 441,557 / 442,622 bytes. Each must complete within fifteen
+  seconds and stay below 128 MiB PHP/RSS. Two more fresh children force 15,000
   reverse-sorted one-row chunks. Both must preserve the exact sorted digest and
-  first/middle/last lookup, merge through three levels with fan-in at most 64
-  and at most 130 live temporary files, and complete below two seconds / 16 MiB
-  PHP. High-entropy 300,000-row children (39.6 / 41.4 MB sources) must reject at
+  first/middle/last lookup, merge through at least two levels with fan-in at
+  most 64 and at most 192 live temporary files, and complete within ten seconds and
+  128 MiB PHP/RSS. High-entropy 300,000-row children (39.6 / 41.4 MB sources) must reject at
   the 16-MiB physical runtime-plus-lookup boundary before a manifest, remove all
-  partial output, and complete below 6.1 seconds / 31 MiB PHP. A final fresh
+  partial output, and complete within fifteen seconds and 128 MiB PHP/RSS. A final fresh
   child proves unindexed fixture
-  output at row 50,001 and decoded byte 8,388,609 rejects before manifest
-  publication and removes every partial pack artifact while directing the
-  operator to indexed gzip;
+  output accepts exactly 50,000 rows and 8,388,608 decoded bytes, then rejects
+  row 50,001 and decoded byte 8,388,609 before manifest publication and removes
+  every partial pack artifact while directing the operator to indexed gzip.
+  Eager construction consumes validator rows as it builds the sole retained
+  surface map, rather than holding both complete representations. Every child
+  records its loaded ini path, and a parent launched with `php -n` must keep all
+  descendants on `php -n`; none may silently reload shared extensions;
 - fresh normal and `php -n` children drive all four source importers through
   every original-input boundary. A 65,536-byte line, 64-MiB physical artifact,
   512-MiB decoded gzip stream, and 8,000,000-line source each produce an
@@ -763,7 +775,7 @@ the production analyzer, indexer, MySQL storage, searcher, and queue:
   are unlinked rather than followed, while caller-owned parent sentinels remain
   byte-identical;
 - fresh 128 MiB CoNLL-U and UniMorph wrapper processes prove recursive source
-  discovery at exactly 256 accepted files, 32,768 relative-path bytes, and
+  discovery at exactly 256 accepted files, 8,192 relative-path bytes, and
   eight directory levels; file/path/depth max+1 and in-root symlinks to outside
   bytes reject before staging or hashing. Both wrappers discard a first
   252-byte `qaa` token before staging, accept exactly 1,250,000 staged rows and
@@ -790,8 +802,8 @@ the production analyzer, indexer, MySQL storage, searcher, and queue:
   HTML fields retain 4,096 morphologies while opening each selected file once,
   reading 4,096 blocks, 1,548,588 compressed bytes, and exactly 64 MiB decoded.
   Current-second integrity work hashes 256 runtime/sidecar files and 2,056,748
-  physical bytes once. The measured run completes in 1.885 seconds with 40 MiB
-  PHP peak and about 69 MB process RSS. Two distinct physical copies are
+  physical bytes once. The complete proof must finish within ten seconds and
+  stay below 128 MiB PHP/RSS. Two distinct physical copies are
   accepted; a third declares 192 files and must raise `configured_pack_metadata`
   before opening any lookup header or payload, in normal PHP and `php -n`;
 - fresh normal and `php -n` 128 MiB processes configure 32 distinct
@@ -968,6 +980,19 @@ contain no raw Jieba checkout. A fresh process extracted from the ZIP must make
 `from_pack_option(true, 'zh')` select that runtime source and lookup with zero
 full-source hash scans before real segmentation succeeds.
 
+The complete indexing fanout above is not allowed to leak into visitor query
+work. A separate fresh-process proof sends a 4,095-byte,
+1,365-distinct-Han query through the public set-oriented `Searcher`. The
+twelve-alternative plan allowance is passed into every configured CJK producer
+as a thirteen-item observation ceiling, including the multi-language pack
+dispatcher. The bundled Jieba producer must detect thirteen unique fallback
+items before prefix preloading, raise the typed `analyzer occurrences` budget,
+and execute exactly zero storage calls, complete dictionary scans, indexed
+range reads, or candidate-cache insertions. That rejection must finish within
+one second and add at most 4 MiB of PHP peak allocation. The adjacent accepted
+boundary of twelve punctuation-separated one-character occurrences must still
+reach storage as exactly twelve logical groups and alternatives.
+
 Every one of those ten pinned-source workloads is also repeated in its own
 fresh PHP process with `memory_limit=128M`. Each child records its absolute PHP
 peak and Linux `VmHWM` and must keep both at or below 128 MiB, so a high-water
@@ -1011,8 +1036,28 @@ persistent WP-CLI probe container IDs must equal the IDs obtained by inspecting
 those exact digest references. It probes cgroup v1/v2 from inside those live
 containers. Each probe
 must report exactly one effective CPU, 1 GiB database or 512 MiB PHP memory,
-and zero usable swap. Finalization revalidates the complete raw image/cgroup
-artifact, including its empty failure list. A dirty local smoke is explicitly marked
+and zero usable swap. Before corpus generation, the database's cumulative
+cgroup peak must be at most 768 MiB, leaving at least 256 MiB of the hard limit
+for the measured workload. This checkpoint occurs after database/WordPress
+initialization, so it catches oversized fixed server allocations without mixing
+in corpus-dependent file cache.
+
+The runner also records database usage, cumulative peak, limit events, OOM
+events, and OOM kills immediately before all 40 planned cold-cache database
+restarts (four cases × ten samples) and once after the final measured workload.
+Together with the pre-corpus sample, the finalizer requires the exact ordered 42-checkpoint inventory;
+deleting or reordering one checkpoint fails. A restart therefore cannot erase the preceding
+cgroup segment's high-water mark or failure counters.
+cgroup v2 reads `memory.current`, `memory.peak`, and `memory.events`; cgroup v1
+reads `memory.usage_in_bytes`, `memory.max_usage_in_bytes`, `memory.failcnt`,
+and `memory.oom_control`, treating a nonzero v1 `memory.failcnt` as the stricter
+portable OOM failure. Final evidence records the maximum observed database peak
+and exact remaining headroom and requires zero OOM and OOM-kill events in every
+segment. The whole-run peak has no tighter cache-sensitive threshold beyond the
+hard 1-GiB/no-swap contract.
+
+Finalization revalidates the complete raw image/cgroup artifact, including its
+empty failure list. A dirty local smoke is explicitly marked
 non-acceptance. It may record an explicit image override for diagnostics, but
 the image ID and every available repository/manifest digest must remain well
 formed and internally consistent. An override can never satisfy a clean release
@@ -1109,7 +1154,7 @@ an unchanged-hash reconciliation cannot satisfy the gate.
 
 ## Hard measured gates
 
-At 100k on the declared MariaDB profile:
+At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 
 | Metric | Required value |
 | --- | ---: |
@@ -1128,6 +1173,7 @@ At 100k on the declared MariaDB profile:
 | concurrent p95 degradation | <=2× idle HTTP |
 | plugin-owned search statements | <=3; impossible AND <=1 |
 | missing-table request on every public adapter | exactly 1 failed plan and 0 rank/hydrate; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 total plugin-owned statements; unhealthy/latch/single-event repair state present before harness restoration |
+| injected plan / rank / hydration database failure | exact ordered plan / plan+rank / plan+rank+hydrate shape with only the final statement failing; no later search or core `LIKE`; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 / <=6 / <=7 total plugin-owned statements; exact capability/Health/cron restoration between requests |
 | largest search SQL | <=32 KiB |
 | planning/ranking/hydration rows sent | <=13 / <=21 / <=20 |
 | candidate-first prefix AND rank / complete-search rows examined | <=32,768 / <=65,536 |
@@ -1147,18 +1193,18 @@ At 100k on the declared MariaDB profile:
 | compressed lemma shard expanding beyond 180 MiB without a sidecar | structural construction rejection; 0 payload hashes/reads; expansion never attempted; <=128 MiB PHP/RSS |
 | 32-MiB plain/gzip lemma source line through four importers | all 8 paths reject at 64 KiB before manifest publication; each four-importer child <=10 seconds / <=32 MiB PHP peak / <=128 MiB RSS |
 | original lemma source envelopes, all four importers, normal PHP and `php -n` | 64-KiB line / 64-MiB physical / 512-MiB decoded / 8,000,000-line exact boundaries accepted; every max+1 rejects without partial output; <=5 / 10 / 10 / 90 seconds; <=32 MiB PHP / <=128 MiB RSS |
-| source swap/restore during all four lemma importers, normal PHP and `php -n` | 5,000 one-row chunks per private snapshot; snapshot digest equals published provenance; attacker source remains installed through manifest publication but contributes zero runtime rows; original path restored; every snapshot removed; measured 2.945 / 2.890 seconds and 23,068,672-byte PHP peak; <=32 MiB PHP / <=128 MiB RSS |
-| invalid temporary parent through all four lemma importers, normal PHP and `php -n` | typed rejection before output setup; caller file retained byte-for-byte; zero output paths; measured <=0.003 seconds / 16 MiB PHP peak |
-| 17,000 maximum namespaced generic/PoliMorf pairs with `chunk_rows=200000` | every row retained; 2 lexical chunks; <=8 MiB keys/chunk; 6 files / 532 blocks / <=98 blocks per file / <=16 KiB decoded per block; 441,557 / 442,622 physical bytes; each child <0.7 seconds / <30 MiB PHP / <=128 MiB RSS |
-| 15,000 reverse-sorted rows with `chunk_rows=1`, both importers | exact sorted digest and boundary lookups; fan-in <=64; 3 levels / 239 merge outputs / <=130 live temporary files; each child <2 seconds / 16 MiB PHP / <=128 MiB RSS |
-| 200,000 short distinct pairs in one generic/PoliMorf chunk, normal PHP and `php -n` | exact option accepted as one 3,000,000-byte lexical chunk; 200,001 option rejects before output; measured 6.102 / 5.820 seconds and 48,250,880-byte PHP peak; <=64 MiB PHP / <=128 MiB RSS |
-| 16,384 initial generic/PoliMorf chunks, normal PHP and `php -n` | exact leaf count compacts and publishes; leaf 16,385 rejects with no manifest or output artifacts; measured 8.688 / 8.308 seconds and 16 MiB PHP peak; <=32 MiB PHP / <=128 MiB RSS |
-| 300,000 high-entropy generic/PoliMorf rows | typed 16-MiB physical pack rejection; no manifest or partial output; each child <6.1 seconds / <31 MiB PHP / <=128 MiB RSS |
+| source swap/restore during all four lemma importers, normal PHP and `php -n` | 5,000 one-row chunks per private snapshot; snapshot digest equals published provenance; attacker source remains installed through manifest publication but contributes zero runtime rows; original path restored; every snapshot removed; <=30 seconds / <=32 MiB PHP / <=128 MiB RSS |
+| invalid temporary parent through all four lemma importers, normal PHP and `php -n` | typed rejection before output setup; caller file retained byte-for-byte; zero output paths; <=128 MiB PHP/RSS |
+| 17,000 maximum namespaced generic/PoliMorf pairs with `chunk_rows=200000` | every row retained; 2 lexical chunks; <=8 MiB keys/chunk; 6 files / 532 blocks / <=98 blocks per file / <=16 KiB decoded per block; 441,557 / 442,622 physical bytes; each child <=15 seconds / <=128 MiB PHP/RSS |
+| 15,000 reverse-sorted rows with `chunk_rows=1`, both importers | exact sorted digest and boundary lookups; at least 2 merge levels; fan-in <=64; <=192 live temporary files; each child <=10 seconds / <=128 MiB PHP/RSS |
+| 200,000 short distinct pairs in one generic/PoliMorf chunk, normal PHP and `php -n` | exact option accepted as one 3,000,000-byte lexical chunk; 200,001 option rejects before output; <=30 seconds / <=64 MiB PHP / <=128 MiB RSS |
+| 16,384 initial generic/PoliMorf chunks, normal PHP and `php -n` | exact leaf count compacts and publishes; leaf 16,385 rejects with no manifest or output artifacts; <=15 seconds / <=32 MiB PHP / <=128 MiB RSS |
+| 300,000 high-entropy generic/PoliMorf rows | typed 16-MiB physical pack rejection; no manifest or partial output; each child <=15 seconds / <=128 MiB PHP/RSS |
 | CoNLL-U / UniMorph recursive source and staging maxima | 256 files / 8 KiB paths / depth 8 accepted; exact-path manifests are 60,009 / 59,973 bytes beneath the 64-KiB runtime read bound; every max+1 and symlink escape rejects before staging/hash; 1,250,000 rows and 64 MiB staging accepted, next row/byte rejects and cleans; <=128 MiB PHP/RSS |
 | sparse 140-MiB audit manifest, normal PHP and `php -n` | normal exit with `invalid_pack`; bounded 64-KiB read; 16 MiB PHP peak; recursive manifest/entry/path/depth max+1 and symlink escapes bounded |
 | unindexed fixture row 50,001 / decoded byte 8,388,609 | rejected before manifest publication; no partial output; error directs to indexed gzip; combined child <=15 seconds / <=128 MiB PHP/RSS |
 | 64-shard lemma manifest | missing/overlapping/out-of-order/unnormalized ranges reject before runtime path resolution; first/middle/last each select exactly 1 indexed shard and decode at most 1 bounded block; gap miss opens 0; normal and no-extension processes each <=2 seconds, <=32 MiB PHP allocation delta, <=128 MiB RSS |
-| exact 128-file configured lemma aggregate | 32 language-scoped fields preserve 4,096 morphologies; 128 opens / 4,096 reads / 1,548,588 compressed bytes / 64 MiB decoded; 256 current-second hashes / 2,056,748 bytes; measured 1.885 seconds / 40 MiB PHP / about 69 MB RSS |
+| exact 128-file configured lemma aggregate | 32 language-scoped fields preserve 4,096 morphologies; 128 opens / 4,096 reads / 1,548,588 compressed bytes / 64 MiB decoded; 256 current-second hashes / 2,056,748 bytes; <=10 seconds / <=128 MiB PHP/RSS |
 | third distinct 64-file physical pack copy | two copies / 128 files accepted; third declares 192 and raises `configured_pack_metadata` before lookup-header or payload I/O; normal PHP and `php -n` |
 | stat-to-read lemma file growth | reported size 1; attestation stops after reading byte 16,777,217 with `runtime_lookup_bytes`; direct 16-MiB+1 builder source rejects before hashing/staging and remains unchanged; current-second same-stat replacement is rehashed next batch; normal PHP and `php -n` |
 | worker throughput | >=20 documents/second |
@@ -1256,8 +1302,23 @@ attributed callback is read immediately and runs without the later concurrency
 workload. The proof fails unless the complete tagged interval occupies at most
 half of that ring and records its used rows and remaining headroom. This keeps
 the interval-loss check explicit without MySQL's OOM-inducing default
-10,000-row SQL-text allocation. The redundant per-thread statement history is
-fixed at one event because every attribution query uses the global ring.
+10,000-row SQL-text allocation. The separate 2,003-event targeted-scope sweep
+also requires exact ordered server attribution, so the global ring cannot be
+reduced further. Every attribution query uses that global ring; unused
+per-thread history and digest summaries are therefore fixed at zero. The
+instrumented-thread reserve is fixed at 128 for the constrained 24-connection
+server, and every runtime assertion requires both positive capacity headroom
+and a zero `Performance_schema_thread_instances_lost` counter. The memory
+reduction therefore cannot silently discard a connection's statements.
+The runner fixes statement consumers to current `YES`, per-thread history `NO`,
+and global history-long `YES`. Because both supported servers reset at least
+one of those consumers during a restart, the runner reapplies and verifies the
+exact state after every cold-cache restart. Validation, cold-eviction
+preparation, and each cold sample assert the loss counter and consumer state at
+both entry and exit, before the next restart can erase either failure signal.
+Attribution that starts with a fresh HTTP connection additionally requires its
+first retained per-thread event ID to be exactly one; a wrapped ring cannot be
+misreported as the connection's real beginning.
 
 Every `<= 3` search-path count and its wpdb/Performance Schema identity proof
 covers the complete recorded callback, including `START TRANSACTION`, `BEGIN`,
@@ -1921,6 +1982,19 @@ production state transitions.
 The disposable harness restores the exact three pre-fault option rows between
 adapters only to isolate those five independent requests; production retains the
 revocation and scheduled repair.
+An additional REST proof injects one real missing-relation database error at
+each of plan, rank, and hydration without renaming a production table. The
+request query filter changes exactly one stage statement, and Performance
+Schema must report that exact statement with MySQL error 1146 / SQLSTATE
+`42S02`. The ordered search prefixes must be plan, plan+rank, and
+plan+rank+hydrate respectively; all earlier statements succeed, only the final
+statement fails, and it must be the sole nonzero MySQL error across every
+plugin-attributed search and control statement,
+and no later stage or core `LIKE` executes. Each request must
+then show the same exact readiness mutation, Health latch, repair schedule, and
+two-to-four option/cron controls as the missing-table case. Hashed raw snapshots
+must prove exact capability, Health, and cron restoration before the next stage
+is injected.
 An isolated read timeout or disconnected search query latches takeover
 fail-closed and schedules bounded physical/profile verification; it must not
 mark a proven-ready index pending or enqueue a corpus rebuild unless that
@@ -1936,7 +2010,9 @@ immutable legacy-v3 `36a26f4ad1aaef9758922f24677069045c5291ab` ZIP, installs the
 each of the seven physical table renames and the `v4_created`,
 `reconciliation_enqueued`, `ready_verified`, and `legacy_cleaned` boundaries.
 Every callback must expose the exact expected table-name set, logical schema
-version, pending health/readiness state, and exact post/scope work cardinality:
+version, pending health/readiness state, and exact post/scope/meta work
+cardinality. `work_rows` is semantic claimable debt (`post` plus `scope`), never
+the persistent `meta:search-epoch` control row:
 prior rename mappings stay on their source names, completed mappings stay on
 their legacy names, the current schema and all seven legacy tables coexist only at the defined
 boundaries, and readiness remains false until after `legacy_cleaned` returns.
@@ -1948,10 +2024,25 @@ Immediately after every SIGKILL and before the next migration phase, a fresh PHP
 process must read an ordinary option and corpus post, run a real no-op
 `wp_update_post()` save, and execute an enabled main front-end `WP_Query` for a
 known corpus token. The save must leave its searchable source unchanged and
-produce exactly no work before the current schema is installed or one accounted
-direct-post job after schema v9 is installed. The public query must return an empty result with
+produce phase-exact work and generations. At each of the seven rename
+boundaries, it attempts exactly one bounded recovery-scope DML against the
+absent work table, leaves no durable work or control generation, rotates the
+32-hex readiness incarnation, and records pending/unhealthy Health with a
+global visibility fence and bounded error. At `v4_created`, that same one DML
+creates one corpus scope plus the epoch row and advances both generations once.
+At `reconciliation_enqueued`, it adds no row but advances both existing
+generations once and rebinds the scope to the new readiness incarnation with
+reason `foreground_queue_failure`. At `ready_verified` and `legacy_cleaned`,
+after logical schema v9 is installed, Health and readiness remain byte-for-byte
+unchanged while exactly two
+mutation-fence/promotion DML statements add one direct-post job and advance the
+epoch twice. Every ordinary-path FTS DML statement must be at most 32 KiB.
+The public query must return an empty result with
 `wp_fts_search_unavailable`, execute no FTS SQL and no core `LIKE`, and neither
-the ordinary path nor the search path may inspect or mutate physical schema.
+path may inspect or mutate plugin-owned physical schema. WordPress core may
+emit first-write `SHOW FULL COLUMNS` diagnostics for its own posts, options,
+blogs, or postmeta tables; those statements are retained separately in the
+artifact and cannot excuse any FTS physical-schema statement.
 Each in-process save/search probe must finish within five seconds, public search
 may execute at most two statements with no statement above 32 KiB, and the
 fresh process has a 120-second hard wall-clock kill rather than an unbounded
@@ -1973,7 +2064,10 @@ then resumes all sites. Every prefix must preserve ordered search membership,
 term DFs, exact
 sentinel IDs and metadata/source signatures, stable complete content hashes, and
 its recorded prefix; its exact integer scores must equal a cardinality-checked
-per-site v4 oracle. Content-hash stability is measured across a new durable
+per-site v4 oracle. Each site snapshot positively classifies the exact physical
+dictionary columns once: baseline DF probes bind the legacy single-column binary term identity, while post-migration probes bind the current composite identity.
+Unknown or partial dictionary shapes fail before either query is
+selected. Content-hash stability is measured across a new durable
 generation for every sentinel and a real bounded worker drain, never two
 back-to-back reads of the same rows.
 A 3×3 site-specific token matrix must have three populated diagonal cells and
@@ -2174,7 +2268,13 @@ Each required lane performs the same fail-closed sequence:
    exact pre-fault capability, Health, and cron rows. Require one failed plan,
    exactly one readiness mutation and one Health mutation within 2-4
    option/cron controls, and no more than five total plugin-attributed
-   statements.
+   statements. Then inject one real missing-relation error at each search stage
+   through three fresh REST requests. Performance Schema must retain the exact
+   ordered plan, plan+rank, and plan+rank+hydrate prefixes with only the last
+   event at error 1146 / SQLSTATE `42S02`, no other plugin-attributed statement
+   with a nonzero MySQL error, no later search or core `LIKE`, the
+   same exact latch/schedule controls, total plugin ceilings of 5/6/7, and exact
+   restoration of all three raw option rows between requests.
 6. On every required MySQL/MariaDB lane, run the aggregate writer, including the maximum-width document with 4,096
    lexical plus 4,096 surface identities, a 32-byte language, and adversarial
    255-byte raw terms. Require exactly one dictionary UPSERT and one resolver,
@@ -2215,12 +2315,12 @@ Each required lane performs the same fail-closed sequence:
    Re-enumerate the installed runtime tree before finalization. Finalization
    rejects inventory shrinkage, any missing raw artifact, wrong result, budget
    breach, unfinished work, or terminal queue row.
-8. Run all four pull-request jobs: 2k on MySQL 5.7, 50k on MariaDB, 50k on
-   MySQL 8.0, and the 100k MariaDB boundary. Upload the evidence and raw phase
-   bundle even when a lane fails, including the hidden `.context` path; only the
-   four successful machine-readable reports are acceptance. A newer commit
+8. Run all five pull-request database lanes: 2k on MySQL 5.7, plus 50k and 100k
+   on both MariaDB 10.11 and MySQL 8.0. Upload the evidence and raw phase bundle
+   even when a lane fails, including the hidden `.context` path; only the five
+   successful machine-readable reports are acceptance. A newer commit
    cancels the obsolete in-progress
-   pull-request workflow so the four deliberately expensive lanes never
+   pull-request workflow so the five deliberately expensive lanes never
    continue burning host capacity for a revision that can no longer merge.
 
 ## Commands
@@ -2246,6 +2346,9 @@ indexer/tools/run-relational-fts-worst-case.sh \
 indexer/tools/run-relational-fts-worst-case.sh \
   --engine=mariadb-10.11 --profile=100k \
   --output=.context/evidence/relational-mariadb-100k.json
+indexer/tools/run-relational-fts-worst-case.sh \
+  --engine=mysql-8.0 --profile=100k \
+  --output=.context/evidence/relational-mysql-100k.json
 ```
 
 The real-database command is intentionally separate from `tests/run.php`; unit

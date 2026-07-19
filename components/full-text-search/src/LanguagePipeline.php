@@ -26,6 +26,7 @@ final class WP_FTS_LanguagePipeline
     private array $lemmaPacksByLanguage;
     /** @var callable|null */
     private $cjkTokenizer;
+    private bool $cjkTokenizerAcceptsProducerLimit = false;
     private bool $enableStemming;
     private bool $namespaceTerms;
     private int $minTermLen;
@@ -96,10 +97,13 @@ final class WP_FTS_LanguagePipeline
             $this->lemma_pack_options_by_language($options)
         );
         $tokenizer = $options['cjk_tokenizer'] ?? $options['cjk_segmenter'] ?? null;
+        $tokenizerAcceptsProducerLimit = $tokenizer instanceof WP_FTS_ChineseJiebaSegmenter;
         if (!is_callable($tokenizer)) {
             $tokenizer = $this->segmenter_pack_tokenizer_for_options($options);
+            $tokenizerAcceptsProducerLimit = is_callable($tokenizer);
         }
         $this->cjkTokenizer = is_callable($tokenizer) ? $tokenizer : null;
+        $this->cjkTokenizerAcceptsProducerLimit = $tokenizerAcceptsProducerLimit;
         $this->enableStemming = (bool) ($options['enable_stemming'] ?? true);
         $this->namespaceTerms = (bool) ($options['namespace_terms'] ?? false);
         $this->minTermLen = max(1, (int) ($options['min_term_len'] ?? 2));
@@ -742,7 +746,15 @@ final class WP_FTS_LanguagePipeline
     {
         if ($this->cjkTokenizer !== null) {
             try {
-                $tokens = ($this->cjkTokenizer)($run, $this->canonicalize_language($language));
+                $canonicalLanguage = $this->canonicalize_language($language);
+                // The analyzer must observe the first excess item, but an
+                // array-returning producer must not build the rest of a
+                // maximum-size query before that rejection occurs. Bundled
+                // producers receive the ceiling; custom and internal callables
+                // keep their original invocation contract regardless of arity.
+                $tokens = $this->cjkTokenizerAcceptsProducerLimit
+                    ? ($this->cjkTokenizer)($run, $canonicalLanguage, $maxTerms + 1)
+                    : ($this->cjkTokenizer)($run, $canonicalLanguage);
                 $emitted = false;
                 foreach ($this->normalize_tokenizer_result(
                     $tokens,
@@ -1120,11 +1132,13 @@ final class WP_FTS_LanguagePipeline
 
         ksort($segmenters, SORT_STRING);
 
-        return function (string $run, string $language) use ($segmenters): array {
+        return function (string $run, string $language, ?int $maxTokens = null) use ($segmenters): array {
             $base = $this->base_language($language);
             $segmenter = $segmenters[$base] ?? null;
 
-            return $segmenter instanceof WP_FTS_ChineseJiebaSegmenter ? $segmenter($run, $language) : [];
+            return $segmenter instanceof WP_FTS_ChineseJiebaSegmenter
+                ? $segmenter($run, $language, $maxTokens)
+                : [];
         };
     }
 

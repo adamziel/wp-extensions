@@ -26,10 +26,17 @@ const WP_FTS_WC_COLD_SAMPLE_COUNT = 10;
 const WP_FTS_WC_IDLE_HTTP_REQUEST_COUNT = 100;
 const WP_FTS_WC_PERFORMANCE_SCHEMA_SQL_TEXT_BYTES = 32768;
 const WP_FTS_WC_PERFORMANCE_SCHEMA_HISTORY_LONG_EVENTS = 2048;
-const WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_HISTORY_EVENTS = 1;
+const WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_HISTORY_EVENTS = 0;
+const WP_FTS_WC_PERFORMANCE_SCHEMA_DIGESTS = 0;
+const WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES = 128;
 const WP_FTS_WC_FAILED_SEARCH_MIN_CONTROL_STATEMENTS = 2;
 const WP_FTS_WC_FAILED_SEARCH_MAX_CONTROL_STATEMENTS = 4;
 const WP_FTS_WC_FAILED_SEARCH_MAX_PLUGIN_STATEMENTS = 5;
+const WP_FTS_WC_FAILED_SEARCH_STAGE_CEILINGS = [
+    'plan' => 5,
+    'rank' => 6,
+    'hydrate' => 7,
+];
 const WP_FTS_WC_DENSE_CANDIDATE_TERMS = 4000;
 const WP_FTS_WC_DENSE_PREFIX_DOCUMENTS = 2000;
 const WP_FTS_WC_DENSE_PREFIX_COMPLETIONS = [
@@ -1898,6 +1905,35 @@ function wp_fts_wc_validate(): array
     array_push($gates, ...$identityEpochEngineEvidence['gates'], ...$analysisEvidence['gates'], ...$oracleEvidence['gates'], ...$cursorEvidence['gates'], ...$terminalOracleEvidence['gates'], ...$writeEvidence['gates'], ...$availabilityEvidence['gates'], ...$faultEvidence['gates']);
     array_push($gates, ...$corpusFrequencyEvidence['gates'], ...$surfaceStorageEvidence['gates']);
 
+    wp_fts_wc_assert_runtime();
+    $runtimeEvidence = wp_fts_wc_runtime_evidence();
+    $expectedConsumers = [
+        'events_statements_current' => 'YES',
+        'events_statements_history' => 'NO',
+        'events_statements_history_long' => 'YES',
+    ];
+    $runtimeIntegrity = [
+        'performance_schema_statement_consumers' => $runtimeEvidence['performance_schema_statement_consumers'] ?? null,
+        'performance_schema_max_thread_instances' => $runtimeEvidence['performance_schema_max_thread_instances'] ?? null,
+        'performance_schema_instrumented_threads' => $runtimeEvidence['performance_schema_instrumented_threads'] ?? null,
+        'performance_schema_thread_instances_lost' => $runtimeEvidence['performance_schema_thread_instances_lost'] ?? null,
+    ];
+    $gates[] = wp_fts_wc_gate(
+        'runtime_performance_schema_integrity',
+        [
+            'performance_schema_statement_consumers' => $expectedConsumers,
+            'performance_schema_max_thread_instances' => WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES,
+            'performance_schema_instrumented_threads' => '< ' . WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES,
+            'performance_schema_thread_instances_lost' => 0,
+        ],
+        $runtimeIntegrity,
+        ($runtimeIntegrity['performance_schema_statement_consumers'] ?? null) === $expectedConsumers
+            && ($runtimeIntegrity['performance_schema_max_thread_instances'] ?? null) === WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES
+            && is_int($runtimeIntegrity['performance_schema_instrumented_threads'] ?? null)
+            && $runtimeIntegrity['performance_schema_instrumented_threads'] < WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES
+            && ($runtimeIntegrity['performance_schema_thread_instances_lost'] ?? null) === 0
+    );
+
     $validationGateIds = array_map(static fn(array $gate): string => (string) ($gate['id'] ?? ''), $gates);
     wp_fts_wc_assert(
         $validationGateIds !== []
@@ -1926,7 +1962,7 @@ function wp_fts_wc_validate(): array
         'lane_id' => wp_fts_wc_required_env('WP_FTS_WC_LANE_ID'),
         'completed' => false,
         'engine' => wp_fts_wc_required_env('WP_FTS_WC_ENGINE'),
-        'runtime' => wp_fts_wc_runtime_evidence(),
+        'runtime' => $runtimeEvidence,
         'runtime_profile_parity' => $runtimeParity,
         'mutation_fence_concurrency' => $mutationFence,
         'actual_wpcli_adapter' => $wpcliAdapter,
@@ -6917,6 +6953,7 @@ PRIMARY KEY (id)
         wp_fts_wc_gate('cold_eviction_payload_checksum_present', true, $scan['checksum'] !== '', $scan['checksum'] !== ''),
         wp_fts_wc_gate('cold_eviction_plan_reads_payload_relation', true, $scan['full_relation_scan'], $scan['full_relation_scan']),
     ];
+    wp_fts_wc_assert_runtime();
     $evidence = [
         'schema' => 'relational-fts-cold-eviction-v1',
         'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
@@ -7051,6 +7088,7 @@ function wp_fts_wc_cold_sample(): array
         'rss_peak_delta_bytes' => $rssPeakDelta,
         'gates' => $conditioningGates,
     ];
+    wp_fts_wc_assert_runtime();
     $case['evidence_sha256'] = wp_fts_wc_canonical_hash($case);
     wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . "/cold-{$caseId}-{$sample}.json", $case);
     if ($case['status'] !== 'PASS') {
@@ -10944,7 +10982,7 @@ function wp_fts_wc_migration_failpoint(): never
             throw new RuntimeException("Migration phase {$target} has impossible durable state: " . implode(', ', wp_fts_wc_gate_failures($gates)));
         }
         wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . "/migration-phase-{$target}.json", [
-            'schema' => 'relational-fts-migration-phase-v2',
+            'schema' => 'relational-fts-migration-phase-v3',
             'status' => 'PASS',
             'phase' => $target,
             'pid' => getmypid(),
@@ -11004,6 +11042,7 @@ function wp_fts_wc_migration_post_kill_probe(): array
     $phaseState = wp_fts_wc_migration_phase_state($target);
     $sourceBefore = wp_fts_wc_multisite_source_signature([$postId]);
     $workBefore = wp_fts_wc_migration_work_counts();
+    $readinessBefore = (string) get_option(WP_FTS_Plugin::READINESS_INCARNATION_OPTION, '');
 
     $ordinaryStarted = hrtime(true);
     $ordinary = wp_fts_wc_record_queries(static function () use ($postId): array {
@@ -11031,6 +11070,7 @@ function wp_fts_wc_migration_post_kill_probe(): array
     $workAfter = wp_fts_wc_migration_work_counts();
     $healthAfter = get_option(WP_FTS_Plugin::INDEX_HEALTH_OPTION, []);
     $healthAfter = is_array($healthAfter) ? $healthAfter : [];
+    $readinessAfter = (string) get_option(WP_FTS_Plugin::READINESS_INCARNATION_OPTION, '');
 
     WP_FTS_Plugin::reset_request_caches();
     $takeover = WP_FTS_Plugin::search_takeover_status();
@@ -11061,22 +11101,62 @@ function wp_fts_wc_migration_post_kill_probe(): array
     $searchQueries = array_values(array_map('strval', $search['queries'] ?? []));
     $searchMaxSqlBytes = max(array_map('strlen', $searchQueries) ?: [0]);
     $allProbeQueries = [...$ordinaryQueries, ...$searchQueries];
-    $ftsSearchQueries = array_values(array_filter($searchQueries, static fn(string $sql): bool => wp_fts_wc_is_search_statement($sql) || str_contains(strtolower($sql), 'wp_fts:')));
+    $ordinaryFtsQueries = array_values(array_filter($ordinaryQueries, 'wp_fts_wc_sql_touches_owned_fts_table'));
+    $ordinaryFtsDmlQueries = array_values(array_filter($ordinaryFtsQueries, 'wp_fts_wc_is_fts_data_mutation_statement'));
+    $ordinaryFtsMaxSqlBytes = max(array_map('strlen', $ordinaryFtsQueries) ?: [0]);
+    $ftsSearchQueries = array_values(array_filter(
+        $searchQueries,
+        static fn(string $sql): bool => wp_fts_wc_sql_touches_owned_fts_table($sql)
+            || str_contains(strtolower($sql), 'wp_fts:')
+    ));
     $schemaQueries = array_values(array_filter($allProbeQueries, 'wp_fts_wc_is_physical_schema_statement'));
+    $ftsSchemaQueries = array_values(array_filter($schemaQueries, 'wp_fts_wc_is_fts_physical_schema_statement'));
+    $wordpressCoreSchemaQueries = array_values(array_filter(
+        $schemaQueries,
+        static fn(string $sql): bool => !wp_fts_wc_is_fts_physical_schema_statement($sql)
+    ));
     $coreLikeQueries = array_values(array_filter($searchQueries, static function (string $sql) use ($wpdb): bool {
         $lower = strtolower($sql);
         return str_contains($lower, strtolower((string) $wpdb->posts)) && str_contains($lower, ' like ');
     }));
     $ordinaryResult = is_array($ordinary['result'] ?? null) ? $ordinary['result'] : [];
     $searchResult = is_array($search['result'] ?? null) ? $search['result'] : null;
-    $expectedPostWorkDelta = (int) ($phaseState['schema_version'] ?? 0) === WP_FTS_Plugin::SCHEMA_VERSION ? 1 : 0;
+    $currentSchemaPhase = in_array($target, ['ready_verified', 'legacy_cleaned'], true);
+    $recoveryScopePhase = in_array($target, ['v4_created', 'reconciliation_enqueued'], true);
+    $expectedPostWorkDelta = $currentSchemaPhase ? 1 : 0;
+    $expectedScopeWorkDelta = $target === 'v4_created' ? 1 : 0;
+    $expectedMetaWorkDelta = $target === 'v4_created' ? 1 : 0;
+    $expectedTotalWorkDelta = $expectedPostWorkDelta + $expectedScopeWorkDelta;
+    $expectedCorpusGenerationDelta = $recoveryScopePhase ? 1 : 0;
+    $expectedSearchEpochGenerationDelta = $currentSchemaPhase ? 2 : ($recoveryScopePhase ? 1 : 0);
+    $expectedFtsDmlCount = $currentSchemaPhase ? 2 : 1;
     $actualPostWorkDelta = (int) ($workAfter['post_rows'] ?? 0) - (int) ($workBefore['post_rows'] ?? 0);
+    $actualScopeWorkDelta = (int) ($workAfter['scope_rows'] ?? 0) - (int) ($workBefore['scope_rows'] ?? 0);
+    $actualMetaWorkDelta = (int) ($workAfter['meta_rows'] ?? 0) - (int) ($workBefore['meta_rows'] ?? 0);
     $actualTotalWorkDelta = (int) ($workAfter['work_rows'] ?? 0) - (int) ($workBefore['work_rows'] ?? 0);
-    $healthEffectAccounted = (int) ($phaseState['schema_version'] ?? 0) === WP_FTS_Plugin::SCHEMA_VERSION
-        ? $healthAfter === ($phaseState['initial_index_health'] ?? null)
+    $actualCorpusGenerationDelta = (int) ($workAfter['corpus_scope_generation'] ?? 0) - (int) ($workBefore['corpus_scope_generation'] ?? 0);
+    $actualSearchEpochGenerationDelta = (int) ($workAfter['search_epoch_generation'] ?? 0) - (int) ($workBefore['search_epoch_generation'] ?? 0);
+    $healthEffectAccounted = $currentSchemaPhase
+        ? $healthAfter === ($phaseState['initial_index_health'] ?? null) && hash_equals($readinessBefore, $readinessAfter)
         : ($healthAfter['initial_index_status'] ?? null) === 'pending'
             && ($healthAfter['status'] ?? null) === 'unhealthy'
-            && trim((string) ($healthAfter['last_error'] ?? '')) !== '';
+            && !empty($healthAfter['global_visibility_fence_active'])
+            && trim((string) ($healthAfter['last_error'] ?? '')) !== ''
+            && strlen((string) ($healthAfter['last_error'] ?? '')) <= 240
+            && strlen($readinessAfter) === 32
+            && wp_fts_wc_is_ascii_hex($readinessAfter)
+            && strtolower($readinessAfter) === $readinessAfter
+            && !hash_equals($readinessBefore, $readinessAfter);
+    $recoveryAuthorityAccounted = $recoveryScopePhase
+        ? $actualCorpusGenerationDelta === 1
+            && (string) ($workAfter['corpus_scope_incarnation'] ?? '') === $readinessAfter
+            && (string) ($workAfter['corpus_scope_reason'] ?? '') === 'foreground_queue_failure'
+        : $actualCorpusGenerationDelta === 0
+            && (int) ($workAfter['corpus_scope_generation'] ?? 0) === 0
+            && (string) ($workAfter['corpus_scope_incarnation'] ?? '') === ''
+            && (string) ($workAfter['corpus_scope_reason'] ?? '') === '';
+    $ftsDmlAccounted = count($ordinaryFtsQueries) === $expectedFtsDmlCount
+        && count($ordinaryFtsDmlQueries) === $expectedFtsDmlCount;
     $gates = [
         wp_fts_wc_gate('migration_post_kill_phase_state', true, wp_fts_wc_gates_pass($phaseState['gates'] ?? []), wp_fts_wc_gates_pass($phaseState['gates'] ?? [])),
         wp_fts_wc_gate('migration_post_kill_ordinary_option_available', true, is_string($ordinaryResult['option'] ?? null) && ($ordinaryResult['option'] ?? '') !== '', is_string($ordinaryResult['option'] ?? null) && ($ordinaryResult['option'] ?? '') !== ''),
@@ -11086,8 +11166,15 @@ function wp_fts_wc_migration_post_kill_probe(): array
         wp_fts_wc_gate('migration_post_kill_ordinary_duration_ms', '<= 5000', $ordinaryDuration, $ordinaryDuration <= 5000.0),
         wp_fts_wc_gate('migration_post_kill_source_stable', $sourceBefore, $sourceAfter, $sourceBefore !== [] && $sourceBefore === $sourceAfter),
         wp_fts_wc_gate('migration_post_kill_accounted_post_work_delta', $expectedPostWorkDelta, $actualPostWorkDelta, $actualPostWorkDelta === $expectedPostWorkDelta),
-        wp_fts_wc_gate('migration_post_kill_accounted_total_work_delta', $expectedPostWorkDelta, $actualTotalWorkDelta, $actualTotalWorkDelta === $expectedPostWorkDelta),
+        wp_fts_wc_gate('migration_post_kill_accounted_scope_work_delta', $expectedScopeWorkDelta, $actualScopeWorkDelta, $actualScopeWorkDelta === $expectedScopeWorkDelta),
+        wp_fts_wc_gate('migration_post_kill_accounted_meta_work_delta', $expectedMetaWorkDelta, $actualMetaWorkDelta, $actualMetaWorkDelta === $expectedMetaWorkDelta),
+        wp_fts_wc_gate('migration_post_kill_accounted_total_work_delta', $expectedTotalWorkDelta, $actualTotalWorkDelta, $actualTotalWorkDelta === $expectedTotalWorkDelta),
+        wp_fts_wc_gate('migration_post_kill_accounted_corpus_generation', $expectedCorpusGenerationDelta, $actualCorpusGenerationDelta, $actualCorpusGenerationDelta === $expectedCorpusGenerationDelta),
+        wp_fts_wc_gate('migration_post_kill_accounted_search_epoch_generation', $expectedSearchEpochGenerationDelta, $actualSearchEpochGenerationDelta, $actualSearchEpochGenerationDelta === $expectedSearchEpochGenerationDelta),
+        wp_fts_wc_gate('migration_post_kill_accounted_recovery_authority', true, $recoveryAuthorityAccounted, $recoveryAuthorityAccounted),
         wp_fts_wc_gate('migration_post_kill_accounted_health_effect', true, $healthEffectAccounted, $healthEffectAccounted),
+        wp_fts_wc_gate('migration_post_kill_exact_fts_dml_count', $expectedFtsDmlCount, ['statements' => count($ordinaryFtsQueries), 'dml' => count($ordinaryFtsDmlQueries)], $ftsDmlAccounted),
+        wp_fts_wc_gate('migration_post_kill_fts_dml_max_sql_bytes', '<= 32768', $ordinaryFtsMaxSqlBytes, $ordinaryFtsMaxSqlBytes <= 32768),
         wp_fts_wc_gate('migration_post_kill_takeover_not_ready', false, (bool) ($takeover['ready'] ?? false), empty($takeover['ready'])),
         wp_fts_wc_gate('migration_post_kill_public_search_empty', [], $searchResult, $searchResult === []),
         wp_fts_wc_gate('migration_post_kill_public_search_unavailable', true, (string) $query->get('wp_fts_search_unavailable') !== '', (string) $query->get('wp_fts_search_unavailable') !== ''),
@@ -11096,10 +11183,10 @@ function wp_fts_wc_migration_post_kill_probe(): array
         wp_fts_wc_gate('migration_post_kill_public_search_max_sql_bytes', '<= 32768', $searchMaxSqlBytes, $searchMaxSqlBytes <= 32768),
         wp_fts_wc_gate('migration_post_kill_no_fts_sql', 0, count($ftsSearchQueries), $ftsSearchQueries === []),
         wp_fts_wc_gate('migration_post_kill_no_core_like_sql', 0, count($coreLikeQueries), $coreLikeQueries === []),
-        wp_fts_wc_gate('migration_post_kill_no_schema_sql', 0, count($schemaQueries), $schemaQueries === []),
+        wp_fts_wc_gate('migration_post_kill_no_fts_schema_sql', 0, count($ftsSchemaQueries), $ftsSchemaQueries === []),
     ];
     $result = [
-        'schema' => 'relational-fts-migration-post-kill-probe-v1',
+        'schema' => 'relational-fts-migration-post-kill-probe-v2',
         'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
         'target' => $target,
         'pid' => getmypid(),
@@ -11110,10 +11197,21 @@ function wp_fts_wc_migration_post_kill_probe(): array
         'work_before' => $workBefore,
         'work_after' => $workAfter,
         'health_after' => $healthAfter,
+        'readiness_before' => $readinessBefore,
+        'readiness_after' => $readinessAfter,
         'expected_post_work_delta' => $expectedPostWorkDelta,
+        'expected_scope_work_delta' => $expectedScopeWorkDelta,
+        'expected_meta_work_delta' => $expectedMetaWorkDelta,
+        'expected_total_work_delta' => $expectedTotalWorkDelta,
+        'expected_corpus_generation_delta' => $expectedCorpusGenerationDelta,
+        'expected_search_epoch_generation_delta' => $expectedSearchEpochGenerationDelta,
+        'expected_fts_dml_count' => $expectedFtsDmlCount,
         'ordinary' => $ordinaryResult,
         'ordinary_duration_ms' => $ordinaryDuration,
         'ordinary_queries' => $ordinaryQueries,
+        'ordinary_fts_queries' => $ordinaryFtsQueries,
+        'ordinary_fts_dml_queries' => $ordinaryFtsDmlQueries,
+        'ordinary_fts_max_sql_bytes' => $ordinaryFtsMaxSqlBytes,
         'public_search' => [
             'results' => $searchResult,
             'unavailable' => $query->get('wp_fts_search_unavailable'),
@@ -11124,6 +11222,8 @@ function wp_fts_wc_migration_post_kill_probe(): array
             'core_like_queries' => $coreLikeQueries,
         ],
         'schema_queries' => $schemaQueries,
+        'fts_schema_queries' => $ftsSchemaQueries,
+        'wordpress_core_schema_queries' => $wordpressCoreSchemaQueries,
         'search_takeover_status' => $takeover,
         'gates' => $gates,
     ];
@@ -11159,6 +11259,7 @@ function wp_fts_wc_migration_phase_gate_ids(): array
         'migration_phase_exact_work_rows',
         'migration_phase_exact_scope_rows',
         'migration_phase_exact_post_rows',
+        'migration_phase_exact_meta_rows',
     ];
 }
 
@@ -11174,8 +11275,15 @@ function wp_fts_wc_migration_post_kill_gate_ids(): array
         'migration_post_kill_ordinary_duration_ms',
         'migration_post_kill_source_stable',
         'migration_post_kill_accounted_post_work_delta',
+        'migration_post_kill_accounted_scope_work_delta',
+        'migration_post_kill_accounted_meta_work_delta',
         'migration_post_kill_accounted_total_work_delta',
+        'migration_post_kill_accounted_corpus_generation',
+        'migration_post_kill_accounted_search_epoch_generation',
+        'migration_post_kill_accounted_recovery_authority',
         'migration_post_kill_accounted_health_effect',
+        'migration_post_kill_exact_fts_dml_count',
+        'migration_post_kill_fts_dml_max_sql_bytes',
         'migration_post_kill_takeover_not_ready',
         'migration_post_kill_public_search_empty',
         'migration_post_kill_public_search_unavailable',
@@ -11184,7 +11292,7 @@ function wp_fts_wc_migration_post_kill_gate_ids(): array
         'migration_post_kill_public_search_max_sql_bytes',
         'migration_post_kill_no_fts_sql',
         'migration_post_kill_no_core_like_sql',
-        'migration_post_kill_no_schema_sql',
+        'migration_post_kill_no_fts_schema_sql',
     ];
 }
 
@@ -11225,16 +11333,17 @@ function wp_fts_wc_migration_phase_state(string $target): array
     $expectedSchemaVersion = $renameIndex !== false
         || in_array($target, ['v4_created', 'reconciliation_enqueued'], true)
         ? 3
-        : 5;
+        : WP_FTS_Plugin::SCHEMA_VERSION;
     $health = get_option(WP_FTS_Plugin::INDEX_HEALTH_OPTION, []);
     $health = is_array($health) ? $health : [];
     WP_FTS_Plugin::reset_request_caches();
     $takeover = WP_FTS_Plugin::search_takeover_status();
     $work = wp_fts_wc_migration_work_counts();
     $expectedWork = match ($target) {
-        'reconciliation_enqueued' => ['work_rows' => 1, 'scope_rows' => 1, 'post_rows' => 0],
-        'v4_created', 'ready_verified', 'legacy_cleaned' => ['work_rows' => 0, 'scope_rows' => 0, 'post_rows' => 0],
-        default => ['work_rows' => null, 'scope_rows' => null, 'post_rows' => null],
+        'reconciliation_enqueued' => ['work_rows' => 1, 'scope_rows' => 1, 'post_rows' => 0, 'meta_rows' => 1],
+        'ready_verified', 'legacy_cleaned' => ['work_rows' => 0, 'scope_rows' => 0, 'post_rows' => 0, 'meta_rows' => 1],
+        'v4_created' => ['work_rows' => 0, 'scope_rows' => 0, 'post_rows' => 0, 'meta_rows' => 0],
+        default => ['work_rows' => null, 'scope_rows' => null, 'post_rows' => null, 'meta_rows' => null],
     };
     $gates = [
         wp_fts_wc_gate('migration_phase_exact_tables', $expectedTables, $actualTables, $actualTables === $expectedTables),
@@ -11244,6 +11353,7 @@ function wp_fts_wc_migration_phase_state(string $target): array
         wp_fts_wc_gate('migration_phase_exact_work_rows', $expectedWork['work_rows'], $work['work_rows'], $work['work_rows'] === $expectedWork['work_rows']),
         wp_fts_wc_gate('migration_phase_exact_scope_rows', $expectedWork['scope_rows'], $work['scope_rows'], $work['scope_rows'] === $expectedWork['scope_rows']),
         wp_fts_wc_gate('migration_phase_exact_post_rows', $expectedWork['post_rows'], $work['post_rows'], $work['post_rows'] === $expectedWork['post_rows']),
+        wp_fts_wc_gate('migration_phase_exact_meta_rows', $expectedWork['meta_rows'], $work['meta_rows'], $work['meta_rows'] === $expectedWork['meta_rows']),
     ];
     return [
         'target' => $target,
@@ -11259,7 +11369,18 @@ function wp_fts_wc_migration_phase_state(string $target): array
     ];
 }
 
-/** @return array{work_rows:?int,scope_rows:?int,post_rows:?int} */
+/**
+ * @return array{
+ *   work_rows:?int,
+ *   scope_rows:?int,
+ *   post_rows:?int,
+ *   meta_rows:?int,
+ *   corpus_scope_generation:?int,
+ *   corpus_scope_incarnation:?string,
+ *   corpus_scope_reason:?string,
+ *   search_epoch_generation:?int
+ * }
+ */
 function wp_fts_wc_migration_work_counts(): array
 {
     global $wpdb;
@@ -11270,24 +11391,58 @@ function wp_fts_wc_migration_work_counts(): array
         throw new RuntimeException('Could not inspect the migration work table: ' . trim((string) $wpdb->last_error));
     }
     if (!is_scalar($exists) || (string) $exists !== $work) {
-        return ['work_rows' => null, 'scope_rows' => null, 'post_rows' => null];
+        return [
+            'work_rows' => null,
+            'scope_rows' => null,
+            'post_rows' => null,
+            'meta_rows' => null,
+            'corpus_scope_generation' => null,
+            'corpus_scope_incarnation' => null,
+            'corpus_scope_reason' => null,
+            'search_epoch_generation' => null,
+        ];
     }
     $identifier = wp_fts_wc_identifier($work);
-    $rows = $wpdb->get_results("SELECT kind,COUNT(*) row_count FROM `{$identifier}` GROUP BY kind", ARRAY_A);
-    if (!is_array($rows) || trim((string) $wpdb->last_error) !== '') {
-        throw new RuntimeException('Could not count durable migration work: ' . trim((string) $wpdb->last_error));
+    $corpusScopeJobKey = 'scope:' . hash('sha256', WP_FTS_Index_Queue::GLOBAL_CORPUS_SCOPE_KEY);
+    $row = $wpdb->get_row($wpdb->prepare(
+        "SELECT
+    COALESCE(SUM(CASE WHEN kind IN ('post','scope') THEN 1 ELSE 0 END),0) work_rows,
+    COALESCE(SUM(CASE WHEN kind='scope' THEN 1 ELSE 0 END),0) scope_rows,
+    COALESCE(SUM(CASE WHEN kind='post' THEN 1 ELSE 0 END),0) post_rows,
+    COALESCE(SUM(CASE WHEN kind='meta' THEN 1 ELSE 0 END),0) meta_rows,
+    COALESCE(MAX(CASE WHEN job_key=%s AND kind='scope' THEN generation END),0) corpus_scope_generation,
+    COALESCE(MAX(CASE WHEN job_key=%s AND kind='scope' THEN scope_incarnation END),'') corpus_scope_incarnation,
+    COALESCE(MAX(CASE WHEN job_key=%s AND kind='scope' THEN payload END),'') corpus_scope_payload,
+    COALESCE(MAX(CASE WHEN job_key=%s AND kind='meta' THEN generation END),0) search_epoch_generation
+FROM `{$identifier}`
+WHERE kind IN ('post','scope','meta')",
+        $corpusScopeJobKey,
+        $corpusScopeJobKey,
+        $corpusScopeJobKey,
+        WP_FTS_Index_Queue::SEARCH_EPOCH_JOB_KEY
+    ), ARRAY_A);
+    if (!is_array($row) || trim((string) $wpdb->last_error) !== '') {
+        throw new RuntimeException('Could not inspect durable migration work: ' . trim((string) $wpdb->last_error));
     }
-    $counts = ['work_rows' => 0, 'scope_rows' => 0, 'post_rows' => 0];
-    foreach ($rows as $row) {
-        $count = (int) ($row['row_count'] ?? 0);
-        $counts['work_rows'] += $count;
-        if (($row['kind'] ?? null) === 'scope') {
-            $counts['scope_rows'] += $count;
-        } elseif (($row['kind'] ?? null) === 'post') {
-            $counts['post_rows'] += $count;
+    $payload = trim((string) ($row['corpus_scope_payload'] ?? ''));
+    $reason = '';
+    if ($payload !== '') {
+        $decoded = json_decode($payload, true, 64, JSON_THROW_ON_ERROR);
+        if (!is_array($decoded)) {
+            throw new RuntimeException('The durable corpus recovery payload is not an object.');
         }
+        $reason = is_scalar($decoded['reason'] ?? null) ? (string) $decoded['reason'] : '';
     }
-    return $counts;
+    return [
+        'work_rows' => (int) ($row['work_rows'] ?? 0),
+        'scope_rows' => (int) ($row['scope_rows'] ?? 0),
+        'post_rows' => (int) ($row['post_rows'] ?? 0),
+        'meta_rows' => (int) ($row['meta_rows'] ?? 0),
+        'corpus_scope_generation' => (int) ($row['corpus_scope_generation'] ?? 0),
+        'corpus_scope_incarnation' => (string) ($row['corpus_scope_incarnation'] ?? ''),
+        'corpus_scope_reason' => $reason,
+        'search_epoch_generation' => (int) ($row['search_epoch_generation'] ?? 0),
+    ];
 }
 
 /** Publish the worker journal header atomically before any forked batch writes. */
@@ -11531,7 +11686,7 @@ function wp_fts_wc_migration_finalize(): array
         $phaseGates = is_array($evidence['gates'] ?? null) ? $evidence['gates'] : [];
         $phaseGateIds = array_values(array_map('strval', array_column($phaseGates, 'id')));
         wp_fts_wc_assert(
-            ($evidence['schema'] ?? null) === 'relational-fts-migration-phase-v2'
+            ($evidence['schema'] ?? null) === 'relational-fts-migration-phase-v3'
                 && ($evidence['status'] ?? null) === 'PASS'
                 && ($evidence['phase'] ?? null) === $phase
                 && (int) ($evidence['pid'] ?? 0) > 0
@@ -11550,7 +11705,7 @@ function wp_fts_wc_migration_finalize(): array
         $probeGates = is_array($probe['gates'] ?? null) ? $probe['gates'] : [];
         $probeGateIds = array_values(array_map('strval', array_column($probeGates, 'id')));
         wp_fts_wc_assert(
-            ($probe['schema'] ?? null) === 'relational-fts-migration-post-kill-probe-v1'
+            ($probe['schema'] ?? null) === 'relational-fts-migration-post-kill-probe-v2'
                 && ($probe['status'] ?? null) === 'PASS'
                 && ($probe['target'] ?? null) === $phase
                 && ($probe['phase_state']['target'] ?? null) === $phase
@@ -12186,12 +12341,13 @@ function wp_fts_wc_multisite_sentinel_state(array $definition, array $foreignTok
     }
 
     $storage = WP_FTS_Plugin::storage(false);
+    $termDictionaryLayout = wp_fts_wc_multisite_term_dictionary_layout();
     $docFreq = [];
     $termKeys = [];
     foreach (['shared' => $definition['shared_token'] ?? '', 'unique' => $definition['unique_token'] ?? ''] as $kind => $token) {
         $termKey = wp_fts_wc_multisite_primary_term_key((string) $token);
         $termKeys[$kind] = $termKey;
-        $docFreq[$kind] = wp_fts_wc_multisite_term_doc_freq($termKey);
+        $docFreq[$kind] = wp_fts_wc_multisite_term_doc_freq($termKey, $termDictionaryLayout);
     }
     $postIds = array_values(array_map('intval', is_array($definition['post_ids'] ?? null) ? $definition['post_ids'] : []));
     $metadata = $storage->get_doc_metadata($postIds);
@@ -12218,7 +12374,7 @@ function wp_fts_wc_multisite_sentinel_state(array $definition, array $foreignTok
         $results = wp_fts_wc_ordered_score_signature(WP_FTS_Plugin::search((string) $token, wp_fts_wc_multisite_search_options()));
         $foreign[(string) $token] = ['results' => $results, 'result_hash' => wp_fts_wc_canonical_hash($results)];
         $termKey = wp_fts_wc_multisite_primary_term_key((string) $token);
-        $foreignDocFreq[(string) $token] = wp_fts_wc_multisite_term_doc_freq($termKey);
+        $foreignDocFreq[(string) $token] = wp_fts_wc_multisite_term_doc_freq($termKey, $termDictionaryLayout);
     }
 
     return [
@@ -12255,18 +12411,47 @@ function wp_fts_wc_multisite_primary_term_key(string $token): string
     throw new RuntimeException("Multisite sentinel token produced no primary analyzed term: {$token}");
 }
 
-/** Read one exact dictionary frequency without materializing its postings. */
-function wp_fts_wc_multisite_term_doc_freq(string $termKey): int
+/** Positively identify the immutable baseline or current dictionary shape. */
+function wp_fts_wc_multisite_term_dictionary_layout(): string
 {
     global $wpdb;
 
-    $identity = WP_FTS_TermNamespace::split_term($termKey);
     $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
-    $value = $wpdb->get_var($wpdb->prepare(
-        "SELECT doc_freq FROM `{$terms}` WHERE lang=%s AND kind=0 AND term=%s LIMIT 1",
-        (string) $identity['lang'],
-        (string) $identity['term']
-    ));
+    $columns = array_map(
+        static fn(array $row): string => (string) ($row['Field'] ?? ''),
+        wp_fts_wc_checked_rows("SHOW COLUMNS FROM `{$terms}`", 'multisite sentinel dictionary columns')
+    );
+    if ($columns === ['term', 'doc_freq']) {
+        return 'legacy';
+    }
+    if ($columns === ['term_id', 'lang', 'kind', 'term', 'doc_freq']) {
+        return 'v4';
+    }
+
+    throw new RuntimeException('Unsupported multisite sentinel dictionary schema: ' . implode(',', $columns));
+}
+
+/** Read one exact frequency from the positively identified dictionary shape. */
+function wp_fts_wc_multisite_term_doc_freq(string $termKey, string $layout): int
+{
+    global $wpdb;
+
+    $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
+    if ($layout === 'legacy') {
+        $value = $wpdb->get_var($wpdb->prepare(
+            "SELECT doc_freq FROM `{$terms}` WHERE term=%s LIMIT 1",
+            $termKey
+        ));
+    } elseif ($layout === 'v4') {
+        $identity = WP_FTS_TermNamespace::split_term($termKey);
+        $value = $wpdb->get_var($wpdb->prepare(
+            "SELECT doc_freq FROM `{$terms}` WHERE lang=%s AND kind=0 AND term=%s LIMIT 1",
+            (string) $identity['lang'],
+            (string) $identity['term']
+        ));
+    } else {
+        throw new RuntimeException("Unsupported multisite sentinel dictionary layout: {$layout}");
+    }
     if (trim((string) $wpdb->last_error) !== '') {
         throw new RuntimeException('Could not inspect the multisite sentinel dictionary row: ' . trim((string) $wpdb->last_error));
     }
@@ -15904,6 +16089,24 @@ function wp_fts_wc_resource_artifact_gates(array $resources, array $validationEv
         : [];
     $ioProfile = is_array($resources['io_profile'] ?? null) ? $resources['io_profile'] : [];
     $hostEnvironment = is_array($resources['host_environment'] ?? null) ? $resources['host_environment'] : [];
+    $databaseEvidence = is_array($resources['database'] ?? null) ? $resources['database'] : [];
+    $databaseMemory = is_array($databaseEvidence['memory'] ?? null) ? $databaseEvidence['memory'] : [];
+    $preCorpusMemory = is_array($databaseMemory['pre_corpus'] ?? null) ? $databaseMemory['pre_corpus'] : [];
+    $finalMemory = is_array($databaseMemory['final_checkpoint'] ?? null) ? $databaseMemory['final_checkpoint'] : [];
+    $memoryCheckpoints = is_array($databaseMemory['checkpoints'] ?? null) ? array_values($databaseMemory['checkpoints']) : [];
+    $expectedMemoryCheckpointLabels = ['pre-corpus'];
+    foreach (['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout'] as $caseId) {
+        for ($sample = 0; $sample < WP_FTS_WC_COLD_SAMPLE_COUNT; $sample++) {
+            $expectedMemoryCheckpointLabels[] = "pre-cold-restart-{$caseId}-{$sample}";
+        }
+    }
+    $expectedMemoryCheckpointLabels[] = 'final-workload';
+    $actualMemoryCheckpointLabels = array_map(
+        static fn(mixed $checkpoint): mixed => is_array($checkpoint) ? ($checkpoint['checkpoint'] ?? null) : null,
+        $memoryCheckpoints
+    );
+    $wholeRunPeak = $databaseMemory['whole_run_peak_bytes'] ?? null;
+    $wholeRunHeadroom = $databaseMemory['whole_run_headroom_bytes'] ?? null;
     $acceptanceLane = ($validationEvidence['acceptance_lane'] ?? null) === true;
     $hostEnvironmentRecorded = is_string($hostEnvironment['runner_os'] ?? null)
         && (string) $hostEnvironment['runner_os'] !== ''
@@ -15962,6 +16165,48 @@ function wp_fts_wc_resource_artifact_gates(array $resources, array $validationEv
             $hostEnvironment,
             $hostEnvironmentRecorded && $acceptanceHostRecorded
         ),
+        wp_fts_wc_gate(
+            'resource_database_memory_checkpoint_contract',
+            'restart-safe cgroup v1/v2 peak and OOM checkpoints',
+            $databaseMemory,
+            wp_fts_wc_database_memory_evidence_is_exact($databaseMemory, $databaseEvidence)
+        ),
+        wp_fts_wc_gate(
+            'resource_database_memory_checkpoint_inventory',
+            $expectedMemoryCheckpointLabels,
+            $actualMemoryCheckpointLabels,
+            ($databaseMemory['expected_checkpoint_labels'] ?? null) === $expectedMemoryCheckpointLabels
+                && $actualMemoryCheckpointLabels === $expectedMemoryCheckpointLabels
+        ),
+        wp_fts_wc_gate(
+            'resource_database_pre_corpus_peak',
+            ['peak_bytes' => '<= 805306368', 'headroom_bytes' => '>= 268435456'],
+            ['peak_bytes' => $preCorpusMemory['peak_bytes'] ?? null, 'headroom_bytes' => is_int($preCorpusMemory['peak_bytes'] ?? null) ? 1073741824 - $preCorpusMemory['peak_bytes'] : null],
+            is_int($preCorpusMemory['peak_bytes'] ?? null)
+                && $preCorpusMemory['peak_bytes'] > 0
+                && $preCorpusMemory['peak_bytes'] <= 805306368
+                && 1073741824 - $preCorpusMemory['peak_bytes'] >= 268435456
+        ),
+        wp_fts_wc_gate(
+            'resource_database_whole_run_peak_recorded',
+            'actual restart-safe peak within the hard 1 GiB cgroup plus exact remaining headroom',
+            ['peak_bytes' => $wholeRunPeak, 'headroom_bytes' => $wholeRunHeadroom, 'final_checkpoint' => $finalMemory],
+            is_int($wholeRunPeak)
+                && $wholeRunPeak > 0
+                && $wholeRunPeak <= 1073741824
+                && is_int($wholeRunHeadroom)
+                && $wholeRunHeadroom === 1073741824 - $wholeRunPeak
+                && is_int($finalMemory['peak_bytes'] ?? null)
+                && $finalMemory['peak_bytes'] <= $wholeRunPeak
+        ),
+        wp_fts_wc_gate(
+            'resource_database_zero_oom',
+            ['oom_events' => 0, 'oom_kill_events' => 0],
+            ['oom_events' => $databaseMemory['oom_events'] ?? null, 'oom_kill_events' => $databaseMemory['oom_kill_events'] ?? null],
+            ($databaseMemory['oom_events'] ?? null) === 0
+                && ($databaseMemory['oom_kill_events'] ?? null) === 0
+                && count(array_filter($memoryCheckpoints, static fn(mixed $checkpoint): bool => !is_array($checkpoint) || ($checkpoint['oom_events'] ?? null) !== 0 || ($checkpoint['oom_kill_events'] ?? null) !== 0)) === 0
+        ),
     ];
     foreach ($expectedImages as $role => $expectedReference) {
         $roleEvidence = is_array($resources[$role] ?? null) ? $resources[$role] : [];
@@ -15982,6 +16227,95 @@ function wp_fts_wc_resource_artifact_gates(array $resources, array $validationEv
     }
 
     return $gates;
+}
+
+/** Prove that planned database restarts could not erase peak or OOM evidence. */
+function wp_fts_wc_database_memory_evidence_is_exact(array $memory, array $databaseEvidence): bool
+{
+    $checkpoints = is_array($memory['checkpoints'] ?? null) ? array_values($memory['checkpoints']) : [];
+    $expectedLabels = ['pre-corpus'];
+    foreach (['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout'] as $caseId) {
+        for ($sample = 0; $sample < WP_FTS_WC_COLD_SAMPLE_COUNT; $sample++) {
+            $expectedLabels[] = "pre-cold-restart-{$caseId}-{$sample}";
+        }
+    }
+    $expectedLabels[] = 'final-workload';
+    if (
+        ($memory['schema'] ?? null) !== 'relational-fts-database-cgroup-memory-v1'
+        || ($memory['limit_bytes'] ?? null) !== 1073741824
+        || ($memory['pre_corpus_peak_limit_bytes'] ?? null) !== 805306368
+        || ($memory['complete'] ?? null) !== true
+        || ($memory['checkpoint_count'] ?? null) !== count($checkpoints)
+        || ($memory['expected_checkpoint_labels'] ?? null) !== $expectedLabels
+        || count($checkpoints) !== count($expectedLabels)
+        || ($memory['counter_aggregation'] ?? null) !== 'maximum across restart-delimited cumulative counters'
+    ) {
+        return false;
+    }
+
+    $effectiveCgroup = is_array($databaseEvidence['effective_cgroup'] ?? null)
+        ? $databaseEvidence['effective_cgroup']
+        : [];
+    $expectedVersion = $effectiveCgroup['version'] ?? null;
+    $labels = [];
+    $actualLabels = [];
+    $peaks = [];
+    $limitEvents = [];
+    $oomEvents = [];
+    $oomKills = [];
+    foreach ($checkpoints as $checkpoint) {
+        if (!is_array($checkpoint)) {
+            return false;
+        }
+        $version = $checkpoint['cgroup_version'] ?? null;
+        $expectedSources = $version === 'v2'
+            ? ['usage' => 'memory.current', 'peak' => 'memory.peak', 'limit_events' => 'memory.events:max', 'oom_events' => 'memory.events:oom', 'oom_kill_events' => 'memory.events:oom_kill']
+            : ['usage' => 'memory.usage_in_bytes', 'peak' => 'memory.max_usage_in_bytes', 'limit_events' => 'memory.failcnt', 'oom_events' => 'memory.failcnt (conservative)', 'oom_kill_events' => 'memory.oom_control:oom_kill'];
+        $label = $checkpoint['checkpoint'] ?? null;
+        if (
+            !is_string($label)
+            || $label === ''
+            || isset($labels[$label])
+            || !in_array($version, ['v1', 'v2'], true)
+            || $version !== $expectedVersion
+            || ($checkpoint['sources'] ?? null) !== $expectedSources
+            || !is_int($checkpoint['usage_bytes'] ?? null)
+            || $checkpoint['usage_bytes'] < 0
+            || !is_int($checkpoint['peak_bytes'] ?? null)
+            || $checkpoint['peak_bytes'] < 1
+            || $checkpoint['peak_bytes'] < $checkpoint['usage_bytes']
+            || !is_int($checkpoint['limit_events'] ?? null)
+            || $checkpoint['limit_events'] < 0
+            || !is_int($checkpoint['oom_events'] ?? null)
+            || $checkpoint['oom_events'] < 0
+            || !is_int($checkpoint['oom_kill_events'] ?? null)
+            || $checkpoint['oom_kill_events'] < 0
+            || !wp_fts_wc_is_lowercase_sha256($checkpoint['raw_sha256'] ?? null)
+        ) {
+            return false;
+        }
+        $labels[$label] = true;
+        $actualLabels[] = $label;
+        $peaks[] = $checkpoint['peak_bytes'];
+        $limitEvents[] = $checkpoint['limit_events'];
+        $oomEvents[] = $checkpoint['oom_events'];
+        $oomKills[] = $checkpoint['oom_kill_events'];
+    }
+
+    $first = $checkpoints[0];
+    $final = $checkpoints[array_key_last($checkpoints)];
+    $wholeRunPeak = max($peaks);
+
+    return $actualLabels === $expectedLabels
+        && ($first['checkpoint'] ?? null) === 'pre-corpus'
+        && ($final['checkpoint'] ?? null) === 'final-workload'
+        && ($memory['pre_corpus'] ?? null) === $first
+        && ($memory['final_checkpoint'] ?? null) === $final
+        && ($memory['whole_run_peak_bytes'] ?? null) === $wholeRunPeak
+        && ($memory['whole_run_headroom_bytes'] ?? null) === 1073741824 - $wholeRunPeak
+        && ($memory['max_limit_events'] ?? null) === max($limitEvents)
+        && ($memory['oom_events'] ?? null) === max($oomEvents)
+        && ($memory['oom_kill_events'] ?? null) === max($oomKills);
 }
 
 /**
@@ -17244,7 +17578,7 @@ function wp_fts_wc_assert_runtime(): void
     if (!isset($wpdb) || !is_object($wpdb)) {
         throw new RuntimeException('WordPress loaded without $wpdb.');
     }
-    $row = $wpdb->get_row('SELECT VERSION() AS version, @@version_comment AS comment, @@innodb_buffer_pool_size AS buffer_pool, @@tmp_table_size AS tmp_table_size, @@max_heap_table_size AS max_heap_table_size, @@max_connections AS max_connections, @@innodb_flush_log_at_trx_commit AS flush_mode, @@performance_schema_max_sql_text_length AS performance_schema_sql_bytes, @@performance_schema_events_statements_history_long_size AS performance_schema_history_long_events, @@performance_schema_events_statements_history_size AS performance_schema_thread_history_events');
+    $row = $wpdb->get_row('SELECT VERSION() AS version, @@version_comment AS comment, @@innodb_buffer_pool_size AS buffer_pool, @@tmp_table_size AS tmp_table_size, @@max_heap_table_size AS max_heap_table_size, @@max_connections AS max_connections, @@innodb_flush_log_at_trx_commit AS flush_mode, @@performance_schema_max_sql_text_length AS performance_schema_sql_bytes, @@performance_schema_events_statements_history_long_size AS performance_schema_history_long_events, @@performance_schema_events_statements_history_size AS performance_schema_thread_history_events, @@performance_schema_digests_size AS performance_schema_digests, @@performance_schema_max_thread_instances AS performance_schema_thread_capacity');
     if (!is_object($row)) {
         throw new RuntimeException('Could not read the MySQL/MariaDB runtime: ' . (string) $wpdb->last_error);
     }
@@ -17295,7 +17629,15 @@ function wp_fts_wc_assert_runtime(): void
     );
     wp_fts_wc_assert(
         (int) $row->performance_schema_thread_history_events === WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_HISTORY_EVENTS,
-        'Performance Schema must retain exactly one redundant per-thread statement event.'
+        'Performance Schema must not reserve unused per-thread statement history.'
+    );
+    wp_fts_wc_assert(
+        (int) $row->performance_schema_digests === WP_FTS_WC_PERFORMANCE_SCHEMA_DIGESTS,
+        'Performance Schema must not reserve unused statement digest summaries.'
+    );
+    wp_fts_wc_assert(
+        (int) $row->performance_schema_thread_capacity === WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES,
+        'Performance Schema must reserve exactly 128 instrumented thread instances.'
     );
     wp_fts_wc_assert(
         function_exists('wp_convert_hr_to_bytes') && wp_convert_hr_to_bytes((string) ini_get('memory_limit')) === 134217728,
@@ -17304,6 +17646,51 @@ function wp_fts_wc_assert_runtime(): void
 
     $performanceSchema = (int) $wpdb->get_var("SELECT COUNT(*) FROM information_schema.ENGINES WHERE ENGINE = 'PERFORMANCE_SCHEMA' AND SUPPORT IN ('YES','DEFAULT')");
     wp_fts_wc_assert($performanceSchema === 1, 'Performance Schema must be enabled; rows-examined evidence cannot be skipped.');
+
+    $consumerState = wp_fts_wc_performance_schema_consumer_state();
+    wp_fts_wc_assert(
+        $consumerState === [
+            'events_statements_current' => 'YES',
+            'events_statements_history' => 'NO',
+            'events_statements_history_long' => 'YES',
+        ],
+        'Performance Schema statement consumers do not match the exact bounded attribution state.'
+    );
+
+    $instrumentedThreads = $wpdb->get_var('SELECT COUNT(*) FROM performance_schema.threads');
+    wp_fts_wc_assert(
+        is_numeric($instrumentedThreads) && (int) $instrumentedThreads < WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES,
+        'Performance Schema has no instrumented-thread headroom.'
+    );
+    $lostThreads = $wpdb->get_row("SHOW GLOBAL STATUS LIKE 'Performance_schema_thread_instances_lost'");
+    wp_fts_wc_assert(
+        is_object($lostThreads)
+            && strcasecmp((string) ($lostThreads->Variable_name ?? ''), 'Performance_schema_thread_instances_lost') === 0
+            && is_numeric($lostThreads->Value ?? null)
+            && (int) $lostThreads->Value === 0,
+        'Performance Schema lost an instrumented thread; statement attribution is incomplete.'
+    );
+}
+
+/** @return array<string,string> */
+function wp_fts_wc_performance_schema_consumer_state(): array
+{
+    global $wpdb;
+
+    $rows = $wpdb->get_results("SELECT NAME, ENABLED FROM performance_schema.setup_consumers WHERE NAME IN ('events_statements_current','events_statements_history','events_statements_history_long') ORDER BY NAME ASC", ARRAY_A);
+    wp_fts_wc_assert(
+        trim((string) $wpdb->last_error) === '' && is_array($rows),
+        'Could not read the Performance Schema statement-consumer state.'
+    );
+
+    $state = [];
+    foreach ($rows as $row) {
+        if (isset($row['NAME'], $row['ENABLED']) && is_string($row['NAME']) && is_string($row['ENABLED'])) {
+            $state[$row['NAME']] = $row['ENABLED'];
+        }
+    }
+
+    return $state;
 }
 
 /** Reject evidence not bound to the mounted harness, ZIP, source, and lane. */
@@ -17330,7 +17717,7 @@ function wp_fts_wc_assert_source_binding(): void
     }
 }
 
-/** Map only the four supported clean profile/engine combinations to lane IDs. */
+/** Map only the five supported clean profile/engine combinations to lane IDs. */
 function wp_fts_wc_expected_lane_id(string $profile, string $engine): ?string
 {
     return match ($profile . '/' . $engine) {
@@ -17338,6 +17725,7 @@ function wp_fts_wc_expected_lane_id(string $profile, string $engine): ?string
         '50k/mariadb-10.11' => 'mariadb1011-50k',
         '50k/mysql-8.0' => 'mysql80-50k',
         '100k/mariadb-10.11' => 'mariadb1011-100k',
+        '100k/mysql-8.0' => 'mysql80-100k',
         default => null,
     };
 }
@@ -17887,7 +18275,10 @@ function wp_fts_wc_runtime_evidence(): array
 {
     global $wpdb;
 
-    $row = $wpdb->get_row('SELECT VERSION() AS version, @@version_comment AS comment, @@innodb_buffer_pool_size AS buffer_pool, @@tmp_table_size AS tmp_table_size, @@max_heap_table_size AS max_heap_table_size, @@max_connections AS max_connections, @@innodb_flush_log_at_trx_commit AS flush_mode, @@performance_schema_max_sql_text_length AS performance_schema_sql_bytes, @@performance_schema_events_statements_history_long_size AS performance_schema_history_long_events, @@performance_schema_events_statements_history_size AS performance_schema_thread_history_events');
+    $row = $wpdb->get_row('SELECT VERSION() AS version, @@version_comment AS comment, @@innodb_buffer_pool_size AS buffer_pool, @@tmp_table_size AS tmp_table_size, @@max_heap_table_size AS max_heap_table_size, @@max_connections AS max_connections, @@innodb_flush_log_at_trx_commit AS flush_mode, @@performance_schema_max_sql_text_length AS performance_schema_sql_bytes, @@performance_schema_events_statements_history_long_size AS performance_schema_history_long_events, @@performance_schema_events_statements_history_size AS performance_schema_thread_history_events, @@performance_schema_digests_size AS performance_schema_digests, @@performance_schema_max_thread_instances AS performance_schema_thread_capacity');
+    $consumerState = wp_fts_wc_performance_schema_consumer_state();
+    $instrumentedThreads = $wpdb->get_var('SELECT COUNT(*) FROM performance_schema.threads');
+    $lostThreads = $wpdb->get_row("SHOW GLOBAL STATUS LIKE 'Performance_schema_thread_instances_lost'");
 
     return [
         'version' => (string) ($row->version ?? ''),
@@ -17900,6 +18291,13 @@ function wp_fts_wc_runtime_evidence(): array
         'performance_schema_max_sql_text_length' => (int) ($row->performance_schema_sql_bytes ?? 0),
         'performance_schema_events_statements_history_long_size' => (int) ($row->performance_schema_history_long_events ?? 0),
         'performance_schema_events_statements_history_size' => (int) ($row->performance_schema_thread_history_events ?? 0),
+        'performance_schema_digests_size' => (int) ($row->performance_schema_digests ?? -1),
+        'performance_schema_max_thread_instances' => (int) ($row->performance_schema_thread_capacity ?? 0),
+        'performance_schema_statement_consumers' => $consumerState,
+        'performance_schema_instrumented_threads' => is_numeric($instrumentedThreads) ? (int) $instrumentedThreads : null,
+        'performance_schema_thread_instances_lost' => is_object($lostThreads) && is_numeric($lostThreads->Value ?? null)
+            ? (int) $lostThreads->Value
+            : null,
         'php_version' => PHP_VERSION,
         'php_memory_limit' => ini_get('memory_limit'),
     ];
@@ -18697,10 +19095,11 @@ function wp_fts_wc_search_statement_kind(string $sql): ?string
 }
 
 /**
- * Tokenize the narrow SQL surface emitted by production search. Comments and
- * quoted values are skipped; quoted identifiers are retained as identifiers.
- * This avoids substring/regexp parsing of nested SQL when enforcing structural
- * anti-fanout invariants.
+ * Tokenize the narrow SQL surface emitted by production search. Comments are
+ * skipped, quoted identifiers are retained, and quoted values are skipped
+ * unless a physical-schema classifier explicitly requests their decoded
+ * tokens. This avoids substring/regexp parsing of nested SQL while preventing
+ * an ordinary DML value from masquerading as table ownership.
  *
  * @return array<int,array{type:string,value:string}>
  */
@@ -18921,7 +19320,7 @@ function wp_fts_wc_posting_values_shape(string $sql): array
 }
 
 /** @return Generator<int,array{type:string,value:string}> */
-function wp_fts_wc_sql_token_stream(string $sql): Generator
+function wp_fts_wc_sql_token_stream(string $sql, bool $includeQuotedValues = false): Generator
 {
     $length = strlen($sql);
     for ($index = 0; $index < $length;) {
@@ -18952,22 +19351,30 @@ function wp_fts_wc_sql_token_stream(string $sql): Generator
         }
         if ($character === "'" || $character === '"') {
             $quote = $character;
+            $value = '';
             $index++;
             while ($index < $length) {
                 if ($sql[$index] === '\\') {
+                    if ($index + 1 < $length) {
+                        $value .= $sql[$index + 1];
+                    }
                     $index = min($length, $index + 2);
                     continue;
                 }
                 if ($sql[$index] !== $quote) {
-                    $index++;
+                    $value .= $sql[$index++];
                     continue;
                 }
                 if ($index + 1 < $length && $sql[$index + 1] === $quote) {
+                    $value .= $quote;
                     $index += 2;
                     continue;
                 }
                 $index++;
                 break;
+            }
+            if ($includeQuotedValues) {
+                yield ['type' => 'string', 'value' => strtolower($value)];
             }
             continue;
         }
@@ -20515,6 +20922,21 @@ function wp_fts_wc_actual_http_adapter_proof(array $manifest, array $oracleCase)
             ]
         ),
     ];
+    $stageFailureUrl = rest_url(WP_FTS_Plugin::REST_NAMESPACE . WP_FTS_Plugin::REST_SEARCH_ROUTE) . '?' . http_build_query([
+        'q' => $query,
+        'lang' => 'en',
+        'mode' => 'OR',
+        'limit' => 20,
+        'prefix' => 1,
+    ], '', '&', PHP_QUERY_RFC3986);
+    $stageFailures = [];
+    foreach (array_keys(WP_FTS_WC_FAILED_SEARCH_STAGE_CEILINGS) as $failureStage) {
+        $stageFailures[$failureStage] = wp_fts_wc_measure_stage_failure_http(
+            $failureStage,
+            $stageFailureUrl,
+            []
+        );
+    }
 
     $gates = [];
     foreach ($requests as $caseId => &$case) {
@@ -20720,6 +21142,177 @@ function wp_fts_wc_actual_http_adapter_proof(array $manifest, array $oracleCase)
             && count($preFaultStateSignatures) === 1
     );
 
+    $stagePreFaultOptionHashes = [];
+    $orderedStages = ['plan', 'rank', 'hydrate'];
+    foreach ($stageFailures as $failureStage => &$case) {
+        $measurements = wp_fts_wc_search_failure_attribution($case);
+        $attribution = $measurements['attribution'];
+        $pluginEvents = $measurements['plugin_events'];
+        $pluginSearchEvents = $measurements['search_events'];
+        $pluginControlEvents = $measurements['control_events'];
+        $pluginOptionEvents = $measurements['option_events'];
+        $pluginTableEvents = $measurements['plugin_table_events'];
+        $nonSearchPluginTableEvents = $measurements['non_search_plugin_table_events'];
+        $requiredOptionMutationCounts = $measurements['required_option_mutations'];
+        $actualOrderedStages = $measurements['ordered_search_stages'];
+        $expectedOrderedStages = array_slice($orderedStages, 0, array_search($failureStage, $orderedStages, true) + 1);
+        $expectedShape = [
+            'plan' => 1,
+            'rank' => in_array('rank', $expectedOrderedStages, true) ? 1 : 0,
+            'hydrate' => in_array('hydrate', $expectedOrderedStages, true) ? 1 : 0,
+        ];
+        $shape = wp_fts_wc_statement_shape($pluginSearchEvents);
+        $injectedEvents = array_values(array_filter(
+            $pluginSearchEvents,
+            static fn(array $event): bool => str_contains(
+                (string) ($event['sql'] ?? ''),
+                "wp_fts_wc_injected_failure:{$failureStage}"
+            )
+        ));
+        $databaseErrorEvents = array_values(array_filter(
+            $pluginEvents,
+            static fn(array $event): bool => (int) ($event['mysql_errno'] ?? 0) !== 0
+        ));
+        $injectedEvent = count($injectedEvents) === 1 ? $injectedEvents[0] : [];
+        $faultIsolation = is_array($case['fault_isolation'] ?? null) ? $case['fault_isolation'] : [];
+        $body = (string) ($case['body'] ?? '');
+        $payload = json_decode($body, true);
+        $failedClosed = (int) ($case['status'] ?? 0) === 503
+            && is_array($payload)
+            && ($payload['code'] ?? null) === 'wp_fts_search_unavailable';
+        $beforeOptionHashes = is_array($faultIsolation['before_option_sha256'] ?? null)
+            ? $faultIsolation['before_option_sha256']
+            : [];
+        $afterOptionHashes = is_array($faultIsolation['after_option_sha256'] ?? null)
+            ? $faultIsolation['after_option_sha256']
+            : [];
+        $postFaultOptionHashes = is_array($faultIsolation['post_fault_option_sha256'] ?? null)
+            ? $faultIsolation['post_fault_option_sha256']
+            : [];
+        $stagePreFaultOptionHashes[$failureStage] = $beforeOptionHashes;
+        $case['ordered_search_stages'] = $actualOrderedStages;
+        $case['statement_shape'] = $shape;
+        $case['plugin_statement_count'] = count($pluginEvents);
+        $case['plugin_control_statement_count'] = count($pluginControlEvents);
+        $case['plugin_option_sitemeta_statement_count'] = count($pluginOptionEvents);
+        $case['body_sha256'] = hash('sha256', $body);
+        unset($case['body']);
+
+        $gates[] = wp_fts_wc_gate("stage_failure_{$failureStage}_http_status", 503, $case['status'] ?? null, (int) ($case['status'] ?? 0) === 503);
+        $gates[] = wp_fts_wc_gate("stage_failure_{$failureStage}_fails_closed", true, $failedClosed, $failedClosed);
+        $gates[] = wp_fts_wc_gate(
+            "stage_failure_{$failureStage}_ordered_search_shape",
+            ['ordered' => $expectedOrderedStages, 'shape' => $expectedShape],
+            ['ordered' => $actualOrderedStages, 'shape' => $shape],
+            $actualOrderedStages === $expectedOrderedStages && $shape === $expectedShape
+        );
+        $gates[] = wp_fts_wc_gate(
+            "stage_failure_{$failureStage}_one_shot_real_database_failure",
+            ['injections' => 1, 'database_errors' => 1, 'failed_stage' => $failureStage, 'mysql_errno' => 1146, 'sqlstate' => '42S02'],
+            [
+                'injections' => count($injectedEvents),
+                'database_errors' => count($databaseErrorEvents),
+                'failed_stage' => wp_fts_wc_search_statement_kind((string) ($injectedEvent['sql'] ?? '')),
+                'mysql_errno' => (int) ($injectedEvent['mysql_errno'] ?? 0),
+                'sqlstate' => (string) ($injectedEvent['returned_sqlstate'] ?? ''),
+                'message_text' => (string) ($injectedEvent['message_text'] ?? ''),
+            ],
+            count($injectedEvents) === 1
+                && count($databaseErrorEvents) === 1
+                && (int) ($injectedEvent['event_id'] ?? 0) === (int) ($databaseErrorEvents[0]['event_id'] ?? -1)
+                && wp_fts_wc_search_statement_kind((string) ($injectedEvent['sql'] ?? '')) === $failureStage
+                && str_contains((string) ($injectedEvent['sql'] ?? ''), "fts_wc_failed_{$failureStage}_")
+                && (int) ($injectedEvent['mysql_errno'] ?? 0) === 1146
+                && (string) ($injectedEvent['returned_sqlstate'] ?? '') === '42S02'
+                && trim((string) ($injectedEvent['message_text'] ?? '')) !== ''
+        );
+        $gates[] = wp_fts_wc_gate(
+            "stage_failure_{$failureStage}_no_later_search_or_core_like",
+            ['ordered_search' => $expectedOrderedStages, 'plugin_table_events' => count($expectedOrderedStages), 'non_search_plugin_table_events' => 0, 'core_like' => 0],
+            ['ordered_search' => $actualOrderedStages, 'plugin_table_events' => count($pluginTableEvents), 'non_search_plugin_table_events' => count($nonSearchPluginTableEvents), 'core_like' => count($case['core_like_events'] ?? [])],
+            $actualOrderedStages === $expectedOrderedStages
+                && count($pluginTableEvents) === count($expectedOrderedStages)
+                && $nonSearchPluginTableEvents === []
+                && ($case['core_like_events'] ?? null) === []
+        );
+        $gates[] = wp_fts_wc_gate(
+            "stage_failure_{$failureStage}_failure_control_statement_set",
+            '2..4 option/sitemeta statements, exactly one readiness revocation and one Health latch mutation, and no other plugin control SQL',
+            [
+                'plugin_control' => count($pluginControlEvents),
+                'option_sitemeta' => count($pluginOptionEvents),
+                'required_option_mutations' => $requiredOptionMutationCounts,
+            ],
+            count($pluginControlEvents) >= WP_FTS_WC_FAILED_SEARCH_MIN_CONTROL_STATEMENTS
+                && count($pluginControlEvents) <= WP_FTS_WC_FAILED_SEARCH_MAX_CONTROL_STATEMENTS
+                && count($pluginOptionEvents) === count($pluginControlEvents)
+                && $requiredOptionMutationCounts === ['search_ready' => 1, 'health' => 1]
+        );
+        $gates[] = wp_fts_wc_gate(
+            "stage_failure_{$failureStage}_total_plugin_statement_ceiling",
+            '<= ' . WP_FTS_WC_FAILED_SEARCH_STAGE_CEILINGS[$failureStage],
+            count($pluginEvents),
+            count($pluginEvents) >= count($expectedOrderedStages) + WP_FTS_WC_FAILED_SEARCH_MIN_CONTROL_STATEMENTS
+                && count($pluginEvents) <= WP_FTS_WC_FAILED_SEARCH_STAGE_CEILINGS[$failureStage]
+                && count($pluginEvents) === count($pluginSearchEvents) + count($pluginControlEvents)
+        );
+        $gates[] = wp_fts_wc_gate(
+            "stage_failure_{$failureStage}_post_fault_state_latched",
+            ['search_ready_revoked' => true, 'health_unhealthy' => true, 'search_runtime_failure_latched' => true, 'schema_repair_scheduled' => true],
+            $faultIsolation,
+            ($faultIsolation['schema'] ?? null) === 'relational-fts-stage-failure-isolation-v1'
+                && ($faultIsolation['failure_stage'] ?? null) === $failureStage
+                && ($faultIsolation['post_fault_search_ready_revoked'] ?? null) === true
+                && ($faultIsolation['post_fault_health_unhealthy'] ?? null) === true
+                && ($faultIsolation['post_fault_health_latched'] ?? null) === true
+                && is_bool($faultIsolation['pre_fault_repair_scheduled'] ?? null)
+                && ($faultIsolation['post_fault_repair_scheduled'] ?? null) === true
+                && array_keys($postFaultOptionHashes) === ['cron', 'health', 'search_ready']
+        );
+        $gates[] = wp_fts_wc_gate(
+            "stage_failure_{$failureStage}_isolated_state_restored",
+            ['pre_fault_search_ready' => true, 'restored' => true, 'three exact option snapshots'],
+            $faultIsolation,
+            ($faultIsolation['pre_fault_search_ready'] ?? null) === true
+                && ($faultIsolation['restored'] ?? null) === true
+                && $beforeOptionHashes === $afterOptionHashes
+                && array_keys($beforeOptionHashes) === ['cron', 'health', 'search_ready']
+                && count(array_filter(
+                    $beforeOptionHashes,
+                    static fn(mixed $hash): bool => is_string($hash)
+                        && strlen($hash) === 64
+                        && strspn($hash, '0123456789abcdef') === 64
+                )) === 3
+        );
+        $gates[] = wp_fts_wc_gate(
+            "stage_failure_{$failureStage}_connection_attribution",
+            ['relational-fts-http-attribution-v1', $case['request_id'] ?? null, 1],
+            [$attribution['schema'] ?? null, $attribution['request_id'] ?? null, $attribution['terminal_event_count'] ?? null],
+            ($attribution['schema'] ?? null) === 'relational-fts-http-attribution-v1'
+                && ($attribution['request_id'] ?? null) === ($case['request_id'] ?? null)
+                && (int) ($attribution['thread_id'] ?? 0) > 0
+                && ($attribution['terminal_event_count'] ?? null) === 1
+        );
+        $gates[] = wp_fts_wc_gate(
+            "stage_failure_{$failureStage}_all_table_sql_attributed",
+            0,
+            count(is_array($attribution['unattributed_connection_events'] ?? null) ? $attribution['unattributed_connection_events'] : []),
+            ($attribution['unattributed_connection_events'] ?? null) === []
+        );
+    }
+    unset($case);
+    $stagePreFaultStateSignatures = array_values(array_unique(array_map(
+        'wp_fts_wc_canonical_hash',
+        $stagePreFaultOptionHashes
+    )));
+    $gates[] = wp_fts_wc_gate(
+        'stage_failure_all_stages_same_pre_fault_state',
+        'one exact capability, Health, and cron snapshot across plan/rank/hydrate',
+        $stagePreFaultOptionHashes,
+        array_keys($stagePreFaultOptionHashes) === $orderedStages
+            && count($stagePreFaultStateSignatures) === 1
+    );
+
     $result = [
         'oracle' => [
             'source' => 'direct-set-oriented-searcher',
@@ -20730,11 +21323,69 @@ function wp_fts_wc_actual_http_adapter_proof(array $manifest, array $oracleCase)
         ],
         'cases' => $requests,
         'missing_table' => $missingTable,
+        'stage_failures' => $stageFailures,
         'gates' => $gates,
     ];
     wp_fts_wc_assert(@unlink($attributionPlugin), 'Could not remove the temporary HTTP attribution MU plugin.');
 
     return $result;
+}
+
+/** @return array<string,mixed> */
+function wp_fts_wc_search_failure_attribution(array $case): array
+{
+    $attribution = is_array($case['attribution'] ?? null) ? $case['attribution'] : [];
+    $pluginEvents = is_array($attribution['plugin_attributed_events'] ?? null)
+        ? array_values($attribution['plugin_attributed_events'])
+        : [];
+    $searchEvents = array_values(array_filter(
+        $pluginEvents,
+        static fn(array $event): bool => wp_fts_wc_is_search_statement((string) ($event['sql'] ?? ''))
+    ));
+    $controlEvents = array_values(array_filter(
+        $pluginEvents,
+        static fn(array $event): bool => !wp_fts_wc_is_search_statement((string) ($event['sql'] ?? ''))
+    ));
+    $optionEvents = is_array($attribution['plugin_option_sitemeta_events'] ?? null)
+        ? array_values($attribution['plugin_option_sitemeta_events'])
+        : [];
+    $requiredOptionMutations = ['search_ready' => 0, 'health' => 0];
+    foreach ($controlEvents as $event) {
+        $sql = (string) ($event['sql'] ?? '');
+        $normalizedSql = strtoupper(ltrim($sql));
+        $isMutation = str_starts_with($normalizedSql, 'UPDATE ')
+            || str_starts_with($normalizedSql, 'INSERT ')
+            || str_starts_with($normalizedSql, 'REPLACE ')
+            || str_starts_with($normalizedSql, 'DELETE ');
+        if (!$isMutation) {
+            continue;
+        }
+        if (str_contains($sql, WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION)) {
+            $requiredOptionMutations['search_ready']++;
+        }
+        if (str_contains($sql, WP_FTS_Plugin::INDEX_HEALTH_OPTION)) {
+            $requiredOptionMutations['health']++;
+        }
+    }
+
+    return [
+        'attribution' => $attribution,
+        'plugin_events' => $pluginEvents,
+        'search_events' => $searchEvents,
+        'control_events' => $controlEvents,
+        'option_events' => $optionEvents,
+        'plugin_table_events' => is_array($attribution['plugin_table_events'] ?? null)
+            ? array_values($attribution['plugin_table_events'])
+            : [],
+        'non_search_plugin_table_events' => is_array($attribution['non_search_plugin_table_events'] ?? null)
+            ? array_values($attribution['non_search_plugin_table_events'])
+            : [],
+        'required_option_mutations' => $requiredOptionMutations,
+        'ordered_search_stages' => array_map(
+            static fn(array $event): ?string => wp_fts_wc_search_statement_kind((string) ($event['sql'] ?? '')),
+            $searchEvents
+        ),
+    ];
 }
 
 /**
@@ -20753,10 +21404,13 @@ function wp_fts_wc_install_request_attribution_mu_plugin(): string
     $source = <<<'PHP'
 <?php
 add_filter('query', static function (string $sql): string {
+    global $wpdb;
+    static $injectedFailure = false;
+
     $id = isset($_SERVER['HTTP_X_WP_FTS_WC_REQUEST_ID']) && is_string($_SERVER['HTTP_X_WP_FTS_WC_REQUEST_ID'])
         ? strtolower(trim($_SERVER['HTTP_X_WP_FTS_WC_REQUEST_ID']))
         : '';
-    if (strlen($id) !== 32 || !wp_fts_wc_is_ascii_hex($id)) {
+    if (strlen($id) !== 32 || strspn($id, '0123456789abcdef') !== 32) {
         return $sql;
     }
     $pluginQuery = false;
@@ -20768,6 +21422,30 @@ add_filter('query', static function (string $sql): string {
             break;
         }
     }
+    $failureStage = isset($_SERVER['HTTP_X_WP_FTS_WC_FAILURE_STAGE']) && is_string($_SERVER['HTTP_X_WP_FTS_WC_FAILURE_STAGE'])
+        ? strtolower(trim($_SERVER['HTTP_X_WP_FTS_WC_FAILURE_STAGE']))
+        : '';
+    if (
+        !$injectedFailure
+        && $pluginQuery
+        && in_array($failureStage, ['plan', 'rank', 'hydrate'], true)
+        && str_contains($sql, 'wp_fts:' . $failureStage)
+        && isset($wpdb)
+        && is_object($wpdb)
+    ) {
+        $sourceTable = match ($failureStage) {
+            'plan' => $wpdb->prefix . 'fts_terms',
+            'rank' => $wpdb->prefix . 'fts_postings',
+            'hydrate' => $wpdb->prefix . 'fts_documents',
+        };
+        $sourceOffset = strpos($sql, $sourceTable);
+        if ($sourceOffset !== false) {
+            $missingTable = $wpdb->prefix . 'fts_wc_failed_' . $failureStage . '_' . substr($id, 0, 8);
+            $sql = '/* wp_fts_wc_injected_failure:' . $failureStage . ' */ '
+                . substr_replace($sql, $missingTable, $sourceOffset, strlen($sourceTable));
+            $injectedFailure = true;
+        }
+    }
     return rtrim($sql)
         . ($pluginQuery ? ' /* wp_fts_wc_plugin_query */' : '')
         . ' /* wp_fts_wc_request:' . $id . ' */';
@@ -20777,14 +21455,14 @@ add_filter('wp_fts_debug_enabled', static function (mixed $enabled): mixed {
         ? strtolower(trim($_SERVER['HTTP_X_WP_FTS_WC_REQUEST_ID']))
         : '';
 
-    return strlen($id) === 32 && wp_fts_wc_is_ascii_hex($id) ? true : $enabled;
+    return strlen($id) === 32 && strspn($id, '0123456789abcdef') === 32 ? true : $enabled;
 }, PHP_INT_MAX, 1);
 $GLOBALS['wp_fts_wc_request_end_callback'] = static function (): void {
     global $wpdb;
     $id = isset($_SERVER['HTTP_X_WP_FTS_WC_REQUEST_ID']) && is_string($_SERVER['HTTP_X_WP_FTS_WC_REQUEST_ID'])
         ? strtolower(trim($_SERVER['HTTP_X_WP_FTS_WC_REQUEST_ID']))
         : '';
-    if (strlen($id) === 32 && wp_fts_wc_is_ascii_hex($id) && isset($wpdb) && is_object($wpdb)) {
+    if (strlen($id) === 32 && strspn($id, '0123456789abcdef') === 32 && isset($wpdb) && is_object($wpdb)) {
         $wpdb->query('SELECT /* wp_fts_wc_request_end:' . $id . ' */ 1');
     }
 };
@@ -20899,10 +21577,8 @@ function wp_fts_wc_measure_http_adapter(string $url, array $headers, ?array $bod
 }
 
 /**
- * Remove the dictionary for one isolated request, then restore the table and
- * every option the production failure latch may mutate before testing the next
- * adapter. Production must retain the latch; this restoration belongs only to
- * the disposable harness so every adapter starts from the same ready state.
+ * Remove the dictionary for one isolated adapter request. The shared failure
+ * harness restores the table and exact option state before the next request.
  *
  * @param array<string,string> $headers
  * @param array<string,mixed>|null $body
@@ -20910,8 +21586,44 @@ function wp_fts_wc_measure_http_adapter(string $url, array $headers, ?array $bod
  */
 function wp_fts_wc_measure_missing_table_http(string $url, array $headers, ?array $body = null): array
 {
+    return wp_fts_wc_measure_isolated_search_failure_http('missing_table', $url, $headers, $body);
+}
+
+/** @return array<string,mixed> */
+function wp_fts_wc_measure_stage_failure_http(
+    string $failureStage,
+    string $url,
+    array $headers,
+    ?array $body = null
+): array {
+    wp_fts_wc_assert(
+        array_key_exists($failureStage, WP_FTS_WC_FAILED_SEARCH_STAGE_CEILINGS),
+        'HTTP search-failure injection requires plan, rank, or hydrate.'
+    );
+
+    return wp_fts_wc_measure_isolated_search_failure_http($failureStage, $url, $headers, $body);
+}
+
+/**
+ * Run one real HTTP failure, capture its production latch, then restore the
+ * exact capability, Health, and cron rows solely to isolate the next proof.
+ *
+ * @return array<string,mixed>
+ */
+function wp_fts_wc_measure_isolated_search_failure_http(
+    string $fault,
+    string $url,
+    array $headers,
+    ?array $body = null
+): array
+{
     global $wpdb;
 
+    $missingTableFault = $fault === 'missing_table';
+    wp_fts_wc_assert(
+        $missingTableFault || array_key_exists($fault, WP_FTS_WC_FAILED_SEARCH_STAGE_CEILINGS),
+        'Unknown isolated HTTP search fault.'
+    );
     $table = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
     $missing = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms_wc_missing');
     $optionNames = [
@@ -20927,11 +21639,15 @@ function wp_fts_wc_measure_missing_table_http(string $url, array $headers, ?arra
     $preFaultSearchReady = is_array($searchReady)
         && preg_match('/^[a-f0-9]{32}$/D', (string) ($searchReady['incarnation'] ?? '')) === 1
         && wp_fts_wc_is_lowercase_sha256($searchReady['profile_hash'] ?? null);
-    wp_fts_wc_assert($preFaultSearchReady, 'Missing-table adapter proof did not begin with a published search-ready capability.');
+    wp_fts_wc_assert($preFaultSearchReady, 'Isolated HTTP failure proof did not begin with a published search-ready capability.');
 
-    $wpdb->query("DROP TABLE IF EXISTS `{$missing}`");
-    if ($wpdb->query("RENAME TABLE `{$table}` TO `{$missing}`") === false) {
-        throw new RuntimeException('Could not install the actual-adapter missing-table fault.');
+    if ($missingTableFault) {
+        $wpdb->query("DROP TABLE IF EXISTS `{$missing}`");
+        if ($wpdb->query("RENAME TABLE `{$table}` TO `{$missing}`") === false) {
+            throw new RuntimeException('Could not install the actual-adapter missing-table fault.');
+        }
+    } else {
+        $headers['X-WP-FTS-WC-Failure-Stage'] = $fault;
     }
     $response = null;
     $postFaultOptionSnapshots = [];
@@ -20945,7 +21661,7 @@ function wp_fts_wc_measure_missing_table_http(string $url, array $headers, ?arra
             $postFaultOptionSnapshots[$key] = wp_fts_wc_raw_option_snapshot($optionName);
         }
     } finally {
-        if ($wpdb->query("RENAME TABLE `{$missing}` TO `{$table}`") === false) {
+        if ($missingTableFault && $wpdb->query("RENAME TABLE `{$missing}` TO `{$table}`") === false) {
             throw new RuntimeException('Could not restore the actual-adapter missing table.');
         }
         foreach ($optionNames as $key => $optionName) {
@@ -20958,13 +21674,17 @@ function wp_fts_wc_measure_missing_table_http(string $url, array $headers, ?arra
         }
     }
 
-    wp_fts_wc_assert(is_array($response), 'Missing-table adapter request did not return measurable HTTP evidence.');
+    wp_fts_wc_assert(is_array($response), 'Isolated HTTP failure request did not return measurable evidence.');
     $restored = $restoredOptionSnapshots === $optionSnapshots;
-    wp_fts_wc_assert($restored, 'Missing-table adapter proof did not restore all exact pre-fault option states.');
+    wp_fts_wc_assert($restored, 'Isolated HTTP failure proof did not restore all exact pre-fault option states.');
     $postFaultSearchReady = maybe_unserialize($postFaultOptionSnapshots['search_ready']['option_value']);
     $postFaultHealth = maybe_unserialize($postFaultOptionSnapshots['health']['option_value']);
     $response['fault_isolation'] = [
-        'schema' => 'relational-fts-missing-table-isolation-v1',
+        'schema' => $missingTableFault
+            ? 'relational-fts-missing-table-isolation-v1'
+            : 'relational-fts-stage-failure-isolation-v1',
+        'failure_stage' => $missingTableFault ? 'plan' : $fault,
+        'fault_source' => $missingTableFault ? 'renamed_dictionary' : 'one_shot_missing_relation',
         'pre_fault_search_ready' => $preFaultSearchReady,
         'post_fault_search_ready_revoked' => $postFaultOptionSnapshots['search_ready']['exists']
             && $postFaultSearchReady === '',
@@ -21195,9 +21915,12 @@ function wp_fts_wc_performance_schema_request_events(string $requestId, bool $fr
     wp_fts_wc_assert(trim((string) $wpdb->last_error) === '', 'Could not resolve the first retained HTTP connection event.');
     $startEvent = $fromConnectionStart ? $firstConnectionEvent : $taggedStartEvent;
     wp_fts_wc_assert($firstConnectionEvent > 0 && $taggedStartEvent >= $firstConnectionEvent && $startEvent > 0 && $endEvent >= $startEvent, 'HTTP request correlation interval is invalid.');
+    if ($fromConnectionStart) {
+        wp_fts_wc_assert($firstConnectionEvent === 1, 'HTTP connection-start attribution lost its first Performance Schema event.');
+    }
 
     $rows = $wpdb->get_results($wpdb->prepare(
-        "SELECT THREAD_ID,EVENT_ID,SQL_TEXT,ROWS_EXAMINED,ROWS_SENT,CREATED_TMP_DISK_TABLES,SORT_MERGE_PASSES,NO_INDEX_USED,NO_GOOD_INDEX_USED,LOCK_TIME,TIMER_WAIT FROM performance_schema.events_statements_history_long WHERE THREAD_ID=%d AND EVENT_ID BETWEEN %d AND %d ORDER BY EVENT_ID ASC",
+        "SELECT THREAD_ID,EVENT_ID,SQL_TEXT,MYSQL_ERRNO,RETURNED_SQLSTATE,MESSAGE_TEXT,ROWS_EXAMINED,ROWS_SENT,CREATED_TMP_DISK_TABLES,SORT_MERGE_PASSES,NO_INDEX_USED,NO_GOOD_INDEX_USED,LOCK_TIME,TIMER_WAIT FROM performance_schema.events_statements_history_long WHERE THREAD_ID=%d AND EVENT_ID BETWEEN %d AND %d ORDER BY EVENT_ID ASC",
         $threadId,
         $startEvent,
         $endEvent
@@ -21212,6 +21935,9 @@ function wp_fts_wc_performance_schema_request_events(string $requestId, bool $fr
         'sql' => (string) ($row['SQL_TEXT'] ?? ''),
         'sql_sha256' => hash('sha256', (string) ($row['SQL_TEXT'] ?? '')),
         'sql_bytes' => strlen((string) ($row['SQL_TEXT'] ?? '')),
+        'mysql_errno' => (int) ($row['MYSQL_ERRNO'] ?? 0),
+        'returned_sqlstate' => (string) ($row['RETURNED_SQLSTATE'] ?? ''),
+        'message_text' => (string) ($row['MESSAGE_TEXT'] ?? ''),
         'rows_examined' => (int) ($row['ROWS_EXAMINED'] ?? 0),
         'rows_sent' => (int) ($row['ROWS_SENT'] ?? 0),
         'tmp_disk_tables' => (int) ($row['CREATED_TMP_DISK_TABLES'] ?? 0),
@@ -21670,14 +22396,72 @@ function wp_fts_wc_worker_roles_are_ordered(array $roles): bool
 /** Detect schema discovery or mutation that must stay outside hot paths. */
 function wp_fts_wc_is_physical_schema_statement(string $sql): bool
 {
-    $normalized = strtoupper(ltrim($sql));
+    $tokens = wp_fts_wc_sql_tokens($sql);
+    $firstExecutableWord = null;
+    foreach ($tokens as $token) {
+        if (in_array($token['type'] ?? null, ['word', 'identifier'], true)) {
+            $firstExecutableWord = (string) ($token['value'] ?? '');
+            break;
+        }
+    }
+    if (in_array($firstExecutableWord, ['show', 'describe', 'create', 'alter', 'drop', 'rename', 'truncate'], true)) {
+        return true;
+    }
+    $count = count($tokens);
+    for ($index = 0; $index + 2 < $count; $index++) {
+        if (
+            ($tokens[$index]['value'] ?? null) === 'information_schema'
+            && ($tokens[$index + 1]['value'] ?? null) === '.'
+            && in_array($tokens[$index + 2]['type'] ?? null, ['word', 'identifier'], true)
+        ) {
+            return true;
+        }
+    }
 
-    $firstToken = strtok($normalized, " \t\r\n");
+    return false;
+}
 
-    return str_starts_with($normalized, 'SHOW ')
-        || str_starts_with($normalized, 'DESCRIBE ')
-        || str_contains($normalized, 'INFORMATION_SCHEMA.')
-        || in_array($firstToken, ['CREATE', 'ALTER', 'DROP', 'RENAME', 'TRUNCATE'], true);
+/** Distinguish plugin-owned metadata work from WordPress core write diagnostics. */
+function wp_fts_wc_is_fts_physical_schema_statement(string $sql): bool
+{
+    return wp_fts_wc_is_physical_schema_statement($sql)
+        && wp_fts_wc_sql_touches_owned_fts_table($sql, true);
+}
+
+/** Identify one plugin-owned INSERT/UPDATE/DELETE/REPLACE without parsing values. */
+function wp_fts_wc_is_fts_data_mutation_statement(string $sql): bool
+{
+    if (!wp_fts_wc_sql_touches_owned_fts_table($sql)) {
+        return false;
+    }
+    foreach (wp_fts_wc_sql_token_stream($sql) as $token) {
+        if (($token['type'] ?? null) !== 'word') {
+            continue;
+        }
+
+        return in_array($token['value'] ?? null, ['insert', 'update', 'delete', 'replace'], true);
+    }
+
+    return false;
+}
+
+/** Match an exact site-owned FTS identifier, optionally including schema values. */
+function wp_fts_wc_sql_touches_owned_fts_table(string $sql, bool $includeQuotedValues = false): bool
+{
+    global $wpdb;
+
+    $ownedPrefix = strtolower((string) ($wpdb->prefix ?? '') . 'fts_');
+    $ownedTokenTypes = $includeQuotedValues ? ['word', 'identifier', 'string'] : ['word', 'identifier'];
+    foreach (wp_fts_wc_sql_token_stream($sql, $includeQuotedValues) as $token) {
+        if (!in_array($token['type'] ?? null, $ownedTokenTypes, true)) {
+            continue;
+        }
+        if (str_starts_with((string) ($token['value'] ?? ''), $ownedPrefix)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /** Detect any access to the renamed legacy-v3 table family. */
@@ -21950,6 +22734,7 @@ function wp_fts_wc_validation_inventory_matches(array $evidence): bool
         'field_impact',
     ];
     $criticalGateIds = [
+        'runtime_performance_schema_integrity',
         'mutation_fence_real_database_artifact',
         'mutation_fence_real_database_cross_process_guard',
         'mutation_fence_real_database_owned_scope_delete',
@@ -22040,6 +22825,7 @@ function wp_fts_wc_validation_inventory_matches(array $evidence): bool
         'all_distributable_pack_identities_active',
         'failure_recovery_progress',
         'missing_table_all_adapters_same_pre_fault_state',
+        'stage_failure_all_stages_same_pre_fault_state',
     ];
     foreach ([1, 20, 50] as $pageSize) {
         foreach ([
@@ -22092,6 +22878,23 @@ function wp_fts_wc_validation_inventory_matches(array $evidence): bool
             'all_table_sql_attributed',
         ] as $suffix) {
             $criticalGateIds[] = "missing_table_{$adapterId}_{$suffix}";
+        }
+    }
+    foreach (['plan', 'rank', 'hydrate'] as $failureStage) {
+        foreach ([
+            'http_status',
+            'fails_closed',
+            'ordered_search_shape',
+            'one_shot_real_database_failure',
+            'no_later_search_or_core_like',
+            'failure_control_statement_set',
+            'total_plugin_statement_ceiling',
+            'post_fault_state_latched',
+            'isolated_state_restored',
+            'connection_attribution',
+            'all_table_sql_attributed',
+        ] as $suffix) {
+            $criticalGateIds[] = "stage_failure_{$failureStage}_{$suffix}";
         }
     }
     foreach ($expectedCaseIds as $caseId) {

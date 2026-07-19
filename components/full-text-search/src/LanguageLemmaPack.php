@@ -61,11 +61,9 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         if ($lazy) {
             self::assert_indexed_runtime_files($validation);
         } else {
-            $this->build_eager_lookup($validation['rows']);
-            // The eager map is the retained runtime representation. Keeping the
-            // validator's row objects as well would nearly double peak residency
-            // for the largest accepted fixture.
-            $this->validation['rows'] = [];
+            if ($validation['rows'] !== []) {
+                throw new LogicException('Eager validation rows must be transferred before pack construction.');
+            }
         }
 
         $this->indexSignature = $this->build_index_signature($validation);
@@ -126,7 +124,10 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
             }
             if (is_array($validation)) {
                 self::assert_expected_language($validation, $expectedLanguage);
+                $rows = $validation['rows'];
+                $validation['rows'] = [];
                 $pack = new self($validation, false, $validator);
+                $pack->build_eager_lookup($rows);
                 $admission?->consume_eager_pack($manifestPath, $pack);
 
                 return $pack;
@@ -560,18 +561,24 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     }
 
     /**
+     * Consume validator rows while constructing their retained eager map.
+     * Unsetting each transferred row prevents the largest accepted fixture
+     * from retaining two complete PHP-array representations at once.
+     *
      * @param array<int,array{surface:string,lemma:string,file:string,line:int}> $rows
      */
-    private function build_eager_lookup(array $rows): void
+    private function build_eager_lookup(array &$rows): void
     {
-        $lemmasBySurface = [];
-        foreach ($rows as $row) {
-            $lemmasBySurface[$row['surface']][$row['lemma']] = true;
+        foreach ($rows as $index => $row) {
+            $this->lemmasBySurface[$row['surface']][$row['lemma']] = true;
+            unset($rows[$index]);
         }
 
-        foreach ($lemmasBySurface as $surface => $lemmas) {
-            $lemmaList = $this->ordered_lemmas_for_surface($surface, array_keys($lemmas));
-            $this->lemmasBySurface[$surface] = $lemmaList;
+        foreach ($this->lemmasBySurface as $surface => $lemmas) {
+            $this->lemmasBySurface[$surface] = $this->ordered_lemmas_for_surface(
+                $surface,
+                array_keys($lemmas)
+            );
         }
     }
 

@@ -6,6 +6,7 @@ require_once __DIR__ . '/../src/bootstrap.php';
 final class WP_FTS_Tokenizer_Yield_Bounds_Probe
 {
     public int $yields = 0;
+    public int $receivedArguments = 0;
 
     /** Configures the yielded value and optional finite yield ceiling. */
     public function __construct(
@@ -17,6 +18,7 @@ final class WP_FTS_Tokenizer_Yield_Bounds_Probe
     /** Yields fixture values until the consumer or configured ceiling stops it. */
     public function __invoke(string $run, string $language): Generator
     {
+        $this->receivedArguments = max($this->receivedArguments, func_num_args());
         while ($this->yieldLimit === null || $this->yields < $this->yieldLimit) {
             $this->yields++;
             yield $this->value;
@@ -75,6 +77,10 @@ wp_fts_tokenizer_yield_check(
     count($exact['terms']) === 3,
     'an exact-boundary invalid tokenizer result should retain bounded CJK fallback tokens'
 );
+wp_fts_tokenizer_yield_check(
+    $exactProbe->receivedArguments === 2,
+    'an existing two-argument custom tokenizer must keep its original invocation contract'
+);
 
 $overProbe = new WP_FTS_Tokenizer_Yield_Bounds_Probe(['ignored' => true], $limit + 1);
 $over = wp_fts_tokenizer_yield_analyze($overProbe, $limit);
@@ -86,6 +92,59 @@ wp_fts_tokenizer_yield_check(
 wp_fts_tokenizer_yield_check(
     $overProbe->yields === $limit + 1,
     'the over-boundary tokenizer should stop on its first excess raw yield'
+);
+
+$internalPipeline = new WP_FTS_LanguagePipeline([
+    'enable_stemming' => false,
+    'cjk_tokenizer' => 'str_contains',
+]);
+$internalLimitSupport = (new ReflectionProperty(
+    $internalPipeline,
+    'cjkTokenizerAcceptsProducerLimit'
+))->getValue($internalPipeline);
+wp_fts_tokenizer_yield_check(
+    $internalLimitSupport === false && count($internalPipeline->analyze_detailed('中文', 'zh')) === 3,
+    'a two-argument internal tokenizer must keep its old call and deterministic fallback behavior'
+);
+
+$legacyThirdValue = null;
+$legacyThreeArgumentPipeline = new WP_FTS_LanguagePipeline([
+    'enable_stemming' => false,
+    'cjk_tokenizer' => static function (
+        string $run,
+        string $language,
+        string $mode = 'legacy'
+    ) use (&$legacyThirdValue): array {
+        $legacyThirdValue = $mode;
+
+        return ['中文'];
+    },
+]);
+$legacyThreeArgumentTerms = $legacyThreeArgumentPipeline->analyze_detailed('中文', 'zh');
+wp_fts_tokenizer_yield_check(
+    $legacyThirdValue === 'legacy'
+        && array_column($legacyThreeArgumentTerms, 'term') === ['中文'],
+    'a legacy optional third tokenizer parameter must retain its default value and custom output'
+);
+
+$legacyVariadicArguments = null;
+$legacyVariadicPipeline = new WP_FTS_LanguagePipeline([
+    'enable_stemming' => false,
+    'cjk_tokenizer' => static function (
+        string $run,
+        string $language,
+        mixed ...$extra
+    ) use (&$legacyVariadicArguments): array {
+        $legacyVariadicArguments = $extra;
+
+        return ['中文'];
+    },
+]);
+$legacyVariadicTerms = $legacyVariadicPipeline->analyze_detailed('中文', 'zh');
+wp_fts_tokenizer_yield_check(
+    $legacyVariadicArguments === []
+        && array_column($legacyVariadicTerms, 'term') === ['中文'],
+    'a legacy variadic tokenizer must receive no new arguments and retain its custom output'
 );
 
 foreach ([

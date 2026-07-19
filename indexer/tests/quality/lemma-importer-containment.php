@@ -349,7 +349,8 @@ function wp_fts_importer_containment_case(string $case): array
 function wp_fts_importer_containment_process(string $case, bool $noIni): array
 {
     $command = [PHP_BINARY];
-    if ($noIni) {
+    $effectiveNoIni = $noIni || php_ini_loaded_file() === false;
+    if ($effectiveNoIni) {
         $command[] = '-n';
     }
     array_push(
@@ -363,6 +364,15 @@ function wp_fts_importer_containment_process(string $case, bool $noIni): array
     assert_same(0, $result['exit'], "{$case} importer containment child should finish under 128 MiB: {$result['stderr']}");
     $payload = json_decode(trim($result['stdout']), true);
     assert_true(is_array($payload), "{$case} importer containment child should emit JSON evidence");
+    if ($effectiveNoIni) {
+        assert_same(false, $payload['php_ini_loaded_file'] ?? null, "{$case} importer containment child should inherit the no-ini runtime");
+    } else {
+        assert_true(
+            is_string($payload['php_ini_loaded_file'] ?? null)
+                && trim((string) $payload['php_ini_loaded_file']) !== '',
+            "{$case} importer containment child should retain its configured runtime"
+        );
+    }
 
     return ['payload' => $payload, 'stderr' => $result['stderr']];
 }

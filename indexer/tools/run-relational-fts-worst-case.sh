@@ -24,6 +24,7 @@ WATCHDOG_PID=""
 WATCHDOG_ESCALATING=0
 WHOLE_RUN_TIMEOUT_SECONDS=19800
 WATCHDOG_CLEANUP_GRACE_SECONDS=300
+DB_PRE_CORPUS_PEAK_LIMIT_BYTES=805306368
 MARIADB_IMAGE="mariadb@sha256:5a5c675881ef3fd1c1da9b0a3bfd6ee82edbe39cd9e32e06be18034c37235e0e"
 MYSQL57_IMAGE="mysql@sha256:4bc6bc963e6d8443453676cae56536f4b8156d78bae03c0145cbe47c2aad73bb"
 MYSQL_IMAGE="mysql@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
@@ -79,9 +80,10 @@ case "${PROFILE}/${ENGINE}" in
     50k/mariadb-10.11) LANE_ID="mariadb1011-50k" ;;
     50k/mysql-8.0) LANE_ID="mysql80-50k" ;;
     100k/mariadb-10.11) LANE_ID="mariadb1011-100k" ;;
+    100k/mysql-8.0) LANE_ID="mysql80-100k" ;;
     *)
         if (( ALLOW_DIRTY == 0 )); then
-            echo "BLOCKED: ${PROFILE}/${ENGINE} is not one of the four clean acceptance lanes; use --allow-dirty for diagnostics." >&2
+            echo "BLOCKED: ${PROFILE}/${ENGINE} is not one of the five clean acceptance lanes; use --allow-dirty for diagnostics." >&2
             exit 2
         fi
         LANE_ID="diagnostic-${ENGINE}-${PROFILE}"
@@ -118,6 +120,8 @@ fi
 PROOF_ROOT="$(mktemp -d /tmp/wp-fts-relational-worst-case.XXXXXX)"
 COMPOSE_FILE="${PROOF_ROOT}/compose.yaml"
 EVIDENCE_DIR="${PROOF_ROOT}/evidence"
+DB_MEMORY_CHECKPOINTS="${EVIDENCE_DIR}/database-memory-cgroup.tsv"
+DB_LAST_MEMORY_CHECKPOINT=""
 BUILD_DIR="${PROOF_ROOT}/build"
 REPRO_BUILD_DIR="${PROOF_ROOT}/repro-build"
 ZIP_PATH="${PROOF_ROOT}/wp-fts-indexer.zip"
@@ -314,6 +318,107 @@ capture_compose() {
     local seconds="$3"
     shift 3
     capture_host "${variable}" "${label}" "${seconds}" docker compose -f "${COMPOSE_FILE}" "$@"
+}
+
+capture_database_memory_checkpoint() {
+    local checkpoint="$1"
+    local raw
+    if [[ "${checkpoint}" == *$'\t'* || "${checkpoint}" == *$'\n'* ]]; then
+        echo "BLOCKED: database memory checkpoint labels must be one TSV-safe line." >&2
+        return 1
+    fi
+    capture_compose raw "database-memory-${checkpoint}" 30 exec -T db sh -c "${CGROUP_MEMORY_PROBE}"
+    printf '%s\t%s\n' "${checkpoint}" "${raw}" >> "${DB_MEMORY_CHECKPOINTS}"
+    DB_LAST_MEMORY_CHECKPOINT="${raw}"
+}
+
+finalize_database_memory_evidence() {
+    local resources="${EVIDENCE_DIR}/resources.json"
+    local temporary="${resources}.tmp.$$"
+    php -r '
+$resources=json_decode((string)file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
+$lines=file($argv[2],FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES);
+if(!is_array($lines)){fwrite(STDERR,"Could not read database cgroup memory checkpoints.\n");exit(1);}
+$unsigned=static fn(string $value):?int=>$value!==""&&strspn($value,"0123456789")===strlen($value)?(int)$value:null;
+$parse=static function(string $label,string $raw)use($unsigned):array{
+    $parts=explode("\t",$raw);
+    $version=$parts[0]??"unavailable";
+    $sources=$version==="v2"
+        ? ["usage"=>"memory.current","peak"=>"memory.peak","limit_events"=>"memory.events:max","oom_events"=>"memory.events:oom","oom_kill_events"=>"memory.events:oom_kill"]
+        : ["usage"=>"memory.usage_in_bytes","peak"=>"memory.max_usage_in_bytes","limit_events"=>"memory.failcnt","oom_events"=>"memory.failcnt (conservative)","oom_kill_events"=>"memory.oom_control:oom_kill"];
+    return [
+        "checkpoint"=>$label,
+        "cgroup_version"=>$version,
+        "usage_bytes"=>$unsigned($parts[1]??""),
+        "peak_bytes"=>$unsigned($parts[2]??""),
+        "limit_events"=>$unsigned($parts[3]??""),
+        "oom_events"=>$unsigned($parts[4]??""),
+        "oom_kill_events"=>$unsigned($parts[5]??""),
+        "sources"=>$sources,
+        "raw_sha256"=>hash("sha256",$raw),
+    ];
+};
+$checkpoints=[];$labels=[];$malformed=false;
+foreach($lines as $line){
+    $separator=strpos($line,"\t");
+    if($separator===false){$malformed=true;continue;}
+    $label=substr($line,0,$separator);$raw=substr($line,$separator+1);
+    if($label===""||isset($labels[$label])){$malformed=true;continue;}
+    $labels[$label]=true;$checkpoint=$parse($label,$raw);
+    $valid=in_array($checkpoint["cgroup_version"],["v1","v2"],true)
+        && is_int($checkpoint["usage_bytes"])&&$checkpoint["usage_bytes"]>=0
+        && is_int($checkpoint["peak_bytes"])&&$checkpoint["peak_bytes"]>0
+        && $checkpoint["peak_bytes"]>=$checkpoint["usage_bytes"]
+        && is_int($checkpoint["limit_events"])&&$checkpoint["limit_events"]>=0
+        && is_int($checkpoint["oom_events"])&&$checkpoint["oom_events"]>=0
+        && is_int($checkpoint["oom_kill_events"])&&$checkpoint["oom_kill_events"]>=0;
+    if(!$valid){$malformed=true;}
+    $checkpoints[]=$checkpoint;
+}
+$expectedLabels=["pre-corpus"];
+foreach(["common_or","max_valid_or_prefix","rare_anchor_and","prefix_fanout"] as $case){
+    for($sample=0;$sample<10;$sample++){$expectedLabels[]="pre-cold-restart-{$case}-{$sample}";}
+}
+$expectedLabels[]="final-workload";
+$actualLabels=array_column($checkpoints,"checkpoint");
+$database=is_array($resources["database"]??null)?$resources["database"]:[];
+$effectiveCgroup=is_array($database["effective_cgroup"]??null)?$database["effective_cgroup"]:[];
+$memory=is_array($database["memory"]??null)?$database["memory"]:[];
+$pre=is_array($memory["pre_corpus"]??null)?$memory["pre_corpus"]:[];
+$limit=(int)($memory["limit_bytes"]??0);$preLimit=(int)($memory["pre_corpus_peak_limit_bytes"]??0);$expectedPreLimit=(int)$argv[4];
+$first=$checkpoints[0]??[];$final=$checkpoints[array_key_last($checkpoints)]??[];
+$versions=array_values(array_unique(array_column($checkpoints,"cgroup_version")));
+$peaks=array_values(array_filter(array_column($checkpoints,"peak_bytes"),"is_int"));
+$limitEvents=array_values(array_filter(array_column($checkpoints,"limit_events"),"is_int"));
+$oomEvents=array_values(array_filter(array_column($checkpoints,"oom_events"),"is_int"));
+$oomKills=array_values(array_filter(array_column($checkpoints,"oom_kill_events"),"is_int"));
+$wholePeak=$peaks===[]?null:max($peaks);$maxLimitEvents=$limitEvents===[]?null:max($limitEvents);
+$maxOom=$oomEvents===[]?null:max($oomEvents);$maxOomKills=$oomKills===[]?null:max($oomKills);
+$failures=is_array($resources["verification"]["gate_failures"]??null)?array_values($resources["verification"]["gate_failures"]):[];
+if($malformed||$actualLabels!==$expectedLabels||($memory["expected_checkpoint_labels"]??null)!==$expectedLabels){$failures[]="database cgroup memory checkpoints do not match the exact ordered 42-checkpoint inventory";}
+if(count($versions)!==1||($versions[0]??null)!==($effectiveCgroup["version"]??null)){$failures[]="database cgroup memory checkpoint versions do not match the effective cgroup";}
+if($first!==$pre){$failures[]="database pre-corpus cgroup memory checkpoint changed before finalization";}
+if(!is_int($wholePeak)||$wholePeak<1||$limit!==1073741824||$wholePeak>$limit){$failures[]="database whole-run cgroup peak is outside the hard 1 GiB limit";}
+if(!is_int($pre["peak_bytes"]??null)||$preLimit!==$expectedPreLimit||$pre["peak_bytes"]>$preLimit){$failures[]="database pre-corpus cgroup peak exceeds 768 MiB";}
+if($maxOom!==0||$maxOomKills!==0){$failures[]="database cgroup recorded an OOM or OOM kill";}
+$memory["checkpoints"]=$checkpoints;
+$memory["expected_checkpoint_labels"]=$expectedLabels;
+$memory["checkpoint_count"]=count($checkpoints);
+$memory["final_checkpoint"]=$final;
+$memory["whole_run_peak_bytes"]=$wholePeak;
+$memory["whole_run_headroom_bytes"]=is_int($wholePeak)?$limit-$wholePeak:null;
+$memory["max_limit_events"]=$maxLimitEvents;
+$memory["oom_events"]=$maxOom;
+$memory["oom_kill_events"]=$maxOomKills;
+$memory["counter_aggregation"]="maximum across restart-delimited cumulative counters";
+$memory["complete"]=true;
+$resources["database"]["memory"]=$memory;
+$resources["verification"]["gate_failures"]=$failures;
+$resources["status"]=$failures===[]?"PASS":"FAIL";
+$json=json_encode($resources,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n";
+if(file_put_contents($argv[3],$json,LOCK_EX)!==strlen($json)||!rename($argv[3],$argv[1])){@unlink($argv[3]);fwrite(STDERR,"Could not atomically update database cgroup memory evidence.\n");exit(1);}
+if($failures!==[]){foreach($failures as $failure){fwrite(STDERR,"BLOCKED: {$failure}.\n");}exit(1);}
+' "${resources}" "${DB_MEMORY_CHECKPOINTS}" "${temporary}" "${DB_PRE_CORPUS_PEAK_LIMIT_BYTES}"
 }
 
 arm_cleanup_escalation() {
@@ -831,11 +936,17 @@ ${DB_ENV}
       # that made 65,536-byte retention exceed this lane's 1 GiB cgroup.
       - --performance-schema-max-sql-text-length=32768
       # 2,048 global events cover every measured request/worker interval with
-      # wide margin while avoiding the default 10,000-row SQL_TEXT allocation.
+      # enough room for the exact 2,003-event targeted-scope attribution while
+      # avoiding the default 10,000-row SQL_TEXT allocation.
       - --performance-schema-events-statements-history-long-size=2048
-      # The proof reads only history_long. Retaining one redundant per-thread
-      # event avoids another autosized SQL_TEXT reserve without losing evidence.
-      - --performance-schema-events-statements-history-size=1
+      # The proof reads only history_long. Do not reserve unused per-thread
+      # history or digest summaries for the 32-KiB statement payload.
+      - --performance-schema-events-statements-history-size=0
+      - --performance-schema-digests-size=0
+      # Twenty-four client connections plus the pinned engines' internal
+      # threads fit well below this reserve. Runtime gates fail if any thread
+      # cannot be instrumented, so this cannot silently weaken attribution.
+      - --performance-schema-max-thread-instances=128
       - --innodb-buffer-pool-size=268435456
       - --tmp-table-size=33554432
       - --max-heap-table-size=33554432
@@ -919,6 +1030,15 @@ timed_compose() {
     timed_host "${label}" "${seconds}" docker compose -f "${COMPOSE_FILE}" "$@"
 }
 
+configure_performance_schema_consumers() {
+    local label="$1"
+    if [[ "${DB_KIND}" == "mariadb" ]]; then
+        timed_compose "${label}" 60 exec -T db mariadb -uroot -pwpfts_root_dev_only -e "UPDATE performance_schema.setup_consumers SET ENABLED='YES' WHERE NAME IN ('events_statements_current','events_statements_history_long'); UPDATE performance_schema.setup_consumers SET ENABLED='NO' WHERE NAME='events_statements_history'; GRANT SELECT ON performance_schema.* TO 'wpfts'@'%'; FLUSH PRIVILEGES;"
+    else
+        timed_compose "${label}" 60 exec -T db mysql -uroot -pwpfts_root_dev_only -e "UPDATE performance_schema.setup_consumers SET ENABLED='YES' WHERE NAME IN ('events_statements_current','events_statements_history_long'); UPDATE performance_schema.setup_consumers SET ENABLED='NO' WHERE NAME='events_statements_history'; GRANT SELECT ON performance_schema.* TO 'wpfts'@'%'; FLUSH PRIVILEGES;"
+    fi
+}
+
 set_run_stage "environment-startup"
 timed_compose environment-up 600 up -d db wordpress
 for _ in $(seq 1 90); do
@@ -953,11 +1073,7 @@ timed_compose baseline-plugin-install 600 run --rm wpcli --url=http://wordpress 
 timed_compose wordpress-config-lock 300 run --rm wpcli --url=http://wordpress config set WP_FTS_INDEX_LOCK_TTL 30 --raw
 timed_compose wordpress-config-cron 300 run --rm wpcli --url=http://wordpress config set DISABLE_WP_CRON true --raw
 
-if [[ "${DB_KIND}" == "mariadb" ]]; then
-    timed_compose performance-schema-enable 60 exec -T db mariadb -uroot -pwpfts_root_dev_only -e "UPDATE performance_schema.setup_consumers SET ENABLED='YES' WHERE NAME IN ('events_statements_current','events_statements_history','events_statements_history_long'); GRANT SELECT ON performance_schema.* TO 'wpfts'@'%'; FLUSH PRIVILEGES;"
-else
-    timed_compose performance-schema-enable 60 exec -T db mysql -uroot -pwpfts_root_dev_only -e "UPDATE performance_schema.setup_consumers SET ENABLED='YES' WHERE NAME IN ('events_statements_current','events_statements_history','events_statements_history_long'); GRANT SELECT ON performance_schema.* TO 'wpfts'@'%'; FLUSH PRIVILEGES;"
-fi
+configure_performance_schema_consumers performance-schema-enable
 
 capture_compose DB_CONTAINER database-container-id 30 ps -q db
 capture_compose WP_CONTAINER wordpress-container-id 30 ps -q wordpress
@@ -1002,8 +1118,39 @@ else
     memory_swap="$(read_first /sys/fs/cgroup/memory/memory.memsw.limit_in_bytes)"
     printf "v1\t%s %s\t%s\t%s\n" "${quota}" "${period}" "${memory}" "${memory_swap}"
 fi'
+CGROUP_MEMORY_PROBE='set -eu
+event_value() {
+    file="$1"
+    wanted="$2"
+    while IFS=" " read -r name value remainder; do
+        if [ "${name}" = "${wanted}" ]; then
+            printf "%s" "${value}"
+            return
+        fi
+    done < "${file}"
+    printf unavailable
+}
+if [ -r /sys/fs/cgroup/cgroup.controllers ]; then
+    current=$(cat /sys/fs/cgroup/memory.current 2>/dev/null || printf unavailable)
+    peak=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || printf unavailable)
+    limit_events=$(event_value /sys/fs/cgroup/memory.events max)
+    oom_events=$(event_value /sys/fs/cgroup/memory.events oom)
+    oom_kill_events=$(event_value /sys/fs/cgroup/memory.events oom_kill)
+    printf "v2\t%s\t%s\t%s\t%s\t%s\n" "${current}" "${peak}" "${limit_events}" "${oom_events}" "${oom_kill_events}"
+else
+    current=$(cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null || printf unavailable)
+    peak=$(cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null || printf unavailable)
+    limit_events=$(cat /sys/fs/cgroup/memory/memory.failcnt 2>/dev/null || printf unavailable)
+    oom_kill_events=$(event_value /sys/fs/cgroup/memory/memory.oom_control oom_kill)
+    # cgroup v1 has no separate cumulative OOM-attempt counter. A zero
+    # memory.failcnt is the stricter portable proof that it never hit the limit.
+    printf "v1\t%s\t%s\t%s\t%s\t%s\n" "${current}" "${peak}" "${limit_events}" "${limit_events}" "${oom_kill_events}"
+fi'
 capture_compose DB_EFFECTIVE_CGROUP database-cgroup-probe 30 exec -T db sh -c "${CGROUP_PROBE}"
 capture_compose WP_EFFECTIVE_CGROUP wordpress-cgroup-probe 30 exec -T wordpress sh -c "${CGROUP_PROBE}"
+: > "${DB_MEMORY_CHECKPOINTS}"
+capture_database_memory_checkpoint pre-corpus
+DB_PRE_CORPUS_MEMORY="${DB_LAST_MEMORY_CHECKPOINT}"
 capture_compose WPCLI_PROBE_CONTAINER wpcli-probe-start 60 run --no-deps -d --entrypoint sh wpcli -c 'sleep 300'
 if [[ -z "${WPCLI_PROBE_CONTAINER}" ]]; then
     echo "BLOCKED: could not create the persistent WP-CLI resource probe container." >&2
@@ -1123,12 +1270,61 @@ $effectiveCgroup = static function (string $label, string $raw, int $expectedMem
     ];
 };
 
+$memoryCheckpoint = static function (string $label, string $raw): array {
+    $parts = explode("\t", trim($raw));
+    $version = $parts[0] ?? "unavailable";
+    $unsigned = static fn(?string $value): ?int => is_string($value)
+        && $value !== ""
+        && strspn($value, "0123456789") === strlen($value)
+            ? (int) $value
+            : null;
+    $sources = $version === "v2"
+        ? ["usage" => "memory.current", "peak" => "memory.peak", "limit_events" => "memory.events:max", "oom_events" => "memory.events:oom", "oom_kill_events" => "memory.events:oom_kill"]
+        : ["usage" => "memory.usage_in_bytes", "peak" => "memory.max_usage_in_bytes", "limit_events" => "memory.failcnt", "oom_events" => "memory.failcnt (conservative)", "oom_kill_events" => "memory.oom_control:oom_kill"];
+
+    return [
+        "checkpoint" => $label,
+        "cgroup_version" => $version,
+        "usage_bytes" => $unsigned($parts[1] ?? null),
+        "peak_bytes" => $unsigned($parts[2] ?? null),
+        "limit_events" => $unsigned($parts[3] ?? null),
+        "oom_events" => $unsigned($parts[4] ?? null),
+        "oom_kill_events" => $unsigned($parts[5] ?? null),
+        "sources" => $sources,
+        "raw_sha256" => hash("sha256", $raw),
+    ];
+};
+
 $databaseImage = $imageEvidence("database", $argv[5], $argv[6], $argv[3], $argv[4], $argv[28]);
 $wordpressImage = $imageEvidence("WordPress", $argv[11], $argv[12], $argv[9], $argv[10], $argv[29]);
 $wpcliImage = $imageEvidence("WP-CLI", $argv[16], $argv[17], $argv[14], $argv[15], $argv[30]);
 $databaseCgroup = $effectiveCgroup("database", $argv[7], 1073741824);
 $wordpressCgroup = $effectiveCgroup("WordPress", $argv[13], 536870912);
 $wpcliCgroup = $effectiveCgroup("WP-CLI", $argv[18], 536870912);
+$databasePreCorpusMemory = $memoryCheckpoint("pre-corpus", $argv[36]);
+$databasePreCorpusPeakLimit = (int) $argv[37];
+$databasePreCorpusValid = $databasePreCorpusMemory["cgroup_version"] === ($databaseCgroup["version"] ?? null)
+    && is_int($databasePreCorpusMemory["usage_bytes"])
+    && $databasePreCorpusMemory["usage_bytes"] >= 0
+    && is_int($databasePreCorpusMemory["peak_bytes"])
+    && $databasePreCorpusMemory["peak_bytes"] > 0
+    && $databasePreCorpusMemory["peak_bytes"] >= $databasePreCorpusMemory["usage_bytes"]
+    && $databasePreCorpusPeakLimit === 805306368
+    && $databasePreCorpusMemory["peak_bytes"] <= $databasePreCorpusPeakLimit
+    && is_int($databasePreCorpusMemory["limit_events"])
+    && $databasePreCorpusMemory["limit_events"] >= 0
+    && $databasePreCorpusMemory["oom_events"] === 0
+    && $databasePreCorpusMemory["oom_kill_events"] === 0;
+if (!$databasePreCorpusValid) {
+    $gates[] = "database pre-corpus cgroup memory must retain at least 256 MiB headroom without OOM";
+}
+$databaseMemoryCheckpointLabels = ["pre-corpus"];
+foreach (["common_or", "max_valid_or_prefix", "rare_anchor_and", "prefix_fanout"] as $case) {
+    for ($sample = 0; $sample < 10; $sample++) {
+        $databaseMemoryCheckpointLabels[] = "pre-cold-restart-{$case}-{$sample}";
+    }
+}
+$databaseMemoryCheckpointLabels[] = "final-workload";
 $packageReproducibility = json_decode((string) file_get_contents($argv[31]), true, 512, JSON_THROW_ON_ERROR);
 $data = [
  "schema" => "relational-fts-resources-v1",
@@ -1144,6 +1340,25 @@ $data = [
      "image_digests" => $databaseImage["actual_repo_digests"],
      "image" => $databaseImage,
      "effective_cgroup" => $databaseCgroup,
+     "memory" => [
+         "schema" => "relational-fts-database-cgroup-memory-v1",
+         "limit_bytes" => 1073741824,
+         "pre_corpus_peak_limit_bytes" => $databasePreCorpusPeakLimit,
+         "pre_corpus" => $databasePreCorpusMemory,
+         "expected_checkpoint_labels" => $databaseMemoryCheckpointLabels,
+         "checkpoints" => [$databasePreCorpusMemory],
+         "checkpoint_count" => 1,
+         "final_checkpoint" => null,
+         "whole_run_peak_bytes" => $databasePreCorpusMemory["peak_bytes"],
+         "whole_run_headroom_bytes" => is_int($databasePreCorpusMemory["peak_bytes"])
+             ? 1073741824 - $databasePreCorpusMemory["peak_bytes"]
+             : null,
+         "max_limit_events" => $databasePreCorpusMemory["limit_events"],
+         "oom_events" => $databasePreCorpusMemory["oom_events"],
+         "oom_kill_events" => $databasePreCorpusMemory["oom_kill_events"],
+         "counter_aggregation" => "maximum across restart-delimited cumulative counters",
+         "complete" => false,
+     ],
  ],
  "wordpress" => [
      "limits" => $argv[8],
@@ -1186,7 +1401,8 @@ if ($gates !== []) {
   "${WPCLI_DIGEST}" "${WPCLI_IMAGE_ID}" "${WPCLI_IMAGE}" "${WPCLI_RUN_IMAGE}" "${WPCLI_EFFECTIVE_CGROUP}" \
   "${PROFILE}" "${DOCUMENTS}" "${ENGINE}" "${TEST_SCRIPT_SHA256}" "${MUTATION_PROOF_SHA256}" "${ISOLATED_BOUNDARIES_SHA256}" "${ALLOW_DIRTY}" "${EVIDENCE_DIR}/resources.json" \
   "${OLD_POSTING_FRONTIER_SHA256}" "${DB_RUNNING_IMAGE_ID}" "${WP_RUNNING_IMAGE_ID}" "${WPCLI_RUNNING_IMAGE_ID}" \
-  "${EVIDENCE_DIR}/package-reproducibility.json" "${RUNNER_OS:-local}" "${RUNNER_ARCH:-unknown}" "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+  "${EVIDENCE_DIR}/package-reproducibility.json" "${RUNNER_OS:-local}" "${RUNNER_ARCH:-unknown}" "${ImageOS:-unknown}" "${ImageVersion:-unknown}" \
+  "${DB_PRE_CORPUS_MEMORY}" "${DB_PRE_CORPUS_PEAK_LIMIT_BYTES}"
 
 ACTIVE_SOURCE_SHA="${BASELINE_SHA}"
 ACTIVE_ZIP_SHA256="${BASELINE_ZIP_SHA256}"
@@ -1811,8 +2027,14 @@ set_run_stage "cold-cache"
 run_php_phase cold-prepare > "${EVIDENCE_DIR}/cold-prepare.log"
 for case_id in common_or max_valid_or_prefix rare_anchor_and prefix_fanout; do
     for sample in $(seq 0 $((COLD_SAMPLES - 1))); do
+        # Docker may recreate/reset a container cgroup across restart. Retain
+        # this segment's cumulative peak and OOM counters before that boundary.
+        capture_database_memory_checkpoint "pre-cold-restart-${case_id}-${sample}"
         timed_compose cold-database-restart 300 restart db >/dev/null
         wait_for_database
+        # Both supported servers reset at least one statement consumer on
+        # restart, so restore the exact attribution state before every sample.
+        configure_performance_schema_consumers "cold-performance-schema-enable-${case_id}-${sample}"
         run_php_phase cold-sample \
           -e "WP_FTS_WC_CASE=${case_id}" \
           -e "WP_FTS_WC_SAMPLE=${sample}" \
@@ -1918,6 +2140,8 @@ fi
 run_php_phase drain > "${EVIDENCE_DIR}/drain.log"
 set_run_stage "finalization"
 record_installed_tree_binding pre-finalize
+capture_database_memory_checkpoint final-workload
+finalize_database_memory_evidence
 run_php_phase finalize > "${EVIDENCE_DIR}/finalize.log"
 
 if grep -R -E '(^|\[)(SKIP|PENDING)(:|\])' "${EVIDENCE_DIR}" --exclude='relational-fts-evidence.json' >/dev/null 2>&1; then

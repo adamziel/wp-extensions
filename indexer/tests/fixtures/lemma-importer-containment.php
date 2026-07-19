@@ -1528,6 +1528,7 @@ function wp_fts_importer_process_evidence(float $started): array
     return [
         'elapsed_seconds' => microtime(true) - $started,
         'php_peak_bytes' => memory_get_peak_usage(true),
+        'php_ini_loaded_file' => php_ini_loaded_file(),
         'proc_status' => wp_fts_importer_proc_status(),
     ];
 }

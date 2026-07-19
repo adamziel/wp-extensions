@@ -71,6 +71,12 @@ jobs:
           timeout --signal=TERM --kill-after=10s 180s \
             php -n -d memory_limit=128M indexer/tests/quality/jieba-indexed-multi-run.php \
             > "${{ runner.temp }}/jieba-memory-no-ini.json"
+          timeout --signal=TERM --kill-after=10s 60s \
+            php -d memory_limit=128M components/full-text-search/tests/jieba-query-producer-bounds.php \
+            > "${{ runner.temp }}/jieba-memory-query-normal.json"
+          timeout --signal=TERM --kill-after=10s 60s \
+            php -n -d memory_limit=128M components/full-text-search/tests/jieba-query-producer-bounds.php \
+            > "${{ runner.temp }}/jieba-memory-query-no-ini.json"
           timeout --signal=TERM --kill-after=10s 180s \
             php -d memory_limit=128M components/full-text-search/tests/smoke.php
           timeout --signal=TERM --kill-after=10s 180s \
@@ -122,9 +128,15 @@ jobs:
           include-hidden-files: true
 
   pull-request-100k:
-    name: 100k / MariaDB 10.11
+    name: 100k / ${{ matrix.engine }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        engine:
+          - mariadb-10.11
+          - mysql-8.0
     steps:
       - uses: actions/checkout@v4
         with:
@@ -357,9 +369,9 @@ jobs:
         timeout-minutes: 345
         run: |
           indexer/tools/run-relational-fts-worst-case.sh \
-            --engine=mariadb-10.11 \
+            --engine='${{ matrix.engine }}' \
             --profile=100k \
-            --output=.context/evidence-mariadb-100k.json
+            --output=".context/evidence-${{ matrix.engine }}-100k.json"
       - name: Collect pre-run evidence after clean-source proof
         if: always()
         env:
@@ -374,9 +386,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: relational-fts-mariadb-100k
+          name: relational-fts-${{ matrix.engine }}-100k
           path: |
-            .context/evidence-mariadb-100k.json*
+            .context/evidence-${{ matrix.engine }}-100k.json*
             .context/jieba-*
           if-no-files-found: error
           include-hidden-files: true

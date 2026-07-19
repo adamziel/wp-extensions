@@ -255,9 +255,17 @@ final class WP_FTS_ChineseJiebaSegmenter
     /**
      * Segment one Chinese CJK run and retain fallback n-grams for recall.
      *
+     * `$maxTokens` is a producer ceiling used by bounded query analysis. The
+     * caller passes its occurrence allowance plus one so it can observe and
+     * reject the first excess item. When fallback n-grams alone reach that
+     * ceiling, they prove the query cannot be accepted and return before any
+     * dictionary prefix is read. Calls without a ceiling retain complete direct
+     * segmentation; the analyzer's ceiling is one item above its accepted
+     * indexing output, so accepted documents retain the same complete order.
+     *
      * @return string[]
      */
-    public function __invoke(string $run, string $language): array
+    public function __invoke(string $run, string $language, ?int $maxTokens = null): array
     {
         if (self::base_language($language) !== $this->language) {
             return [];
@@ -268,9 +276,14 @@ final class WP_FTS_ChineseJiebaSegmenter
         // UTF-8 character materialization and candidate-by-offset matching are
         // otherwise proportional to an unchecked complete run.
         WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($run));
+        if ($maxTokens !== null && $maxTokens <= 0) {
+            return [];
+        }
         if (array_key_exists($run, $this->runCache)) {
             $this->touch_run($run);
-            return $this->runCache[$run];
+            return $maxTokens === null
+                ? $this->runCache[$run]
+                : array_slice($this->runCache[$run], 0, $maxTokens);
         }
         $chars = $this->utf8_chars($run);
         if ($chars === []) {
@@ -280,6 +293,19 @@ final class WP_FTS_ChineseJiebaSegmenter
             $this->store_run_tokens($run, $chars);
             return $chars;
         }
+
+        if ($maxTokens !== null) {
+            $boundedFallbackTokens = [];
+            $fallbackSeen = [];
+            foreach ($this->fallback_cjk_tokens($chars) as $token) {
+                $this->append_unique($boundedFallbackTokens, $fallbackSeen, $token);
+                if (count($boundedFallbackTokens) >= $maxTokens) {
+                    return $boundedFallbackTokens;
+                }
+            }
+            unset($boundedFallbackTokens, $fallbackSeen);
+        }
+
         $preloaded = $this->preload_prefixes($chars);
         $activePrefixes = $preloaded['active'];
         $runLookup = $preloaded['lookup'];
@@ -289,11 +315,20 @@ final class WP_FTS_ChineseJiebaSegmenter
         foreach ($this->dictionary_segments($chars, $activePrefixes, $runLookup['matches'] ?? null) as $segment) {
             foreach ($this->search_subsegments($segment, $activePrefixes, $runLookup['words'] ?? null) as $subsegment) {
                 $this->append_unique($tokens, $seen, $subsegment);
+                if ($maxTokens !== null && count($tokens) >= $maxTokens) {
+                    return $tokens;
+                }
             }
             $this->append_unique($tokens, $seen, $segment);
+            if ($maxTokens !== null && count($tokens) >= $maxTokens) {
+                return $tokens;
+            }
         }
         foreach ($this->fallback_cjk_tokens($chars) as $token) {
             $this->append_unique($tokens, $seen, $token);
+            if ($maxTokens !== null && count($tokens) >= $maxTokens) {
+                return $tokens;
+            }
         }
 
         $this->store_run_tokens($run, $tokens);
@@ -1431,24 +1466,22 @@ final class WP_FTS_ChineseJiebaSegmenter
 
     /**
      * @param string[] $chars
-     * @return string[]
+     * @return iterable<int,string>
      */
-    private function fallback_cjk_tokens(array $chars): array
+    private function fallback_cjk_tokens(array $chars): iterable
     {
         $count = count($chars);
         if ($count <= 1) {
-            return $chars;
+            yield from $chars;
+            return;
         }
 
-        $tokens = [];
         $maxLength = min(self::FALLBACK_MAX_NGRAM_LENGTH, $count);
         for ($length = 1; $length <= $maxLength; $length++) {
             for ($offset = 0; $offset <= $count - $length; $offset++) {
-                $tokens[] = implode('', array_slice($chars, $offset, $length));
+                yield implode('', array_slice($chars, $offset, $length));
             }
         }
-
-        return $tokens;
     }
 
     /**

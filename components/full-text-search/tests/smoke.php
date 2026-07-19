@@ -30,6 +30,7 @@ $hardeningChecks += require __DIR__ . '/jieba-scan-bounds.php';
 $hardeningChecks += require __DIR__ . '/jieba-line-bounds.php';
 $hardeningChecks += require __DIR__ . '/jieba-cache-bounds.php';
 $hardeningChecks += require __DIR__ . '/jieba-indexed-multi-run.php';
+$hardeningChecks += require __DIR__ . '/jieba-query-producer-bounds.php';
 $hardeningChecks += require __DIR__ . '/tokenizer-yield-bounds.php';
 $hardeningChecks += require __DIR__ . '/extension-output-bounds.php';
 $hardeningChecks += require __DIR__ . '/html-text-stream-boundary-bounds.php';
