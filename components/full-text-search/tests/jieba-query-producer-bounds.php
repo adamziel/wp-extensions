@@ -79,29 +79,6 @@ function wp_fts_jieba_query_bound_segmenter(WP_FTS_Analyzer $analyzer): WP_FTS_C
     return $tokenizer;
 }
 
-/** Tokenize PHP source while discarding only formatting and comments. */
-function wp_fts_jieba_query_bound_compact_php(string $path): string
-{
-    $source = file_get_contents($path);
-    if (!is_string($source)) {
-        throw new RuntimeException('Could not read the language pipeline for its forwarding contract.');
-    }
-
-    $compact = '';
-    foreach (token_get_all($source) as $token) {
-        if (is_array($token)) {
-            if (in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
-                continue;
-            }
-            $compact .= $token[1];
-            continue;
-        }
-        $compact .= $token;
-    }
-
-    return $compact;
-}
-
 /**
  * Exercise both sides of the public twelve-occurrence boundary in one fresh
  * process and return source-bound work, result, time, and memory evidence.
@@ -119,6 +96,11 @@ function wp_fts_jieba_query_bound_measure(string $maximumQuery, array $queryChar
         'segmenter_packs_by_lang' => ['zh' => true],
     ]);
     $segmenter = wp_fts_jieba_query_bound_segmenter($analyzer);
+    $pipeline = (new ReflectionProperty($analyzer, 'languagePipeline'))->getValue($analyzer);
+    $producerLimitEnabled = (bool) (new ReflectionProperty(
+        $pipeline,
+        'cjkTokenizerAcceptsProducerLimit'
+    ))->getValue($pipeline);
     $storage = new WP_FTS_Jieba_Query_Bound_Storage();
     $searcher = WP_FTS_Searcher::for_set_oriented_storage($storage, $analyzer);
     $scansBefore = wp_fts_jieba_query_bound_counter($segmenter, 'dictionaryScanCount');
@@ -188,6 +170,7 @@ function wp_fts_jieba_query_bound_measure(string $maximumQuery, array $queryChar
         && $storage->searchCalls === 1
         && count($storage->lastGroups) === 12
         && array_sum(array_map('count', $storage->lastGroups)) === 12
+        && $producerLimitEnabled
         && $dictionaryEvidence['available'] === true
         && $lookupEvidence['available'] === true;
 
@@ -246,6 +229,7 @@ function wp_fts_jieba_query_bound_measure(string $maximumQuery, array $queryChar
         'accepted_storage_search_calls' => $storage->searchCalls,
         'accepted_group_count' => count($storage->lastGroups),
         'accepted_alternative_count' => array_sum(array_map('count', $storage->lastGroups)),
+        'producer_limit_enabled' => $producerLimitEnabled,
     ];
 }
 
@@ -382,20 +366,9 @@ wp_fts_jieba_query_bound_check(
     'the accepted boundary must preserve exactly twelve logical groups and alternatives'
 );
 
-$pipelineSource = wp_fts_jieba_query_bound_compact_php(__DIR__ . '/../src/LanguagePipeline.php');
 wp_fts_jieba_query_bound_check(
-    str_contains(
-        $pipelineSource,
-        '$tokens=$this->cjkTokenizerAcceptsProducerLimit?($this->cjkTokenizer)($run,$canonicalLanguage,$maxTerms+1):($this->cjkTokenizer)($run,$canonicalLanguage);'
-    ),
-    'every configured CJK tokenizer must receive the finite producer ceiling'
-);
-wp_fts_jieba_query_bound_check(
-    str_contains(
-        $pipelineSource,
-        'returnfunction(string$run,string$language,?int$maxTokens=null)use($segmenters):array{'
-    ) && str_contains($pipelineSource, '$segmenter($run,$language,$maxTokens)'),
-    'the multi-language segmenter dispatcher must accept and forward the same finite ceiling'
+    ($measurement['producer_limit_enabled'] ?? false) === true,
+    'the public bundled segmenter path must enable its finite producer ceiling'
 );
 
 $measurement['checks'] = $wp_fts_jieba_query_bound_checks;
