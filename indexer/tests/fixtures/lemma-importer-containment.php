@@ -704,13 +704,16 @@ function wp_fts_importer_chunk_file_boundary_case(): array
 /** @return array<string,mixed> */
 function wp_fts_importer_physical_cap_case(bool $polimorf): array
 {
-    $started = microtime(true);
+    $totalStarted = microtime(true);
     $kind = $polimorf ? 'polimorf' : 'generic';
     $root = wp_fts_importer_fixture_root('physical-' . $kind);
     try {
         $source = $root . '/high-entropy.tsv';
         $rows = 300000;
+        $sourceGenerationStarted = microtime(true);
         wp_fts_importer_write_high_entropy_rows($source, $rows, $polimorf);
+        $sourceGenerationSeconds = microtime(true) - $sourceGenerationStarted;
+        $started = microtime(true);
         $out = $root . '/pack';
         $failure = null;
         try {
@@ -726,6 +729,8 @@ function wp_fts_importer_physical_cap_case(bool $polimorf): array
 
         return wp_fts_importer_process_evidence($started) + [
             'case' => 'physical-' . $kind,
+            'source_generation_seconds' => $sourceGenerationSeconds,
+            'total_elapsed_seconds' => microtime(true) - $totalStarted,
             'source_rows' => $rows,
             'source_bytes' => filesize($source),
             'runtime_lookup_byte_limit' => WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_LOOKUP_BYTES_PER_PACK,
@@ -877,6 +882,9 @@ function wp_fts_importer_plain_fixture_case(): array
                 'runtime_rows' => is_array($summary) ? ($summary['runtime']['rows'] ?? null) : null,
                 'activatable' => $activatable,
             ];
+            unset($pack);
+            gc_collect_cycles();
+            gc_mem_caches();
         }
 
         return wp_fts_importer_process_evidence($started) + [

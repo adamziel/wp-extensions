@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-test_case('current-v9 dropped scope keyset schedules maintenance, repairs, and resumes the scope', function (): void {
+test_case_with_pdo_sqlite_fixture('current-v9 dropped scope keyset schedules maintenance, repairs, and resumes the scope', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     wp_fts_v4_regression_add_source_post($wpdb, 42, '<p>repaired exact target</p>', '');
@@ -118,7 +118,7 @@ WHERE kind = 'scope'"
     );
 });
 
-test_case('current-v9 malformed scope keyset fails before selective SQL and schedules maintenance', function (): void {
+test_case_with_pdo_sqlite_fixture('current-v9 malformed scope keyset fails before selective SQL and schedules maintenance', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     wp_fts_v4_regression_add_source_post($wpdb, 52, '<p>malformed keyset target</p>', '');
@@ -176,7 +176,7 @@ test_case('current-v9 malformed scope keyset fails before selective SQL and sche
     );
 });
 
-test_case('current-v9 malformed filtered keyset fails in one narrow SQLite metadata read', function (): void {
+test_case_with_pdo_sqlite_fixture('current-v9 malformed filtered keyset fails in one narrow SQLite metadata read', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $storage = new WP_FTS_Storage_Mysql($wpdb);

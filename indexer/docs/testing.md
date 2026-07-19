@@ -37,6 +37,11 @@ This verifies the fallback paths used when shared optional extensions are
 missing. Some PHP builds compile zlib or other capabilities into the binary, so
 the deterministic gzip-unavailable contract also uses the generator's existing
 capability seam instead of assuming `php -n` removed a compiled-in extension.
+The real-SQL regression adapter is test-only and requires PDO SQLite. A `php -n`
+binary without that driver reports each affected adapter case as `[SKIP]` and
+includes it in the summary's `skipped` count; extension-enabled lanes must load
+the driver and fail rather than silently losing those regressions. Production
+indexing continues through WordPress `$wpdb` and has no PDO dependency.
 
 ## Provider Compatibility Evidence
 

@@ -24,6 +24,9 @@ const WP_FTS_WC_WARMUP_COUNT = 20;
 const WP_FTS_WC_WARM_SAMPLE_COUNT = 200;
 const WP_FTS_WC_COLD_SAMPLE_COUNT = 10;
 const WP_FTS_WC_IDLE_HTTP_REQUEST_COUNT = 100;
+const WP_FTS_WC_PERFORMANCE_SCHEMA_SQL_TEXT_BYTES = 32768;
+const WP_FTS_WC_PERFORMANCE_SCHEMA_HISTORY_LONG_EVENTS = 2048;
+const WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_HISTORY_EVENTS = 1;
 const WP_FTS_WC_FAILED_SEARCH_MIN_CONTROL_STATEMENTS = 2;
 const WP_FTS_WC_FAILED_SEARCH_MAX_CONTROL_STATEMENTS = 4;
 const WP_FTS_WC_FAILED_SEARCH_MAX_PLUGIN_STATEMENTS = 5;
@@ -8086,7 +8089,7 @@ FROM `{$sequence}` sequence"
 
         if (!function_exists('pll_get_post_language')) {
             /** Make Polylang detectable while forcing the bounded relation fallback. */
-            function pll_get_post_language(mixed $postId = null, mixed $field = null): false
+            function pll_get_post_language(mixed $postId = null, mixed $field = null): bool
             {
                 return false;
             }
@@ -17241,7 +17244,7 @@ function wp_fts_wc_assert_runtime(): void
     if (!isset($wpdb) || !is_object($wpdb)) {
         throw new RuntimeException('WordPress loaded without $wpdb.');
     }
-    $row = $wpdb->get_row('SELECT VERSION() AS version, @@version_comment AS comment, @@innodb_buffer_pool_size AS buffer_pool, @@tmp_table_size AS tmp_table_size, @@max_heap_table_size AS max_heap_table_size, @@max_connections AS max_connections, @@innodb_flush_log_at_trx_commit AS flush_mode, @@performance_schema_max_sql_text_length AS performance_schema_sql_bytes');
+    $row = $wpdb->get_row('SELECT VERSION() AS version, @@version_comment AS comment, @@innodb_buffer_pool_size AS buffer_pool, @@tmp_table_size AS tmp_table_size, @@max_heap_table_size AS max_heap_table_size, @@max_connections AS max_connections, @@innodb_flush_log_at_trx_commit AS flush_mode, @@performance_schema_max_sql_text_length AS performance_schema_sql_bytes, @@performance_schema_events_statements_history_long_size AS performance_schema_history_long_events, @@performance_schema_events_statements_history_size AS performance_schema_thread_history_events');
     if (!is_object($row)) {
         throw new RuntimeException('Could not read the MySQL/MariaDB runtime: ' . (string) $wpdb->last_error);
     }
@@ -17282,7 +17285,18 @@ function wp_fts_wc_assert_runtime(): void
     wp_fts_wc_assert((int) $row->max_heap_table_size === 33554432, 'max_heap_table_size must be exactly 32 MiB.');
     wp_fts_wc_assert((int) $row->max_connections === 24, 'max_connections must be exactly 24.');
     wp_fts_wc_assert((int) $row->flush_mode === 1, 'innodb_flush_log_at_trx_commit must remain 1.');
-    wp_fts_wc_assert((int) $row->performance_schema_sql_bytes >= 65536, 'Performance Schema must retain at least 65,536 SQL bytes for exact statement attribution.');
+    wp_fts_wc_assert(
+        (int) $row->performance_schema_sql_bytes === WP_FTS_WC_PERFORMANCE_SCHEMA_SQL_TEXT_BYTES,
+        'Performance Schema must retain exactly 32,768 SQL bytes for complete bounded-statement attribution.'
+    );
+    wp_fts_wc_assert(
+        (int) $row->performance_schema_history_long_events === WP_FTS_WC_PERFORMANCE_SCHEMA_HISTORY_LONG_EVENTS,
+        'Performance Schema must retain exactly 2,048 global statement events.'
+    );
+    wp_fts_wc_assert(
+        (int) $row->performance_schema_thread_history_events === WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_HISTORY_EVENTS,
+        'Performance Schema must retain exactly one redundant per-thread statement event.'
+    );
     wp_fts_wc_assert(
         function_exists('wp_convert_hr_to_bytes') && wp_convert_hr_to_bytes((string) ini_get('memory_limit')) === 134217728,
         'PHP memory_limit must be exactly 128 MiB.'
@@ -17873,7 +17887,7 @@ function wp_fts_wc_runtime_evidence(): array
 {
     global $wpdb;
 
-    $row = $wpdb->get_row('SELECT VERSION() AS version, @@version_comment AS comment, @@innodb_buffer_pool_size AS buffer_pool, @@tmp_table_size AS tmp_table_size, @@max_heap_table_size AS max_heap_table_size, @@max_connections AS max_connections, @@innodb_flush_log_at_trx_commit AS flush_mode, @@performance_schema_max_sql_text_length AS performance_schema_sql_bytes');
+    $row = $wpdb->get_row('SELECT VERSION() AS version, @@version_comment AS comment, @@innodb_buffer_pool_size AS buffer_pool, @@tmp_table_size AS tmp_table_size, @@max_heap_table_size AS max_heap_table_size, @@max_connections AS max_connections, @@innodb_flush_log_at_trx_commit AS flush_mode, @@performance_schema_max_sql_text_length AS performance_schema_sql_bytes, @@performance_schema_events_statements_history_long_size AS performance_schema_history_long_events, @@performance_schema_events_statements_history_size AS performance_schema_thread_history_events');
 
     return [
         'version' => (string) ($row->version ?? ''),
@@ -17884,6 +17898,8 @@ function wp_fts_wc_runtime_evidence(): array
         'max_connections' => (int) ($row->max_connections ?? 0),
         'innodb_flush_log_at_trx_commit' => (int) ($row->flush_mode ?? 0),
         'performance_schema_max_sql_text_length' => (int) ($row->performance_schema_sql_bytes ?? 0),
+        'performance_schema_events_statements_history_long_size' => (int) ($row->performance_schema_history_long_events ?? 0),
+        'performance_schema_events_statements_history_size' => (int) ($row->performance_schema_thread_history_events ?? 0),
         'php_version' => PHP_VERSION,
         'php_memory_limit' => ini_get('memory_limit'),
     ];
@@ -21186,6 +21202,10 @@ function wp_fts_wc_performance_schema_request_events(string $requestId, bool $fr
         $startEvent,
         $endEvent
     ), ARRAY_A) ?: [];
+    wp_fts_wc_assert(
+        count($rows) <= intdiv(WP_FTS_WC_PERFORMANCE_SCHEMA_HISTORY_LONG_EVENTS, 2),
+        'HTTP request attribution consumed more than half of the fixed Performance Schema history ring.'
+    );
     $events = array_map(static fn(array $row): array => [
         'thread_id' => (int) ($row['THREAD_ID'] ?? 0),
         'event_id' => (int) ($row['EVENT_ID'] ?? 0),
@@ -21249,6 +21269,9 @@ function wp_fts_wc_performance_schema_request_events(string $requestId, bool $fr
         'tagged_start_event_id' => $taggedStartEvent,
         'end_event_id' => $endEvent,
         'terminal_event_count' => count($endEvents),
+        'history_long_capacity' => WP_FTS_WC_PERFORMANCE_SCHEMA_HISTORY_LONG_EVENTS,
+        'history_long_event_count' => count($rows),
+        'history_long_headroom' => WP_FTS_WC_PERFORMANCE_SCHEMA_HISTORY_LONG_EVENTS - count($rows),
         'all_connection_events' => $events,
         'untagged_connection_prefix_events' => $untaggedConnectionPrefixEvents,
         'unattributed_connection_events' => $unattributedConnectionEvents,

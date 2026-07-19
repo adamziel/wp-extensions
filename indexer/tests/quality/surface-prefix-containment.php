@@ -123,7 +123,7 @@ test_case('surface rows stay proportional to source tokens instead of token leng
     assert_same(20000, $repeatedSurfaces[WP_FTS_TermNamespace::namespace_term('en', 'repeating')] ?? null, 'the one repeated surface row must retain its complete source-token frequency');
 });
 
-test_case('a filtered final token cannot turn the previous word into a prefix', function (): void {
+test_case_with_pdo_sqlite_fixture('a filtered final token cannot turn the previous word into a prefix', function (): void {
     $analyzer = new WP_FTS_Analyzer([
         'auto_detect_language' => false,
         'default_lang' => 'en',

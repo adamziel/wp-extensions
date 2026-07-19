@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-test_case('relational query alternatives share their position even when analyzer output is reordered', function (): void {
+test_case_with_pdo_sqlite_fixture('relational query alternatives share their position even when analyzer output is reordered', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     wp_fts_v4_regression_add_post($wpdb, 1, '2026-01-01 00:00:00');
     wp_fts_v4_regression_add_term($wpdb, 'surface', [1 => 100.0]);
@@ -37,7 +37,7 @@ test_case('relational query alternatives share their position even when analyzer
     assert_same(3, $payload['explain']['resolved_alternatives'] ?? null, 'both alternatives from the first position should remain in its one group');
 });
 
-test_case('relational v4 regression keeps a signed recency cursor on its original scoring clock', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 regression keeps a signed recency cursor on its original scoring clock', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     for ($postId = 1; $postId <= 6; $postId++) {
         wp_fts_v4_regression_add_post(
@@ -82,7 +82,7 @@ test_case('relational v4 regression keeps a signed recency cursor on its origina
     );
 });
 
-test_case('relational recency cursors retain posts with zero GMT dates', function (): void {
+test_case_with_pdo_sqlite_fixture('relational recency cursors retain posts with zero GMT dates', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     $dates = [
         1 => '2026-01-05 00:00:00',
@@ -172,7 +172,7 @@ test_case('relational v4 cursor fingerprints are bound to one multisite index na
     assert_true(!hash_equals($mainHash, $siteHash), 'a network-wide signing salt must not make a cursor replayable against another blog index');
 });
 
-test_case('relational v6 integerizes surface-range scores before forward and reverse cursors', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v6 integerizes surface-range scores before forward and reverse cursors', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     for ($postId = 10; $postId <= 15; $postId++) {
         wp_fts_v4_regression_add_post($wpdb, $postId, '2026-02-01 00:00:00');
@@ -215,7 +215,7 @@ test_case('relational v6 integerizes surface-range scores before forward and rev
     );
 });
 
-test_case('relational v4 regression rejects cross-query and cross-filter cursors', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 regression rejects cross-query and cross-filter cursors', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     for ($postId = 21; $postId <= 26; $postId++) {
         wp_fts_v4_regression_add_post($wpdb, $postId, '2026-03-' . str_pad((string) ($postId - 20), 2, '0', STR_PAD_LEFT) . ' 00:00:00');
@@ -243,7 +243,7 @@ test_case('relational v4 regression rejects cross-query and cross-filter cursors
     }
 });
 
-test_case('relational v4 regression rejects cursors after the durable search epoch advances', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 regression rejects cursors after the durable search epoch advances', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     for ($postId = 31; $postId <= 34; $postId++) {
         wp_fts_v4_regression_add_post($wpdb, $postId, '2026-03-10 00:00:00');
@@ -277,7 +277,7 @@ test_case('relational v4 regression rejects cursors after the durable search epo
     assert_true(!str_contains(implode("\n", $wpdb->queries), '/* wp_fts:rank */'), 'stale cursor rejection must issue no ranking statement');
 });
 
-test_case('relational v4 search statements fail closed when publication changes between bounded reads', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 search statements fail closed when publication changes between bounded reads', function (): void {
     $search = static function (string $mutateBefore): array {
         [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
         wp_fts_v4_regression_add_post($wpdb, 35, '2026-03-10 00:00:00');
@@ -317,7 +317,7 @@ test_case('relational v4 search statements fail closed when publication changes 
     }
 });
 
-test_case('relational v4 search uses one authoritative sentinel per statement including valid zero hits', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 search uses one authoritative sentinel per statement including valid zero hits', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     wp_fts_v4_regression_add_post($wpdb, 36, '2026-03-10 00:00:00', 'post', 'draft');
     wp_fts_v4_regression_add_term($wpdb, 'snapshotzerohit', [36 => 100.0]);
@@ -349,7 +349,7 @@ test_case('relational v4 search uses one authoritative sentinel per statement in
     assert_same(1, substr_count($hydrationWpdb->queries[2] ?? '', 'schema_option.option_name'), 'page-sized hydration should evaluate one publication sentinel');
 });
 
-test_case('relational v4 cursors cannot cross a capability publication with an unchanged epoch', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 cursors cannot cross a capability publication with an unchanged epoch', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     for ($postId = 38; $postId <= 41; $postId++) {
         wp_fts_v4_regression_add_post($wpdb, $postId, '2026-03-10 00:00:00');
@@ -393,7 +393,7 @@ test_case('relational v4 cursors cannot cross a capability publication with an u
     assert_true(!str_contains(implode("\n", $wpdb->queries), '/* wp_fts:rank */'), 'a cross-capability cursor must issue no ranking statement');
 });
 
-test_case('relational v4 validates cursors before every empty or impossible search return', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 validates cursors before every empty or impossible search return', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     for ($postId = 41; $postId <= 44; $postId++) {
         wp_fts_v4_regression_add_post($wpdb, $postId, '2026-03-11 00:00:00');
@@ -474,7 +474,7 @@ test_case('relational v4 validates cursors before every empty or impossible sear
     assert_same([], $wpdb->queries, 'an analyzer-empty cursor request should reject before storage SQL');
 });
 
-test_case('relational planning cardinality is independent of adversarial lexical neighbors', function (): void {
+test_case_with_pdo_sqlite_fixture('relational planning cardinality is independent of adversarial lexical neighbors', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     wp_fts_v4_regression_add_post($wpdb, 51, '2026-03-12 00:00:00');
     wp_fts_v4_regression_add_term($wpdb, 'collisiontarget', [51 => 100.0]);
@@ -511,7 +511,7 @@ test_case('relational planning cardinality is independent of adversarial lexical
     assert_contains('wp_fts_term_identity', $explain, 'the adversarial plan should use the unique composite identity index');
 });
 
-test_case('relational v4 pagination advances across a full K+1 window of oversized legacy rows', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 pagination advances across a full K+1 window of oversized legacy rows', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     for ($postId = 61; $postId <= 63; $postId++) {
         wp_fts_v4_regression_add_post($wpdb, $postId, '2026-03-13 00:00:00');
@@ -576,7 +576,7 @@ test_case('relational v4 pagination advances across a full K+1 window of oversiz
     assert_same([75], array_column($backAtOrigin['results'], 'doc_id'), 'the reverse progress cursor should reach the original returnable page without looping');
 });
 
-test_case('relational v6 ranges over one normalized surface per indexed token', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v6 ranges over one normalized surface per indexed token', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     wp_fts_v4_regression_add_post($wpdb, 900, '2026-04-01 00:00:00');
     wp_fts_v4_regression_add_term($wpdb, 'construction', [900 => 0.001]);
@@ -644,7 +644,7 @@ test_case('relational visibility never walks taxonomy relationships per ranked c
     assert_contains('LEFT JOIN wp_fts_work dirty_mysql57 FORCE INDEX (dirty)', (string) ($visibility['joins'] ?? ''), 'dirty visibility should always probe the post-first work index');
 });
 
-test_case('relational v6 real Russian ambiguity ranges on the typed surface without replacing exact lemmas', function (): void {
+test_case('relational v6 real Russian ambiguity retains exact lemmas without mbstring', function (): void {
     assert_or_pending(
         WP_FTS_AnalyzerPackValidator::gzip_available(),
         'gzip support should be available for the bundled Russian real-pack prefix regression',
@@ -675,6 +675,15 @@ test_case('relational v6 real Russian ambiguity ranges on the typed surface with
         !in_array('матери', array_column($analysis, 'term'), true),
         'the regression surface must differ from every lemma or it cannot detect a lemma-derived prefix identity'
     );
+});
+
+test_case_with_pdo_sqlite_fixture('relational v6 real Russian ambiguity ranges on the typed surface without replacing exact lemmas', function (): void {
+    $manifest = dirname(__DIR__, 2) . '/resources/analyzer-packs/ru-unimorph-rus-50dcabfd0a04/manifest.json';
+    $analyzer = new WP_FTS_Analyzer([
+        'default_lang' => 'ru',
+        'auto_detect_language' => false,
+        'lemmatizer_packs_by_lang' => ['ru' => $manifest],
+    ]);
 
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     $terms = [
@@ -722,7 +731,7 @@ test_case('relational v6 real Russian ambiguity ranges on the typed surface with
     assert_same(2, count($wpdb->queries), 'an unhydrated real-pack prefix search should use exactly one plan and one rank statement');
 });
 
-test_case('relational v6 AND prefixes intersect one range-led scan with exact candidates', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v6 AND prefixes intersect one range-led scan with exact candidates', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     for ($postId = 1; $postId <= 100; $postId++) {
         wp_fts_v4_regression_add_post($wpdb, $postId, '2026-04-02 00:00:00');
@@ -801,7 +810,7 @@ test_case('relational v6 AND prefixes intersect one range-led scan with exact ca
     assert_same(4, count($wpdb->queries), 'two selective prefix pages must remain exactly two statements each');
 });
 
-test_case('relational v6 broad non-anchor prefixes execute candidate-first with exact score', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v6 broad non-anchor prefixes execute candidate-first with exact score', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     $wpdb->dbh->beginTransaction();
     for ($postId = 1; $postId <= 8193; $postId++) {
@@ -845,7 +854,7 @@ test_case('relational v6 broad non-anchor prefixes execute candidate-first with 
     assert_same(2, count($wpdb->queries), 'candidate-first AND must remain exactly one plan plus one rank statement');
 });
 
-test_case('relational v6 unavailable surface ranges use exact probes without weakening cursor identity', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v6 unavailable surface ranges use exact probes without weakening cursor identity', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     foreach ([1, 2, 3] as $postId) {
         wp_fts_v4_regression_add_post($wpdb, $postId, '2026-04-02 00:00:00');
@@ -972,7 +981,7 @@ test_case('relational MySQL rank arms pin bounded drivers ahead of postings and 
     assert_same(1, substr_count($commonExactSql, 'pt.term >='), 'the prefix anchor must retain one surface predicate');
 });
 
-test_case('relational v4 overlap costing uses dictionary DF only and never scans postings during planning', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 overlap costing uses dictionary DF only and never scans postings during planning', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     for ($postId = 1; $postId <= 60; $postId++) {
         wp_fts_v4_regression_add_post($wpdb, $postId, '2026-04-03 00:00:00');
@@ -1012,7 +1021,7 @@ test_case('relational v4 overlap costing uses dictionary DF only and never scans
     assert_true(!str_contains($rankSql, 'JOIN wp_fts_documents d_f'), 'exact AND must not repeat complete visibility after bounded post-first probes');
 });
 
-test_case('relational v4 regression fences an explicit retry that arrives during an active lease', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 regression fences an explicit retry that arrives during an active lease', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $queue = new WP_FTS_Index_Queue($wpdb);
@@ -1040,7 +1049,7 @@ test_case('relational v4 regression fences an explicit retry that arrives during
     assert_same(0, $queue->count(), 'only the new generation owner should remove the work row');
 });
 
-test_case('relational v4 SQLite mutation fences recover and supersede by generation CAS', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 SQLite mutation fences recover and supersede by generation CAS', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $queue = new WP_FTS_Index_Queue($wpdb);
@@ -1082,7 +1091,7 @@ test_case('relational v4 SQLite mutation fences recover and supersede by generat
     assert_same(4, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'INSERT INTO wp_fts_work'))), 'two fences and two promotions should each remain one bounded generation UPSERT');
 });
 
-test_case('relational v4 SQLite late promotions preserve postdeadline successor intent', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 SQLite late promotions preserve postdeadline successor intent', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $queue = new WP_FTS_Index_Queue($wpdb);
@@ -1148,7 +1157,7 @@ test_case('relational v4 SQLite late promotions preserve postdeadline successor 
     assert_same($scopePayload, $scopeSuccessor['payload'] ?? null, 'the next SQLite scope claim should retain the coalesced payload');
 });
 
-test_case('relational v4 SQLite foreground handoff releases owned fences without tombstones or accidental global scopes', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 SQLite foreground handoff releases owned fences without tombstones or accidental global scopes', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $queue = new WP_FTS_Index_Queue($wpdb);
@@ -1234,7 +1243,7 @@ test_case('relational v4 SQLite foreground handoff releases owned fences without
     assert_same(1, (int) $wpdb->dbh->query("SELECT COUNT(*) FROM wp_fts_work WHERE job_key = 'meta:search-epoch'")->fetchColumn(), 'real SQLite reset must retain exactly the singleton cursor epoch');
 });
 
-test_case('relational v4 SQLite rejects impossible multi-scope ownership and deletes the maximum one by primary-key CAS', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 SQLite rejects impossible multi-scope ownership and deletes the maximum one by primary-key CAS', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $queue = new WP_FTS_Index_Queue($wpdb);
@@ -1324,7 +1333,7 @@ test_case('relational v4 SQLite rejects impossible multi-scope ownership and del
     assert_true($elapsed < 1.0, "the exact maximum SQLite boundary should remain cheap (measured {$elapsed} seconds)");
 });
 
-test_case('relational v4 SQLite reset rebuilds 409600 populated postings with constant metadata work', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 SQLite reset rebuilds 409600 populated postings with constant metadata work', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $wpdb->dbh->beginTransaction();
@@ -1386,7 +1395,7 @@ test_case('relational v4 SQLite reset rebuilds 409600 populated postings with co
     assert_same(true, $storage->verify_schema()['valid'] ?? null, 'SQLite reset should recreate the exact production table and index contract');
 });
 
-test_case('relational v4 SQLite schema verification stays fixed with 2048 unrelated indexes', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 SQLite schema verification stays fixed with 2048 unrelated indexes', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $storage = new WP_FTS_Storage_Mysql($wpdb);
@@ -1439,7 +1448,7 @@ test_case('relational v4 SQLite schema verification stays fixed with 2048 unrela
     assert_true($elapsed < 1.0, "bounded SQLite schema verification should remain cheap with 2,048 peer indexes; observed {$elapsed} seconds");
 });
 
-test_case('relational v4 real SQLite worker drains only the newest canonical generation', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 real SQLite worker drains only the newest canonical generation', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     wp_fts_v4_regression_add_source_post(
@@ -1503,7 +1512,7 @@ test_case('relational v4 real SQLite worker drains only the newest canonical gen
     assert_same([741], array_column($search['results'] ?? [], 'doc_id'), 'relational search must expose the newest committed canonical projection');
 });
 
-test_case('relational v4 claim_scope executes its complete SQL lifecycle on SQLite', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 claim_scope executes its complete SQL lifecycle on SQLite', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $queue = new WP_FTS_Index_Queue($wpdb);
@@ -1539,7 +1548,7 @@ test_case('relational v4 claim_scope executes its complete SQL lifecycle on SQLi
     assert_same('scheduled-reconciliation', $scheduled['payload']['reason'] ?? null, 'scheduled scope claiming should preserve its bounded diagnostic reason');
 });
 
-test_case('relational v4 SQLite schema repair is idempotent and preserves postings, work, and cursor epoch', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 SQLite schema repair is idempotent and preserves postings, work, and cursor epoch', function (): void {
     $fixture = dirname(__DIR__) . '/fixtures/sqlite-schema-repair-idempotence.php';
     $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($fixture);
     $lines = [];
@@ -1646,7 +1655,7 @@ test_case('relational v4 native schema repair drops only inspected search-genera
     );
 });
 
-test_case('relational v4 scope page fan-out and cursor progress commit atomically behind the generation fence', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 scope page fan-out and cursor progress commit atomically behind the generation fence', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $queue = new WP_FTS_Index_Queue($wpdb);
@@ -1710,7 +1719,7 @@ test_case('relational v4 scope page fan-out and cursor progress commit atomicall
     assert_same($failedClaim['token'] ?? null, $failedScopeRow['claim_token'] ?? null, 'rollback should restore the exact scope owner so fail_scope can apply bounded backoff');
 });
 
-test_case('relational v4 worker alternates direct claims and scope pages across bounded cron invocations', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 worker alternates direct claims and scope pages across bounded cron invocations', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $directIds = range(91, 110);
@@ -1774,7 +1783,7 @@ test_case('relational v4 worker alternates direct claims and scope pages across 
     assert_same(1, count($GLOBALS['wp_fts_test_schedule_calls']), 'continued scope work should schedule exactly one post-drain successor');
 });
 
-test_case('relational v4 targeted scopes use the exact composite membership keyset', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 targeted scopes use the exact composite membership keyset', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     wp_fts_v4_regression_add_source_post($wpdb, 1, '<p>first exact target</p>', '');
@@ -1855,7 +1864,7 @@ test_case('relational v4 targeted scopes use the exact composite membership keys
     assert_same(2, (int) $wpdb->dbh->query('SELECT COUNT(*) FROM wp_fts_documents')->fetchColumn(), 'the two exact targets should be indexed while unrelated relationships remain untouched');
 });
 
-test_case('relational v4 targeted scopes ignore unrelated relationship fanout', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 targeted scopes ignore unrelated relationship fanout', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     wp_fts_v4_regression_add_source_post($wpdb, 300, '<p>high fanout exact target</p>', '');
@@ -1895,7 +1904,7 @@ test_case('relational v4 targeted scopes ignore unrelated relationship fanout', 
     assert_contains('INDEXED BY `wp_fts_', $targetedQueries[0] ?? '', 'high fanout must force the exact composite membership index');
 });
 
-test_case('relational v4 selective keysets skip sparse gaps while corpus pages stay raw and bounded', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 selective keysets skip sparse gaps while corpus pages stay raw and bounded', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     for ($postId = 1; $postId <= 201; $postId++) {
@@ -2009,7 +2018,7 @@ test_case('relational v4 selective keysets skip sparse gaps while corpus pages s
     assert_same(0, (int) $wpdb->dbh->query("SELECT COUNT(*) FROM wp_fts_work WHERE kind IN ('scope','post')")->fetchColumn(), 'the sparse filtered workflow must fully drain after alternating scope and post passes');
 });
 
-test_case('relational v6 worker defers the 50000-posting aggregate overflow without a hot loop or lost generation', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v6 worker defers the 50000-posting aggregate overflow without a hot loop or lost generation', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $terms = [];
@@ -2087,7 +2096,7 @@ test_case('relational v6 worker defers the 50000-posting aggregate overflow with
     assert_same(0, count(array_filter($wpdb->queries, static fn(string $sql): bool => $sql === 'BEGIN')), 'a drained continuation should not open a document replacement transaction');
 });
 
-test_case('relational v6 worker preserves a source-deferred suffix at the 50000-posting frontier', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v6 worker preserves a source-deferred suffix at the 50000-posting frontier', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $terms = [];
@@ -2226,7 +2235,7 @@ test_case('relational v6 writer signals the 50000-posting aggregate overflow bef
     assert_same([], $wpdb->docs, 'oversized canonical language must not publish a document');
 });
 
-test_case('relational v4 search plan accepts 12x12x12 boundaries and rejects the next unit before SQL', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 search plan accepts 12x12x12 boundaries and rejects the next unit before SQL', function (): void {
     assert_same(12, WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_GROUPS, 'the relational interface should cap one query at twelve logical groups');
     assert_same(12, WP_FTS_Set_Oriented_Search_Storage::MAX_ALTERNATIVES_PER_GROUP, 'one logical group should retain up to twelve exact morphology alternatives');
     assert_same(12, WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_ALTERNATIVES, 'one query should carry at most twelve total alternatives');
@@ -2332,7 +2341,7 @@ test_case('relational v4 search plan accepts 12x12x12 boundaries and rejects the
     }
 });
 
-test_case('relational v4 direct AND plans reject malformed groups without widening', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 direct AND plans reject malformed groups without widening', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     wp_fts_v4_regression_add_post($wpdb, 1, '2026-07-18 00:00:00');
     wp_fts_v4_regression_add_term($wpdb, 'validplanarm', [1 => 100.0]);
@@ -2370,7 +2379,7 @@ test_case('relational v4 direct AND plans reject malformed groups without wideni
     }
 });
 
-test_case('relational v4 direct metadata filters reject malformed restrictions without widening', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 direct metadata filters reject malformed restrictions without widening', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     wp_fts_v4_regression_add_post($wpdb, 1, '2026-07-18 00:00:00');
     wp_fts_v4_regression_add_term($wpdb, 'filterfailclosed', [1 => 100.0]);
@@ -2426,7 +2435,7 @@ test_case('relational v4 direct metadata filters reject malformed restrictions w
     }
 });
 
-test_case('relational v4 direct storage options reject unknown keys and malformed values before SQL', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v4 direct storage options reject unknown keys and malformed values before SQL', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     wp_fts_v4_regression_add_post($wpdb, 1, '2026-07-18 00:00:00');
     wp_fts_v4_regression_add_term($wpdb, 'optionfailclosed', [1 => 100.0]);
@@ -2524,7 +2533,7 @@ test_case('relational v4 direct storage options reject unknown keys and malforme
     assert_same([], $wpdb->queries, 'an overlong snippet_length must be rejected before planning SQL');
 });
 
-test_case('relational v6 Mysql advertises set-oriented capabilities without legacy posting primitives', function (): void {
+test_case_with_pdo_sqlite_fixture('relational v6 Mysql advertises set-oriented capabilities without legacy posting primitives', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
 
     assert_true($storage instanceof WP_FTS_Set_Oriented_Search_Storage, 'Mysql should expose database-owned planning, ranking, and pagination');
@@ -2989,6 +2998,7 @@ final class WP_FTS_V4_Regression_SQLite_WPDB
             return str_replace(
                 [
                     'ON DUPLICATE KEY UPDATE',
+                    'IF(',
                     'VALUES(kind)',
                     'VALUES(state)',
                     'VALUES(available_at)',
@@ -3001,6 +3011,7 @@ final class WP_FTS_V4_Regression_SQLite_WPDB
                 ],
                 [
                     'ON CONFLICT(job_key) DO UPDATE SET',
+                    'IIF(',
                     'excluded.kind',
                     'excluded.state',
                     'excluded.available_at',
@@ -3042,3 +3053,17 @@ final class WP_FTS_V4_Regression_SQLite_WPDB
         throw new RuntimeException('SQLite regression adapter received an unknown MySQL UPSERT.');
     }
 }
+
+test_case_with_pdo_sqlite_fixture('SQLite regression adapter translates nested MySQL IF work expressions', function (): void {
+    $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
+    $portableSql = new ReflectionMethod($wpdb, 'portable_sql');
+    $translated = (string) $portableSql->invoke(
+        $wpdb,
+        "INSERT INTO wp_fts_work (job_key,kind,state,available_at) VALUES ('post:1','post','ready',0) "
+            . "ON DUPLICATE KEY UPDATE available_at = IF(kind = 'meta', 0, IF(state = 'fenced', available_at, VALUES(available_at)))"
+    );
+
+    assert_contains('ON CONFLICT(job_key) DO UPDATE SET', $translated, 'the focused fixture should retain its SQLite UPSERT translation');
+    assert_same(2, substr_count($translated, 'IIF('), 'both nested MySQL IF expressions should use SQLite IIF');
+    assert_same(0, substr_count($translated, 'IF(') - substr_count($translated, 'IIF('), 'no standalone MySQL IF expression should survive translation');
+});

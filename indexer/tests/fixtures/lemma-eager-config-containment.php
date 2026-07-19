@@ -4,6 +4,8 @@ declare(strict_types=1);
 require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
 
 $started = microtime(true);
+$fixtureGenerationSeconds = 0.0;
+$productElapsedSeconds = 0.0;
 $peakBefore = memory_get_peak_usage(true);
 $root = sys_get_temp_dir() . '/wp-fts-eager-config-' . bin2hex(random_bytes(6));
 if (!mkdir($root, 0777, true) && !is_dir($root)) {
@@ -11,12 +13,15 @@ if (!mkdir($root, 0777, true) && !is_dir($root)) {
 }
 
 try {
+    $phaseStarted = microtime(true);
     $exact = wp_fts_eager_config_write_packs(
         $root . '/exact',
         WP_FTS_LemmaPackLimits::MAX_CONFIGURED_EAGER_FIXTURE_ROWS,
         false,
         WP_FTS_LemmaPackLimits::MAX_CONFIGURED_EAGER_FIXTURE_RUNTIME_BYTES
     );
+    $fixtureGenerationSeconds += microtime(true) - $phaseStarted;
+    $phaseStarted = microtime(true);
     $exactHeadersBefore = WP_FTS_LemmaPackLookupIndex::metadata_diagnostics();
     $exactIoBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
     $pipeline = new WP_FTS_LanguagePipeline([
@@ -50,13 +55,17 @@ try {
         : 0;
     unset($exactStatuses);
     gc_collect_cycles();
+    $productElapsedSeconds += microtime(true) - $phaseStarted;
 
+    $phaseStarted = microtime(true);
     $overflow = wp_fts_eager_config_write_packs(
         $root . '/overflow',
         WP_FTS_LemmaPackLimits::MAX_CONFIGURED_EAGER_FIXTURE_ROWS + 1,
         true,
         null
     );
+    $fixtureGenerationSeconds += microtime(true) - $phaseStarted;
+    $phaseStarted = microtime(true);
     $overflowHeadersBefore = WP_FTS_LemmaPackLookupIndex::metadata_diagnostics();
     $overflowIoBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
     $overflowError = null;
@@ -77,8 +86,10 @@ try {
     }
     $overflowHeadersAfter = WP_FTS_LemmaPackLookupIndex::metadata_diagnostics();
     $overflowIoAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
+    $productElapsedSeconds += microtime(true) - $phaseStarted;
 
     $peakAfter = memory_get_peak_usage(true);
+    $totalElapsedSeconds = microtime(true) - $started;
     echo json_encode([
         'case' => 'configured-eager-fixture-rows',
         'declared' => [
@@ -112,7 +123,9 @@ try {
                 - $overflowHeadersBefore['lookup_header_opens'],
             'indexed_io' => wp_fts_eager_config_diagnostic_delta($overflowIoBefore, $overflowIoAfter),
         ],
-        'elapsed_seconds' => microtime(true) - $started,
+        'elapsed_seconds' => $productElapsedSeconds,
+        'fixture_generation_seconds' => $fixtureGenerationSeconds,
+        'total_elapsed_seconds' => $totalElapsedSeconds,
         'php_peak_bytes' => $peakAfter,
         'php_peak_delta_bytes' => max(0, $peakAfter - $peakBefore),
         'proc_status' => wp_fts_eager_config_proc_status(),

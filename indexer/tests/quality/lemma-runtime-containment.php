@@ -490,6 +490,12 @@ test_case('configured eager fixtures accept 50,000 aggregate rows and reject row
         ];
         assert_same($zeroIo, $payload['exact']['indexed_io'] ?? null, 'eager exact construction should perform no indexed payload I/O');
         assert_same($zeroIo, $payload['overflow']['indexed_io'] ?? null, 'aggregate row overflow should perform no indexed payload I/O');
+        assert_true((float) ($payload['fixture_generation_seconds'] ?? -1.0) >= 0.0, 'eager row fixture generation should be timed separately from product paths');
+        assert_true(
+            (float) ($payload['total_elapsed_seconds'] ?? -1.0)
+                >= (float) ($payload['fixture_generation_seconds'] ?? INF) + (float) ($payload['elapsed_seconds'] ?? INF),
+            'eager row total timing should cover separate fixture generation and product execution'
+        );
         assert_true((float) ($payload['elapsed_seconds'] ?? INF) <= 5.0, 'both thirty-two-pack boundaries should finish within five seconds');
         assert_true((int) ($payload['php_peak_bytes'] ?? PHP_INT_MAX) <= 128 * 1024 * 1024, 'both eager aggregate boundaries should stay below 128 MiB PHP allocation');
         assert_true((int) ($payload['php_peak_delta_bytes'] ?? PHP_INT_MAX) <= 32 * 1024 * 1024, 'the eager aggregate proof should add at most 32 MiB PHP allocation');
@@ -503,6 +509,7 @@ test_case('configured eager fixtures accept 50,000 aggregate rows and reject row
 });
 
 test_case('configured eager fixtures share an exact 8-MiB decoded-byte limit across plain and gzip packs', function (): void {
+    $descriptorFaultInjectionRuns = 0;
     foreach ([[], ['-n']] as $phpOptions) {
         $result = test_run_subprocess(array_merge([
             PHP_BINARY,
@@ -511,7 +518,7 @@ test_case('configured eager fixtures share an exact 8-MiB decoded-byte limit acr
             'memory_limit=128M',
             dirname(__DIR__) . '/fixtures/lemma-eager-byte-config-containment.php',
         ]), dirname(__DIR__, 2));
-        assert_same(0, $result['exit'], 'the eager-fixture byte aggregate child should finish under 128 MiB: ' . $result['stderr']);
+        assert_same(0, $result['exit'], 'the eager-fixture byte aggregate child should finish under 128 MiB: ' . $result['stderr'] . $result['stdout']);
         $payload = json_decode(trim($result['stdout']), true);
         assert_true(is_array($payload), 'the eager-fixture byte aggregate child should emit JSON evidence');
         assert_same('configured-eager-fixture-bytes', $payload['case'] ?? null, 'the child should identify its aggregate eager-fixture byte workload');
@@ -577,22 +584,28 @@ test_case('configured eager fixtures share an exact 8-MiB decoded-byte limit acr
         assert_true((float) ($lateCorrupt['alias_pipeline']['elapsed_seconds'] ?? INF) <= 2.0, 'the maximum pipeline alias set should finish its one physical 8-MiB attempt within two seconds');
         assert_true((float) ($lateCorrupt['alias_status']['elapsed_seconds'] ?? INF) <= 2.0, 'the maximum status alias set should finish its one physical 8-MiB attempt within two seconds');
 
-        $authoritative = $payload['authoritative_preflight'] ?? [];
-        assert_same(32, $authoritative['configured_aliases'] ?? null, 'the repaired-manifest TOCTOU should span 32 physical aliases');
-        assert_same(1, $authoritative['pipeline_repair_warnings'] ?? null, 'pipeline preflight should physically attempt the initially broken manifest once');
-        assert_same(false, $authoritative['pipeline_pack_active'] ?? null, 'pipeline aliases must retain the first failed preflight after the manifest is repaired');
-        assert_same(1, $authoritative['status_repair_warnings'] ?? null, 'public status preflight should physically attempt the initially broken manifest once');
-        assert_same(0, $authoritative['status_active'] ?? null, 'public status must not activate the repaired but unadmitted generation');
-        assert_same(32, $authoritative['status_corrupt'] ?? null, 'public status aliases should preserve the captured first-pass corruption reason');
+        if (($payload['descriptor_fault_injection_available'] ?? false) === true) {
+            $descriptorFaultInjectionRuns++;
+            $authoritative = $payload['authoritative_preflight'] ?? [];
+            assert_same(32, $authoritative['configured_aliases'] ?? null, 'the repaired-manifest TOCTOU should span 32 physical aliases');
+            assert_same(1, $authoritative['pipeline_repair_warnings'] ?? null, 'pipeline preflight should physically attempt the initially broken manifest once');
+            assert_same(false, $authoritative['pipeline_pack_active'] ?? null, 'pipeline aliases must retain the first failed preflight after the manifest is repaired');
+            assert_same(1, $authoritative['status_repair_warnings'] ?? null, 'public status preflight should physically attempt the initially broken manifest once');
+            assert_same(0, $authoritative['status_active'] ?? null, 'public status must not activate the repaired but unadmitted generation');
+            assert_same(32, $authoritative['status_corrupt'] ?? null, 'public status aliases should preserve the captured first-pass corruption reason');
 
-        $appearance = $payload['authoritative_appearance'] ?? [];
-        assert_same(2, $appearance['configured_languages'] ?? null, 'the appearing-manifest TOCTOU should include one missing target and one repair trigger');
-        assert_same(1, $appearance['pipeline_repair_warnings'] ?? null, 'pipeline appearance synchronization should use exactly one failed physical preflight');
-        assert_same(false, $appearance['pipeline_pack_active'] ?? null, 'pipeline construction must not retry a manifest that appeared after its failed realpath preflight');
-        assert_same(1, $appearance['status_repair_warnings'] ?? null, 'status appearance synchronization should use exactly one failed physical preflight');
-        assert_same(0, $appearance['status_active'] ?? null, 'public status must not activate a manifest that appeared after preflight');
-        assert_same(1, $appearance['status_corrupt'] ?? null, 'the trigger should retain its first-pass corruption status');
-        assert_same(1, $appearance['status_not_active'] ?? null, 'the appearing target should retain its first-pass missing status');
+            $appearance = $payload['authoritative_appearance'] ?? [];
+            assert_same(2, $appearance['configured_languages'] ?? null, 'the appearing-manifest TOCTOU should include one missing target and one repair trigger');
+            assert_same(1, $appearance['pipeline_repair_warnings'] ?? null, 'pipeline appearance synchronization should use exactly one failed physical preflight');
+            assert_same(false, $appearance['pipeline_pack_active'] ?? null, 'pipeline construction must not retry a manifest that appeared after its failed realpath preflight');
+            assert_same(1, $appearance['status_repair_warnings'] ?? null, 'status appearance synchronization should use exactly one failed physical preflight');
+            assert_same(0, $appearance['status_active'] ?? null, 'public status must not activate a manifest that appeared after preflight');
+            assert_same(1, $appearance['status_corrupt'] ?? null, 'the trigger should retain its first-pass corruption status');
+            assert_same(1, $appearance['status_not_active'] ?? null, 'the appearing target should retain its first-pass missing status');
+        } else {
+            assert_same(null, $payload['authoritative_preflight'], 'a runtime without POSIX descriptor limits should omit only the repaired-manifest fault injection');
+            assert_same(null, $payload['authoritative_appearance'], 'a runtime without POSIX descriptor limits should omit only the appearing-manifest fault injection');
+        }
 
         $canonical = $payload['canonical_last_wins'] ?? [];
         assert_same('qaa-US', $canonical['canonical_language'] ?? null, 'raw underscore and hyphen spellings should resolve to one canonical language');
@@ -607,7 +620,19 @@ test_case('configured eager fixtures share an exact 8-MiB decoded-byte limit acr
         assert_same(true, $payload['canonical_polish_precedence']['pack_active'] ?? null, 'a canonical generic Polish assignment should suppress legacy fallback');
         assert_same(['lemmarepair'], $payload['canonical_polish_precedence']['morphology'] ?? null, 'case-equivalent explicit Polish configuration should retain precedence over the legacy pack');
 
-        assert_true((float) ($payload['elapsed_seconds'] ?? INF) <= 5.0, 'all eager boundary and maximum-alias adversaries should finish within five seconds');
+        assert_true((float) ($payload['fixture_generation_seconds'] ?? -1.0) >= 0.0, 'eager byte fixture generation should be timed separately from product paths');
+        assert_true((float) ($payload['fault_injection_seconds'] ?? -1.0) >= 0.0, 'eager byte descriptor fault injection should be timed separately from product paths');
+        assert_true(
+            (float) ($payload['total_elapsed_seconds'] ?? -1.0)
+                >= (float) ($payload['fixture_generation_seconds'] ?? INF)
+                    + (float) ($payload['fault_injection_seconds'] ?? INF)
+                    + (float) ($payload['elapsed_seconds'] ?? INF),
+            'eager byte total timing should cover fixture generation, fault injection, and product execution'
+        );
+        assert_true(
+            (float) ($payload['elapsed_seconds'] ?? INF) + (float) ($payload['fault_injection_seconds'] ?? INF) <= 5.0,
+            'all eager boundary, maximum-alias, and fault-injected product paths should finish within five seconds'
+        );
         assert_true((int) ($payload['php_peak_bytes'] ?? PHP_INT_MAX) <= 128 * 1024 * 1024, 'the eager byte aggregate proof should stay below 128 MiB PHP allocation');
         assert_true((int) ($payload['php_peak_delta_bytes'] ?? PHP_INT_MAX) <= 32 * 1024 * 1024, 'the eager byte aggregate proof should add at most 32 MiB PHP allocation');
         foreach (['VmHWM_bytes', 'VmRSS_bytes'] as $metric) {
@@ -617,6 +642,7 @@ test_case('configured eager fixtures share an exact 8-MiB decoded-byte limit acr
             }
         }
     }
+    assert_true($descriptorFaultInjectionRuns >= 1, 'at least one eager-byte child should exercise POSIX descriptor fault injection');
 });
 
 test_case('configured lemma-pack admission has one component source of truth', function (): void {

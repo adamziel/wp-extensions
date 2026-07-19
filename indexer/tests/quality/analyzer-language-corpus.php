@@ -458,6 +458,8 @@ test_case('quality corpus applies language-specific folding including no-mbstrin
         ['de', 'ÄRGER', 'aerger'],
         ['tr', 'ÇİĞ', 'cig'],
         ['fr', 'ÉCOLE', 'ecole'],
+        ['ru', 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'],
+        ['uk', 'ҐЄІЇ', 'ґєії'],
     ];
     foreach ($fallbackCases as [$lang, $input, $expected]) {
         record_check('no-mbstring uppercase fallback scenario: ' . $lang);

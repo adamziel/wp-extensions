@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/php-source-token-stream.php';
+
 /**
  * Read-only release evidence collector for current-main review.
  *
@@ -19,6 +21,7 @@ final class WP_FTS_ReleaseEvidenceCollector
     private const TARGET_PUBLIC_SUBMISSION = 'public-submission';
     private const OUTPUT_EXCERPT_BYTES = 1200;
     private const RAW_OUTPUT_CAPTURE_BYTES = 12000;
+    private const HISTORICAL_BUILDER_SOURCE_BYTES = 1048576;
     private const DEFAULT_TIMEOUT_SECONDS = 90;
     private const PREVIOUS_PACKAGE_TEMP_PREFIX = 'wp-fts-previous-direct-package-';
     private const PREVIOUS_PACKAGE_ARCHIVE_PATHS = ['indexer', 'components/full-text-search'];
@@ -2061,28 +2064,38 @@ final class WP_FTS_ReleaseEvidenceCollector
     }
 
     /**
-     * Older archived builders reject unknown CLI options. Inspect PHP string
-     * tokens so those builders keep using their already isolated env cache,
-     * while newer builders receive the same cache as an explicit option.
+     * Older archived builders reject unknown CLI options. Lex the bounded PHP
+     * source without requiring ext-tokenizer so those builders keep using their
+     * already isolated env cache, while newer builders receive the same cache
+     * as an explicit option.
      */
     private static function release_builder_supports_explicit_composer_cache(string $builderPath): bool
     {
         if (!is_file($builderPath)) {
             return false;
         }
-        $source = file_get_contents($builderPath);
-        if (!is_string($source)) {
+        $handle = fopen($builderPath, 'rb');
+        if ($handle === false) {
+            return false;
+        }
+        try {
+            $source = stream_get_contents($handle, self::HISTORICAL_BUILDER_SOURCE_BYTES + 1);
+        } finally {
+            fclose($handle);
+        }
+        if (!is_string($source) || strlen($source) > self::HISTORICAL_BUILDER_SOURCE_BYTES) {
             return false;
         }
 
-        foreach (token_get_all($source) as $token) {
-            if (
-                is_array($token)
-                && $token[0] === T_CONSTANT_ENCAPSED_STRING
-                && in_array($token[1], ["'composer-cache-dir'", '"composer-cache-dir"'], true)
-            ) {
-                return true;
+        try {
+            foreach (wp_fts_php_source_token_stream($source, self::HISTORICAL_BUILDER_SOURCE_BYTES) as $token) {
+                if ($token[0] === 'string_literal' && in_array($token[1], ["'composer-cache-dir'", '"composer-cache-dir"'], true)) {
+                    return true;
+                }
             }
+        } catch (RuntimeException) {
+            // An unfamiliar archived builder must not weaken source analysis.
+            return false;
         }
 
         return false;

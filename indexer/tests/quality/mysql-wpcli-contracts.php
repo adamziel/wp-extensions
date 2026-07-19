@@ -422,7 +422,7 @@ namespace {
         assert_true(!str_contains($allSql, 'postings longblob'), 'posting rows must never collapse back into a PHP blob write');
     });
 
-    test_case('quality mysql SQLite fixture preserves typed surface rows and rejects legacy collections', function (): void {
+    test_case_with_pdo_sqlite_fixture('quality mysql SQLite fixture preserves typed surface rows and rejects legacy collections', function (): void {
         $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
         wp_fts_v4_regression_create_schema($wpdb);
         $storage = new WP_FTS_Storage_Mysql($wpdb);
@@ -671,7 +671,7 @@ namespace {
         assert_true(!in_array('COMMIT', $wpdb->queries, true), 'fenced transaction should never issue COMMIT after ownership loss');
     });
 
-    test_case('quality language inputs canonicalize consistently across mysql and cli', function (): void {
+    test_case_with_pdo_sqlite_fixture('quality language inputs canonicalize consistently across mysql and cli', function (): void {
         $cases = [
             [' pl_PL ', 'pl-PL'],
             ['PT_br', 'pt-BR'],
@@ -946,7 +946,7 @@ namespace {
         assert_contains("\$payload['total_relation'] ?? 'unknown'", $source, 'CLI output should preserve unknown-total semantics');
     });
 
-    test_case('quality wp cli search forwards bounded filters and formats cursor pages', function (): void {
+    test_case_with_pdo_sqlite_fixture('quality wp cli search forwards bounded filters and formats cursor pages', function (): void {
         [$fake] = wp_fts_v4_regression_search_fixture();
         wp_fts_v4_regression_add_post($fake, 901, '2026-04-01 00:00:00', 'post', 'publish');
         wp_fts_v4_regression_add_post($fake, 902, '2026-04-02 00:00:00', 'page', 'draft');

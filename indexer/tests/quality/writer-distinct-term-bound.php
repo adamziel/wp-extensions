@@ -630,7 +630,7 @@ test_case('relational writer splits disjoint vocabulary at the 8192-identity tra
     assert_same([], $wpdb->queries, 'aggregate term overflow must be detected before transaction or dictionary SQL');
 });
 
-test_case('relational writer replaces a 6000-term old union without returning it to PHP', function (): void {
+test_case_with_pdo_sqlite_fixture('relational writer replaces a 6000-term old union without returning it to PHP', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $storage = new WP_FTS_Storage_Mysql($wpdb);

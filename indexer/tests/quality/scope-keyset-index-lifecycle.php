@@ -191,7 +191,7 @@ test_case('quality schema migration stops after first DDL when its writer lease 
     }
 });
 
-test_case('quality SQLite scope index names are complete, nonpartial, and unique per multisite table', function (): void {
+test_case_with_pdo_sqlite_fixture('quality SQLite scope index names are complete, nonpartial, and unique per multisite table', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     foreach (['wp_posts', 'wp_2_posts'] as $table) {
         $wpdb->query("CREATE TABLE {$table} (ID INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL)");

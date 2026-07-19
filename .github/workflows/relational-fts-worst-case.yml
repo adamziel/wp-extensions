@@ -64,6 +64,7 @@ jobs:
       - name: Prove isolated memory under normal and no-ini PHP
         run: |
           set -euo pipefail
+          php -l indexer/tests/integration/relational-fts-worst-case.php
           timeout --signal=TERM --kill-after=10s 180s \
             php -d memory_limit=128M indexer/tests/quality/jieba-indexed-multi-run.php \
             > "${{ runner.temp }}/jieba-memory-normal.json"

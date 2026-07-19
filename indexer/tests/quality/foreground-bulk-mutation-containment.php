@@ -968,8 +968,22 @@ test_case('foreground bulk mutation corpus authority contains 100000 heterogeneo
         // separately tested cold allocation.
         WP_FTS_Plugin::runtime_analyzer();
         $memoryBefore = memory_get_usage(false);
-        if (function_exists('memory_reset_peak_usage')) {
+        $canResetPeak = function_exists('memory_reset_peak_usage');
+        if ($canResetPeak) {
             memory_reset_peak_usage();
+            $peakBaseline = memory_get_peak_usage(false);
+            $peakPadding = null;
+        } else {
+            // PHP 8.1 cannot reset the suite's process-wide peak. Retain enough
+            // inert memory to lift current usage back to that peak, then use
+            // the new high-water mark as the workload baseline. This preserves
+            // true in-call transient peak detection rather than sampling only
+            // after each hook returns.
+            $historicalPeak = memory_get_peak_usage(false);
+            $paddingBytes = max(0, $historicalPeak - $memoryBefore);
+            $peakPadding = $paddingBytes > 0 ? str_repeat('p', $paddingBytes) : null;
+            $memoryBefore = memory_get_usage(false);
+            $peakBaseline = memory_get_peak_usage(false);
         }
 
         $maxMetadataKeys = 0;
@@ -1042,9 +1056,10 @@ test_case('foreground bulk mutation corpus authority contains 100000 heterogeneo
         assert_same((int) $authorityQueries + (int) $authorityCoreLookups, count($fake->queries) + $coreLookups, 'the observable core-plus-FTS query frontier must remain constant after corpus authority');
 
         $retainedMemory = max(0, memory_get_usage(false) - $memoryBefore);
-        $peakMemory = max(0, memory_get_peak_usage(false) - $memoryBefore);
+        $peakMemory = max(0, memory_get_peak_usage(false) - $peakBaseline);
         assert_true($retainedMemory <= 2 * 1024 * 1024, "300,000 worst-case hook lifecycles must retain at most 2 MiB; observed {$retainedMemory} bytes");
         assert_true($peakMemory <= 4 * 1024 * 1024, "300,000 worst-case hook lifecycles must peak within 4 MiB above the warm baseline; observed {$peakMemory} bytes");
+        unset($peakPadding);
 
         WP_FTS_Plugin::flush_foreground_bulk_mutations();
         assert_same((int) $authoritySql + 3, count(wp_fts_foreground_bulk_total_sql($fake)), 'the complete 300,000-lifecycle request must add exactly three fixed corpus publish, sentinel-delete, and owned-scope-delete statements');

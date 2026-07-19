@@ -398,6 +398,68 @@ publish_evidence() {
 
 }
 
+# Preserve the database failure itself, not only the runner's coarse stage.
+# These commands run before both the evidence archive and `compose down`; an
+# initialization OOM or unsupported server flag would otherwise destroy the
+# only logs and container state that explain why the real-database proof died.
+capture_failure_environment_artifacts() {
+    if [[ ! -f "${COMPOSE_FILE}" || ! -d "${EVIDENCE_DIR}" ]]; then
+        return
+    fi
+
+    local manifest="${EVIDENCE_DIR}/failure-environment-capture.txt"
+    local temporary="${manifest}.tmp.$$"
+    local artifact command_status db_container
+    : > "${temporary}"
+
+    artifact="${EVIDENCE_DIR}/failure-compose-ps.json"
+    if timeout --signal=TERM --kill-after=5s 30s docker compose -f "${COMPOSE_FILE}" \
+        ps --all --format json > "${artifact}.tmp.$$" 2>&1; then
+        command_status=0
+    else
+        command_status=$?
+    fi
+    mv "${artifact}.tmp.$$" "${artifact}"
+    printf 'compose_ps_exit=%d\n' "${command_status}" >> "${temporary}"
+
+    artifact="${EVIDENCE_DIR}/failure-compose.log"
+    if timeout --signal=TERM --kill-after=5s 30s docker compose -f "${COMPOSE_FILE}" \
+        logs --no-color --timestamps > "${artifact}.tmp.$$" 2>&1; then
+        command_status=0
+    else
+        command_status=$?
+    fi
+    mv "${artifact}.tmp.$$" "${artifact}"
+    printf 'compose_logs_exit=%d\n' "${command_status}" >> "${temporary}"
+
+    db_container="$(timeout --signal=TERM --kill-after=5s 15s docker compose -f "${COMPOSE_FILE}" \
+        ps --all -q db 2>/dev/null | head -n 1 || true)"
+    printf 'db_container=%s\n' "${db_container}" >> "${temporary}"
+    if [[ -n "${db_container}" ]]; then
+        artifact="${EVIDENCE_DIR}/failure-db-inspect.json"
+        if timeout --signal=TERM --kill-after=5s 15s docker inspect "${db_container}" \
+            > "${artifact}.tmp.$$" 2>&1; then
+            command_status=0
+        else
+            command_status=$?
+        fi
+        mv "${artifact}.tmp.$$" "${artifact}"
+        printf 'db_inspect_exit=%d\n' "${command_status}" >> "${temporary}"
+
+        artifact="${EVIDENCE_DIR}/failure-db.log"
+        if timeout --signal=TERM --kill-after=5s 30s docker logs --timestamps "${db_container}" \
+            > "${artifact}.tmp.$$" 2>&1; then
+            command_status=0
+        else
+            command_status=$?
+        fi
+        mv "${artifact}.tmp.$$" "${artifact}"
+        printf 'db_logs_exit=%d\n' "${command_status}" >> "${temporary}"
+    fi
+
+    mv "${temporary}" "${manifest}"
+}
+
 cleanup() {
     local status=$?
     trap - EXIT INT TERM USR1
@@ -433,6 +495,9 @@ cleanup() {
         fi
         wait "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null || true
         MIGRATION_DISK_MONITOR_PID=""
+    fi
+    if (( status != 0 )); then
+        capture_failure_environment_artifacts || true
     fi
     if [[ -n "${WPCLI_PROBE_CONTAINER:-}" ]]; then
         docker rm -f "${WPCLI_PROBE_CONTAINER}" >/dev/null 2>&1 || true
@@ -761,7 +826,16 @@ ${DB_ENV}
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --performance-schema=ON
-      - --performance-schema-max-sql-text-length=65536
+      # The search SQL contract is <=32 KiB. Retaining exactly that many bytes
+      # preserves complete statement identity without the per-event reserves
+      # that made 65,536-byte retention exceed this lane's 1 GiB cgroup.
+      - --performance-schema-max-sql-text-length=32768
+      # 2,048 global events cover every measured request/worker interval with
+      # wide margin while avoiding the default 10,000-row SQL_TEXT allocation.
+      - --performance-schema-events-statements-history-long-size=2048
+      # The proof reads only history_long. Retaining one redundant per-thread
+      # event avoids another autosized SQL_TEXT reserve without losing evidence.
+      - --performance-schema-events-statements-history-size=1
       - --innodb-buffer-pool-size=268435456
       - --tmp-table-size=33554432
       - --max-heap-table-size=33554432

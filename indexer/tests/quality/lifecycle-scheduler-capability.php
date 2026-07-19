@@ -155,53 +155,9 @@ function wp_fts_lifecycle_scheduler_queue_mutation_map(): array
     if (!is_string($pluginSource)) {
         throw new RuntimeException('Could not read Plugin.php for the queue capability contract.');
     }
-    $tokens = token_get_all($pluginSource);
     $methods = [];
-    $tokenCount = count($tokens);
-    for ($index = 0; $index < $tokenCount; $index++) {
-        if (!is_array($tokens[$index]) || $tokens[$index][0] !== T_FUNCTION) {
-            continue;
-        }
-        $methodName = null;
-        $cursor = $index + 1;
-        for (; $cursor < $tokenCount; $cursor++) {
-            $token = $tokens[$cursor];
-            $text = is_array($token) ? $token[1] : $token;
-            if (is_array($token) && $token[0] === T_STRING) {
-                $methodName = $token[1];
-                break;
-            }
-            if ($text === '(') {
-                break;
-            }
-        }
-        if ($methodName === null) {
-            continue;
-        }
-        for (; $cursor < $tokenCount; $cursor++) {
-            if ((is_array($tokens[$cursor]) ? $tokens[$cursor][1] : $tokens[$cursor]) === '{') {
-                break;
-            }
-        }
-        if ($cursor >= $tokenCount) {
-            continue;
-        }
-        $depth = 0;
-        $body = [];
-        for (; $cursor < $tokenCount; $cursor++) {
-            $token = $tokens[$cursor];
-            $text = is_array($token) ? $token[1] : $token;
-            $body[] = $token;
-            if ($text === '{') {
-                $depth++;
-            } elseif ($text === '}') {
-                $depth--;
-                if ($depth === 0) {
-                    break;
-                }
-            }
-        }
-        $methods[$methodName] = $body;
+    foreach (wp_fts_php_source_function_stream($pluginSource) as $method) {
+        $methods[$method['name']] = $method['tokens'];
     }
 
     $mutationNames = array_fill_keys([
@@ -234,29 +190,26 @@ function wp_fts_lifecycle_scheduler_queue_mutation_map(): array
     $sourceByMethod = [];
     foreach ($methods as $methodName => $body) {
         $sourceByMethod[$methodName] = implode('', array_map(
-            static fn(mixed $token): string => is_array($token) ? $token[1] : (string) $token,
+            static fn(array $token): string => $token[1],
             $body
         ));
         $calls = [];
         $bodyCount = count($body);
         for ($index = 0; $index < $bodyCount; $index++) {
             if (
-                !is_array($body[$index])
-                || !in_array($body[$index][0], [T_OBJECT_OPERATOR, T_DOUBLE_COLON], true)
+                !in_array($body[$index][0], ['object_operator', 'double_colon'], true)
             ) {
                 continue;
             }
             for ($cursor = $index + 1; $cursor < $bodyCount; $cursor++) {
                 $candidate = $body[$cursor];
                 if (
-                    is_array($candidate)
-                    && in_array($candidate[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)
+                    wp_fts_php_source_token_is_trivia($candidate)
                 ) {
                     continue;
                 }
                 if (
-                    is_array($candidate)
-                    && $candidate[0] === T_STRING
+                    $candidate[0] === 'identifier'
                     && isset($mutationNames[$candidate[1]])
                     && !in_array($candidate[1], $calls, true)
                 ) {

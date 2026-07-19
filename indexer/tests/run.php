@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/../tools/php-source-token-stream.php';
+
 // A focused subprocess can force the owner-guard open failure without
 // changing the host or leaving a process-wide constant behind in this runner.
 $wpFtsForegroundLockDir = getenv('WP_FTS_TEST_FOREGROUND_LOCK_DIR');
@@ -15,6 +17,10 @@ final class WP_FTS_TestFailure extends RuntimeException
 }
 
 final class WP_FTS_TestPending extends RuntimeException
+{
+}
+
+final class WP_FTS_TestSkipped extends RuntimeException
 {
 }
 
@@ -120,6 +126,37 @@ function test_case(string $name, callable $fn): void
 {
     global $tests;
     $tests[] = ['name' => $name, 'fn' => $fn];
+}
+
+/** Register a real-SQL regression only when its test-only PDO SQLite engine exists. */
+function test_case_with_pdo_sqlite_fixture(string $name, callable $fn): void
+{
+    if (wp_fts_test_has_pdo_sqlite_fixture()) {
+        test_case($name, $fn);
+        return;
+    }
+
+    // php -n is the authoritative production fallback lane; PDO is not a
+    // production dependency. An extension-enabled lane, however, must never
+    // lose its real-SQL fixture coverage silently.
+    if (php_ini_loaded_file() !== false) {
+        test_case($name, static function (): void {
+            throw new WP_FTS_TestFailure('The required extension-enabled PDO SQLite test fixture is unavailable.');
+        });
+        return;
+    }
+
+    test_case($name, static function (): void {
+        throw new WP_FTS_TestSkipped('The real-SQL regression requires the test-only PDO SQLite fixture; production has no PDO dependency.');
+    });
+}
+
+/** Whether the test-only in-memory real-SQL adapter can execute. */
+function wp_fts_test_has_pdo_sqlite_fixture(): bool
+{
+    return class_exists(PDO::class)
+        && method_exists(PDO::class, 'getAvailableDrivers')
+        && in_array('sqlite', PDO::getAvailableDrivers(), true);
 }
 
 function record_check(?string $label = null, int $count = 1): void
@@ -240,6 +277,7 @@ function wp_fts_run_registered_tests_and_exit(): void
 
     $failures = 0;
     $pending = 0;
+    $skipped = 0;
     $start = microtime(true);
     $count = count($tests);
     for ($testIndex = 0; $testIndex < $count; $testIndex++) {
@@ -253,6 +291,9 @@ function wp_fts_run_registered_tests_and_exit(): void
         } catch (WP_FTS_TestPending $e) {
             $pending++;
             fwrite(STDOUT, "[PEND] {$test['name']}\n{$e->getMessage()}\n");
+        } catch (WP_FTS_TestSkipped $e) {
+            $skipped++;
+            fwrite(STDOUT, "[SKIP] {$test['name']}\n{$e->getMessage()}\n");
         } catch (Throwable $e) {
             $failures++;
             fwrite(STDERR, "[FAIL] {$test['name']}\n{$e->getMessage()}\n{$e->getTraceAsString()}\n");
@@ -265,7 +306,7 @@ function wp_fts_run_registered_tests_and_exit(): void
     }
 
     $duration = number_format(microtime(true) - $start, 3);
-    $passed = $count - $failures - $pending;
+    $passed = $count - $failures - $pending - $skipped;
     $gateFailures = 0;
     $minimumChecks = WP_FTS_DEFAULT_MIN_CHECKS;
     try {
@@ -286,7 +327,7 @@ function wp_fts_run_registered_tests_and_exit(): void
     }
 
     $totalFailures = $failures + $gateFailures;
-    $summary = "{$passed}/{$count} named tests passed; failures={$totalFailures}; pending={$pending}; checks/scenarios={$checkCount}; minimum checks={$minimumChecks}; final target>=" . WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS . "; duration={$duration}s\n";
+    $summary = "{$passed}/{$count} named tests passed; failures={$totalFailures}; pending={$pending}; skipped={$skipped}; checks/scenarios={$checkCount}; minimum checks={$minimumChecks}; final target>=" . WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS . "; duration={$duration}s\n";
     if ($totalFailures > 0) {
         fwrite(STDERR, $summary);
         exit(1);
@@ -16870,7 +16911,7 @@ test_case('wp-cli repair reports active writer contention without probing schema
     assert_same('cli-repair-foreign-writer', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'contended CLI repair should not replace the foreign lease');
 });
 
-test_case('wp-cli asynchronous reindex queues while direct writers skip safely under an active lock', function (): void {
+test_case_with_pdo_sqlite_fixture('wp-cli asynchronous reindex queues while direct writers skip safely under an active lock', function (): void {
     $fake = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($fake);
     wp_fts_v4_regression_add_source_post($fake, 901, '<p>locked reindex</p>', 'Locked Reindex');
@@ -29740,7 +29781,7 @@ test_case('strict runtime lemma pack enable leaves options unchanged after integ
         try {
             WP_FTS_Plugin::set_runtime_lemma_pack_option('pl', $manifestPath);
         } catch (RuntimeException $e) {
-            $thrown = str_contains($e->getMessage(), 'row count mismatch');
+            $thrown = str_contains($e->getMessage(), 'Runtime row count exceeds the manifest declaration');
         }
 
         assert_true($thrown, 'enable should fully stream runtime content even when its file digest was updated');
@@ -32604,7 +32645,7 @@ test_case('HTML visible-text block boundaries stay linear at the accepted 2MiB s
     );
     assert_same(0, $cli['exit'], "accepted HTML block-boundary proof should pass in its hard fresh-process envelope: {$cli['stderr']}");
     $measurement = json_decode(trim($cli['stdout']), true, 32, JSON_THROW_ON_ERROR);
-    assert_same(8, $measurement['checks'] ?? null, 'the component boundary proof should execute every correctness and containment assertion');
+    assert_same(11, $measurement['checks'] ?? null, 'the component boundary proof should execute every correctness and containment assertion');
     assert_same(2090000, $measurement['full']['source_bytes'] ?? null, 'the full boundary should remain just below the 2 MiB source limit');
     assert_same(20000, $measurement['full']['markup_tokens'] ?? null, 'the full boundary should exercise the exact accepted markup-token limit');
     assert_same(true, $measurement['full']['exact_output'] ?? null, 'the full boundary should preserve exact visible output');
@@ -35981,7 +36022,7 @@ test_case('mysql row-posting indexing skips oversized namespaced terms before st
     );
 });
 
-test_case('wp cli reindex preserves language filters and limit for later bounded workers', function (): void {
+test_case_with_pdo_sqlite_fixture('wp cli reindex preserves language filters and limit for later bounded workers', function (): void {
     $fake = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($fake);
     wp_fts_v4_regression_add_source_post(
@@ -36821,7 +36862,7 @@ test_case('wp cli search accepts prefix minimum aliases and keeps the complete r
     assert_same([2, 1], array_column($expanded[0]['items'] ?? [], 'doc_id'), 'CLI dashed prefix aliases should preserve the same complete range and tie order');
 });
 
-test_case('wp cli reindex scopes default admin statuses while later workers keep explicit publish narrow', function (): void {
+test_case_with_pdo_sqlite_fixture('wp cli reindex scopes default admin statuses while later workers keep explicit publish narrow', function (): void {
     $supportedStatuses = ['publish', 'draft', 'pending', 'future', 'private'];
     $fake = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($fake);
@@ -36919,7 +36960,7 @@ test_case('wp cli reindex scopes default admin statuses while later workers keep
     ), 'the publish-only lane must force the plugin-owned composite source index');
 });
 
-test_case('wp cli reindex carries plugin runtime analyzer configuration into later workers', function (): void {
+test_case_with_pdo_sqlite_fixture('wp cli reindex carries plugin runtime analyzer configuration into later workers', function (): void {
     $fake = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($fake);
     wp_fts_v4_regression_add_source_post(

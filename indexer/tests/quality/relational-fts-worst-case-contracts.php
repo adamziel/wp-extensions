@@ -9,42 +9,9 @@ declare(strict_types=1);
 
 function wp_fts_wc_contract_function_source(string $source, string $name): string
 {
-    $tokens = token_get_all($source);
-    foreach ($tokens as $index => $token) {
-        if (!is_array($token) || $token[0] !== T_FUNCTION) {
-            continue;
-        }
-        $candidate = null;
-        for ($cursor = $index + 1, $count = count($tokens); $cursor < $count; $cursor++) {
-            $next = $tokens[$cursor];
-            if (is_array($next) && $next[0] === T_STRING) {
-                $candidate = $next[1];
-                break;
-            }
-            if ($next === '(') {
-                break;
-            }
-        }
-        if ($candidate !== $name) {
-            continue;
-        }
-
-        $body = '';
-        $opened = false;
-        $depth = 0;
-        for ($cursor = $index, $count = count($tokens); $cursor < $count; $cursor++) {
-            $next = $tokens[$cursor];
-            $text = is_array($next) ? $next[1] : $next;
-            $body .= $text;
-            if ($text === '{') {
-                $opened = true;
-                $depth++;
-            } elseif ($text === '}' && $opened) {
-                $depth--;
-                if ($depth === 0) {
-                    return $body;
-                }
-            }
+    foreach (wp_fts_php_source_function_stream($source) as $function) {
+        if ($function['name'] === $name) {
+            return $function['source'];
         }
     }
 
@@ -160,46 +127,9 @@ BASH;
 
 test_case('relational worst-case phase failures are terminal after preserving evidence', function (): void {
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
-    $tokens = token_get_all($integration);
     $functions = [];
-    $functionName = null;
-    $awaitingFunctionName = false;
-    $collecting = false;
-    $depth = 0;
-    $body = '';
-    foreach ($tokens as $token) {
-        $text = is_array($token) ? $token[1] : $token;
-        if (!$collecting && is_array($token) && $token[0] === T_FUNCTION) {
-            $functionName = null;
-            $awaitingFunctionName = true;
-            continue;
-        }
-        if (!$collecting && $awaitingFunctionName && is_array($token) && $token[0] === T_STRING) {
-            $functionName = $token[1];
-            $awaitingFunctionName = false;
-            continue;
-        }
-        if (!$collecting && $functionName !== null && $text === '{') {
-            $collecting = true;
-            $depth = 1;
-            $body = '';
-            continue;
-        }
-        if (!$collecting) {
-            continue;
-        }
-        if ($text === '{') {
-            $depth++;
-        } elseif ($text === '}') {
-            $depth--;
-            if ($depth === 0) {
-                $functions[$functionName] = $body;
-                $functionName = null;
-                $collecting = false;
-                continue;
-            }
-        }
-        $body .= $text;
+    foreach (wp_fts_php_source_function_stream($integration) as $function) {
+        $functions[$function['name']] = $function['source'];
     }
 
     foreach ([
@@ -917,17 +847,16 @@ PHP;
 test_case('relational direct mutation methods reject set-oriented storage before any work', function (): void {
     $indexer = (string) file_get_contents(dirname(__DIR__, 3) . '/components/full-text-search/src/Indexer.php');
     $firstToken = static function (string $methodSource): mixed {
-        $tokens = token_get_all("<?php\n" . $methodSource);
         $inside = false;
-        foreach ($tokens as $token) {
-            $text = is_array($token) ? $token[1] : $token;
+        foreach (wp_fts_php_source_token_stream("<?php\n" . $methodSource) as $token) {
+            $text = $token[1];
             if (!$inside) {
                 if ($text === '{') {
                     $inside = true;
                 }
                 continue;
             }
-            if (is_array($token) && in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+            if (wp_fts_php_source_token_is_trivia($token)) {
                 continue;
             }
             return $token;
@@ -944,7 +873,7 @@ test_case('relational direct mutation methods reject set-oriented storage before
     foreach ($firstWorkMarkers as $method => $firstWorkMarker) {
         $methodSource = wp_fts_wc_contract_function_source($indexer, $method);
         $token = $firstToken($methodSource);
-        assert_true(is_array($token) && $token[0] === T_IF, "{$method} must begin with its relational capability guard");
+        assert_true(is_array($token) && $token[0] === 'if', "{$method} must begin with its relational capability guard");
         assert_contains('instanceof WP_FTS_Set_Oriented_Search_Storage', $methodSource, "{$method} should derive rejection from storage capability");
         assert_contains('throw new LogicException', $methodSource, "{$method} should throw the stable relational exception");
         $guardMessage = strpos($methodSource, 'Set-oriented storage mutations must use the bounded batch writer.');
@@ -959,7 +888,7 @@ test_case('relational direct mutation methods reject set-oriented storage before
     foreach (['replace_doc_postings', 'put_doc', 'put_doc_metadata', 'delete_doc'] as $method) {
         $methodSource = wp_fts_wc_contract_function_source($mysqlStorage, $method);
         $token = $firstToken($methodSource);
-        assert_true(is_array($token) && $token[0] === T_THROW, "{$method} must reject before validation, locks, or SQL");
+        assert_true(is_array($token) && $token[0] === 'throw', "{$method} must reject before validation, locks, or SQL");
         assert_contains('throw new LogicException', $methodSource, "{$method} should throw the stable relational exception");
         assert_contains('Set-oriented storage mutations must use the bounded batch writer.', $methodSource, "{$method} should retain the exact relational exception message");
     }
@@ -1041,6 +970,34 @@ test_case('relational worst-case runner publishes an atomic failure envelope and
     assert_contains('if(posix_getppid()===$parent&&@posix_kill($parent,0)){@posix_kill($parent,9);}', $runner, 'the hard-kill escalation must immediately recheck parentage and liveness');
     assert_contains('</dev/null >/dev/null 2>&1 &', $runner, 'the watchdog must not retain CI stdin/stdout/stderr pipes after runner death');
     assert_true(!str_contains($runner, '( sleep'), 'the watchdog must not hide an orphanable sleep child behind a background subshell');
+    foreach ([
+        'failure-compose-ps.json',
+        'failure-compose.log',
+        'failure-db-inspect.json',
+        'failure-db.log',
+        'docker compose -f "${COMPOSE_FILE}"',
+        'ps --all --format json',
+        'logs --no-color --timestamps',
+        'docker inspect "${db_container}"',
+        'docker logs --timestamps "${db_container}"',
+    ] as $required) {
+        assert_contains($required, $runner, "failed runner must preserve real database diagnostics: {$required}");
+    }
+    $cleanupStart = strpos($runner, "\ncleanup() {");
+    $cleanupEnd = strpos($runner, "\ntrap cleanup EXIT", $cleanupStart === false ? 0 : $cleanupStart);
+    assert_true(is_int($cleanupStart) && is_int($cleanupEnd), 'runner cleanup should remain independently inspectable');
+    $cleanup = substr($runner, $cleanupStart, $cleanupEnd - $cleanupStart);
+    $failureCapture = strpos($cleanup, 'capture_failure_environment_artifacts');
+    $archivePublication = strpos($cleanup, 'publish_evidence');
+    $composeTeardown = strpos($cleanup, 'docker compose -f "${COMPOSE_FILE}" down');
+    assert_true(
+        is_int($failureCapture)
+            && is_int($archivePublication)
+            && is_int($composeTeardown)
+            && $failureCapture < $archivePublication
+            && $archivePublication < $composeTeardown,
+        'failure logs and state must be captured before the raw archive and Docker teardown'
+    );
     $temporary = sys_get_temp_dir() . '/wp-fts-failure-publication-' . bin2hex(random_bytes(6));
     $bin = $temporary . '/bin';
     mkdir($bin, 0777, true);
@@ -1493,6 +1450,9 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         '--innodb-flush-log-at-trx-commit=1',
         'CONCURRENCY_SECONDS=60',
         '--performance-schema=ON',
+        '--performance-schema-max-sql-text-length=32768',
+        '--performance-schema-events-statements-history-long-size=2048',
+        '--performance-schema-events-statements-history-size=1',
         'db_data:/var/lib/mysql',
         '${EVIDENCE_DIR}:/evidence',
         '${MUTATION_PROOF_SCRIPT}:/proof/mutation-fence-concurrency.php:ro',
@@ -1519,6 +1479,46 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         'COLD_SAMPLES=10',
     ] as $required) {
         assert_contains($required, $runner, "runner should retain hard acceptance contract: {$required}");
+    }
+    assert_true(
+        !str_contains($runner, '--performance-schema-max-sql-text-length=65536'),
+        'the 1 GiB database lane must not restore the OOM-inducing 65,536-byte Performance Schema allocation'
+    );
+    foreach ([
+        'const WP_FTS_WC_PERFORMANCE_SCHEMA_SQL_TEXT_BYTES = 32768;',
+        'const WP_FTS_WC_PERFORMANCE_SCHEMA_HISTORY_LONG_EVENTS = 2048;',
+        'const WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_HISTORY_EVENTS = 1;',
+        '@@performance_schema_events_statements_history_long_size AS performance_schema_history_long_events',
+        '@@performance_schema_events_statements_history_size AS performance_schema_thread_history_events',
+        "'performance_schema_events_statements_history_long_size'",
+        "'performance_schema_events_statements_history_size'",
+    ] as $required) {
+        assert_contains($required, $integration, "runtime evidence must bind the bounded Performance Schema configuration: {$required}");
+    }
+    $runtimeAssertion = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_assert_runtime');
+    assert_contains(
+        '(int) $row->performance_schema_sql_bytes === WP_FTS_WC_PERFORMANCE_SCHEMA_SQL_TEXT_BYTES',
+        $runtimeAssertion,
+        'runtime validation must require the exact complete-SQL retention width'
+    );
+    assert_contains(
+        '(int) $row->performance_schema_history_long_events === WP_FTS_WC_PERFORMANCE_SCHEMA_HISTORY_LONG_EVENTS',
+        $runtimeAssertion,
+        'runtime validation must require the exact bounded global statement ring'
+    );
+    assert_contains(
+        '(int) $row->performance_schema_thread_history_events === WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_HISTORY_EVENTS',
+        $runtimeAssertion,
+        'runtime validation must require the exact redundant per-thread history size'
+    );
+    $requestAttribution = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_performance_schema_request_events');
+    foreach ([
+        'count($rows) <= intdiv(WP_FTS_WC_PERFORMANCE_SCHEMA_HISTORY_LONG_EVENTS, 2)',
+        "'history_long_capacity' => WP_FTS_WC_PERFORMANCE_SCHEMA_HISTORY_LONG_EVENTS",
+        "'history_long_event_count' => count(\$rows)",
+        "'history_long_headroom' => WP_FTS_WC_PERFORMANCE_SCHEMA_HISTORY_LONG_EVENTS - count(\$rows)",
+    ] as $required) {
+        assert_contains($required, $requestAttribution, "request attribution must prove retained ring headroom: {$required}");
     }
     foreach ([
         "'documents' => 50000",
@@ -3298,6 +3298,7 @@ test_case('Jieba memory proof is authoritative on PHP 8.1 and 8.4 with and witho
     foreach ([
         "- '8.1'",
         "- '8.4'",
+        'php -l indexer/tests/integration/relational-fts-worst-case.php',
         'php -d memory_limit=128M indexer/tests/quality/jieba-indexed-multi-run.php',
         'php -n -d memory_limit=128M indexer/tests/quality/jieba-indexed-multi-run.php',
         'php -d memory_limit=128M components/full-text-search/tests/smoke.php',

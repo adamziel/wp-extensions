@@ -726,7 +726,8 @@ final class WP_FTS_Normalizer
     /**
      * Return explicit uppercase-to-lowercase mappings for no-mbstring runs.
      *
-     * This covers the same Latin letters the folding maps understand and keeps
+     * This covers the same Latin letters the folding maps understand and the
+     * Cyrillic alphabets used by bundled Russian and Ukrainian packs. It keeps
      * analyzer behavior stable in minimal PHP environments.
      *
      * @return array<string,string>
@@ -795,6 +796,43 @@ final class WP_FTS_Normalizer
             'Ž' => 'ž',
             'Ð' => 'ð',
             'Þ' => 'þ',
+            'А' => 'а',
+            'Б' => 'б',
+            'В' => 'в',
+            'Г' => 'г',
+            'Д' => 'д',
+            'Е' => 'е',
+            'Ё' => 'ё',
+            'Ж' => 'ж',
+            'З' => 'з',
+            'И' => 'и',
+            'Й' => 'й',
+            'К' => 'к',
+            'Л' => 'л',
+            'М' => 'м',
+            'Н' => 'н',
+            'О' => 'о',
+            'П' => 'п',
+            'Р' => 'р',
+            'С' => 'с',
+            'Т' => 'т',
+            'У' => 'у',
+            'Ф' => 'ф',
+            'Х' => 'х',
+            'Ц' => 'ц',
+            'Ч' => 'ч',
+            'Ш' => 'ш',
+            'Щ' => 'щ',
+            'Ъ' => 'ъ',
+            'Ы' => 'ы',
+            'Ь' => 'ь',
+            'Э' => 'э',
+            'Ю' => 'ю',
+            'Я' => 'я',
+            'Ґ' => 'ґ',
+            'Є' => 'є',
+            'І' => 'і',
+            'Ї' => 'ї',
         ];
     }
 

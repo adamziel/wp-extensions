@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../src/bootstrap.php';
 
-/** @return array<string,int|float|bool> */
+/** @return array<string,int|float|bool|string> */
 function wp_fts_html_boundary_measure(int $paragraphs): array
 {
     $paragraphText = str_repeat('x', 202);
@@ -20,10 +20,17 @@ function wp_fts_html_boundary_measure(int $paragraphs): array
     $visible = WP_FTS_Html_Text_Stream::visible_text($source);
     $elapsedMs = (hrtime(true) - $started) / 1_000_000;
 
-    $usage = function_exists('getrusage') ? getrusage() : false;
-    $peakRss = is_array($usage) ? max(0, (int) ($usage['ru_maxrss'] ?? 0)) : 0;
-    if ($peakRss > 0 && PHP_OS_FAMILY !== 'Darwin') {
-        $peakRss *= 1024;
+    $peakRss = wp_fts_html_boundary_proc_peak_rss_bytes();
+    $peakRssSource = 'proc-self-status-vmhwm';
+    if ($peakRss === null) {
+        $peakRss = wp_fts_html_boundary_getrusage_peak_rss_bytes();
+        $peakRssSource = PHP_OS_FAMILY === 'Darwin'
+            ? 'getrusage-darwin-bytes'
+            : 'getrusage-kib';
+    }
+    if ($peakRss === null) {
+        $peakRss = memory_get_peak_usage(true);
+        $peakRssSource = 'php-allocation-peak';
     }
 
     return [
@@ -34,8 +41,113 @@ function wp_fts_html_boundary_measure(int $paragraphs): array
         'exact_output' => $visible === $expected,
         'elapsed_ms' => $elapsedMs,
         'allocation_delta_bytes' => memory_get_peak_usage(true) - $memoryBefore,
-        'peak_rss_bytes' => $peakRss > 0 ? $peakRss : memory_get_peak_usage(true),
+        'peak_rss_bytes' => $peakRss,
+        'peak_rss_source' => $peakRssSource,
     ];
+}
+
+/** Read Linux's authoritative process RSS high-water mark without buffering `/proc`. */
+function wp_fts_html_boundary_proc_peak_rss_bytes(): ?int
+{
+    $handle = @fopen('/proc/self/status', 'rb');
+    if (!is_resource($handle)) {
+        return null;
+    }
+
+    try {
+        while (($line = fgets($handle, 256)) !== false) {
+            if (!str_starts_with($line, 'VmHWM:')) {
+                continue;
+            }
+
+            $peak = wp_fts_html_boundary_parse_vm_hwm_line($line);
+            return $peak !== null && $peak > 0 ? $peak : null;
+        }
+    } finally {
+        fclose($handle);
+    }
+
+    return null;
+}
+
+/** Parse the exact `VmHWM: <kilobytes> kB` line published by procfs. */
+function wp_fts_html_boundary_parse_vm_hwm_line(string $line): ?int
+{
+    if (!str_starts_with($line, 'VmHWM:')) {
+        return null;
+    }
+
+    $length = strlen($line);
+    $offset = strlen('VmHWM:');
+    while ($offset < $length && wp_fts_html_boundary_is_ascii_whitespace($line[$offset])) {
+        $offset++;
+    }
+
+    $kilobytes = 0;
+    $digits = 0;
+    while ($offset < $length) {
+        $byte = ord($line[$offset]);
+        if ($byte < 48 || $byte > 57) {
+            break;
+        }
+        $digit = $byte - 48;
+        if ($kilobytes > intdiv(PHP_INT_MAX - $digit, 10)) {
+            return null;
+        }
+        $kilobytes = ($kilobytes * 10) + $digit;
+        $digits++;
+        $offset++;
+    }
+    if ($digits === 0) {
+        return null;
+    }
+
+    while ($offset < $length && wp_fts_html_boundary_is_ascii_whitespace($line[$offset])) {
+        $offset++;
+    }
+    if (substr_compare($line, 'kB', $offset, 2) !== 0) {
+        return null;
+    }
+    $offset += 2;
+    while ($offset < $length && wp_fts_html_boundary_is_ascii_whitespace($line[$offset])) {
+        $offset++;
+    }
+    if ($offset !== $length || $kilobytes > intdiv(PHP_INT_MAX, 1024)) {
+        return null;
+    }
+
+    return $kilobytes * 1024;
+}
+
+/** Fall back to the platform's `getrusage(2)` unit convention. */
+function wp_fts_html_boundary_getrusage_peak_rss_bytes(): ?int
+{
+    if (!function_exists('getrusage')) {
+        return null;
+    }
+    $usage = getrusage();
+    $peak = is_array($usage) ? (int) ($usage['ru_maxrss'] ?? 0) : 0;
+    if ($peak <= 0) {
+        return null;
+    }
+    if (PHP_OS_FAMILY === 'Darwin') {
+        return $peak;
+    }
+    if ($peak > intdiv(PHP_INT_MAX, 1024)) {
+        return null;
+    }
+
+    return $peak * 1024;
+}
+
+/** Recognize only the ASCII spacing bytes permitted around procfs fields. */
+function wp_fts_html_boundary_is_ascii_whitespace(string $byte): bool
+{
+    return $byte === ' '
+        || $byte === "\t"
+        || $byte === "\n"
+        || $byte === "\r"
+        || $byte === "\f";
 }
 
 if (isset($argv[1]) && str_starts_with($argv[1], '--measure=')) {
@@ -61,7 +173,7 @@ function wp_fts_html_boundary_check(bool $condition, string $message): void
     }
 }
 
-/** @return array<string,int|float|bool> */
+/** @return array<string,int|float|bool|string> */
 function wp_fts_html_boundary_run(int $paragraphs): array
 {
     if (!function_exists('proc_open')) {
@@ -133,6 +245,14 @@ wp_fts_html_boundary_check(
     'the accepted near-2 MiB boundary must keep fresh-process RSS at or below 128 MiB'
 );
 wp_fts_html_boundary_check(
+    !is_readable('/proc/self/status')
+        || (
+            ($half['peak_rss_source'] ?? null) === 'proc-self-status-vmhwm'
+            && ($full['peak_rss_source'] ?? null) === 'proc-self-status-vmhwm'
+        ),
+    'Linux fresh-process RSS must come from the procfs VmHWM field rather than ambiguous getrusage units'
+);
+wp_fts_html_boundary_check(
     ($half['exact_output'] ?? null) === true
         && (float) ($full['elapsed_ms'] ?? INF) <= ((float) ($half['elapsed_ms'] ?? 0.0) * 3.0) + 50.0,
     'doubling accepted boundary input must remain linear rather than quadrupling scan time'
@@ -144,6 +264,15 @@ wp_fts_html_boundary_check(
 wp_fts_html_boundary_check(
     WP_FTS_Html_Text_Stream::visible_text("A\xFF</p><p>B") === 'A B',
     'bounded trailing-codepoint checks must retain malformed UTF-8 repair behavior'
+);
+wp_fts_html_boundary_check(
+    wp_fts_html_boundary_parse_vm_hwm_line("VmHWM:\t  131072 kB\n") === 128 * 1024 * 1024,
+    'procfs VmHWM parsing must convert its documented KiB value to bytes exactly once'
+);
+wp_fts_html_boundary_check(
+    wp_fts_html_boundary_parse_vm_hwm_line("VmHWM:\t128 MB\n") === null
+        && wp_fts_html_boundary_parse_vm_hwm_line("VmHWM:\t-1 kB\n") === null,
+    'procfs VmHWM parsing must reject unknown units and non-decimal values'
 );
 
 if (realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === __FILE__) {

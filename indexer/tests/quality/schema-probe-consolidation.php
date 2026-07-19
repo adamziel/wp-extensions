@@ -151,7 +151,7 @@ test_case('operator support and diagnose stay inside fixed total statement ceili
     }
 });
 
-test_case('SQLite physical diagnostics inspect six tables in one portable statement', function (): void {
+test_case_with_pdo_sqlite_fixture('SQLite physical diagnostics inspect six tables in one portable statement', function (): void {
     $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
     wp_fts_v4_regression_create_schema($wpdb);
     $storage = new WP_FTS_Storage_Mysql($wpdb);

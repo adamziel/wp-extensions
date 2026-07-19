@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-test_case('relational cursor scores remain exact above the 32-bit PHP integer ceiling', function (): void {
+test_case_with_pdo_sqlite_fixture('relational cursor scores remain exact above the 32-bit PHP integer ceiling', function (): void {
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
     $groups = [];
     for ($postId = 1; $postId <= 4; $postId++) {

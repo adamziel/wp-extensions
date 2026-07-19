@@ -136,6 +136,12 @@ test_case('lemma source importers reject the first pack above sixteen physical M
         assert_same(false, $payload['manifest_written'] ?? null, "{$case} should reject before publishing a manifest");
         assert_same([], $payload['output_entries'] ?? null, "{$case} should remove every partial runtime and sidecar");
         assert_true((int) ($payload['php_peak_bytes'] ?? PHP_INT_MAX) <= 128 * 1024 * 1024, "{$case} should reject under the low-host PHP ceiling");
+        assert_true((float) ($payload['source_generation_seconds'] ?? -1.0) >= 0.0, "{$case} should report high-entropy fixture generation separately");
+        assert_true(
+            (float) ($payload['total_elapsed_seconds'] ?? -1.0)
+                >= (float) ($payload['source_generation_seconds'] ?? INF) + (float) ($payload['elapsed_seconds'] ?? INF),
+            "{$case} total timing should cover separate fixture generation and importer execution"
+        );
         assert_true((float) ($payload['elapsed_seconds'] ?? INF) <= 15.0, "{$case} physical-cap proof should finish within fifteen seconds");
         wp_fts_assert_importer_proc_memory($payload, $case);
     }
@@ -367,7 +373,7 @@ function wp_fts_assert_importer_proc_memory(array $payload, string $case): void
     foreach (['VmHWM_bytes', 'VmRSS_bytes'] as $metric) {
         $value = $payload['proc_status'][$metric] ?? null;
         if (is_int($value)) {
-            assert_true($value <= 128 * 1024 * 1024, "{$case} {$metric} should remain below 128 MiB");
+            assert_true($value <= 128 * 1024 * 1024, "{$case} {$metric} should remain below 128 MiB; observed {$value} bytes");
         }
     }
 }

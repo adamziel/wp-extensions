@@ -16,6 +16,9 @@ if (!function_exists('get_option')) {
 require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
 
 $started = microtime(true);
+$fixtureGenerationSeconds = 0.0;
+$productElapsedSeconds = 0.0;
+$faultInjectionElapsedSeconds = 0.0;
 $peakBefore = memory_get_peak_usage(true);
 $root = sys_get_temp_dir() . '/wp-fts-eager-byte-config-' . bin2hex(random_bytes(6));
 if (!mkdir($root, 0777, true) && !is_dir($root)) {
@@ -27,6 +30,7 @@ try {
     $half = intdiv($limit, 2);
     $modes = [];
     foreach (['plain' => false, 'gzip' => true] as $mode => $gzip) {
+        $phaseStarted = microtime(true);
         $exact = wp_fts_eager_byte_write_pair($root . '/' . $mode . '-exact', $half, $half, $gzip, false);
         $overflow = wp_fts_eager_byte_write_pair(
             $root . '/' . $mode . '-overflow',
@@ -35,28 +39,38 @@ try {
             $gzip,
             !$gzip
         );
+        $fixtureGenerationSeconds += microtime(true) - $phaseStarted;
+        $phaseStarted = microtime(true);
+        $exactResult = wp_fts_eager_byte_exercise($exact['options']);
+        $overflowResult = wp_fts_eager_byte_exercise($overflow['options']);
+        $productElapsedSeconds += microtime(true) - $phaseStarted;
         $modes[$mode] = [
             'exact_decoded_bytes' => $exact['decoded_bytes'],
             'overflow_decoded_bytes' => $overflow['decoded_bytes'],
             'exact_physical_bytes' => $exact['physical_bytes'],
             'overflow_physical_bytes' => $overflow['physical_bytes'],
             'overflow_first_runtime_digest_matches' => $overflow['first_runtime_digest_matches'],
-            'exact' => wp_fts_eager_byte_exercise($exact['options']),
-            'overflow' => wp_fts_eager_byte_exercise($overflow['options']),
+            'exact' => $exactResult,
+            'overflow' => $overflowResult,
         ];
     }
 
+    $phaseStarted = microtime(true);
     $lateCorrupt = wp_fts_eager_byte_write_late_corrupt_pack(
         $root . '/late-corrupt',
         $limit,
         20000
     );
+    $fixtureGenerationSeconds += microtime(true) - $phaseStarted;
     $lateCorruptAliases = wp_fts_eager_byte_language_aliases($lateCorrupt['manifest']);
+    $phaseStarted = microtime(true);
     $lateCorruptAttempts = wp_fts_eager_byte_exercise_late_corrupt_aliases(
         $lateCorrupt['manifest'],
         $lateCorruptAliases
     );
+    $productElapsedSeconds += microtime(true) - $phaseStarted;
 
+    $phaseStarted = microtime(true);
     $repairable = wp_fts_eager_byte_write_pack(
         $root . '/repairable',
         'repair',
@@ -65,23 +79,39 @@ try {
         false,
         'pl'
     );
-    $authoritativePreflight = wp_fts_eager_byte_exercise_repaired_preflight(
-        $repairable['manifest'],
-        wp_fts_eager_byte_language_aliases($repairable['manifest'])
-    );
-    $appearing = wp_fts_eager_byte_write_pack(
-        $root . '/appearing',
-        'appear',
-        4096,
-        false,
-        false,
-        'pl'
-    );
-    $authoritativeAppearance = wp_fts_eager_byte_exercise_appearing_preflight(
-        $appearing['manifest'],
-        $repairable['manifest']
-    );
+    $fixtureGenerationSeconds += microtime(true) - $phaseStarted;
+    // Descriptor exhaustion is test-only fault injection. The php -n
+    // production fallback lane intentionally has no shared POSIX extension.
+    $descriptorFaultInjectionAvailable = function_exists('posix_getrlimit')
+        && function_exists('posix_setrlimit');
+    $authoritativePreflight = null;
+    $authoritativeAppearance = null;
+    if ($descriptorFaultInjectionAvailable) {
+        $phaseStarted = microtime(true);
+        $authoritativePreflight = wp_fts_eager_byte_exercise_repaired_preflight(
+            $repairable['manifest'],
+            wp_fts_eager_byte_language_aliases($repairable['manifest'])
+        );
+        $faultInjectionElapsedSeconds += microtime(true) - $phaseStarted;
+        $phaseStarted = microtime(true);
+        $appearing = wp_fts_eager_byte_write_pack(
+            $root . '/appearing',
+            'appear',
+            4096,
+            false,
+            false,
+            'pl'
+        );
+        $fixtureGenerationSeconds += microtime(true) - $phaseStarted;
+        $phaseStarted = microtime(true);
+        $authoritativeAppearance = wp_fts_eager_byte_exercise_appearing_preflight(
+            $appearing['manifest'],
+            $repairable['manifest']
+        );
+        $faultInjectionElapsedSeconds += microtime(true) - $phaseStarted;
+    }
 
+    $phaseStarted = microtime(true);
     $discarded = wp_fts_eager_byte_write_pack(
         $root . '/canonical-discarded',
         'discarded',
@@ -97,6 +127,8 @@ try {
         false,
         false
     );
+    $fixtureGenerationSeconds += microtime(true) - $phaseStarted;
+    $phaseStarted = microtime(true);
     $canonicalLastWins = wp_fts_eager_byte_exercise_canonical_last_wins(
         $discarded['manifest'],
         $survivor['manifest']
@@ -109,8 +141,10 @@ try {
         $repairable['manifest'],
         $lateCorrupt['manifest']
     );
+    $productElapsedSeconds += microtime(true) - $phaseStarted;
 
     $peakAfter = memory_get_peak_usage(true);
+    $totalElapsedSeconds = microtime(true) - $started;
     echo json_encode([
         'case' => 'configured-eager-fixture-bytes',
         'limit_bytes' => $limit,
@@ -124,10 +158,14 @@ try {
         ],
         'authoritative_preflight' => $authoritativePreflight,
         'authoritative_appearance' => $authoritativeAppearance,
+        'descriptor_fault_injection_available' => $descriptorFaultInjectionAvailable,
         'canonical_last_wins' => $canonicalLastWins,
         'canonical_cross_map' => $canonicalCrossMap,
         'canonical_polish_precedence' => $canonicalPolishPrecedence,
-        'elapsed_seconds' => microtime(true) - $started,
+        'elapsed_seconds' => $productElapsedSeconds,
+        'fixture_generation_seconds' => $fixtureGenerationSeconds,
+        'fault_injection_seconds' => $faultInjectionElapsedSeconds,
+        'total_elapsed_seconds' => $totalElapsedSeconds,
         'php_peak_bytes' => $peakAfter,
         'php_peak_delta_bytes' => max(0, $peakAfter - $peakBefore),
         'proc_status' => wp_fts_eager_byte_proc_status(),

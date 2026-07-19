@@ -1249,8 +1249,15 @@ the measured execution. Its ordered wpdb SQL SHA-256 list must equal both the
 measured execution's captured SQL list and the ordered completed SQL text read
 from Performance Schema, statement for statement. A fast measured search plus
 an unrelated instrumented search cannot satisfy the gate. Performance Schema
-is configured to retain at least 65,536 bytes of SQL text so a truncated event
-cannot create false identity.
+is configured to retain exactly 32,768 bytes of SQL text, the complete maximum
+accepted search-statement width, so a truncated event cannot create false
+identity. Its global statement-history ring is fixed at 2,048 events. Each
+attributed callback is read immediately and runs without the later concurrency
+workload. The proof fails unless the complete tagged interval occupies at most
+half of that ring and records its used rows and remaining headroom. This keeps
+the interval-loss check explicit without MySQL's OOM-inducing default
+10,000-row SQL-text allocation. The redundant per-thread statement history is
+fixed at one event because every attribution query uses the global ring.
 
 Every `<= 3` search-path count and its wpdb/Performance Schema identity proof
 covers the complete recorded callback, including `START TRANSACTION`, `BEGIN`,
