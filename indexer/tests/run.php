@@ -32543,6 +32543,63 @@ final class QueryLimitStorage implements WP_FTS_Set_Oriented_Search_Storage
     public function optimize(): void {}
 }
 
+/** Read one Linux process-memory field without buffering `/proc/self/status`. */
+function query_limit_proc_status_bytes(string $field): ?int
+{
+    if (PHP_OS_FAMILY !== 'Linux') {
+        return null;
+    }
+
+    $handle = @fopen('/proc/self/status', 'rb');
+    if (!is_resource($handle)) {
+        return null;
+    }
+
+    try {
+        $prefix = $field . ':';
+        while (($line = fgets($handle, 256)) !== false) {
+            if (!str_starts_with($line, $prefix)) {
+                continue;
+            }
+
+            $fields = array_values(array_filter(
+                explode(' ', str_replace("\t", ' ', trim(substr($line, strlen($prefix))))),
+                static fn(string $value): bool => $value !== ''
+            ));
+            if (
+                count($fields) !== 2
+                || $fields[1] !== 'kB'
+                || $fields[0] === ''
+                || strspn($fields[0], '0123456789') !== strlen($fields[0])
+            ) {
+                return null;
+            }
+
+            return (int) $fields[0] * 1024;
+        }
+    } finally {
+        fclose($handle);
+    }
+
+    return null;
+}
+
+/** Return the platform-normalized lifetime RSS high-water mark. */
+function query_limit_getrusage_peak_bytes(): ?int
+{
+    if (!function_exists('getrusage')) {
+        return null;
+    }
+
+    $usage = getrusage();
+    $rawRss = is_array($usage) ? max(0, (int) ($usage['ru_maxrss'] ?? 0)) : 0;
+    if ($rawRss === 0) {
+        return null;
+    }
+
+    return PHP_OS_FAMILY === 'Darwin' ? $rawRss : $rawRss * 1024;
+}
+
 $mode = $argv[1] ?? '';
 $tokenizerYields = 0;
 $options = [
@@ -32567,6 +32624,12 @@ if ($mode !== 'cjk') {
 }
 
 $query = $mode === 'cjk' ? str_repeat('界', 1365) : '中文';
+// Linux uses live RSS immediately before analyzer construction and query
+// execution as the baseline. VmHWM cannot be reset, so that difference is a
+// conservative upper bound: an earlier transient can be counted, never hidden.
+// Other hosts retain a labeled HWM increment only as a diagnostic fallback.
+$rssBefore = query_limit_proc_status_bytes('VmRSS');
+$fallbackPeakBefore = query_limit_getrusage_peak_bytes();
 $storage = new QueryLimitStorage();
 $searcher = new WP_FTS_Searcher($storage, new WP_FTS_Analyzer($options));
 $reason = '';
@@ -32578,11 +32641,20 @@ try {
     $reason = $error->budget();
 }
 
-$usage = getrusage();
-$rawRss = max(0, (int) ($usage['ru_maxrss'] ?? 0));
-$rssBytes = PHP_OS_FAMILY === 'Darwin' ? $rawRss : $rawRss * 1024;
+$rssPeak = query_limit_proc_status_bytes('VmHWM');
+$rssPeakDeltaAuthoritative = $rssBefore !== null && $rssPeak !== null;
+if (!$rssPeakDeltaAuthoritative) {
+    $rssBefore = $fallbackPeakBefore;
+    $rssPeak = query_limit_getrusage_peak_bytes();
+}
+$rssPeakDelta = $rssBefore !== null && $rssPeak !== null
+    ? max(0, $rssPeak - $rssBefore)
+    : null;
 echo json_encode([
     'mode' => $mode,
+    'ini_loaded' => php_ini_loaded_file() !== false,
+    'ini_scanned' => trim((string) php_ini_scanned_files()) !== '',
+    'memory_limit' => (string) ini_get('memory_limit'),
     'query_bytes' => strlen($query),
     'reason' => $reason,
     'tokenizer_yields' => $tokenizerYields,
@@ -32590,43 +32662,85 @@ echo json_encode([
     'group_count' => $storage->groupCount,
     'alternative_count' => $storage->alternativeCount,
     'peak_bytes' => memory_get_peak_usage(true),
-    'rss_bytes' => $rssBytes,
+    'rss_before_bytes' => $rssBefore,
+    'rss_peak_bytes' => $rssPeak,
+    'rss_peak_delta_bytes' => $rssPeakDelta,
+    'rss_peak_delta_authoritative' => $rssPeakDeltaAuthoritative,
+    'rss_source' => $rssPeakDeltaAuthoritative
+        ? 'linux-proc-vmrss-before-vmhwm-after'
+        : 'getrusage-high-water-increment',
 ], JSON_THROW_ON_ERROR), "\n";
 PHP;
 
     $results = [];
-    foreach (['cjk', 'infinite-custom', 'boundary'] as $mode) {
-        $cli = test_run_subprocess(
-            [
-                PHP_BINARY,
+    $runtimeCommands = [
+        'default-config' => [
+            'command' => [PHP_BINARY],
+            'absolute_rss' => false,
+        ],
+        'no-ini' => [
+            'command' => [PHP_BINARY, '-n'],
+            'absolute_rss' => true,
+        ],
+    ];
+    foreach ($runtimeCommands as $runtime => $runtimeOptions) {
+        foreach (['cjk', 'infinite-custom', 'boundary'] as $mode) {
+            $command = $runtimeOptions['command'];
+            array_push(
+                $command,
                 '-d',
                 'memory_limit=128M',
                 '-d',
                 'max_execution_time=10',
                 '-r',
                 $code,
-                $mode,
-            ],
-            dirname(__DIR__)
-        );
-        assert_same(0, $cli['exit'], "{$mode} query analysis should finish in a fresh 128M process: {$cli['stderr']}");
-        $payload = json_decode(trim($cli['stdout']), true, 512, JSON_THROW_ON_ERROR);
-        assert_true((int) ($payload['peak_bytes'] ?? PHP_INT_MAX) <= 128 * 1024 * 1024, "{$mode} query analysis should remain below the PHP memory limit");
-        assert_true((int) ($payload['rss_bytes'] ?? PHP_INT_MAX) <= 128 * 1024 * 1024, "{$mode} query analysis should keep process RSS below 128 MiB");
-        $results[$mode] = $payload;
+                $mode
+            );
+            $cli = test_run_subprocess($command, dirname(__DIR__));
+            assert_same(0, $cli['exit'], "{$runtime} {$mode} query analysis should finish in a fresh 128M process: {$cli['stderr']}");
+            $payload = json_decode(trim($cli['stdout']), true, 512, JSON_THROW_ON_ERROR);
+            if ($runtime === 'no-ini') {
+                assert_same(false, $payload['ini_loaded'] ?? null, "{$runtime} {$mode} should load no main ini file");
+                assert_same(false, $payload['ini_scanned'] ?? null, "{$runtime} {$mode} should load no scanned ini fragments");
+            }
+            assert_same('128M', $payload['memory_limit'] ?? null, "{$runtime} {$mode} should run at the low-host PHP memory limit");
+            assert_true((int) ($payload['peak_bytes'] ?? PHP_INT_MAX) <= 128 * 1024 * 1024, "{$runtime} {$mode} query analysis should remain below the PHP memory limit");
+            assert_true((int) ($payload['rss_before_bytes'] ?? 0) > 0, "{$runtime} {$mode} should measure a positive process RSS baseline");
+            assert_true((int) ($payload['rss_peak_bytes'] ?? 0) >= (int) ($payload['rss_before_bytes'] ?? PHP_INT_MAX), "{$runtime} {$mode} process RSS high-water mark should not precede its baseline");
+            assert_same(
+                max(0, (int) ($payload['rss_peak_bytes'] ?? 0) - (int) ($payload['rss_before_bytes'] ?? 0)),
+                $payload['rss_peak_delta_bytes'] ?? null,
+                "{$runtime} {$mode} should report the exact difference between its labeled RSS measurements"
+            );
+            if (PHP_OS_FAMILY === 'Linux') {
+                assert_same(true, $payload['rss_peak_delta_authoritative'] ?? null, "{$runtime} {$mode} should use authoritative Linux VmRSS/VmHWM attribution");
+                assert_same('linux-proc-vmrss-before-vmhwm-after', $payload['rss_source'] ?? null, "{$runtime} {$mode} should identify its authoritative Linux RSS fields");
+                assert_true((int) ($payload['rss_peak_delta_bytes'] ?? PHP_INT_MAX) <= 16 * 1024 * 1024, "{$runtime} {$mode} query analysis should keep its conservative Linux RSS upper bound within 16 MiB");
+            } else {
+                assert_same(false, $payload['rss_peak_delta_authoritative'] ?? null, "{$runtime} {$mode} should not label a non-Linux high-water increment as authoritative RSS attribution");
+                assert_same('getrusage-high-water-increment', $payload['rss_source'] ?? null, "{$runtime} {$mode} should identify its portable high-water fallback");
+                assert_true((int) ($payload['rss_peak_delta_bytes'] ?? PHP_INT_MAX) <= 16 * 1024 * 1024, "{$runtime} {$mode} non-authoritative RSS high-water increment should remain within its 16 MiB diagnostic ceiling");
+            }
+            if ($runtimeOptions['absolute_rss']) {
+                assert_true((int) ($payload['rss_peak_bytes'] ?? PHP_INT_MAX) <= 128 * 1024 * 1024, "{$runtime} {$mode} query analysis should keep its controlled no-ini process RSS below 128 MiB");
+            }
+            $results[$runtime][$mode] = $payload;
+        }
     }
 
-    assert_same(4095, $results['cjk']['query_bytes'] ?? null, 'CJK adversary should exercise the largest whole-codepoint run below the 4KiB query cap');
-    assert_same('analyzer occurrences', $results['cjk']['reason'] ?? null, 'oversized built-in CJK expansion should reject at the public typed twelve-alternative boundary');
-    assert_same(0, $results['cjk']['storage_calls'] ?? null, 'oversized CJK expansion must reject before the storage backend can issue SQL');
-    assert_same('analyzer occurrences', $results['infinite-custom']['reason'] ?? null, 'infinite custom tokenizer should reject at the public typed twelve-alternative boundary');
-    assert_same(13, $results['infinite-custom']['tokenizer_yields'] ?? null, 'infinite custom tokenizer should stop on its first output beyond twelve');
-    assert_same(0, $results['infinite-custom']['storage_calls'] ?? null, 'infinite custom tokenizer must reject before the storage backend can issue SQL');
-    assert_same('', $results['boundary']['reason'] ?? null, 'exactly twelve custom alternatives should remain accepted');
-    assert_same(12, $results['boundary']['tokenizer_yields'] ?? null, 'exact boundary should consume every custom tokenizer output');
-    assert_same(1, $results['boundary']['storage_calls'] ?? null, 'exact boundary should execute one set-oriented storage page');
-    assert_same(12, $results['boundary']['group_count'] ?? null, 'exact boundary should preserve twelve logical source positions');
-    assert_same(12, $results['boundary']['alternative_count'] ?? null, 'exact boundary should preserve exactly twelve alternatives');
+    foreach ($results as $runtime => $runtimeResults) {
+        assert_same(4095, $runtimeResults['cjk']['query_bytes'] ?? null, "{$runtime} CJK adversary should exercise the largest whole-codepoint run below the 4KiB query cap");
+        assert_same('analyzer occurrences', $runtimeResults['cjk']['reason'] ?? null, "{$runtime} oversized built-in CJK expansion should reject at the public typed twelve-alternative boundary");
+        assert_same(0, $runtimeResults['cjk']['storage_calls'] ?? null, "{$runtime} oversized CJK expansion must reject before the storage backend can issue SQL");
+        assert_same('analyzer occurrences', $runtimeResults['infinite-custom']['reason'] ?? null, "{$runtime} infinite custom tokenizer should reject at the public typed twelve-alternative boundary");
+        assert_same(13, $runtimeResults['infinite-custom']['tokenizer_yields'] ?? null, "{$runtime} infinite custom tokenizer should stop on its first output beyond twelve");
+        assert_same(0, $runtimeResults['infinite-custom']['storage_calls'] ?? null, "{$runtime} infinite custom tokenizer must reject before the storage backend can issue SQL");
+        assert_same('', $runtimeResults['boundary']['reason'] ?? null, "{$runtime} exactly twelve custom alternatives should remain accepted");
+        assert_same(12, $runtimeResults['boundary']['tokenizer_yields'] ?? null, "{$runtime} exact boundary should consume every custom tokenizer output");
+        assert_same(1, $runtimeResults['boundary']['storage_calls'] ?? null, "{$runtime} exact boundary should execute one set-oriented storage page");
+        assert_same(12, $runtimeResults['boundary']['group_count'] ?? null, "{$runtime} exact boundary should preserve twelve logical source positions");
+        assert_same(12, $runtimeResults['boundary']['alternative_count'] ?? null, "{$runtime} exact boundary should preserve exactly twelve alternatives");
+    }
 });
 
 test_case('HTML visible-text block boundaries stay linear at the accepted 2MiB syntax limit', function (): void {
