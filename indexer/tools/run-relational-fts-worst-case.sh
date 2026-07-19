@@ -2457,7 +2457,7 @@ $bound=($e["source_sha"]??null)===$argv[2]
  &&($manifest["documents"]??null)===(int)$argv[5]
  &&($e["acceptance_lane"]??null)===($argv[6]==="0")
  &&($e["lane_id"]??null)===$argv[7];
-if(($e["schema"]??null)!=="relational-fts-evidence-v3"||($e["status"]??null)!=="PASS"||($e["completed"]??null)!==true||!$bound||!is_string($recorded)||!hash_equals($calculated,$recorded)){fwrite(STDERR,"Final evidence is incomplete, unbound, failed, or has an invalid self-hash.\n");exit(1);}
+if(($e["schema"]??null)!=="relational-fts-evidence-v4"||($e["status"]??null)!=="PASS"||($e["completed"]??null)!==true||!$bound||!is_string($recorded)||!hash_equals($calculated,$recorded)){fwrite(STDERR,"Final evidence is incomplete, unbound, failed, or has an invalid self-hash.\n");exit(1);}
 ' "${EVIDENCE_DIR}/relational-fts-evidence.json" "${SOURCE_SHA}" "${ENGINE}" "${PROFILE}" "${DOCUMENTS}" "${ALLOW_DIRTY}" "${LANE_ID}"
 RUN_COMPLETED=1
 publish_evidence 0

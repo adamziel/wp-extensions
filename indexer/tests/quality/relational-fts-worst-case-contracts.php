@@ -93,7 +93,7 @@ run_wpcli_php_phase() { printf '%s\n' "$1" >> "${INVOCATIONS}"; }
 run_php_phase() {
     printf '%s\n' "$1" >> "${INVOCATIONS}"
     if [[ "$1" == validate ]]; then
-        printf '{"schema":"relational-fts-evidence-v3","status":"FAIL","completed":false}\n' > "${EVIDENCE_DIR}/relational-fts-evidence.json"
+        printf '{"schema":"relational-fts-evidence-v4","status":"FAIL","completed":false}\n' > "${EVIDENCE_DIR}/relational-fts-evidence.json"
         return 47
     fi
 }
@@ -274,7 +274,7 @@ test_case('relational worst-case preliminary inventory rejects self-rehashed evi
         'migration_worker_no_progress_batches',
         'migration_physical_monotonic_coverage',
         'migration_physical_max_sample_duration',
-        'multisite_search_order_parity',
+        'multisite_search_membership_parity',
         'schema_exact_physical_contract',
         'schema_no_term_hash_column_or_index',
         'surface_range_dictionary_terms',
@@ -401,7 +401,7 @@ test_case('relational worst-case preliminary inventory rejects self-rehashed evi
         . '$gateIds = ' . var_export($criticalGateIds, true) . ";\n"
         . <<<'PHP'
 $evidence = [
-    'schema' => 'relational-fts-evidence-v3',
+    'schema' => 'relational-fts-evidence-v4',
     'status' => 'PASS',
     'source_sha' => str_repeat('a', 40),
     'zip_sha256' => str_repeat('b', 64),
@@ -2178,7 +2178,7 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     $acceptance = (string) file_get_contents(dirname(__DIR__, 2) . '/docs/relational-search-acceptance.md');
     foreach ([
-        'relational-fts-evidence-v3',
+        'relational-fts-evidence-v4',
         "'acceptance_lane' => wp_fts_wc_required_env('WP_FTS_WC_ALLOW_DIRTY') !== '1'",
         "'completed' => false",
         "\$evidence['completed'] = true",
@@ -2950,6 +2950,127 @@ test_case('migration physical-schema classifier covers quoted identities without
     record_check('relational quoted physical-schema classifier contract', 7);
 });
 
+test_case('multisite migration compares semantic membership across the scoring and storage cutover', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    foreach ([
+        'wp_fts_wc_multisite_search_membership_matches',
+        'wp_fts_wc_multisite_document_state_matches',
+    ] as $function) {
+        eval(wp_fts_wc_contract_function_source($integration, $function));
+    }
+    $migrationSource = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_multisite_migration');
+    assert_contains(
+        '$firstV4ScoreParity = ($baselineSites[$siteIds[0]][\'v4_oracle\'] ?? null) === ($firstSiteAfterFailure[\'v4_search\'] ?? null);',
+        $migrationSource,
+        'site-one failure isolation must retain exact current v4 oracle order and score parity'
+    );
+    assert_contains(
+        '$v4ScoreParity = ($definition[\'v4_oracle\'] ?? null) === ($currentState[\'v4_search\'] ?? null);',
+        $migrationSource,
+        'each resumed site must retain exact current v4 oracle order and score parity'
+    );
+    assert_contains(
+        '&& $foreignDfIsolation && $v4ScoreParity && $indexHashStable',
+        $migrationSource,
+        'exact v4 order and score parity must remain coupled to each site result'
+    );
+
+    $source = [
+        ['post_id' => 3, 'post_type' => 'post', 'post_status' => 'publish', 'post_date_gmt' => '2020-01-02 12:01:00', 'title_sha256' => hash('sha256', 'Sentinel 1'), 'excerpt_sha256' => hash('sha256', ''), 'content_sha256' => str_repeat('3', 64), 'password_sha256' => str_repeat('4', 64)],
+        ['post_id' => 4, 'post_type' => 'post', 'post_status' => 'publish', 'post_date_gmt' => '2020-01-02 12:02:00', 'title_sha256' => hash('sha256', 'Sentinel 2'), 'excerpt_sha256' => hash('sha256', ''), 'content_sha256' => str_repeat('7', 64), 'password_sha256' => str_repeat('8', 64)],
+    ];
+    $legacy = [
+        'search' => [
+            'shared' => ['results' => [['doc_id' => 3, 'score' => '0.18'], ['doc_id' => 4, 'score' => '0.18']]],
+            'unique' => ['results' => [['doc_id' => 3, 'score' => '0.18'], ['doc_id' => 4, 'score' => '0.18']]],
+        ],
+        'document_count' => 2,
+        'document_ids' => [3, 4],
+        'metadata_signature' => [
+            3 => ['post_type' => 'post', 'post_status' => 'publish', 'post_date_gmt' => '2020-01-02 12:01:00', 'title' => 'Sentinel 1', 'excerpt' => '', 'search_text_sha256' => str_repeat('9', 64)],
+            4 => ['post_type' => 'post', 'post_status' => 'publish', 'post_date_gmt' => '2020-01-02 12:02:00', 'title' => 'Sentinel 2', 'excerpt' => '', 'search_text_sha256' => str_repeat('a', 64)],
+        ],
+        'index_document_signature' => [
+            ['doc_id' => 3, 'lang' => 'en', 'content_hash_hex' => str_repeat('b', 80)],
+            ['doc_id' => 4, 'lang' => 'en', 'content_hash_hex' => str_repeat('c', 80)],
+        ],
+        'source_signature' => $source,
+    ];
+    $current = $legacy;
+    $current['search']['shared']['results'] = [['doc_id' => 4, 'score' => '2048000000'], ['doc_id' => 3, 'score' => '2048000000']];
+    $current['search']['unique']['results'] = $current['search']['shared']['results'];
+    $current['metadata_signature'][3]['search_text_sha256'] = $source[0]['content_sha256'];
+    $current['metadata_signature'][4]['search_text_sha256'] = $source[1]['content_sha256'];
+    $current['index_document_signature'][0]['content_hash_hex'] = str_repeat('d', 80);
+    $current['index_document_signature'][1]['content_hash_hex'] = str_repeat('e', 80);
+
+    assert_true(
+        wp_fts_wc_multisite_search_membership_matches($legacy, $current),
+        'legacy tie order may change when the authenticated v4 scoring model takes over'
+    );
+    $duplicateResult = $current;
+    $duplicateResult['search']['shared']['results'][1]['doc_id'] = 4;
+    assert_true(
+        !wp_fts_wc_multisite_search_membership_matches($legacy, $duplicateResult),
+        'membership parity must reject duplicate or missing documents'
+    );
+    $emptyResult = $legacy;
+    $emptyResult['search']['shared']['results'] = [];
+    $emptyResult['search']['unique']['results'] = [];
+    assert_true(
+        !wp_fts_wc_multisite_search_membership_matches($emptyResult, $emptyResult),
+        'membership parity must not authenticate two empty result sets'
+    );
+    assert_true(
+        wp_fts_wc_multisite_document_state_matches($legacy, $current),
+        'v4 content-only search_text and rewritten profile hash should preserve semantic source/document identity'
+    );
+    $changedMetadata = $current;
+    $changedMetadata['metadata_signature'][3]['title'] = 'Mutated';
+    assert_true(!wp_fts_wc_multisite_document_state_matches($legacy, $changedMetadata), 'shared metadata changes must fail cutover parity');
+    $misboundSourceLegacy = $legacy;
+    $misboundSourceCurrent = $current;
+    $misboundSourceLegacy['source_signature'][0]['title_sha256'] = str_repeat('f', 64);
+    $misboundSourceCurrent['source_signature'][0]['title_sha256'] = str_repeat('f', 64);
+    assert_true(
+        !wp_fts_wc_multisite_document_state_matches($misboundSourceLegacy, $misboundSourceCurrent),
+        'shared metadata must authenticate against the canonical source signature'
+    );
+    $unboundSearchText = $current;
+    $unboundSearchText['metadata_signature'][3]['search_text_sha256'] = str_repeat('f', 64);
+    assert_true(!wp_fts_wc_multisite_document_state_matches($legacy, $unboundSearchText), 'v4 search_text must bind to canonical source content');
+    $sourceMutations = [
+        'post_id' => 99,
+        'post_type' => 'page',
+        'post_status' => 'draft',
+        'post_date_gmt' => '2020-01-03 00:00:00',
+        'title_sha256' => str_repeat('0', 64),
+        'excerpt_sha256' => str_repeat('1', 64),
+        'content_sha256' => str_repeat('2', 64),
+        'password_sha256' => str_repeat('3', 64),
+    ];
+    foreach ($sourceMutations as $field => $value) {
+        $changedSource = $current;
+        $changedSource['source_signature'][0][$field] = $value;
+        assert_true(
+            !wp_fts_wc_multisite_document_state_matches($legacy, $changedSource),
+            "canonical source field {$field} must participate in document-semantic continuity"
+        );
+    }
+    $missingSourceLegacy = $legacy;
+    $missingSourceCurrent = $current;
+    array_pop($missingSourceLegacy['source_signature']);
+    array_pop($missingSourceCurrent['source_signature']);
+    assert_true(
+        !wp_fts_wc_multisite_document_state_matches($missingSourceLegacy, $missingSourceCurrent),
+        'matching but incomplete source signatures must fail document-semantic continuity'
+    );
+    $changedIndexIdentity = $current;
+    $changedIndexIdentity['index_document_signature'][0]['doc_id'] = 99;
+    assert_true(!wp_fts_wc_multisite_document_state_matches($legacy, $changedIndexIdentity), 'index document identity changes must fail parity');
+    record_check('multisite scoring and storage cutover parity contract', 20);
+});
+
 test_case('relational worst-case migration kills every table boundary and validates populated parity', function (): void {
     $root = dirname(__DIR__, 2);
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
@@ -3035,14 +3156,14 @@ test_case('relational worst-case migration kills every table boundary and valida
         'migration-rerun',
         '_fresh_process_stable',
         'WP_FTS_WC_MULTISITE_POST_TITLE_PREFIX',
-        'multisite_search_order_parity',
+        'multisite_search_membership_parity',
         'multisite_doc_freq_parity',
-        'multisite_document_parity',
+        'multisite_document_semantics_parity',
         'multisite_cross_site_isolation',
         'multisite_recorded_prefix_parity',
         'migration_search_takeover_ready',
         'multisite_search_takeover_ready',
-        'multisite_diagonal_token_matches',
+        'multisite_diagonal_token_membership',
         'multisite_off_diagonal_token_isolation',
         'multisite_empty_foreign_doc_freq_probes',
         'multisite_v4_oracle_score_parity',
@@ -3076,7 +3197,7 @@ test_case('relational worst-case migration kills every table boundary and valida
         'foreign_terms',
         'foreign_postings',
         'wp_fts_wc_multisite_requeue_and_drain',
-        'relational-fts-multisite-migration-v4',
+        'relational-fts-multisite-migration-v5',
         'multisite_site_one_stability_generations_acknowledged_after_site_two_failure',
         'multisite_stability_acknowledged_sentinel_sites',
         'multisite_stability_generation_outcomes',

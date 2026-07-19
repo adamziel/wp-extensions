@@ -2138,15 +2138,19 @@ is ready.
 
 The same proof seeds one, two, and three deterministic searchable documents in
 the three real multisite prefixes before migration. After an injected failure
-on site two it verifies site-one search/DF/document state and independent v4
-scores immediately, proves the recorded site-three schema and physical
+on site two it verifies site-one search membership, DF, semantic document state,
+and independent v4 scores immediately, proves the recorded site-three schema and physical
 term/posting/document/length/metadata/collection-metadata sentinel fingerprints
 are unchanged and that raw foreign-term and foreign-posting probes are empty,
-then resumes all sites. Every prefix must preserve ordered search membership,
-term DFs, exact
-sentinel IDs and metadata/source signatures, stable complete content hashes, and
-its recorded prefix; its exact integer scores must equal a cardinality-checked
-per-site v4 oracle. Each site snapshot positively classifies the exact physical
+then resumes all sites. Every prefix must preserve search membership, term DFs,
+exact sentinel IDs, shared metadata, and source signatures while binding the v4
+content-only `search_text` representation to unchanged canonical post content
+for these deterministic plain-text sentinels.
+Complete profile hashes must be rewritten once and remain stable, and every
+prefix must retain its recorded prefix. Current result order and exact integer
+scores must equal a cardinality-checked per-site v4 oracle; legacy tie order is
+not a target invariant across the documented scoring-model cutover. Each site
+snapshot positively classifies the exact physical
 dictionary columns once: baseline DF probes bind the legacy single-column binary term identity, while post-migration probes bind the current composite identity.
 Unknown or partial dictionary shapes fail before either query is
 selected. Content-hash stability is measured across a new durable
@@ -2175,7 +2179,7 @@ measurement.
 
 ## Evidence and before/after comparison
 
-The runner writes `relational-fts-evidence-v3` JSON containing source and ZIP
+The runner writes `relational-fts-evidence-v4` JSON containing source and ZIP
 hashes, image digests, effective resources, corpus seed/hash/counts, schema and
 DB bytes, raw latency samples, result IDs/hashes, SQL count/bytes/text,
 `EXPLAIN`/`ANALYZE`, rows examined/sent, temporary/sort/lock metrics, PHP
@@ -2340,7 +2344,7 @@ Each required lane performs the same fail-closed sequence:
    monotonic physical disk sampler proves leading/trailing coverage, <=750 ms
    completion gaps, and <=750 ms sample duration across the complete migration
    window.
-4. Verify exact four-table columns/indexes, migration and multisite parity,
+4. Verify exact four-table columns/indexes, migration and multisite semantic parity,
    document-frequency consistency, and web/WP-CLI runtime-profile parity. Force
    and time a complete current-version rebuild, then prove every invalidated row
    was rewritten.

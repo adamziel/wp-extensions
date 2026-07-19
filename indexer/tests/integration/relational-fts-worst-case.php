@@ -10,7 +10,7 @@ declare(strict_types=1);
  * prerequisites are absent; this proof never reports a successful skip.
  */
 
-const WP_FTS_WC_EVIDENCE_SCHEMA = 'relational-fts-evidence-v3';
+const WP_FTS_WC_EVIDENCE_SCHEMA = 'relational-fts-evidence-v4';
 const WP_FTS_WC_IMMUTABLE_BASELINE_SHA = '36a26f4ad1aaef9758922f24677069045c5291ab';
 const WP_FTS_WC_MANIFEST_OPTION = 'wp_fts_relational_wc_manifest';
 const WP_FTS_WC_POST_TITLE_PREFIX = 'WP FTS relational worst case ';
@@ -1782,9 +1782,9 @@ function wp_fts_wc_validate(): array
     $multisiteMigration = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/multisite-migration.json');
     array_push($gates, ...wp_fts_wc_require_evidence_gates($multisiteMigration, 'multisite migration isolation', [
         'multisite_site_two_failure_observed',
-        'multisite_site_one_search_unchanged_after_site_two_failure',
+        'multisite_site_one_search_membership_after_site_two_failure',
         'multisite_site_one_df_unchanged_after_site_two_failure',
-        'multisite_site_one_documents_unchanged_after_site_two_failure',
+        'multisite_site_one_document_semantics_preserved_after_site_two_failure',
         'multisite_site_one_isolated_after_site_two_failure',
         'multisite_site_one_foreign_dfs_empty_after_site_two_failure',
         'multisite_site_one_v4_score_parity_after_site_two_failure',
@@ -1797,9 +1797,9 @@ function wp_fts_wc_validate(): array
         'multisite_prefixes_distinct',
         'multisite_recorded_prefix_parity',
         'multisite_search_takeover_ready',
-        'multisite_search_order_parity',
+        'multisite_search_membership_parity',
         'multisite_doc_freq_parity',
-        'multisite_document_parity',
+        'multisite_document_semantics_parity',
         'multisite_cross_site_isolation',
         'multisite_foreign_doc_freq_isolation',
         'multisite_v4_oracle_score_parity',
@@ -1810,9 +1810,9 @@ function wp_fts_wc_validate(): array
         'multisite_foreign_query_probes',
         'multisite_empty_foreign_query_probes',
         'multisite_empty_foreign_doc_freq_probes',
-        'multisite_diagonal_token_matches',
+        'multisite_diagonal_token_membership',
         'multisite_off_diagonal_token_isolation',
-    ], 'relational-fts-multisite-migration-v4'));
+    ], 'relational-fts-multisite-migration-v5'));
 
     $storageBytes = wp_fts_wc_storage_bytes($tables);
     $eligibleDocs = max(1, (int) $profile['documents'] - (int) $profile['password']);
@@ -12505,9 +12505,9 @@ function wp_fts_wc_multisite_migration(): array
         restore_current_blog();
     }
     $firstBaselineState = $baselineSites[$siteIds[0]]['baseline'];
-    $firstSearchUnchanged = wp_fts_wc_multisite_search_order_matches($firstBaselineState, $firstSiteAfterFailure);
+    $firstSearchMembership = wp_fts_wc_multisite_search_membership_matches($firstBaselineState, $firstSiteAfterFailure);
     $firstDfUnchanged = ($firstBaselineState['doc_freq'] ?? null) === ($firstSiteAfterFailure['doc_freq'] ?? null);
-    $firstDocsUnchanged = wp_fts_wc_multisite_document_state_matches($firstBaselineState, $firstSiteAfterFailure);
+    $firstDocumentSemanticsPreserved = wp_fts_wc_multisite_document_state_matches($firstBaselineState, $firstSiteAfterFailure);
     $firstIndexHashesRewritten = wp_fts_wc_multisite_index_hashes_rewritten($firstBaselineState, $firstSiteAfterFailure);
     $firstIsolated = wp_fts_wc_multisite_foreign_searches_empty($firstSiteAfterFailure);
     $firstForeignDfsEmpty = wp_fts_wc_multisite_foreign_doc_freqs_empty($firstSiteAfterFailure);
@@ -12579,9 +12579,9 @@ function wp_fts_wc_multisite_migration(): array
             $currentState['requeue'] = wp_fts_wc_multisite_requeue_and_drain($siteId, $definition['post_ids']);
             $currentState['index_document_rerun_signature'] = wp_fts_wc_multisite_index_document_signature($definition['post_ids']);
             $baselineState = is_array($definition['baseline'] ?? null) ? $definition['baseline'] : [];
-            $searchParity = wp_fts_wc_multisite_search_order_matches($baselineState, $currentState);
+            $searchMembership = wp_fts_wc_multisite_search_membership_matches($baselineState, $currentState);
             $dfParity = ($baselineState['doc_freq'] ?? null) === ($currentState['doc_freq'] ?? null);
-            $documentParity = wp_fts_wc_multisite_document_state_matches($baselineState, $currentState);
+            $documentSemanticsParity = wp_fts_wc_multisite_document_state_matches($baselineState, $currentState);
             $indexHashesRewritten = wp_fts_wc_multisite_index_hashes_rewritten($baselineState, $currentState);
             $crossSiteIsolation = wp_fts_wc_multisite_foreign_searches_empty($currentState);
             $foreignDfIsolation = wp_fts_wc_multisite_foreign_doc_freqs_empty($currentState);
@@ -12597,9 +12597,9 @@ function wp_fts_wc_multisite_migration(): array
                 'ordinary_option_available' => is_string(get_option('blogname')) && get_option('blogname') !== '',
                 'baseline' => $baselineState,
                 'current' => $currentState,
-                'search_order_parity' => $searchParity,
+                'search_membership_parity' => $searchMembership,
                 'doc_freq_parity' => $dfParity,
-                'document_parity' => $documentParity,
+                'document_semantics_parity' => $documentSemanticsParity,
                 'cross_site_isolation' => $crossSiteIsolation,
                 'foreign_doc_freq_isolation' => $foreignDfIsolation,
                 'v4_oracle_score_parity' => $v4ScoreParity,
@@ -12607,16 +12607,16 @@ function wp_fts_wc_multisite_migration(): array
                 'index_content_hash_rewritten' => $indexHashesRewritten,
                 'recorded_prefix_parity' => $recordedPrefixParity,
                 'search_takeover_ready' => $ready,
-                'passed' => $actual === $expected && $workRows === 0 && $ready && $searchParity && $dfParity && $documentParity && $crossSiteIsolation && $foreignDfIsolation && $v4ScoreParity && $indexHashStable && $indexHashesRewritten && $recordedPrefixParity,
+                'passed' => $actual === $expected && $workRows === 0 && $ready && $searchMembership && $dfParity && $documentSemanticsParity && $crossSiteIsolation && $foreignDfIsolation && $v4ScoreParity && $indexHashStable && $indexHashesRewritten && $recordedPrefixParity,
             ];
         } finally {
             restore_current_blog();
         }
     }
     $passedSites = count(array_filter($sites, static fn(array $site): bool => !empty($site['passed']) && !empty($site['ordinary_option_available'])));
-    $searchParitySites = count(array_filter($sites, static fn(array $site): bool => !empty($site['search_order_parity'])));
+    $searchMembershipSites = count(array_filter($sites, static fn(array $site): bool => !empty($site['search_membership_parity'])));
     $dfParitySites = count(array_filter($sites, static fn(array $site): bool => !empty($site['doc_freq_parity'])));
-    $documentParitySites = count(array_filter($sites, static fn(array $site): bool => !empty($site['document_parity'])));
+    $documentSemanticsParitySites = count(array_filter($sites, static fn(array $site): bool => !empty($site['document_semantics_parity'])));
     $isolatedSites = count(array_filter($sites, static fn(array $site): bool => !empty($site['cross_site_isolation'])));
     $foreignDfIsolatedSites = count(array_filter($sites, static fn(array $site): bool => !empty($site['foreign_doc_freq_isolation'])));
     $v4ScoreParitySites = count(array_filter($sites, static fn(array $site): bool => !empty($site['v4_oracle_score_parity'])));
@@ -12677,9 +12677,14 @@ function wp_fts_wc_multisite_migration(): array
             $tokenMatrix[$siteId][$ownerSiteId] = $results;
             if ($ownerSiteId === $siteId) {
                 $baselineResults = $sites[$siteId]['baseline']['search']['unique']['results'] ?? [];
-                $diagonalMatch = array_map('intval', array_column($results, 'doc_id'))
-                    === array_map('intval', array_column(is_array($baselineResults) ? $baselineResults : [], 'doc_id'))
-                    && $results !== [];
+                $actualIds = array_map('intval', array_column($results, 'doc_id'));
+                $baselineIds = array_map('intval', array_column(is_array($baselineResults) ? $baselineResults : [], 'doc_id'));
+                sort($actualIds, SORT_NUMERIC);
+                sort($baselineIds, SORT_NUMERIC);
+                $diagonalMatch = $actualIds !== []
+                    && count(array_unique($actualIds)) === count($actualIds)
+                    && count(array_unique($baselineIds)) === count($baselineIds)
+                    && $actualIds === $baselineIds;
                 $diagonalMatches += $diagonalMatch ? 1 : 0;
             } elseif ($results === []) {
                 $offDiagonalEmpty++;
@@ -12688,9 +12693,9 @@ function wp_fts_wc_multisite_migration(): array
     }
     $gates = [
         wp_fts_wc_gate('multisite_site_two_failure_observed', true, $caught, $caught),
-        wp_fts_wc_gate('multisite_site_one_search_unchanged_after_site_two_failure', true, $firstSearchUnchanged, $firstSearchUnchanged),
+        wp_fts_wc_gate('multisite_site_one_search_membership_after_site_two_failure', true, $firstSearchMembership, $firstSearchMembership),
         wp_fts_wc_gate('multisite_site_one_df_unchanged_after_site_two_failure', true, $firstDfUnchanged, $firstDfUnchanged),
-        wp_fts_wc_gate('multisite_site_one_documents_unchanged_after_site_two_failure', true, $firstDocsUnchanged, $firstDocsUnchanged),
+        wp_fts_wc_gate('multisite_site_one_document_semantics_preserved_after_site_two_failure', true, $firstDocumentSemanticsPreserved, $firstDocumentSemanticsPreserved),
         wp_fts_wc_gate('multisite_site_one_isolated_after_site_two_failure', true, $firstIsolated, $firstIsolated),
         wp_fts_wc_gate('multisite_site_one_foreign_dfs_empty_after_site_two_failure', true, $firstForeignDfsEmpty, $firstForeignDfsEmpty),
         wp_fts_wc_gate('multisite_site_one_v4_score_parity_after_site_two_failure', true, $firstV4ScoreParity, $firstV4ScoreParity),
@@ -12703,9 +12708,9 @@ function wp_fts_wc_multisite_migration(): array
         wp_fts_wc_gate('multisite_prefixes_distinct', 3, count(array_unique(array_column($sites, 'prefix'))), count(array_unique(array_column($sites, 'prefix'))) === 3),
         wp_fts_wc_gate('multisite_recorded_prefix_parity', 3, $recordedPrefixSites, $recordedPrefixSites === 3),
         wp_fts_wc_gate('multisite_search_takeover_ready', 3, $readySites, $readySites === 3),
-        wp_fts_wc_gate('multisite_search_order_parity', 3, $searchParitySites, $searchParitySites === 3),
+        wp_fts_wc_gate('multisite_search_membership_parity', 3, $searchMembershipSites, $searchMembershipSites === 3),
         wp_fts_wc_gate('multisite_doc_freq_parity', 3, $dfParitySites, $dfParitySites === 3),
-        wp_fts_wc_gate('multisite_document_parity', 3, $documentParitySites, $documentParitySites === 3),
+        wp_fts_wc_gate('multisite_document_semantics_parity', 3, $documentSemanticsParitySites, $documentSemanticsParitySites === 3),
         wp_fts_wc_gate('multisite_cross_site_isolation', 3, $isolatedSites, $isolatedSites === 3),
         wp_fts_wc_gate('multisite_foreign_doc_freq_isolation', 3, $foreignDfIsolatedSites, $foreignDfIsolatedSites === 3),
         wp_fts_wc_gate('multisite_v4_oracle_score_parity', 3, $v4ScoreParitySites, $v4ScoreParitySites === 3),
@@ -12716,14 +12721,14 @@ function wp_fts_wc_multisite_migration(): array
         wp_fts_wc_gate('multisite_foreign_query_probes', 6, $foreignProbeCount, $foreignProbeCount === 6),
         wp_fts_wc_gate('multisite_empty_foreign_query_probes', 6, $emptyForeignProbes, $emptyForeignProbes === 6),
         wp_fts_wc_gate('multisite_empty_foreign_doc_freq_probes', 6, $emptyForeignDfProbes, $emptyForeignDfProbes === 6),
-        wp_fts_wc_gate('multisite_diagonal_token_matches', 3, $diagonalMatches, $diagonalMatches === 3),
+        wp_fts_wc_gate('multisite_diagonal_token_membership', 3, $diagonalMatches, $diagonalMatches === 3),
         wp_fts_wc_gate('multisite_off_diagonal_token_isolation', 6, $offDiagonalEmpty, $offDiagonalEmpty === 6),
     ];
     $expectedGateIds = [
         'multisite_site_two_failure_observed',
-        'multisite_site_one_search_unchanged_after_site_two_failure',
+        'multisite_site_one_search_membership_after_site_two_failure',
         'multisite_site_one_df_unchanged_after_site_two_failure',
-        'multisite_site_one_documents_unchanged_after_site_two_failure',
+        'multisite_site_one_document_semantics_preserved_after_site_two_failure',
         'multisite_site_one_isolated_after_site_two_failure',
         'multisite_site_one_foreign_dfs_empty_after_site_two_failure',
         'multisite_site_one_v4_score_parity_after_site_two_failure',
@@ -12736,9 +12741,9 @@ function wp_fts_wc_multisite_migration(): array
         'multisite_prefixes_distinct',
         'multisite_recorded_prefix_parity',
         'multisite_search_takeover_ready',
-        'multisite_search_order_parity',
+        'multisite_search_membership_parity',
         'multisite_doc_freq_parity',
-        'multisite_document_parity',
+        'multisite_document_semantics_parity',
         'multisite_cross_site_isolation',
         'multisite_foreign_doc_freq_isolation',
         'multisite_v4_oracle_score_parity',
@@ -12749,7 +12754,7 @@ function wp_fts_wc_multisite_migration(): array
         'multisite_foreign_query_probes',
         'multisite_empty_foreign_query_probes',
         'multisite_empty_foreign_doc_freq_probes',
-        'multisite_diagonal_token_matches',
+        'multisite_diagonal_token_membership',
         'multisite_off_diagonal_token_isolation',
     ];
     wp_fts_wc_assert(
@@ -12757,7 +12762,7 @@ function wp_fts_wc_multisite_migration(): array
         'Multisite migration evidence gate set drifted.'
     );
     $result = [
-        'schema' => 'relational-fts-multisite-migration-v4',
+        'schema' => 'relational-fts-multisite-migration-v5',
         'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
         'site_ids' => $siteIds,
         'failed_site_id' => $secondSite,
@@ -13323,7 +13328,7 @@ WHERE t.term=%s AND wp_f.post_password='' AND wp_f.post_type='post' AND wp_f.pos
 }
 
 /** @param array<string,mixed> $expected @param array<string,mixed> $actual */
-function wp_fts_wc_multisite_search_order_matches(array $expected, array $actual): bool
+function wp_fts_wc_multisite_search_membership_matches(array $expected, array $actual): bool
 {
     foreach (['shared', 'unique'] as $kind) {
         $expectedRows = $expected['search'][$kind]['results'] ?? null;
@@ -13331,8 +13336,23 @@ function wp_fts_wc_multisite_search_order_matches(array $expected, array $actual
         if (!is_array($expectedRows) || !is_array($actualRows)) {
             return false;
         }
+        if ($expectedRows === [] || $actualRows === []) {
+            return false;
+        }
+        foreach ([...$expectedRows, ...$actualRows] as $row) {
+            if (!is_array($row) || !is_int($row['doc_id'] ?? null) || $row['doc_id'] <= 0) {
+                return false;
+            }
+        }
         $expectedIds = array_map('intval', array_column($expectedRows, 'doc_id'));
         $actualIds = array_map('intval', array_column($actualRows, 'doc_id'));
+        if (count(array_unique($expectedIds)) !== count($expectedIds)
+            || count(array_unique($actualIds)) !== count($actualIds)
+        ) {
+            return false;
+        }
+        sort($expectedIds, SORT_NUMERIC);
+        sort($actualIds, SORT_NUMERIC);
         if ($expectedIds !== $actualIds) {
             return false;
         }
@@ -13367,8 +13387,75 @@ function wp_fts_wc_multisite_foreign_doc_freqs_empty(array $state): bool
 /** @param array<string,mixed> $expected @param array<string,mixed> $actual */
 function wp_fts_wc_multisite_document_state_matches(array $expected, array $actual): bool
 {
-    foreach (['document_count', 'document_ids', 'metadata_signature', 'source_signature'] as $key) {
+    foreach (['document_count', 'document_ids', 'source_signature'] as $key) {
         if (($expected[$key] ?? null) !== ($actual[$key] ?? null)) {
+            return false;
+        }
+    }
+    $expectedMetadata = is_array($expected['metadata_signature'] ?? null) ? $expected['metadata_signature'] : [];
+    $actualMetadata = is_array($actual['metadata_signature'] ?? null) ? $actual['metadata_signature'] : [];
+    if ($expectedMetadata === [] || array_keys($expectedMetadata) !== array_keys($actualMetadata)) {
+        return false;
+    }
+    // Legacy v3 stored one combined searchable-text field. V4 derives title and
+    // excerpt from wp_posts and, for these plain-text sentinels, its search_text
+    // sidecar equals canonical post_content. Compare the shared metadata fields
+    // and authenticate the new representation against the unchanged source
+    // signature rather than equating two physical layouts.
+    $sourceByPostId = [];
+    foreach (is_array($actual['source_signature'] ?? null) ? $actual['source_signature'] : [] as $source) {
+        if (!is_array($source)
+            || array_keys($source) !== ['post_id', 'post_type', 'post_status', 'post_date_gmt', 'title_sha256', 'excerpt_sha256', 'content_sha256', 'password_sha256']
+            || !is_int($source['post_id'] ?? null)
+            || $source['post_id'] <= 0
+            || isset($sourceByPostId[$source['post_id']])
+        ) {
+            return false;
+        }
+        foreach (['post_type', 'post_status', 'post_date_gmt'] as $field) {
+            if (!is_string($source[$field] ?? null)) {
+                return false;
+            }
+        }
+        foreach (['title_sha256', 'excerpt_sha256', 'content_sha256', 'password_sha256'] as $hashKey) {
+            $hash = $source[$hashKey] ?? null;
+            if (!is_string($hash) || strlen($hash) !== 64 || strspn($hash, '0123456789abcdef') !== 64) {
+                return false;
+            }
+        }
+        $sourceByPostId[$source['post_id']] = $source;
+    }
+    if (count($sourceByPostId) !== count($actualMetadata)) {
+        return false;
+    }
+    foreach ($expectedMetadata as $postId => $legacyMetadata) {
+        $currentMetadata = $actualMetadata[$postId] ?? null;
+        $source = $sourceByPostId[(int) $postId] ?? null;
+        if (!is_array($legacyMetadata)
+            || !is_array($currentMetadata)
+            || !is_array($source)
+            || array_keys($legacyMetadata) !== ['post_type', 'post_status', 'post_date_gmt', 'title', 'excerpt', 'search_text_sha256']
+            || array_keys($currentMetadata) !== ['post_type', 'post_status', 'post_date_gmt', 'title', 'excerpt', 'search_text_sha256']
+        ) {
+            return false;
+        }
+        $legacySearchTextHash = $legacyMetadata['search_text_sha256'] ?? null;
+        $currentSearchTextHash = $currentMetadata['search_text_sha256'] ?? null;
+        unset($legacyMetadata['search_text_sha256'], $currentMetadata['search_text_sha256']);
+        if ($legacyMetadata !== $currentMetadata
+            || !is_string($legacySearchTextHash)
+            || strlen($legacySearchTextHash) !== 64
+            || strspn($legacySearchTextHash, '0123456789abcdef') !== 64
+            || !is_string($currentSearchTextHash)
+            || strlen($currentSearchTextHash) !== 64
+            || strspn($currentSearchTextHash, '0123456789abcdef') !== 64
+            || ($currentMetadata['post_type'] ?? null) !== ($source['post_type'] ?? null)
+            || ($currentMetadata['post_status'] ?? null) !== ($source['post_status'] ?? null)
+            || ($currentMetadata['post_date_gmt'] ?? null) !== ($source['post_date_gmt'] ?? null)
+            || hash('sha256', (string) ($currentMetadata['title'] ?? '')) !== ($source['title_sha256'] ?? null)
+            || hash('sha256', (string) ($currentMetadata['excerpt'] ?? '')) !== ($source['excerpt_sha256'] ?? null)
+            || ($source['content_sha256'] ?? null) !== $currentSearchTextHash
+        ) {
             return false;
         }
     }
@@ -13376,24 +13463,31 @@ function wp_fts_wc_multisite_document_state_matches(array $expected, array $actu
     $actualIndex = is_array($actual['index_document_signature'] ?? null) ? $actual['index_document_signature'] : [];
     $withoutHash = static function (array $rows): array {
         foreach ($rows as &$row) {
-            if (is_array($row)) {
-                unset($row['content_hash_hex']);
+            if (!is_array($row)
+                || array_keys($row) !== ['doc_id', 'lang', 'content_hash_hex']
+                || !is_int($row['doc_id'])
+                || $row['doc_id'] <= 0
+                || !is_string($row['lang'])
+                || $row['lang'] === ''
+                || !is_string($row['content_hash_hex'])
+                || strlen($row['content_hash_hex']) !== 80
+                || strspn($row['content_hash_hex'], '0123456789abcdef') !== 80
+            ) {
+                return [];
             }
+            unset($row['content_hash_hex']);
         }
         unset($row);
         return $rows;
     };
-    if ($withoutHash($expectedIndex) !== $withoutHash($actualIndex)) {
+    $expectedIndexIdentity = $withoutHash($expectedIndex);
+    $actualIndexIdentity = $withoutHash($actualIndex);
+    if ($expectedIndexIdentity === [] || $expectedIndexIdentity !== $actualIndexIdentity) {
         return false;
     }
     // The profile signature intentionally changes across the legacy-v3 to
-    // profile-v5 cutover. The separate rewrite predicate below proves that the
-    // value changed; document parity only checks complete SHA-1 payloads here.
-    foreach ([...$expectedIndex, ...$actualIndex] as $row) {
-        if (!is_array($row) || strlen((string) ($row['content_hash_hex'] ?? '')) !== 80) {
-            return false;
-        }
-    }
+    // profile-v6 cutover. The separate rewrite predicate below proves that the
+    // value changed; document-semantic parity only checks complete SHA-1 payloads here.
     return true;
 }
 
@@ -23713,7 +23807,7 @@ function wp_fts_wc_validation_inventory_matches(array $evidence): bool
         'migration_worker_no_progress_batches',
         'migration_physical_monotonic_coverage',
         'migration_physical_max_sample_duration',
-        'multisite_search_order_parity',
+        'multisite_search_membership_parity',
         'schema_exact_physical_contract',
         'schema_no_term_hash_column_or_index',
         'surface_range_dictionary_terms',
