@@ -2780,12 +2780,12 @@ test_case('relational worst-case migration kills every table boundary and valida
     assert_true(!str_contains($snapshot, 'sort('), 'legacy migration snapshot must preserve result order');
     assert_true(!str_contains($finalize, 'sort('), 'post-migration parity must preserve result order');
     foreach ([
-        'relational-fts-v4-migration-oracle-v2',
+        'relational-fts-v4-migration-oracle-v3',
         'legacy_bm25_float',
         'v4_quantized_impact_times_integer_rarity',
         'legacy_numeric_score_parity_expected',
         '(180234*p.tf+12) DIV (20*p.tf+24)',
-        '1000000 DIV GREATEST(1,t.doc_freq)',
+        '1000000 DIV GREATEST(1,target_df.target_doc_freq)',
         'wp_fts_wc_v4_ordered_score_signature',
         'migration-rerun',
         '_fresh_process_stable',
@@ -2858,6 +2858,107 @@ test_case('relational worst-case migration kills every table boundary and valida
     record_check('relational populated migration contract', 61);
 });
 
+test_case('migration oracle target-v4 DF scope is bounded and independent from v3 dictionary DF', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $oracle = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_oracle');
+    $score = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_v4_oracle_from_legacy');
+    $targetDf = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_v4_oracle_target_df_relation');
+    $v3Consistency = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_v4_oracle_relevant_df_mismatches');
+
+    assert_contains('relational-fts-v4-migration-oracle-v3', $oracle, 'the changed target-rarity semantics require a new oracle schema');
+    assert_true(!str_contains($integration, 'relational-fts-v4-migration-oracle-v' . '2'), 'the stale v2 oracle schema must not remain accepted or emitted');
+    assert_contains("'target_doc_freq_basis' => \$targetDocFreqBasis", $oracle, 'oracle evidence should publish the exact global target-DF basis');
+    assert_contains("'post_types' => WP_FTS_WC_INDEX_POST_TYPES", $oracle, 'target DF must share the configured acceptance post-type scope');
+    assert_contains("'post_statuses' => WP_FTS_WC_INDEX_POST_STATUSES", $oracle, 'target DF must bind the fixed production-indexable status scope');
+    assert_contains("const WP_FTS_WC_INDEX_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];", $integration, 'the acceptance target-DF status constant must remain explicit');
+    assert_same(
+        ['publish', 'draft', 'pending', 'future', 'private'],
+        (new ReflectionClass(WP_FTS_Plugin::class))->getConstant('ADMIN_POST_SEARCH_POST_STATUSES'),
+        'the acceptance target-DF status list must stay aligned with production global indexability'
+    );
+    assert_contains('1000000 DIV GREATEST(1,target_df.target_doc_freq)', $score, 'exact rarity must use the target-v4 DF relation');
+    assert_contains('CASE WHEN prefix_target_df.target_doc_freq<1 THEN 1 ELSE prefix_target_df.target_doc_freq END AS SIGNED', $score, 'prefix rarity must use target-v4 DF while preserving production CAST rounding');
+    assert_true(!str_contains($score, 't.doc_freq') && !str_contains($score, 'pt.doc_freq'), 'v3 dictionary DF must never score target-v4 exact or prefix results');
+    assert_contains('target_p.term IN (', $targetDf, 'exact target DF must be constrained to the planned term keys');
+    assert_contains('target_p.term > %s', $targetDf, 'prefix target DF must have the exclusive binary lower bound');
+    assert_contains('target_p.term < %s', $targetDf, 'bounded prefixes must retain their exclusive binary upper bound');
+    assert_contains('target_d.is_deleted=0', $targetDf, 'target DF must count only active legacy documents');
+    assert_contains("target_wp.post_password=''", $targetDf, 'target DF must exclude password-protected canonical posts');
+    assert_contains('target_wp.post_type IN (', $targetDf, 'target DF must use the configured global post-type scope');
+    assert_contains('target_wp.post_status IN (', $targetDf, 'target DF must use the production indexable status scope');
+    assert_contains("'per_query_filters' => false", $targetDf, 'query visibility filters must not become global target-DF filters');
+    assert_contains('GROUP BY t.term,t.doc_freq', $v3Consistency, 'the independent v3 dictionary-consistency proof must remain intact');
+    assert_contains('HAVING t.doc_freq<>actual', $v3Consistency, 'the independent proof must still reject stale v3 dictionary rows');
+});
+
+test_case_with_pdo_sqlite_fixture('migration oracle password-protected posting changes target-v4 DF and rank', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $targetDf = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_v4_oracle_target_df_relation');
+
+    if (!defined('WP_FTS_WC_INDEX_POST_TYPES')) {
+        define('WP_FTS_WC_INDEX_POST_TYPES', ['post', 'page', 'attachment']);
+    }
+    if (!defined('WP_FTS_WC_INDEX_POST_STATUSES')) {
+        define('WP_FTS_WC_INDEX_POST_STATUSES', ['publish', 'draft', 'pending', 'future', 'private']);
+    }
+    eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_identifier'));
+    eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_assert'));
+    eval($targetDf);
+
+    $database = new PDO('sqlite::memory:');
+    $database->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $database->exec('CREATE TABLE wp_fts_postings (term TEXT NOT NULL, doc_id INTEGER NOT NULL, tf INTEGER NOT NULL, PRIMARY KEY (term,doc_id))');
+    $database->exec('CREATE TABLE wp_fts_docs (doc_id INTEGER PRIMARY KEY, is_deleted INTEGER NOT NULL)');
+    $database->exec('CREATE TABLE wp_posts (ID INTEGER PRIMARY KEY, post_password TEXT NOT NULL, post_type TEXT NOT NULL, post_status TEXT NOT NULL)');
+    $database->exec('CREATE TABLE wp_fts_terms (term TEXT PRIMARY KEY, doc_freq INTEGER NOT NULL)');
+    $database->exec("INSERT INTO wp_fts_postings VALUES ('alpha',1,1),('alpha',2,1),('beta',3,2),('beta',4,1)");
+    $database->exec('INSERT INTO wp_fts_docs VALUES (1,0),(2,0),(3,0),(4,0)');
+    $database->exec("INSERT INTO wp_posts VALUES (1,'','post','publish'),(2,'secret','post','publish'),(3,'','post','publish'),(4,'','post','publish')");
+    $database->exec("INSERT INTO wp_fts_terms VALUES ('alpha',2),('beta',2)");
+
+    global $wpdb;
+    $previousWpdb = $wpdb ?? null;
+    $wpdb = (object) ['posts' => 'wp_posts'];
+    try {
+        $basis = [
+            'legacy_docs' => 'is_deleted=0',
+            'post_password' => '',
+            'post_types' => WP_FTS_WC_INDEX_POST_TYPES,
+            'post_statuses' => WP_FTS_WC_INDEX_POST_STATUSES,
+            'per_query_filters' => false,
+        ];
+        $relation = wp_fts_wc_v4_oracle_target_df_relation('wp_fts_postings', 'wp_fts_docs', $basis, ['alpha', 'beta'], null);
+        $statement = $relation['sql'];
+        foreach ($relation['args'] as $argument) {
+            $placeholder = strpos($statement, '%s');
+            assert_true(is_int($placeholder), 'every target-DF argument must bind one placeholder');
+            $quoted = $database->quote($argument);
+            assert_true(is_string($quoted), 'SQLite must quote each target-DF fixture argument');
+            $statement = substr($statement, 0, $placeholder) . $quoted . substr($statement, $placeholder + 2);
+        }
+        assert_true(!str_contains($statement, '%s'), 'the target-DF fixture query must have no unbound placeholder');
+        $rows = $database->query($statement)->fetchAll(PDO::FETCH_ASSOC);
+    } finally {
+        $wpdb = $previousWpdb;
+    }
+    $derivedDf = [];
+    foreach ($rows as $row) {
+        $derivedDf[(string) $row['term']] = (int) $row['target_doc_freq'];
+    }
+    assert_same(['alpha' => 1, 'beta' => 2], $derivedDf, 'one protected alpha posting must be absent from target-v4 DF while both public beta postings remain');
+    $legacyAlphaDf = (int) $database->query("SELECT doc_freq FROM wp_fts_terms WHERE term='alpha'")->fetchColumn();
+    assert_same(2, $legacyAlphaDf, 'the regression fixture must retain the stale-for-v4 but internally valid v3 dictionary DF');
+    $alphaImpact = max(1, min(65535, intdiv(180234 + 12, 20 + 24)));
+    $betaImpact = max(1, min(65535, intdiv(180234 * 2 + 12, 20 * 2 + 24)));
+    $alphaTargetScore = $alphaImpact * intdiv(1000000, $derivedDf['alpha']);
+    $alphaDictionaryScore = $alphaImpact * intdiv(1000000, $legacyAlphaDf);
+    $betaTargetScore = $betaImpact * intdiv(1000000, $derivedDf['beta']);
+    assert_true(
+        $alphaTargetScore > $betaTargetScore && $betaTargetScore > $alphaDictionaryScore,
+        'excluding the password-protected posting must reverse alpha/beta rank, so t.doc_freq cannot satisfy the regression'
+    );
+});
+
 test_case('relational migration freezes and reproduces the exact legacy candidate-budget outcome', function (): void {
     if (!function_exists('proc_open')) {
         mark_pending('proc_open() is required to execute the extracted legacy outcome contract.');
@@ -2904,10 +3005,11 @@ test_case('relational migration freezes and reproduces the exact legacy candidat
     assert_contains('wp_fts_wc_migration_oracle_is_valid($oracle, $baseline)', $finalize, 'finalization should authenticate the exact v4 oracle before consuming results or keys');
     assert_contains('"execution_matches_snapshot"=>false', $runner, 'the wrapper should mark timeout, OOM, and process-death evidence as nonmatching');
     assert_contains('relational-fts-baseline-performance-v2', $performance . $runner . $finalize, 'the result-or-rejection measurement union should use only its v2 schema');
-    assert_same(2, substr_count($integration, 'relational-fts-migration-evidence-v2'), 'the v2 populated-migration envelope should be required by its only consumer and emitted by its only producer');
+    assert_same(2, substr_count($integration, 'relational-fts-migration-evidence-v3'), 'the v3 populated-migration envelope should be required by its only consumer and emitted by its only producer');
+    assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '2'), 'the stale v2 populated-migration envelope must not remain accepted or emitted');
     assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '1'), 'the incompatible v1 populated-migration envelope must not remain accepted or emitted');
     assert_contains('138,564 construction-known candidate postings', $acceptance, 'the acceptance contract should retain the measured 50k common-OR fanout');
-    assert_contains('relational-fts-migration-evidence-v2', $acceptance, 'the acceptance contract should name the envelope version carrying the exact result-or-rejection union');
+    assert_contains('relational-fts-migration-evidence-v3', $acceptance, 'the acceptance contract should name the envelope version carrying the target-v4 rarity basis and exact result-or-rejection union');
     assert_contains('cannot pass the final baseline-completeness gate', $acceptance, 'the acceptance contract should distinguish a reproduced rejection PASS from an arbitrary legacy failure');
 
     $extracted = '';
@@ -2934,6 +3036,8 @@ test_case('relational migration freezes and reproduces the exact legacy candidat
 declare(strict_types=1);
 
 const WP_FTS_WC_IMMUTABLE_BASELINE_SHA = '36a26f4ad1aaef9758922f24677069045c5291ab';
+const WP_FTS_WC_INDEX_POST_TYPES = ['post', 'page', 'attachment'];
+const WP_FTS_WC_INDEX_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];
 
 final class WP_FTS_Search_Budget_Exceeded extends RuntimeException
 {
@@ -3090,18 +3194,28 @@ foreach ($oracleCaseIds as $caseId) {
     ];
 }
 $migrationOracle = [
-    'schema' => 'relational-fts-v4-migration-oracle-v2',
+    'schema' => 'relational-fts-v4-migration-oracle-v3',
     'source' => 'v3 logical terms/postings plus canonical wp_posts',
     'scoring_cutover' => [
         'from' => 'legacy_bm25_float',
         'to' => 'v4_quantized_impact_times_integer_rarity',
         'legacy_numeric_score_parity_expected' => false,
     ],
+    'target_doc_freq_basis' => [
+        'legacy_docs' => 'is_deleted=0',
+        'post_password' => '',
+        'post_types' => WP_FTS_WC_INDEX_POST_TYPES,
+        'post_statuses' => WP_FTS_WC_INDEX_POST_STATUSES,
+        'per_query_filters' => false,
+    ],
     'v3_doc_freq_mismatches' => 0,
     'v3_queue_rows' => 0,
     'cases' => $oracleCases,
 ];
 probe_assert(wp_fts_wc_migration_oracle_is_valid($migrationOracle, $baseline), 'exact five-case v4 oracle should validate');
+$mutatedOracle = $migrationOracle;
+$mutatedOracle['target_doc_freq_basis']['per_query_filters'] = true;
+probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'per-query visibility must not authenticate as the global target-v4 rarity basis');
 $mutatedOracle = $migrationOracle;
 unset($mutatedOracle['cases']['ambiguous_morphology_and']);
 probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'missing oracle case should fail');

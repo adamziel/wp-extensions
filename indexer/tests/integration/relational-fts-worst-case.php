@@ -16,6 +16,7 @@ const WP_FTS_WC_MANIFEST_OPTION = 'wp_fts_relational_wc_manifest';
 const WP_FTS_WC_POST_TITLE_PREFIX = 'WP FTS relational worst case ';
 const WP_FTS_WC_MULTISITE_POST_TITLE_PREFIX = 'WP FTS multisite migration sentinel ';
 const WP_FTS_WC_INDEX_POST_TYPES = ['post', 'page', 'attachment'];
+const WP_FTS_WC_INDEX_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];
 const WP_FTS_WC_DEPENDENCY_LOB_BYTES = 262144;
 const WP_FTS_WC_DEPENDENCY_ACCEPTED_UNSELECTED_ROWS = 511;
 const WP_FTS_WC_DEPENDENCY_OVERFLOW_UNSELECTED_ROWS = 512;
@@ -1734,7 +1735,7 @@ function wp_fts_wc_validate(): array
         'migration_ambiguous_morphology_or_post_migration_rerun_stable',
         'migration_ambiguous_morphology_and_v4_oracle_ordered_score_parity',
         'migration_ambiguous_morphology_and_post_migration_rerun_stable',
-    ], 'relational-fts-migration-evidence-v2'));
+    ], 'relational-fts-migration-evidence-v3'));
     $migrationDisk = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration-disk.json');
     array_push($gates, ...wp_fts_wc_require_evidence_gates($migrationDisk, 'physical migration disk monitor', [
         'migration_physical_disk_sample_count',
@@ -10820,7 +10821,8 @@ function wp_fts_wc_migration_snapshot(): array
  * Compute the target v4 order and scores directly from the still-unmodified v3
  * term/posting relation. This intentionally does not call the v4 storage search:
  * the independent SQL oracle quantizes legacy logical TFs to v4 impacts, applies
- * v4 rarity tiers, and filters/orders against canonical wp_posts.
+ * v4 rarity from the globally indexable target corpus, and filters/orders
+ * against canonical wp_posts.
  */
 function wp_fts_wc_migration_oracle(): array
 {
@@ -10848,6 +10850,13 @@ function wp_fts_wc_migration_oracle(): array
     }
     $docFreqMismatches = wp_fts_wc_v4_oracle_relevant_df_mismatches(array_column($plannedCases, 'plan'));
     wp_fts_wc_assert($docFreqMismatches === 0, 'The v3 logical rows used by the oracle have inconsistent active-document frequencies.');
+    $targetDocFreqBasis = [
+        'legacy_docs' => 'is_deleted=0',
+        'post_password' => '',
+        'post_types' => WP_FTS_WC_INDEX_POST_TYPES,
+        'post_statuses' => WP_FTS_WC_INDEX_POST_STATUSES,
+        'per_query_filters' => false,
+    ];
 
     $cases = [];
     foreach ($plannedCases as $caseId => $planned) {
@@ -10855,7 +10864,7 @@ function wp_fts_wc_migration_oracle(): array
         $query = $planned['query'];
         $options = $planned['options'];
         $plan = $planned['plan'];
-        $results = wp_fts_wc_v4_oracle_from_legacy($plan, $options);
+        $results = wp_fts_wc_v4_oracle_from_legacy($plan, $options, $targetDocFreqBasis);
         wp_fts_wc_assert($results !== [], "The independent v4 migration oracle returned no rows for {$caseId}.");
         $cases[$caseId] = [
             'query' => $query,
@@ -10869,13 +10878,14 @@ function wp_fts_wc_migration_oracle(): array
     }
     wp_fts_wc_assert(count($cases) === 5, 'Migration oracle did not compute every required OR, AND, prefix, and ambiguous case.');
     $result = [
-        'schema' => 'relational-fts-v4-migration-oracle-v2',
+        'schema' => 'relational-fts-v4-migration-oracle-v3',
         'source' => 'v3 logical terms/postings plus canonical wp_posts',
         'scoring_cutover' => [
             'from' => 'legacy_bm25_float',
             'to' => 'v4_quantized_impact_times_integer_rarity',
             'legacy_numeric_score_parity_expected' => false,
         ],
+        'target_doc_freq_basis' => $targetDocFreqBasis,
         'v3_doc_freq_mismatches' => $docFreqMismatches,
         'v3_queue_rows' => $legacyQueueRows,
         'cases' => $cases,
@@ -11150,13 +11160,20 @@ function wp_fts_wc_migration_oracle_is_valid(array $oracle, array $baseline): bo
 {
     $caseIds = ['common_or', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and'];
     $cases = is_array($oracle['cases'] ?? null) ? $oracle['cases'] : [];
-    if (array_keys($oracle) !== ['schema', 'source', 'scoring_cutover', 'v3_doc_freq_mismatches', 'v3_queue_rows', 'cases']
-        || ($oracle['schema'] ?? null) !== 'relational-fts-v4-migration-oracle-v2'
+    if (array_keys($oracle) !== ['schema', 'source', 'scoring_cutover', 'target_doc_freq_basis', 'v3_doc_freq_mismatches', 'v3_queue_rows', 'cases']
+        || ($oracle['schema'] ?? null) !== 'relational-fts-v4-migration-oracle-v3'
         || ($oracle['source'] ?? null) !== 'v3 logical terms/postings plus canonical wp_posts'
         || ($oracle['scoring_cutover'] ?? null) !== [
             'from' => 'legacy_bm25_float',
             'to' => 'v4_quantized_impact_times_integer_rarity',
             'legacy_numeric_score_parity_expected' => false,
+        ]
+        || ($oracle['target_doc_freq_basis'] ?? null) !== [
+            'legacy_docs' => 'is_deleted=0',
+            'post_password' => '',
+            'post_types' => WP_FTS_WC_INDEX_POST_TYPES,
+            'post_statuses' => WP_FTS_WC_INDEX_POST_STATUSES,
+            'per_query_filters' => false,
         ]
         || ($oracle['v3_doc_freq_mismatches'] ?? null) !== 0
         || ($oracle['v3_queue_rows'] ?? null) !== 0
@@ -12128,7 +12145,7 @@ function wp_fts_wc_migration_finalize(): array
         'Migration final evidence gate set drifted.'
     );
     $result = [
-        'schema' => 'relational-fts-migration-evidence-v2',
+        'schema' => 'relational-fts-migration-evidence-v3',
         'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
         'baseline' => $baseline,
         'oracle' => $oracle,
@@ -13349,51 +13366,65 @@ function wp_fts_wc_v4_oracle_relevant_df_mismatches(array $plans): int
  *
  * @param array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>,prefix:?array{group_id:int,key:string,legacy_completion_lower:string,legacy_completion_upper:?string}} $plan
  * @param array<string,mixed> $options
+ * @param array{legacy_docs:string,post_password:string,post_types:array<int,string>,post_statuses:array<int,string>,per_query_filters:bool} $targetDocFreqBasis
  * @return array<int,array{doc_id:int,score:string}>
  */
-function wp_fts_wc_v4_oracle_from_legacy(array $plan, array $options): array
+function wp_fts_wc_v4_oracle_from_legacy(array $plan, array $options, array $targetDocFreqBasis): array
 {
     global $wpdb;
 
     $qRows = [];
     $args = [];
+    $exactTermKeys = [];
     foreach ($plan['groups'] as $groupId => $alternatives) {
         foreach ($alternatives as $alternative) {
             $qRows[] = 'SELECT %s AS term_key, %d AS group_id, %d AS tier';
             array_push($args, $alternative['key'], $groupId, $alternative['rank'] === 0 ? 1000 : 800);
+            $exactTermKeys[(string) $alternative['key']] = true;
         }
     }
     wp_fts_wc_assert($qRows !== [], 'Migration v4 oracle has no exact alternatives.');
     $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
     $postings = wp_fts_wc_identifier($wpdb->prefix . 'fts_postings');
     $docs = wp_fts_wc_identifier($wpdb->prefix . 'fts_docs');
+    $exactTargetDf = wp_fts_wc_v4_oracle_target_df_relation(
+        $postings,
+        $docs,
+        $targetDocFreqBasis,
+        array_keys($exactTermKeys),
+        null
+    );
+    array_push($args, ...$exactTargetDf['args']);
     // Positive integer forms of the v4 rounding rules avoid engine-specific
     // floating-point or CAST behavior in the independent oracle.
     $impact = 'GREATEST(1,LEAST(65535,(180234*p.tf+12) DIV (20*p.tf+24)))';
-    $weight = 'GREATEST(1,((GREATEST(1,1000000 DIV GREATEST(1,t.doc_freq))*q.tier) DIV 1000))';
+    $weight = 'GREATEST(1,((GREATEST(1,1000000 DIV GREATEST(1,target_df.target_doc_freq))*q.tier) DIV 1000))';
     $rawParts = [
         "SELECT p.doc_id,q.group_id,MAX({$impact}*{$weight}) AS group_score
 FROM (" . implode("\nUNION ALL\n", $qRows) . ") q
 JOIN `{$terms}` t ON t.term=q.term_key
+JOIN ({$exactTargetDf['sql']}) target_df ON target_df.term=t.term
 JOIN `{$postings}` p ON p.term=t.term
 GROUP BY p.doc_id,q.group_id",
     ];
     $prefix = $plan['prefix'];
     if (is_array($prefix)) {
+        $prefixTargetDf = wp_fts_wc_v4_oracle_target_df_relation(
+            $postings,
+            $docs,
+            $targetDocFreqBasis,
+            [],
+            ['lower' => $prefix['legacy_completion_lower'], 'upper' => $prefix['legacy_completion_upper']]
+        );
+        array_push($args, ...$prefixTargetDf['args']);
         $prefixImpact = 'GREATEST(1,LEAST(65535,(180234*pp.tf+12) DIV (20*pp.tf+24)))';
-        $prefixRarity = 'CAST(1000000 / CASE WHEN pt.doc_freq<1 THEN 1 ELSE pt.doc_freq END AS SIGNED)';
+        $prefixRarity = 'CAST(1000000 / CASE WHEN prefix_target_df.target_doc_freq<1 THEN 1 ELSE prefix_target_df.target_doc_freq END AS SIGNED)';
         $prefixScore = "CAST({$prefixImpact}*{$prefixRarity}*600/1000 AS SIGNED)";
-        $postingRange = 'pt.term > %s';
-        $args[] = $prefix['legacy_completion_lower'];
-        if ($prefix['legacy_completion_upper'] !== null) {
-            $postingRange .= ' AND pt.term < %s';
-            $args[] = $prefix['legacy_completion_upper'];
-        }
         $rawParts[] = "SELECT pp.doc_id," . (int) $prefix['group_id'] . " AS group_id,{$prefixScore} AS group_score
-FROM `{$terms}` pt
+FROM ({$prefixTargetDf['sql']}) prefix_target_df
+JOIN `{$terms}` pt ON pt.term=prefix_target_df.term
 JOIN `{$postings}` pp ON pp.term=pt.term
-JOIN `{$docs}` legacy_prefix_d ON legacy_prefix_d.doc_id=pp.doc_id AND legacy_prefix_d.is_deleted=0
-WHERE {$postingRange}";
+JOIN `{$docs}` legacy_prefix_d ON legacy_prefix_d.doc_id=pp.doc_id AND legacy_prefix_d.is_deleted=0";
     }
     $mode = strtoupper((string) ($options['mode'] ?? 'OR'));
     wp_fts_wc_assert(in_array($mode, ['OR', 'AND'], true), 'Migration v4 oracle mode must be OR or AND.');
@@ -13431,6 +13462,66 @@ LIMIT %d";
         throw new RuntimeException('Independent v4 migration oracle query failed: ' . trim((string) $wpdb->last_error));
     }
     return wp_fts_wc_v4_ordered_score_signature($rows);
+}
+
+/**
+ * Build one target-v4 document-frequency relation over only the exact keys or
+ * binary completion interval used by a migration oracle query. Target rarity
+ * is global index state: per-query visibility filters must not change it.
+ *
+ * @param array{legacy_docs:string,post_password:string,post_types:array<int,string>,post_statuses:array<int,string>,per_query_filters:bool} $targetDocFreqBasis
+ * @param array<int,string> $exactTermKeys
+ * @param array{lower:string,upper:?string}|null $prefixRange
+ * @return array{sql:string,args:array<int,string>}
+ */
+function wp_fts_wc_v4_oracle_target_df_relation(
+    string $postings,
+    string $docs,
+    array $targetDocFreqBasis,
+    array $exactTermKeys,
+    ?array $prefixRange
+): array {
+    global $wpdb;
+
+    wp_fts_wc_assert($targetDocFreqBasis === [
+        'legacy_docs' => 'is_deleted=0',
+        'post_password' => '',
+        'post_types' => WP_FTS_WC_INDEX_POST_TYPES,
+        'post_statuses' => WP_FTS_WC_INDEX_POST_STATUSES,
+        'per_query_filters' => false,
+    ], 'Migration v4 oracle target document-frequency basis drifted.');
+    wp_fts_wc_assert(($exactTermKeys !== []) !== ($prefixRange !== null), 'Migration v4 oracle target DF requires exactly one bounded term scope.');
+    $postTypes = $targetDocFreqBasis['post_types'];
+    $postStatuses = $targetDocFreqBasis['post_statuses'];
+    $typePlaceholders = implode(',', array_fill(0, count($postTypes), '%s'));
+    $statusPlaceholders = implode(',', array_fill(0, count($postStatuses), '%s'));
+    $args = [...$postTypes, ...$postStatuses];
+    if ($exactTermKeys !== []) {
+        wp_fts_wc_assert(!in_array('', $exactTermKeys, true), 'Migration v4 oracle target DF received an empty exact term key.');
+        $termPredicate = 'target_p.term IN (' . implode(',', array_fill(0, count($exactTermKeys), '%s')) . ')';
+        array_push($args, ...$exactTermKeys);
+    } else {
+        $lower = is_string($prefixRange['lower'] ?? null) ? $prefixRange['lower'] : '';
+        $upper = $prefixRange['upper'] ?? null;
+        wp_fts_wc_assert($lower !== '' && ($upper === null || (is_string($upper) && strcmp($upper, $lower) > 0)), 'Migration v4 oracle target DF received an invalid binary prefix interval.');
+        $termPredicate = 'target_p.term > %s';
+        $args[] = $lower;
+        if ($upper !== null) {
+            $termPredicate .= ' AND target_p.term < %s';
+            $args[] = $upper;
+        }
+    }
+    $posts = wp_fts_wc_identifier((string) $wpdb->posts);
+    $sql = "SELECT target_p.term,COUNT(DISTINCT target_p.doc_id) AS target_doc_freq
+FROM `{$postings}` target_p
+JOIN `{$docs}` target_d ON target_d.doc_id=target_p.doc_id AND target_d.is_deleted=0
+JOIN `{$posts}` target_wp ON target_wp.ID=target_p.doc_id
+    AND target_wp.post_password=''
+    AND target_wp.post_type IN ({$typePlaceholders})
+    AND target_wp.post_status IN ({$statusPlaceholders})
+WHERE {$termPredicate}
+GROUP BY target_p.term";
+    return ['sql' => $sql, 'args' => $args];
 }
 
 /** Compute the exclusive binary prefix bound without enumerating completions. */

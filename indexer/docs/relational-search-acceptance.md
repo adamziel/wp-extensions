@@ -2070,17 +2070,29 @@ has zero result rows, null result hashes, and the exact error object. A differen
 budget, exception, result, timeout, OOM, or process death remains diagnostic
 evidence but cannot satisfy migration acceptance.
 The completed populated-migration envelope is
-`relational-fts-migration-evidence-v2`; the final report accepts only v2, so a
-stale result-only v1 consumer fails.
+`relational-fts-migration-evidence-v3`; the final report accepts only v3, so a
+stale envelope that does not authenticate the target-v4 rarity basis fails.
 
 Legacy BM25 results are informational evidence of the intentional scoring-model
-cutover. The `relational-fts-v4-migration-oracle-v2` independent oracle selects
+cutover. The `relational-fts-v4-migration-oracle-v3` independent oracle selects
 its fixed five migration cases from the six-case snapshot and computes expected
 v4 order and integer scores directly from the untouched v3 logical postings,
 regardless of whether legacy execution returned results or hit its candidate-row
-budget. Those v4 results are checked exactly after migration, repeated after
-cache reset, and repeated again in a fresh PHP process. Legacy tables may be
-removed only after all work drains and takeover is ready.
+budget. It independently proves that relevant v3 dictionary `doc_freq` values
+still match active legacy postings, but never reuses those values as target-v4
+rarity. Instead, one exact-key `IN` relation and, where needed, one exclusive
+binary prefix-range relation count distinct active legacy posting documents
+joined to canonical posts with an empty password, one of the configured
+`post`, `page`, or `attachment` types, and one of `publish`, `draft`, `pending`,
+`future`, or `private` status. This is the global production indexability scope:
+per-query type/status visibility filters apply only to final results and cannot
+change rarity. The prefix score retains production's signed `CAST` around
+`1000000 / doc_freq`, including its rounding. The artifact publishes this exact
+`target_doc_freq_basis`; neither relation groups the whole dictionary or runs a
+correlated count per candidate posting. Those v4 results are checked exactly
+after migration, repeated after cache reset, and repeated again in a fresh PHP
+process. Legacy tables may be removed only after all work drains and takeover
+is ready.
 
 The same proof seeds one, two, and three deterministic searchable documents in
 the three real multisite prefixes before migration. After an injected failure
