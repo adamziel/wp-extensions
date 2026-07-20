@@ -1956,10 +1956,6 @@ if(file_put_contents($temporary,$json,LOCK_EX)!==strlen($json)||!rename($tempora
 set_run_stage "current-corpus-and-initial-index"
 record_installed_tree_binding post-install
 run_php_phase setup > "${EVIDENCE_DIR}/setup.log"
-timed_compose initial-reindex-enqueue 1800 run --rm wpcli --url=http://wordpress fts reindex \
-    --post_type=post \
-    --post_status=publish,draft,pending,future,private \
-    --format=json > "${EVIDENCE_DIR}/initial-reindex-enqueue.json"
 run_php_phase initial-index-drain > "${EVIDENCE_DIR}/initial-index-drain.log"
 
 # The queue fake tests cannot prove session-lock behavior. Exercise the exact

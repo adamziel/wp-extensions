@@ -226,9 +226,9 @@ VALUES " . implode(',', $rows),
     ));
     wp_fts_wc_assert($relationshipCount === count($actualIds), 'Worst-case taxonomy relationship count is incomplete.');
 
-    // Activation and fixture-option changes may have queued work for the empty
-    // site that existed before this direct corpus seed. Make the explicit
-    // current-version reindex below the only producer for the seeded corpus.
+    // Activation and the analyzer-pack changes coalesce into one current-profile
+    // corpus scope. Keep that clean-install work as the initial-index producer;
+    // issuing a second filtered CLI scope here would process the same corpus twice.
     $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
     $postings = wp_fts_wc_identifier($wpdb->prefix . 'fts_postings');
     $documents = wp_fts_wc_identifier($wpdb->prefix . 'fts_documents');
@@ -239,13 +239,15 @@ VALUES " . implode(',', $rows),
         'documents' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$documents}`", 'documents before the initial current index'),
     ];
     wp_fts_wc_assert($derivedRows === ['terms' => 0, 'postings' => 0, 'documents' => 0], 'The clean install contains derived rows before its explicit initial index.');
+    $initialWork = [
+        'post' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='post'", 'post work before the clean-install index'),
+        'scope' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='scope'", 'scope work before the clean-install index'),
+        'corpus' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='scope' AND scope_coverage='corpus'", 'corpus work before the clean-install index'),
+        'filtered' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='scope' AND scope_coverage='filtered'", 'filtered work before the clean-install index'),
+    ];
     wp_fts_wc_assert(
-        $wpdb->query("DELETE FROM `{$work}` WHERE kind IN ('post','scope')") !== false,
-        'Could not clear pre-corpus work before the explicit initial index.'
-    );
-    wp_fts_wc_assert(
-        wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')", 'work before the explicit initial index') === 0,
-        'Pre-corpus work remains before the explicit initial index.'
+        $initialWork === ['post' => 0, 'scope' => 1, 'corpus' => 1, 'filtered' => 0],
+        'Clean installation must retain exactly one current-profile corpus scope before indexing.'
     );
 
     $manifest = [
@@ -422,8 +424,18 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
     $initial = [
         'post' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='post'", 'post work after the WP-CLI reindex enqueue'),
         'scope' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='scope'", 'scope work after the WP-CLI reindex enqueue'),
+        'corpus' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='scope' AND scope_coverage='corpus'", 'corpus work before the asynchronous drain'),
+        'filtered' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='scope' AND scope_coverage='filtered'", 'filtered work before the asynchronous drain'),
     ];
-    wp_fts_wc_assert($initial === ['post' => 0, 'scope' => 1], 'WP-CLI reindex must enqueue exactly one scope without materializing post work.');
+    $expectedInitial = $initialIndex
+        ? ['post' => 0, 'scope' => 1, 'corpus' => 1, 'filtered' => 0]
+        : ['post' => 0, 'scope' => 1, 'corpus' => 0, 'filtered' => 1];
+    wp_fts_wc_assert(
+        $initial === $expectedInitial,
+        $initialIndex
+            ? 'Clean installation must begin with one corpus scope and no materialized post work.'
+            : 'WP-CLI reindex must enqueue one filtered scope and no materialized post work.'
+    );
 
     $started = hrtime(true);
     $deadline = microtime(true) + 21600.0;
@@ -509,7 +521,7 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
     );
     $statuses = array_values(array_unique(array_map(static fn(array $batch): string => (string) ($batch['status'] ?? ''), $batches)));
     $gates = [
-        wp_fts_wc_gate('reindex_enqueue_constant_scope', ['post' => 0, 'scope' => 1], $initial, $initial === ['post' => 0, 'scope' => 1]),
+        wp_fts_wc_gate('reindex_enqueue_constant_scope', $expectedInitial, $initial, $initial === $expectedInitial),
         wp_fts_wc_gate('reindex_processed_documents', $expectedDocuments, $totals['processed'], $totals['processed'] === $expectedDocuments),
         wp_fts_wc_gate('reindex_committed_documents', $expectedDocuments, $totals['committed'], $totals['committed'] === $expectedDocuments),
         wp_fts_wc_gate('reindex_analyzed_documents', $expectedDocuments, $totals['analyzed'], $totals['analyzed'] === $expectedDocuments),
