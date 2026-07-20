@@ -223,20 +223,6 @@ function wp_fts_lifecycle_contract_inspection_payload(
         'fts_documents',
         'fts_work',
     ];
-    $legacySuffixes = [
-        'fts_docs',
-        'fts_doc_lengths',
-        'fts_docmeta',
-        'fts_meta',
-        'fts_queue',
-        'fts_legacy_terms',
-        'fts_legacy_postings',
-        'fts_legacy_docs',
-        'fts_legacy_doc_lengths',
-        'fts_legacy_docmeta',
-        'fts_legacy_meta',
-        'fts_legacy_queue',
-    ];
     $resetKeys = [
         'reset_new_fts_terms',
         'reset_old_fts_terms',
@@ -247,7 +233,7 @@ function wp_fts_lifecycle_contract_inspection_payload(
         'reset_new_fts_work',
         'reset_old_fts_work',
     ];
-    $counts = array_fill_keys(array_merge($currentSuffixes, $legacySuffixes, $resetKeys), null);
+    $counts = array_fill_keys(array_merge($currentSuffixes, $resetKeys), null);
     $uninstalled = in_array($phase, [
         'after_uninstall',
         'multisite_subsite_after_uninstall',
@@ -255,7 +241,7 @@ function wp_fts_lifecycle_contract_inspection_payload(
         'multisite_subsite_after_reinstall_inactive',
     ], true);
     $currentExists = $phase !== 'before_activation' && !$uninstalled;
-    $legacyExists = in_array($phase, [
+    $resetExists = in_array($phase, [
         'before_deactivation',
         'after_deactivation',
         'multisite_subsite_before_deactivation',
@@ -270,8 +256,8 @@ function wp_fts_lifecycle_contract_inspection_payload(
             'fts_work' => in_array($phase, ['before_deactivation', 'after_deactivation'], true) ? 1 : 0,
         ]);
     }
-    if ($legacyExists) {
-        foreach ([...$legacySuffixes, ...$resetKeys] as $key) {
+    if ($resetExists) {
+        foreach ($resetKeys as $key) {
             $counts[$key] = 1;
         }
     }
@@ -281,18 +267,19 @@ function wp_fts_lifecycle_contract_inspection_payload(
     $options = [];
     foreach ([
         'wp_fts_schema_version',
-        'wp_fts_pending_index_post_ids',
-        'wp_fts_sandbox_demo_post_ids',
         'wp_fts_analyzer_options',
         'wp_fts_settings',
+        'wp_fts_index_custom_fields',
         'wp_fts_indexing_lock',
         'wp_fts_index_health',
+        'wp_fts_readiness_incarnation',
+        'wp_fts_search_ready_incarnation',
         'wp_fts_activation_redirect',
+        'wp_fts_scope_index_ownership',
     ] as $option) {
         $options[$option] = [
             'exists' => $optionExists,
-            'queue_count' => 0,
-            'schema_version' => $option === 'wp_fts_schema_version' && $optionExists ? 6 : 0,
+            'schema_version' => $option === 'wp_fts_schema_version' && $optionExists ? 9 : 0,
         ];
     }
     $fenceExists = in_array($phase, [
@@ -314,7 +301,7 @@ function wp_fts_lifecycle_contract_inspection_payload(
 
     $tables = [];
     foreach (array_keys($counts) as $suffix) {
-        $exists = in_array($suffix, $currentSuffixes, true) ? $currentExists : $legacyExists;
+        $exists = in_array($suffix, $currentSuffixes, true) ? $currentExists : $resetExists;
         $tables[$suffix] = [
             'name' => $prefix . $suffix,
             'exists' => $exists,
@@ -369,25 +356,9 @@ function wp_fts_lifecycle_contract_inspection_payload(
 }
 
 /** @return array<string,mixed> */
-function wp_fts_lifecycle_contract_legacy_seed_payload(): array
+function wp_fts_lifecycle_contract_reset_generation_seed_payload(): array
 {
     $tables = [];
-    foreach ([
-        'fts_docs',
-        'fts_doc_lengths',
-        'fts_docmeta',
-        'fts_meta',
-        'fts_queue',
-        'fts_legacy_terms',
-        'fts_legacy_postings',
-        'fts_legacy_docs',
-        'fts_legacy_doc_lengths',
-        'fts_legacy_docmeta',
-        'fts_legacy_meta',
-        'fts_legacy_queue',
-    ] as $suffix) {
-        $tables[$suffix] = ['exists' => true, 'rows' => 1];
-    }
     $resetKeys = [
         'reset_new_fts_terms',
         'reset_old_fts_terms',
@@ -403,10 +374,6 @@ function wp_fts_lifecycle_contract_legacy_seed_payload(): array
     }
 
     return [
-        'seeded_legacy_table_suffixes' => array_values(array_filter(
-            array_keys($tables),
-            static fn(string $key): bool => !str_starts_with($key, 'reset_')
-        )),
         'seeded_reset_generation_table_keys' => $resetKeys,
         'tables' => $tables,
     ];
@@ -517,30 +484,18 @@ test_case('quality disposable lifecycle smoke requires write opt-in and marker b
     }
 });
 
-test_case('quality disposable lifecycle smoke binds uninstall to every current and recoverable table', function (): void {
+test_case('quality disposable lifecycle smoke binds uninstall to current and reset-generation tables', function (): void {
     $expected = [
         'fts_terms',
         'fts_postings',
         'fts_documents',
         'fts_work',
-        'fts_docs',
-        'fts_doc_lengths',
-        'fts_docmeta',
-        'fts_meta',
-        'fts_queue',
-        'fts_legacy_terms',
-        'fts_legacy_postings',
-        'fts_legacy_docs',
-        'fts_legacy_doc_lengths',
-        'fts_legacy_docmeta',
-        'fts_legacy_meta',
-        'fts_legacy_queue',
     ];
     $reflection = new ReflectionClass(WP_FTS_DisposableLifecycleSmokeRunner::class);
     wp_fts_lifecycle_contract_same(
         $expected,
-        $reflection->getConstant('UNINSTALL_FTS_TABLE_SUFFIXES'),
-        'lifecycle uninstall proof should cover exactly four current and twelve distinct recoverable table suffixes'
+        $reflection->getConstant('CURRENT_FTS_TABLE_SUFFIXES'),
+        'lifecycle uninstall proof should cover exactly the four current table suffixes'
     );
     $resetTables = $reflection->getConstant('RESET_GENERATION_TABLES');
     wp_fts_lifecycle_contract_same(
@@ -555,7 +510,7 @@ test_case('quality disposable lifecycle smoke binds uninstall to every current a
             'reset_old_fts_work',
         ],
         is_array($resetTables) ? array_keys($resetTables) : [],
-        'lifecycle uninstall proof should independently inspect all eight deterministic failed-reset generations'
+        'lifecycle uninstall proof should independently inspect all eight deterministic reset generations'
     );
 
     $inspection = wp_fts_lifecycle_contract_inspection_payload('after_uninstall');
@@ -567,7 +522,7 @@ test_case('quality disposable lifecycle smoke binds uninstall to every current a
     } catch (RuntimeException $error) {
         $rejected = str_contains($error->getMessage(), 'reset_old_fts_postings');
     }
-    wp_fts_lifecycle_contract_true($rejected, 'one surviving retired posting generation must fail lifecycle uninstall proof');
+    wp_fts_lifecycle_contract_true($rejected, 'one surviving reset posting generation must fail lifecycle uninstall proof');
 });
 
 test_case('quality disposable lifecycle smoke requires the exact bounded uninstall fence shape', function (): void {
@@ -640,21 +595,21 @@ test_case('quality disposable lifecycle smoke builds bounded lifecycle WP-CLI co
                 if (str_contains($joined, "\nfts\nstatus")) {
                     return ['exit' => 0, 'stdout' => wp_fts_lifecycle_contract_json([
                         'schema_status' => 'current',
-                        'schema_version' => 6,
-                        'expected_schema_version' => 6,
+                        'schema_version' => 9,
+                        'expected_schema_version' => 9,
                         'pending_queue_count' => 0,
                     ]), 'stderr' => ''];
                 }
                 if (str_contains($joined, "\nfts\nrepair")) {
                     return ['exit' => 0, 'stdout' => wp_fts_lifecycle_contract_json([
                         'schema_status' => 'current',
-                        'schema_version' => 6,
-                        'expected_schema_version' => 6,
+                        'schema_version' => 9,
+                        'expected_schema_version' => 9,
                     ]), 'stderr' => ''];
                 }
                 if (str_contains($joined, "\nfts\nprocess-batch")) {
                     return ['exit' => 0, 'stdout' => wp_fts_lifecycle_contract_json([
-                        'processed' => 1,
+                        'indexed' => 1,
                         'queue_processed' => 1,
                         'pending_queue_count' => 0,
                     ]), 'stderr' => ''];
@@ -688,8 +643,8 @@ test_case('quality disposable lifecycle smoke builds bounded lifecycle WP-CLI co
                             'table_exists_after_drop' => false,
                         ]), 'stderr' => ''];
                     }
-                    if (str_contains($joined, 'seeded_legacy_table_suffixes')) {
-                        return ['exit' => 0, 'stdout' => wp_fts_lifecycle_contract_json(wp_fts_lifecycle_contract_legacy_seed_payload()), 'stderr' => ''];
+                    if (str_contains($joined, 'seeded_reset_generation_table_keys')) {
+                        return ['exit' => 0, 'stdout' => wp_fts_lifecycle_contract_json(wp_fts_lifecycle_contract_reset_generation_seed_payload()), 'stderr' => ''];
                     }
                     foreach ([
                         'before_activation',
@@ -771,14 +726,14 @@ test_case('quality disposable lifecycle smoke builds bounded lifecycle WP-CLI co
         wp_fts_lifecycle_contract_contains('activation_and_repair_do_not_index_existing_content', $encodedReport, 'report should record activation and repair no-index evidence');
         wp_fts_lifecycle_contract_contains('deactivation_clears_scheduled_queue_processing', $encodedReport, 'report should record deactivation cron cleanup evidence');
         wp_fts_lifecycle_contract_contains('uninstall_clears_operational_options', $encodedReport, 'report should record uninstall option cleanup evidence');
-        wp_fts_lifecycle_contract_contains('uninstall_removes_current_and_legacy_fts_tables', $encodedReport, 'report should record destructive current/legacy table cleanup evidence');
+        wp_fts_lifecycle_contract_contains('uninstall_removes_current_and_reset_generation_fts_tables', $encodedReport, 'report should record current/reset-generation table cleanup');
         wp_fts_lifecycle_contract_contains('uninstall_retains_exact_bounded_lifecycle_fence', $encodedReport, 'report should record the exact retained lifecycle fence');
         wp_fts_lifecycle_contract_contains('explicit_reactivation_clears_fence_and_reprovisions', $encodedReport, 'report should record explicit reactivation fence clearance and schema repair');
         wp_fts_lifecycle_contract_contains('multisite_uninstall_removes_all_site_fts_tables', $encodedReport, 'report should record multisite destructive cleanup evidence');
         wp_fts_lifecycle_contract_contains('multisite_reactivation_clears_all_site_fences_and_reprovisions', $encodedReport, 'report should record multisite reactivation recovery evidence');
         wp_fts_lifecycle_contract_contains('public_submission_artifacts_created', $encodedReport, 'report should record no public-submission artifact creation');
         wp_fts_lifecycle_contract_same('passed', $result['report']['multisite_evidence']['status'] ?? null, 'report should include real multisite runtime proof');
-        wp_fts_lifecycle_contract_same(true, $result['report']['multisite_evidence']['all_current_and_legacy_tables_removed'] ?? null, 'report should bind multisite proof to destructive current/legacy cleanup');
+        wp_fts_lifecycle_contract_same(true, $result['report']['multisite_evidence']['all_current_and_reset_generation_tables_removed'] ?? null, 'report should bind multisite proof to current/reset-generation cleanup');
         wp_fts_lifecycle_contract_same(true, $result['report']['multisite_evidence']['bounded_uninstall_fence_retained'] ?? null, 'report should bind multisite proof to the exact retained fence');
         wp_fts_lifecycle_contract_same(true, $result['report']['multisite_evidence']['network_reactivation_cleared_fences_and_reprovisioned'] ?? null, 'report should bind multisite proof to reactivation recovery');
         wp_fts_lifecycle_contract_same(2, $result['report']['multisite_evidence']['site_count'] ?? null, 'report should record both disposable network sites');
@@ -843,7 +798,7 @@ test_case('quality Docker disposable lifecycle wrapper is guarded and disposable
         '--report-file="${LIFECYCLE_REPORT_CONTAINER_FILE}"',
         'Inner lifecycle smoke reported status',
         'Inner lifecycle smoke reported multisite_evidence.status',
-        'Inner lifecycle smoke did not prove current/legacy FTS table removal',
+        'Inner lifecycle smoke did not prove current/reset-generation FTS table removal',
         'Inner lifecycle smoke did not prove the exact bounded uninstall fence',
         'Inner lifecycle smoke did not prove network reactivation fence clearance and reprovisioning',
         'core multisite-install',
@@ -931,9 +886,9 @@ test_case('quality disposable lifecycle smoke docs and composer command are oper
         '--run-docker-lifecycle-smokes',
         'activation and repair do not index pre-existing content',
         'deactivation clears scheduled queue processing',
-        'uninstall removes all plugin-owned current/legacy FTS tables',
-        'requires all sixteen distinct current/legacy',
-        'table names to be absent from both site prefixes',
+        'uninstall removes all plugin-owned current/reset-generation FTS tables',
+        'seeds all eight deterministic reset-generation',
+        'absent from both site prefixes after uninstall',
         '`multisite_evidence.status=passed`',
         '`wp_fts_uninstall_fence` row containing the exact one-byte string `1`',
         'network-reactivates it and runs one bounded site-provisioning page',
@@ -945,13 +900,13 @@ test_case('quality disposable lifecycle smoke docs and composer command are oper
     }
 
     foreach ([
-        'Disposable lifecycle evidence',
+        'The disposable lifecycle report',
         'deactivation clears scheduled queue processing while retaining `fts_*` data',
-        'uninstall removes plugin-owned current/legacy tables and operational',
-        'requires the current and',
-        'legacy tables to be absent from both site prefixes after uninstall',
+        'uninstall removes plugin-owned current/reset-generation tables and operational',
+        'deterministic reset-generation table names on both sites',
+        'twelve owned tables to be absent from both site prefixes after uninstall',
         'exact non-autoloaded one-byte uninstall fence',
-        'requires both fences absent plus exactly four current and zero legacy tables',
+        'requires both fences absent plus exactly four current and zero reset-generation tables',
     ] as $needle) {
         wp_fts_lifecycle_contract_contains($needle, $operationsDocs, "operations docs should mention {$needle}");
     }
@@ -960,7 +915,7 @@ test_case('quality disposable lifecycle smoke docs and composer command are oper
         '--run-docker-lifecycle-smokes',
         'direct-install/operator lifecycle evidence',
         'reversible network deactivation',
-        'network uninstall. It seeds all recoverable legacy table names',
+        'network uninstall. It seeds all deterministic reset-generation table names',
         'The collector requires passed multisite, table-removal, fence, and',
         'reactivates it and requires the bounded provisioning chain',
         'This lane does not build a public-submission artifact',

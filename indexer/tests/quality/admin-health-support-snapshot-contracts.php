@@ -125,7 +125,7 @@ function wp_fts_support_snapshot_seed_state(WP_FTS_Test_WPDB $fake): void
         'expires_at' => time() + 290,
     ];
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
-        'last_batch_processed' => 3,
+        'last_batch_indexed' => 3,
         'last_batch_queue_processed' => 1,
         'last_batch_backfill_processed' => 2,
         'has_more' => true,
@@ -150,7 +150,7 @@ function wp_fts_support_snapshot_seed_state(WP_FTS_Test_WPDB $fake): void
             'finished_at' => '2026-06-22 10:01:00',
             'elapsed_ms' => 17.25,
             'batch_limit' => 5,
-            'processed' => 3,
+            'indexed' => 3,
             'queue_processed' => 1,
             'backfill_processed' => 2,
             'queue_before' => 2,

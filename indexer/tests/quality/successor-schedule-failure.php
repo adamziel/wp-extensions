@@ -46,7 +46,7 @@ test_case('manual successor schedule failure reports a future retry without poll
     $GLOBALS['wp_fts_test_posts'][126] = wp_fts_test_backfill_post(126, 'post', 'publish', 'Failed future successor');
     $queue = new WP_FTS_Index_Queue($fake);
     $queue->enqueue(126);
-    $claim = $queue->claim(1)[0] ?? null;
+    $claim = $queue->claim_batch(1)[0] ?? null;
     assert_true(is_array($claim), 'future schedule-failure fixture should own one generation');
     $retry = is_array($claim) ? $queue->fail($claim) : [];
     $retryAt = (int) ($retry['available_at'] ?? 0);
@@ -63,7 +63,7 @@ test_case('manual successor schedule failure reports a future retry without poll
         $wpdb = $oldWpdb;
     }
 
-    assert_same(0, $summary['processed'] ?? null, 'manual indexing must not reclaim a future retry early');
+    assert_same(0, $summary['indexed'] ?? null, 'manual indexing must not reclaim a future retry early');
     assert_same(true, $summary['wait_for_next_available'] ?? null, 'manual failure should preserve the exact future-work classification');
     assert_same($retryAt, $summary['next_available_at'] ?? null, 'manual failure should preserve the exact retry timestamp');
     assert_same(true, $summary['successor_schedule_failed'] ?? null, 'manual callers should receive an explicit schedule-failure flag');

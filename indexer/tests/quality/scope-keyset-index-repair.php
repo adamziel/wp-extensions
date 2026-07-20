@@ -49,7 +49,7 @@ test_case_with_pdo_sqlite_fixture('current-v9 dropped scope keyset schedules mai
     );
     $maintenanceSchedules = array_values(array_filter(
         $GLOBALS['wp_fts_test_schedule_calls'],
-        static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK
+        static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK
     ));
     assert_same(1, count($maintenanceSchedules), 'the failed current-v9 scope should schedule exactly one schema-maintenance event');
     assert_same(
@@ -65,7 +65,7 @@ test_case_with_pdo_sqlite_fixture('current-v9 dropped scope keyset schedules mai
 
     $wpdb->queries = [];
     wp_fts_quality_with_wpdb($wpdb, static function (): void {
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
     });
     $verification = $storage->verify_scope_keyset_indexes();
     assert_same(true, $verification['valid'] ?? null, 'scheduled maintenance should recreate the missing owned keyset at current v9');
@@ -167,7 +167,7 @@ test_case_with_pdo_sqlite_fixture('current-v9 malformed scope keyset fails befor
     )), 'malformed physical drift must be rejected before any potentially amplifying targeted selector');
     assert_same(1, count(array_filter(
         $GLOBALS['wp_fts_test_schedule_calls'],
-        static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK
+        static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK
     )), 'the worker outer boundary should schedule one explicit maintenance attempt for malformed drift');
     assert_same(
         0,

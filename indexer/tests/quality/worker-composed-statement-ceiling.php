@@ -39,7 +39,7 @@ test_case('maximum mixed worker composition stays inside the complete statement 
     ], $roles, 'the strongest successful worker protocol must remain exact and ordered');
     assert_same('success', $summary['status'] ?? null, 'the strongest worker must succeed');
     assert_same(1, $summary['attempted'] ?? null, 'the strongest worker must attempt the admitted maximum document');
-    assert_same(1, $summary['processed'] ?? null, 'the strongest worker must process the admitted maximum document');
+    assert_same(1, $summary['indexed'] ?? null, 'the strongest worker must process the admitted maximum document');
     assert_same(1, $summary['committed'] ?? null, 'the strongest worker must commit the admitted maximum document');
     assert_same(2, $summary['analyzed'] ?? null, 'the worker must reach the first over-frontier document before deferring the suffix');
     assert_same(5, $summary['deferred'] ?? null, 'the posting/identity frontier must defer all five near-limit suffix documents');
@@ -88,7 +88,7 @@ test_case('content failure settles before maximum writer work can compose with i
     ], $roles, 'the failure settlement protocol must remain exact and ordered');
     assert_same('failed', $summary['status'] ?? null, 'the injected content failure must be reported');
     assert_same(1, $summary['attempted'] ?? null, 'only the failing document may be attempted');
-    assert_same(0, $summary['processed'] ?? null, 'no document may publish after the failure');
+    assert_same(0, $summary['indexed'] ?? null, 'no document may publish after the failure');
     assert_same(1, $summary['retryable_failures'] ?? null, 'the exact failing generation must become retryable');
     assert_same(11, $summary['deferred'] ?? null, 'the maximum document and remaining suffix must be deferred together');
     assert_same(1, $summary['last_batch_failures'] ?? null, 'the failure summary must contain exactly one failure');

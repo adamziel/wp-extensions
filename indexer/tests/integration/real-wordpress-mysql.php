@@ -83,7 +83,7 @@ function wp_fts_real_integration_run_inside_wordpress(): void
 
     try {
         wp_fts_real_integration_drop_tables($wpdb, $prefix);
-        wp_fts_real_integration_db_delta_migration($wpdb, $prefix);
+        wp_fts_real_integration_db_delta_repair($wpdb, $prefix);
         wp_fts_real_integration_binary_round_trips($wpdb, $prefix);
         wp_fts_real_integration_transactions($wpdb, $prefix);
         wp_fts_real_integration_schema_version_path($wpdb, $prefix, $optionName);
@@ -103,13 +103,13 @@ function wp_fts_real_integration_run_inside_wordpress(): void
     }
 }
 
-/** Prove dbDelta replaces an incompatible legacy table with the exact schema. */
-function wp_fts_real_integration_db_delta_migration(object $wpdb, string $prefix): void
+/** Prove dbDelta replaces an incompatible derived table with the exact schema. */
+function wp_fts_real_integration_db_delta_repair(object $wpdb, string $prefix): void
 {
     $tables = wp_fts_real_integration_tables($prefix);
     $terms = wp_fts_real_integration_identifier($tables['terms']);
 
-    // Seed an incompatible pre-v4 derived table. The current migration must
+    // Seed an incompatible derived table. Current schema repair must
     // replace it rather than leave a half-converted dictionary in service.
     wp_fts_real_integration_query($wpdb, "CREATE TABLE `{$terms}` (
 term varbinary(255) NOT NULL,
@@ -121,7 +121,7 @@ PRIMARY KEY  (term)
     $storage->create_tables();
     $storage->create_tables();
 
-    wp_fts_real_integration_assert(function_exists('dbDelta'), 'dbDelta() should be loaded for real WordPress schema migration.');
+    wp_fts_real_integration_assert(function_exists('dbDelta'), 'dbDelta() should be loaded for real WordPress schema repair.');
     foreach ($tables as $table) {
         wp_fts_real_integration_assert_table_exists($wpdb, $table);
     }
@@ -192,7 +192,7 @@ function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix
         1005 => wp_fts_real_integration_impact(7),
     ], $codecRow['postings'], 'encoded compatibility writes should become quantized relational posting rows.');
 
-    wp_fts_real_integration_assert_legacy_reads_absent($storage, $wpdb);
+    wp_fts_real_integration_assert_point_reads_absent($storage, $wpdb);
 
     echo "ok binary dictionary identities and bounded prepared posting writes round trip\n";
 }
@@ -214,7 +214,7 @@ function wp_fts_real_integration_transactions(object $wpdb, string $prefix): voi
     ]]);
     $storage->rollback();
 
-    wp_fts_real_integration_assert($storage->get_doc(2001) === null, 'rolled back document should not persist.');
+    wp_fts_real_integration_assert_same([], $storage->document_hashes([2001]), 'rolled back document should not persist.');
     wp_fts_real_integration_assert_same(null, wp_fts_real_integration_term_state($wpdb, $prefix, $rolledBackTerm, 10), 'rolled back term should not persist.');
 
     $storage->begin_transaction();
@@ -227,7 +227,7 @@ function wp_fts_real_integration_transactions(object $wpdb, string $prefix): voi
     ]]);
     $storage->commit();
 
-    wp_fts_real_integration_assert($storage->get_doc(2002) !== null, 'committed document should persist.');
+    wp_fts_real_integration_assert_same([2002 => sha1('commit')], $storage->document_hashes([2002]), 'committed document should persist.');
     wp_fts_real_integration_assert(wp_fts_real_integration_term_state($wpdb, $prefix, $committedTerm, 10) !== null, 'committed term should persist.');
     $documents = wp_fts_real_integration_identifier(wp_fts_real_integration_tables($prefix)['documents']);
     wp_fts_real_integration_assert_same(1, (int) $wpdb->get_var("SELECT COUNT(*) FROM `{$documents}`"), 'rollback should leave only the committed document row.');
@@ -327,11 +327,11 @@ function wp_fts_real_integration_wp_cli_process(object $wpdb, string $prefix, st
     wp_fts_real_integration_assert(!$hasMore, 'Ten explicit bounded worker passes should be sufficient for the one-post integration scope.');
 
     $storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
-    $doc = $storage->get_doc($postId);
-    wp_fts_real_integration_assert($doc !== null, 'WP-CLI reindex should write the inserted post.');
-    wp_fts_real_integration_assert_same('pl', $doc['primary_lang'], 'WP-CLI reindex should store the requested language.');
-    wp_fts_real_integration_assert_same(0, $doc['doc_len'], 'v4 should not recreate the removed document-length projection.');
-    wp_fts_real_integration_assert(is_string($doc['content_hash']) && $doc['content_hash'] !== '', 'WP-CLI reindex should store a content fingerprint.');
+    $hashes = $storage->document_hashes([$postId]);
+    wp_fts_real_integration_assert(isset($hashes[$postId]) && $hashes[$postId] !== '', 'WP-CLI reindex should write the inserted post with a content fingerprint.');
+    $documents = wp_fts_real_integration_identifier(wp_fts_real_integration_tables($prefix)['documents']);
+    $primaryLang = $wpdb->get_var($wpdb->prepare("SELECT primary_lang FROM `{$documents}` WHERE post_id = %d", $postId));
+    wp_fts_real_integration_assert_same('pl', $primaryLang, 'WP-CLI reindex should store the requested language.');
 
     $searcher = new WP_FTS_Searcher($storage, new WP_FTS_Analyzer());
     $payload = $searcher->search('wpftsneedle', [
@@ -542,11 +542,11 @@ function wp_fts_real_integration_term_state(object $wpdb, string $prefix, string
     return ['df' => (int) $termRow->doc_freq, 'postings' => $result];
 }
 
-/** Require every legacy posting-list API to be absent from production storage. */
-function wp_fts_real_integration_assert_legacy_reads_absent(WP_FTS_Storage_Mysql $storage, object $wpdb): void
+/** Require point and posting-list readers to be absent from production storage. */
+function wp_fts_real_integration_assert_point_reads_absent(WP_FTS_Storage_Mysql $storage, object $wpdb): void
 {
     $queriesBefore = (int) ($wpdb->num_queries ?? 0);
-    foreach (['get_terms', 'get_postings', 'get_capped_postings', 'get_budgeted_postings'] as $method) {
+    foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'get_terms', 'get_postings', 'get_capped_postings', 'get_budgeted_postings'] as $method) {
         wp_fts_real_integration_assert(!method_exists($storage, $method), "production storage should not expose {$method}.");
     }
     wp_fts_real_integration_assert_same($queriesBefore, (int) ($wpdb->num_queries ?? 0), 'production capability inspection should not run SQL.');

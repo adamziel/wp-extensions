@@ -132,7 +132,7 @@ if (!is_string($status) || $status === "") {
     exit(3);
 }
 $multisite = $report["multisite_evidence"]["status"] ?? "";
-$cleanup = $report["covered_behaviors"]["uninstall_removes_current_and_legacy_fts_tables"] ?? false;
+$cleanup = $report["covered_behaviors"]["uninstall_removes_current_and_reset_generation_fts_tables"] ?? false;
 $fence = $report["covered_behaviors"]["uninstall_retains_exact_bounded_lifecycle_fence"] ?? false;
 $reactivation = $report["covered_behaviors"]["multisite_reactivation_clears_all_site_fences_and_reprovisions"] ?? false;
 echo json_encode([
@@ -174,7 +174,7 @@ echo json_encode([
     fi
     if [[ "${uninstall_cleanup}" != "true" ]]; then
         cat "${LIFECYCLE_OUTPUT_FILE}" >&2
-        printf 'FAIL: Inner lifecycle smoke did not prove current/legacy FTS table removal.\n' >&2
+        printf 'FAIL: Inner lifecycle smoke did not prove current/reset-generation FTS table removal.\n' >&2
         return 1
     fi
     if [[ "${uninstall_fence}" != "true" ]]; then

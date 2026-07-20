@@ -133,8 +133,8 @@ The JSON statuses are:
 
 - `pass`: the lane completed and its evidence passed.
 - `skip`: the lane was not configured or was intentionally deferred.
-- `unavailable`: the lane was explicitly requested but required disposable
-  evidence inputs, such as a previous direct-install package, were missing or invalid.
+- `unavailable`: the lane was explicitly requested but its disposable runtime
+  prerequisites were missing or invalid.
 - `blocked`: the lane found expected release policy blockers.
 - `fail`: the lane attempted to run and failed unexpectedly.
 
@@ -162,14 +162,6 @@ php tools/collect-release-evidence.php \
 php tools/collect-release-evidence.php \
   --release-target=direct-install \
   --run-docker-lifecycle-smokes
-php tools/collect-release-evidence.php \
-  --release-target=direct-install \
-  --run-docker-upgrade-multisite-smoke \
-  --previous-direct-package=/path/to/previous-wp-fts-indexer.zip
-php tools/collect-release-evidence.php \
-  --release-target=direct-install \
-  --run-docker-upgrade-multisite-smoke \
-  --previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA
 WP_FTS_EVIDENCE_RUN_REAL_WORDPRESS_MYSQL=1 php tools/collect-release-evidence.php
 ```
 
@@ -292,14 +284,14 @@ composer test:smoke:lifecycle
 
 The smoke proves that activation creates the FTS schema, repair restores a
 missing plugin table, activation and repair do not index pre-existing content
-or create demo posts, `wp fts status --format=json` and
+or change WordPress content, `wp fts status --format=json` and
 `wp fts repair --format=json` report schema state, deactivation clears scheduled queue processing
-while retaining index tables/data, and uninstall removes all plugin-owned current/legacy FTS tables
+while retaining index tables/data, and uninstall removes all plugin-owned current/reset-generation FTS tables
 and operational options while leaving
 canonical WordPress content untouched. The Docker wrapper network-activates the
-plugin, creates a real subsite, seeds all twelve distinct legacy/recoverable
-table names on both sites, and requires all sixteen distinct current/legacy
-table names to be absent from both site prefixes after uninstall. The only
+plugin, creates a real subsite, seeds all eight deterministic reset-generation
+table names on both sites, and requires all twelve owned table names to be
+absent from both site prefixes after uninstall. The only
 retained plugin state on each site must be one non-autoloaded
 `wp_fts_uninstall_fence` row containing the exact one-byte string `1`; all
 content, settings, health, and lock options remain absent. The wrapper builds a
@@ -307,9 +299,8 @@ temporary source-bound reinstallation ZIP inside the disposable directory,
 installs it inactive to prove files alone do not cross that fence, then
 network-reactivates it and runs one bounded site-provisioning page. Both fences
 must disappear, exactly four current tables must return on each site, and no
-legacy table may return. The temporary ZIP is destroyed with the stack; the
-lane does not create public-submission artifacts and is not public-submission
-readiness.
+reset-generation table may return. The temporary ZIP is destroyed with the stack; the
+lane does not create public-submission artifacts and is not public-submission readiness.
 
 The release evidence collector records this Docker lifecycle lane as skipped by
 default:
@@ -324,64 +315,6 @@ The wrapper and release evidence collector require
 `multisite_evidence.status=passed`, destructive table removal, the exact
 bounded uninstall fence, and successful all-site network reactivation; a
 single-site or lifecycle-status-only report cannot pass this Docker lane.
-
-## Docker Disposable Upgrade/Multisite Smoke
-
-Use the Docker-backed upgrade wrapper when a direct-install release review needs
-runtime evidence that the current package upgrades cleanly from a previous
-direct-install package:
-
-```sh
-tools/run-disposable-upgrade-multisite-smoke.sh --previous-package=/path/to/previous-wp-fts-indexer.zip
-composer test:smoke:upgrade-multisite:docker -- --previous-package=/path/to/previous-wp-fts-indexer.zip
-```
-
-The wrapper copies the supplied previous ZIP into temporary storage, builds the
-current direct-install ZIP in temporary storage, starts disposable WordPress and
-MariaDB containers, installs WordPress as a multisite network, marks the
-WordPress root with `.wp-fts-upgrade-smoke`, and runs
-`tools/smoke-disposable-wordpress-upgrade.php`. The inner runner
-network-activates the previous package, creates disposable fixture content,
-indexes and searches that fixture, installs the current package over it,
-verifies schema version/status after upgrade, runs repair twice for repair
-idempotence after upgrade, checks search continuity and queue health after
-upgrade, creates an additional disposable site, proves that non-main site's six
-`fts_*` tables use the subsite table prefix, proves subsite
-indexing/search/queue/repair behavior, proves the WordPress deletion-table
-filter contributes the target site's FTS tables, and deletes generated fixture
-posts before the wrapper destroys containers, volumes, temporary roots,
-temporary ZIPs, and reports.
-
-The release evidence collector records this Docker upgrade/multisite lane as
-skipped by default:
-
-```sh
-php tools/collect-release-evidence.php \
-  --release-target=direct-install \
-  --run-docker-upgrade-multisite-smoke \
-  --previous-direct-package=/path/to/previous-wp-fts-indexer.zip
-php tools/collect-release-evidence.php \
-  --release-target=direct-install \
-  --run-docker-upgrade-multisite-smoke \
-  --previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA
-```
-
-A missing previous package or previous local ref is reported as `unavailable`,
-not as a pass. The `--previous-direct-package-ref` form resolves a local Git
-ref/SHA without fetching, rejects the current target commit, requires the
-previous ref to contain the release ZIP builder and Composer lockfile, archives
-only package source paths into temporary storage, and builds the previous ZIP
-with isolated Composer home/auth, an existing local Composer package cache when
-available, network access disabled, and credential-capable environment variables
-scrubbed before the historical builder or nested Composer process can inherit
-them. Previous refs containing Composer auth files such as `indexer/auth.json`
-or `indexer/.composer/auth.json` are rejected before checkout/archive. Missing
-Docker, Docker Compose, or daemon access remains a wrapper `SKIP:` and is
-recorded by the collector as non-pass/unavailable because no disposable runtime
-proof was possible. The collector only passes the lane when the decoded wrapper
-proof includes `multisite_evidence_status` as `passed`; an upgrade-only report
-without multisite runtime evidence is not a pass. This is
-direct-install/operator evidence only and is not public-submission readiness.
 
 ## Analyzer Language Quality
 

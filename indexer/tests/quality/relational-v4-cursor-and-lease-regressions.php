@@ -1028,7 +1028,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 regression fences an explicit r
     $queue = new WP_FTS_Index_Queue($wpdb);
 
     $queue->enqueue(71, 1000);
-    $old = $queue->claim(1, 1000, 300)[0] ?? null;
+    $old = $queue->claim_batch(1, 1000, 300)[0] ?? null;
     assert_true(is_array($old), 'the original generation should hold an active lease');
     assert_same(1, $old['generation'] ?? null, 'the original lease should own generation one');
 
@@ -1043,7 +1043,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 regression fences an explicit r
     assert_same('lost', $queue->fail($old, 1002)['status'] ?? null, 'the stale lease must not defer the retried generation');
     assert_true(!$queue->release($old, 1002), 'the stale lease must not release or rewrite the retried generation');
 
-    $new = $queue->claim(1, 1002, 300)[0] ?? null;
+    $new = $queue->claim_batch(1, 1002, 300)[0] ?? null;
     assert_same(2, $new['generation'] ?? null, 'a new worker should claim the retried generation without waiting for the old lease expiry');
     assert_true(($new['token'] ?? '') !== ($old['token'] ?? ''), 'retry recovery should transfer ownership to a new token');
     assert_true($queue->acknowledge($new, 1003), 'the new generation owner should retain acknowledgement rights');
@@ -1062,9 +1062,9 @@ test_case_with_pdo_sqlite_fixture('relational v4 SQLite mutation fences recover 
     assert_same(1, $queue->status()['post_count'] ?? null, 'operator status should count a guarded SQLite post generation');
     assert_true($queue->has_work(), 'automatic scheduling should retain guarded SQLite crash debt');
     assert_same(1300, $queue->next_available_at(), 'SQLite status should expose the bounded recovery time');
-    assert_same([], $queue->claim(1, 1299, 30), 'ordinary claim CAS must wait for the durable recovery time');
+    assert_same([], $queue->claim_batch(1, 1299, 30), 'ordinary claim CAS must wait for the durable recovery time');
 
-    $recovered = $queue->claim(1, 1300, 30)[0] ?? null;
+    $recovered = $queue->claim_batch(1, 1300, 30)[0] ?? null;
     assert_true(is_array($recovered), 'the ordinary claim path should recover an elapsed fence by exact generation CAS');
     assert_same(1, $recovered['generation'] ?? null, 'recovery should own only the selected generation');
     assert_true(($recovered['token'] ?? '') !== $originalToken, 'recovery should replace the foreground token with one fresh worker token');
@@ -1101,7 +1101,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 SQLite late promotions preserve
     $postPayload = ['index_options' => ['language' => 'pl']];
     $queue->fence_post(74, $postToken, 1500, ['source' => 'foreground']);
     $queue->enqueue_many([74], 1400, $postPayload);
-    $recoveredPost = $queue->claim(1, 1500, 30)[0] ?? null;
+    $recoveredPost = $queue->claim_batch(1, 1500, 30)[0] ?? null;
     assert_true(is_array($recoveredPost), 'SQLite should recover the coalesced post generation at its exact watchdog deadline');
     $queue->promote_post(74, $postToken, 1501);
     $postAfterPromotion = wp_fts_v4_regression_work_row($wpdb, 74);
@@ -1134,7 +1134,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 SQLite late promotions preserve
         'term_taxonomy',
         99
     );
-    $recoveredScope = $queue->claim_scope(1600, 30);
+    $recoveredScope = $queue->claim_batch(0, 1600, 30)[0] ?? null;
     assert_same('scope', $recoveredScope['kind'] ?? null, 'SQLite should recover the coalesced scope generation at its exact watchdog deadline');
     $queue->promote_scope(
         $scopeKey,
@@ -1153,7 +1153,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 SQLite late promotions preserve
     assert_same(99, (int) ($scopeAfterPromotion['scope_subject_id'] ?? 0), 'late scope promotion must preserve newer coalesced scope authority');
     assert_same($scopePayload, json_decode((string) ($scopeAfterPromotion['payload'] ?? ''), true), 'late scope promotion must preserve newer coalesced scope payload');
     assert_true(!$queue->acknowledge_scope($recoveredScope, 1602), 'the recovered scope worker must not acknowledge the scope-hook successor');
-    $scopeSuccessor = $queue->claim_scope(1602, 30);
+    $scopeSuccessor = $queue->claim_batch(0, 1602, 30)[0] ?? null;
     assert_same(99, $scopeSuccessor['scope_subject_id'] ?? null, 'the next SQLite scope claim should retain the coalesced authority');
     assert_same($scopePayload, $scopeSuccessor['payload'] ?? null, 'the next SQLite scope claim should retain the coalesced payload');
 });
@@ -1505,42 +1505,6 @@ test_case_with_pdo_sqlite_fixture('relational v4 real SQLite worker drains only 
     assert_same([741], array_column($search['results'] ?? [], 'doc_id'), 'relational search must expose the newest committed canonical projection');
 });
 
-test_case_with_pdo_sqlite_fixture('relational v4 claim_scope executes its complete SQL lifecycle on SQLite', function (): void {
-    $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
-    wp_fts_v4_regression_create_schema($wpdb);
-    $queue = new WP_FTS_Index_Queue($wpdb);
-
-    $queue->enqueue_scope('real-scope-sql', ['reason' => 'claim-scope-regression'], 1000);
-    $wpdb->queries = [];
-    $claim = $queue->claim_scope(1000, 30);
-    assert_true(is_array($claim), 'a ready scope should execute its real selection and update statements');
-    assert_same('scope', $claim['kind'] ?? null, 'the compatibility claim should preserve the scope kind');
-    assert_same('claim-scope-regression', $claim['payload']['reason'] ?? null, 'the real claim should decode its bounded payload');
-    assert_same(1030, $claim['claim_expires_at'] ?? null, 'the real claim should expose its deterministic lease boundary');
-    assert_same(2, count($wpdb->queries), 'a successful compatibility scope claim should use exactly one read and one compare-and-swap update');
-    assert_true(str_starts_with($wpdb->queries[0] ?? '', 'SELECT job_key, kind, generation,'), 'scope claim statement one should be the bounded indexed selection');
-    assert_contains('(job_key, generation) IN', $wpdb->queries[0] ?? '', 'SQLite scope selection must bind its bounded candidate to the observed generation');
-    assert_contains('SELECT job_key, generation FROM', $wpdb->queries[0] ?? '', 'every SQLite state-arm driver must carry generation beside the primary key');
-    assert_true(str_starts_with($wpdb->queries[1] ?? '', 'UPDATE wp_fts_work'), 'scope claim statement two should lease the selected generation');
-    assert_contains('WHERE job_key =', $wpdb->queries[1] ?? '', 'SQLite scope CAS must target the selected primary key');
-    assert_contains('AND generation =', $wpdb->queries[1] ?? '', 'SQLite scope CAS must reject a generation advanced after candidate selection');
-    assert_same(6, substr_count(strtoupper($wpdb->queries[0] ?? ''), 'FROM WP_FTS_WORK'), 'scope selection should use one outer lookup plus five one-row state/index arms');
-    assert_same(4, substr_count(strtoupper($wpdb->queries[0] ?? ''), 'UNION ALL'), 'the five fixed state arms should compose through exactly four bounded unions');
-    assert_same(null, $queue->claim_scope(1029, 30), 'an active real lease should not be claimed twice');
-    assert_true($queue->commit_scope_page($claim, [], 77), 'the real claimed generation should persist its keyset cursor and release ownership');
-
-    $continued = $queue->claim_scope(1030, 30);
-    assert_same(77, $continued['cursor_post_id'] ?? null, 'the next real claim should resume from the persisted scope cursor');
-    assert_true($queue->acknowledge_scope($continued, 1031), 'the resumed real claim should acknowledge its exact generation');
-    assert_same(0, $queue->count(), 'real scope acknowledgement should remove the completed durable row');
-
-    $queue->enqueue_scope('real-future-scope', ['reason' => 'scheduled-reconciliation'], 1400);
-    assert_same(null, $queue->claim_scope(1399, 30), 'a future reconciliation scope must remain unclaimable before its available time');
-    $scheduled = $queue->claim_scope(1400, 30);
-    assert_true(is_array($scheduled), 'the same real scope should become claimable exactly at its available time');
-    assert_same('scheduled-reconciliation', $scheduled['payload']['reason'] ?? null, 'scheduled scope claiming should preserve its bounded diagnostic reason');
-});
-
 test_case_with_pdo_sqlite_fixture('relational v4 SQLite schema repair is idempotent and preserves postings, work, and cursor epoch', function (): void {
     $fixture = dirname(__DIR__) . '/fixtures/sqlite-schema-repair-idempotence.php';
     $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($fixture);
@@ -1654,7 +1618,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 scope page fan-out and cursor p
     $queue = new WP_FTS_Index_Queue($wpdb);
 
     $queue->enqueue_scope('atomic-scope-page', ['reason' => 'atomic-page-regression'], 1000);
-    $claim = $queue->claim_scope(1000, 30);
+    $claim = $queue->claim_batch(0, 1000, 30)[0] ?? null;
     assert_true(is_array($claim), 'the atomic page fixture should own its first scope generation');
     $wpdb->queries = [];
 
@@ -1673,7 +1637,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 scope page fan-out and cursor p
     assert_same('', $scopeRow['claim_token'] ?? null, 'a committed page should release its old lease');
     assert_same([81, 82], array_map('intval', $wpdb->dbh->query("SELECT post_id FROM wp_fts_work WHERE kind = 'post' ORDER BY post_id")->fetchAll(PDO::FETCH_COLUMN)), 'one commit should expose every exact page row');
 
-    $continued = $queue->claim_scope(1002, 30);
+    $continued = $queue->claim_batch(0, 1002, 30)[0] ?? null;
     assert_same(82, $continued['cursor_post_id'] ?? null, 'the next owner should continue from the atomically published cursor');
     $queue->enqueue_scope('atomic-scope-page', ['reason' => 'superseding-generation'], 1003);
     $wpdb->queries = [];
@@ -1690,7 +1654,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 scope page fan-out and cursor p
 
     $failureQueue = new WP_FTS_Index_Queue($wpdb);
     $failureQueue->enqueue_scope('failed-atomic-scope-page', ['reason' => 'statement-failure'], 1005);
-    $failedClaim = $failureQueue->claim_scope(1005, 30);
+    $failedClaim = $failureQueue->claim_batch(0, 1005, 30)[0] ?? null;
     assert_true(is_array($failedClaim), 'the statement-failure fixture should own its scope generation');
     $wpdb->dbh->exec("CREATE TRIGGER wp_fts_fail_scope_page BEFORE INSERT ON wp_fts_work WHEN NEW.kind = 'post' AND NEW.post_id = 84 BEGIN SELECT RAISE(ABORT, 'simulated page insert failure'); END");
     $wpdb->queries = [];
@@ -1831,7 +1795,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 targeted scopes use the exact c
         'batch_size' => 100,
         'source' => 'sparse-targeted-regression',
     ]));
-    assert_same(2, $postDrain['processed'] ?? null, 'the second pass should drain both exact target generations');
+    assert_same(2, $postDrain['indexed'] ?? null, 'the second pass should drain both exact target generations');
     assert_same(0, $postDrain['backfill_scanned'] ?? null, 'the direct-post pass should not issue the target-index EOF query');
     assert_same(false, $postDrain['scope_completed'] ?? null, 'the direct-post pass should leave the targeted scope ready');
     assert_same(true, $postDrain['has_more'] ?? null, 'the deferred targeted scope should request its immediate successor');
@@ -1848,7 +1812,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 targeted scopes use the exact c
     ]));
     assert_same(0, $scopeCompletion['backfill_scanned'] ?? null, 'one scope-only empty target-index page should prove true targeted EOF');
     assert_same(true, $scopeCompletion['scope_completed'] ?? null, 'target-index EOF should acknowledge the exact scope generation');
-    assert_same(0, $scopeCompletion['processed'] ?? null, 'target-index acknowledgement should not repeat either document write');
+    assert_same(0, $scopeCompletion['indexed'] ?? null, 'target-index acknowledgement should not repeat either document write');
     assert_same(1, count(array_filter(
         $wpdb->queries,
         static fn(string $sql): bool => str_starts_with($sql, '/* wp_fts:targeted-scope-page */')
@@ -1989,7 +1953,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 selective keysets skip sparse g
         'source' => 'sparse-gap-worker-regression',
     ]));
     assert_same(false, $postDrain['scope_completed'] ?? null, 'the exact post drain should leave the filtered scope ready');
-    assert_same(1, $postDrain['processed'] ?? null, 'the second pass must process the exact post without adding scope SQL');
+    assert_same(1, $postDrain['indexed'] ?? null, 'the second pass must process the exact post without adding scope SQL');
     assert_same(true, $postDrain['has_more'] ?? null, 'the exact post drain should request its filtered EOF successor');
     assert_same(0, count(array_filter(
         $wpdb->queries,
@@ -2003,7 +1967,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 selective keysets skip sparse g
         'source' => 'sparse-gap-worker-regression',
     ]));
     assert_same(true, $completion['scope_completed'] ?? null, 'one scope-only empty composite range must prove filtered EOF');
-    assert_same(0, $completion['processed'] ?? null, 'the filtered EOF pass must not repeat the exact post');
+    assert_same(0, $completion['indexed'] ?? null, 'the filtered EOF pass must not repeat the exact post');
     assert_same(0, count(array_filter(
         $wpdb->queries,
         static fn(string $sql): bool => str_starts_with($sql, '/* wp_fts:filtered-scope-page */')
@@ -2043,7 +2007,7 @@ test_case_with_pdo_sqlite_fixture('relational v6 worker defers the 50000-posting
         'batch_size' => 100,
         'source' => 'aggregate-split-regression',
     ]));
-    assert_same(99, $first['processed'] ?? null, 'first worker pass should commit only the deterministic prefix that fits 50,000 posting mutations');
+    assert_same(99, $first['indexed'] ?? null, 'first worker pass should commit only the deterministic prefix that fits 50,000 posting mutations');
     assert_same(true, $first['has_more'] ?? null, 'the split pass should explicitly signal deferred work');
     assert_same(99, (int) $wpdb->get_var('SELECT COUNT(*) FROM wp_fts_documents'), 'first pass should publish exactly the committed prefix');
     $remaining = $wpdb->get_row("SELECT post_id,generation,state,attempts,claim_token,claimed_generation FROM wp_fts_work WHERE kind = 'post'");
@@ -2070,7 +2034,7 @@ test_case_with_pdo_sqlite_fixture('relational v6 worker defers the 50000-posting
         'batch_size' => 100,
         'source' => 'aggregate-split-regression',
     ]));
-    assert_same(1, $second['processed'] ?? null, 'the next bounded pass should process the one deferred generation');
+    assert_same(1, $second['indexed'] ?? null, 'the next bounded pass should process the one deferred generation');
     assert_same(false, $second['has_more'] ?? null, 'the drained queue should not force a synchronous empty claim solely for dictionary cleanup');
     assert_same(false, $second['cleanup_pending'] ?? null, 'the final short document batch should complete bounded dictionary cleanup without scheduling an empty pass');
     assert_same(100, (int) $wpdb->get_var('SELECT COUNT(*) FROM wp_fts_documents'), 'both passes should publish all 100 documents');
@@ -2084,7 +2048,7 @@ test_case_with_pdo_sqlite_fixture('relational v6 worker defers the 50000-posting
         'batch_size' => 100,
         'source' => 'aggregate-split-regression',
     ]));
-    assert_same(0, $cleanup['processed'] ?? null, 'an idempotent drained continuation should not repeat document work');
+    assert_same(0, $cleanup['indexed'] ?? null, 'an idempotent drained continuation should not repeat document work');
     assert_same(false, $cleanup['has_more'] ?? null, 'an idempotent drained continuation should terminate without a hot loop');
     assert_same(0, count(array_filter($wpdb->queries, static fn(string $sql): bool => $sql === 'BEGIN')), 'a drained continuation should not open a document replacement transaction');
 });
@@ -2120,7 +2084,7 @@ test_case_with_pdo_sqlite_fixture('relational v6 worker preserves a source-defer
         'batch_size' => 100,
         'source' => 'source-plus-writer-split-regression',
     ]));
-    assert_same(98, $first['processed'] ?? null, 'first pass should commit only the 98-document posting prefix');
+    assert_same(98, $first['indexed'] ?? null, 'first pass should commit only the 98-document posting prefix');
     assert_same(true, $first['has_more'] ?? null, 'both deferral causes should leave explicit follow-up work');
     assert_same(
         range(21001, 21098),
@@ -2152,7 +2116,7 @@ test_case_with_pdo_sqlite_fixture('relational v6 worker preserves a source-defer
         'batch_size' => 100,
         'source' => 'source-plus-writer-split-regression',
     ]));
-    assert_same(2, $second['processed'] ?? null, 'the next pass should make progress on both exact deferred generations');
+    assert_same(2, $second['indexed'] ?? null, 'the next pass should make progress on both exact deferred generations');
     assert_same(false, $second['has_more'] ?? null, 'draining mixed deferrals should not force a synchronous empty claim solely for dictionary cleanup');
     assert_same(false, $second['cleanup_pending'] ?? null, 'the final short capacity batch should complete bounded dictionary cleanup without scheduling an empty pass');
     assert_same(100, (int) $wpdb->get_var('SELECT COUNT(*) FROM wp_fts_documents'), 'follow-up should publish all 100 documents');
@@ -2165,7 +2129,7 @@ test_case_with_pdo_sqlite_fixture('relational v6 worker preserves a source-defer
         'batch_size' => 100,
         'source' => 'source-plus-writer-split-regression',
     ]));
-    assert_same(0, $cleanup['processed'] ?? null, 'an idempotent mixed-deferral continuation should not repeat document work');
+    assert_same(0, $cleanup['indexed'] ?? null, 'an idempotent mixed-deferral continuation should not repeat document work');
     assert_same(false, $cleanup['has_more'] ?? null, 'an idempotent mixed-deferral continuation should terminate without a hot loop');
     assert_same(0, count(array_filter($wpdb->queries, static fn(string $sql): bool => $sql === 'BEGIN')), 'a drained mixed-deferral continuation should not open a document replacement transaction');
 });

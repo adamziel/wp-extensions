@@ -68,7 +68,7 @@ test_case('generation-aware queue rejects caller-shaped expansion before SQL', f
     }
 });
 
-test_case('all public queue claims reject unsafe lease and source bounds before SQL', function (): void {
+test_case('queue batch claims reject unsafe lease and source bounds before SQL', function (): void {
     $fake = new WP_FTS_Test_WPDB();
     $queue = new WP_FTS_Index_Queue($fake);
     $rejections = [
@@ -80,15 +80,12 @@ test_case('all public queue claims reject unsafe lease and source bounds before 
             WP_FTS_Index_Queue::MAX_SOURCE_SNAPSHOT_BYTES + 1
         ),
         'zero batch lease' => static fn() => $queue->claim_batch(1, 1000, 0),
-        'oversized direct lease' => static fn() => $queue->claim(
-            0,
+        'oversized batch lease' => static fn() => $queue->claim_batch(
+            1,
             1000,
             WP_FTS_Index_Queue::MAX_LEASE_SECONDS + 1
         ),
-        'negative scope lease' => static fn() => $queue->claim_scope(1000, -1),
         'batch expiration overflow' => static fn() => $queue->claim_batch(1, PHP_INT_MAX, 1),
-        'direct expiration overflow' => static fn() => $queue->claim(1, PHP_INT_MAX, 1),
-        'scope expiration overflow' => static fn() => $queue->claim_scope(PHP_INT_MAX, 1),
     ];
     foreach ($rejections as $label => $operation) {
         $fake->queries = [];
@@ -104,13 +101,6 @@ test_case('all public queue claims reject unsafe lease and source bounds before 
         assert_same([], $fake->prepared, "{$label} should reject before preparing SQL");
     }
 
-    assert_same(
-        [],
-        $queue->claim(0, 1000, WP_FTS_Index_Queue::MAX_LEASE_SECONDS),
-        'the exact maximum lease boundary should remain valid for a no-op direct claim'
-    );
-    assert_same([], $fake->queries, 'a zero-size boundary claim should execute no SQL');
-    assert_same([], $fake->prepared, 'a zero-size boundary claim should prepare no SQL');
 });
 
 test_case('public dependency invalidation rejects an oversized raw caller batch before SQL', function (): void {
@@ -290,7 +280,7 @@ test_case('generation-aware queue acknowledgement cannot erase a newer save', fu
     $queue = new WP_FTS_Index_Queue($wpdb);
 
     $queue->enqueue(42, 1000);
-    $first = $queue->claim(1, 1000, 30)[0] ?? null;
+    $first = $queue->claim_batch(1, 1000, 30)[0] ?? null;
     assert_true(is_array($first), 'the first generation should be claimable');
 
     $queue->enqueue(42, 1001);
@@ -298,7 +288,7 @@ test_case('generation-aware queue acknowledgement cannot erase a newer save', fu
     assert_same(2, $wpdb->queue[42]['generation'] ?? null, 'acknowledging generation one should preserve generation two');
     assert_same('', $wpdb->queue[42]['claim_token'] ?? null, 'the newer generation should be released for another worker');
 
-    $second = $queue->claim(1, 1002, 30)[0] ?? null;
+    $second = $queue->claim_batch(1, 1002, 30)[0] ?? null;
     assert_same(2, $second['generation'] ?? null, 'the next worker should claim the newer generation');
     assert_true($queue->acknowledge($second, 1003), 'the current generation owner should acknowledge its work');
     assert_same(0, $queue->count(), 'the row should disappear only after its latest generation finishes');
@@ -309,11 +299,11 @@ test_case('generation-aware queue recovers expired claims without accepting stal
     $queue = new WP_FTS_Index_Queue($wpdb);
 
     $queue->enqueue(43, 1000);
-    $stale = $queue->claim(1, 1000, 10)[0] ?? null;
+    $stale = $queue->claim_batch(1, 1000, 10)[0] ?? null;
     assert_true(is_array($stale), 'the initial worker should claim the row');
-    assert_same([], $queue->claim(1, 1009, 10), 'an active lease should prevent duplicate processing');
+    assert_same([], $queue->claim_batch(1, 1009, 10), 'an active lease should prevent duplicate processing');
 
-    $recovered = $queue->claim(1, 1010, 10)[0] ?? null;
+    $recovered = $queue->claim_batch(1, 1010, 10)[0] ?? null;
     assert_true(is_array($recovered), 'an expired lease should be recoverable after a worker crash');
     assert_true(($recovered['token'] ?? '') !== ($stale['token'] ?? ''), 'recovery should transfer ownership to a new token');
     assert_true(!$queue->acknowledge($stale, 1011), 'the stale worker should no longer be allowed to acknowledge');
@@ -325,20 +315,20 @@ test_case('generation-aware queue retries failures with bounded backoff and clea
     $queue = new WP_FTS_Index_Queue($wpdb);
 
     $queue->enqueue(44, 1000);
-    $first = $queue->claim(1, 1000, 30)[0] ?? null;
+    $first = $queue->claim_batch(1, 1000, 30)[0] ?? null;
     $failure = $queue->fail($first, 1000);
     assert_same('backoff', $failure['status'], 'a failed current generation should enter backoff');
     assert_same(1300, $failure['available_at'], 'the first failure should use the base retry delay');
-    assert_same([], $queue->claim(1, 1299, 30), 'a deferred row should not be claimable early');
+    assert_same([], $queue->claim_batch(1, 1299, 30), 'a deferred row should not be claimable early');
 
-    $second = $queue->claim(1, 1300, 30)[0] ?? null;
+    $second = $queue->claim_batch(1, 1300, 30)[0] ?? null;
     assert_same(1, $second['attempts'] ?? null, 'an automatic retry should carry the prior failure count');
     assert_same(1, $second['generation'] ?? null, 'automatic retry should retain the desired generation');
     $secondFailure = $queue->fail($second, 1300);
     assert_same(1900, $secondFailure['available_at'], 'the second same-generation failure should double the retry delay');
 
     $queue->retry(44, 1400);
-    $explicit = $queue->claim(1, 1400, 30)[0] ?? null;
+    $explicit = $queue->claim_batch(1, 1400, 30)[0] ?? null;
     assert_same(0, $explicit['attempts'] ?? null, 'an explicit operator retry should start a clean failure budget');
     assert_same(2, $explicit['generation'] ?? null, 'an explicit operator retry should fence old workers with a new desired generation');
     assert_same(1700, $queue->fail($explicit, 1400)['available_at'] ?? null, 'the clean generation should restart at the base retry delay');
@@ -349,7 +339,7 @@ test_case('generation-aware queue gives a newer save a clean retry state', funct
     $queue = new WP_FTS_Index_Queue($wpdb);
 
     $queue->enqueue(45, 1000);
-    $old = $queue->claim(1, 1000, 30)[0] ?? null;
+    $old = $queue->claim_batch(1, 1000, 30)[0] ?? null;
     $queue->enqueue(45, 1001);
     $result = $queue->fail($old, 1002);
 
@@ -400,9 +390,9 @@ test_case('generation-aware queue keeps repeated failures durable and lets a new
 
     $now = 1000;
     $lastDelay = 0;
-    $attempts = WP_FTS_Index_Queue::DEAD_AFTER_ATTEMPTS + 3;
+    $attempts = 6;
     for ($attempt = 1; $attempt <= $attempts; $attempt++) {
-        $claim = $queue->claim(1, $now, 30)[0] ?? null;
+        $claim = $queue->claim_batch(1, $now, 30)[0] ?? null;
         assert_true(is_array($claim), "failure attempt {$attempt} should claim the same desired generation");
         $failure = $queue->fail($claim, $now);
         assert_same('backoff', $failure['status'] ?? null, "failure attempt {$attempt} should stay durable instead of becoming terminal");
@@ -410,81 +400,17 @@ test_case('generation-aware queue keeps repeated failures durable and lets a new
         $lastDelay = (int) ($failure['available_at'] ?? 0) - $now;
         $now = (int) ($failure['available_at'] ?? 0);
     }
-    assert_same($attempts, $wpdb->queue[47]['attempts'] ?? null, 'repeated failures should retain their diagnostic attempt count beyond the former terminal threshold');
+    assert_same($attempts, $wpdb->queue[47]['attempts'] ?? null, 'repeated failures should retain their diagnostic attempt count');
     assert_same(WP_FTS_Index_Queue::MAX_BACKOFF_SECONDS, $lastDelay, 'repeated failures should cap delay without dropping the durable generation');
 
     $queue->enqueue(47, $now + 1);
     assert_same(2, $wpdb->queue[47]['generation'] ?? null, 'a later save should advance beyond the repeatedly failed generation');
     assert_same('ready', $wpdb->queue[47]['state'] ?? null, 'a later save should make corrected content immediately claimable');
     assert_same(0, $wpdb->queue[47]['attempts'] ?? null, 'a later save should receive a clean failure budget');
-    $current = $queue->claim(1, $now + 1, 30)[0] ?? null;
+    $current = $queue->claim_batch(1, $now + 1, 30)[0] ?? null;
     assert_true(is_array($current), 'the corrected desired generation should be claimable');
     assert_true($queue->acknowledge($current), 'the corrected generation should acknowledge normally');
     assert_same(0, $queue->count(), 'successful corrected work should remove the durable row');
-});
-
-test_case('generation-aware queue activation coalesces legacy pending work into one schema corpus scope', function (): void {
-    global $wpdb;
-
-    $oldWpdb = $wpdb ?? null;
-    $wpdb = new WP_FTS_Test_WPDB();
-    foreach (['wp_fts_terms', 'wp_fts_postings', 'wp_fts_documents', 'wp_fts_work'] as $table) {
-        unset($wpdb->schemaColumns[$table], $wpdb->schemaIndexes[$table], $wpdb->schemaUniqueIndexes[$table]);
-    }
-    wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 1;
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [51, '51', 52, 0];
-
-    try {
-        WP_FTS_Plugin::activate();
-        $createQueries = array_filter(
-            $wpdb->queries,
-            static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE')
-        );
-        assert_same(4, count($createQueries), 'schema upgrade should create the compact four-table schema including shared durable work');
-        assert_same([], wp_fts_test_queue_ids($wpdb), 'legacy option migration must not turn an unbounded historical array into foreground post rows');
-        $scopeRows = array_values(array_filter(
-            $wpdb->queue,
-            static fn(array $row): bool => (string) ($row['kind'] ?? '') === 'scope'
-        ));
-        assert_same(1, count($scopeRows), 'legacy migration, schema upgrade, and activation should share one corpus reconciliation row');
-        assert_same(
-            'scope:' . hash('sha256', WP_FTS_Index_Queue::GLOBAL_CORPUS_SCOPE_KEY),
-            $scopeRows[0]['job_key'] ?? null,
-            'legacy migration, schema upgrade, and activation must converge on the one canonical corpus identity'
-        );
-        assert_same(3, $scopeRows[0]['generation'] ?? null, 'each completed migration phase should advance the same fenced reconciliation generation');
-        assert_same('activation', json_decode((string) ($scopeRows[0]['payload'] ?? ''), true)['reason'] ?? null, 'the final activation phase should leave truthful current scope context');
-        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION]), 'migration should delete the legacy option after durable import');
-        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'schema version should advance after queue migration');
-    } finally {
-        $wpdb = $oldWpdb;
-    }
-});
-
-test_case('generation-aware queue activation failure preserves its migration source and old schema version', function (): void {
-    global $wpdb;
-
-    $oldWpdb = $wpdb ?? null;
-    $wpdb = new WP_FTS_Test_WPDB();
-    $wpdb->failQueryPrefix = 'INSERT INTO wp_fts_work';
-    wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 1;
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [53];
-
-    try {
-        $thrown = null;
-        try {
-            WP_FTS_Plugin::activate();
-        } catch (RuntimeException $e) {
-            $thrown = $e;
-        }
-        assert_true($thrown instanceof RuntimeException, 'a failed durable import should fail the migration visibly');
-        assert_same([53], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'a failed migration should retain its legacy source');
-        assert_same(1, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'a failed migration should not acknowledge the new schema version');
-    } finally {
-        $wpdb = $oldWpdb;
-    }
 });
 
 test_case('generation-aware queue uninstall surfaces destructive table cleanup failures', function (): void {
@@ -516,48 +442,19 @@ test_case('generation-aware queue uninstall surfaces destructive table cleanup f
     }
 });
 
-test_case('generation-aware queue uninstall preserves pre-version state on table cleanup failure', function (): void {
-    global $wpdb;
-
-    $oldWpdb = $wpdb ?? null;
-    $wpdb = new WP_FTS_Test_WPDB();
-    wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 1;
-    wp_fts_test_seed_queue($wpdb, [55]);
-    $wpdb->failQueryPrefix = 'DROP TABLE IF EXISTS ';
-
-    try {
-        $thrown = null;
-        try {
-            WP_FTS_Plugin::uninstall();
-        } catch (RuntimeException $e) {
-            $thrown = $e;
-        }
-
-        assert_true($thrown instanceof RuntimeException, 'a pre-version install should surface a durable queue cleanup failure');
-        assert_same([55], array_keys($wpdb->queue), 'pre-version durable work should remain visible after failed uninstall cleanup');
-        assert_same(1, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'failed pre-version cleanup should preserve operational state for a retry');
-        assert_same(WP_FTS_Plugin::UNINSTALL_FENCE_VALUE, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::UNINSTALL_FENCE_OPTION] ?? null, 'failed pre-version cleanup should remain fenced until uninstall retry or explicit activation');
-    } finally {
-        $wpdb = $oldWpdb;
-    }
-});
-
-test_case('generation-aware queue uninstall uses idempotent table removal for partial installs', function (): void {
+test_case('generation-aware queue uninstall uses idempotent table removal for a partial install', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
     $wpdb = new WP_FTS_Test_WPDB();
     $wpdb->queueTableExists = false;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 1;
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [56];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
 
     try {
         WP_FTS_Plugin::uninstall();
 
         assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'a partial install without a queue table should still remove its schema state');
-        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION]), 'a partial install without a queue table should still remove its legacy queue option');
         assert_same(WP_FTS_Plugin::UNINSTALL_FENCE_VALUE, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::UNINSTALL_FENCE_OPTION] ?? null, 'partial-install cleanup should retain only its lifecycle fence');
         assert_same([], $wpdb->prepared, 'DROP TABLE IF EXISTS should not require a metadata probe for a partial install');
         assert_same(1, count($wpdb->queries), 'partial-install uninstall should remain one database statement');

@@ -444,26 +444,25 @@ namespace {
         assert_same([0, 1], array_map('intval', $wpdb->dbh->query('SELECT kind FROM wp_fts_terms ORDER BY kind')->fetchAll(PDO::FETCH_COLUMN)), 'typed identities must remain distinct without materializing every proper prefix');
 
         $queriesBefore = count($wpdb->queries);
-        foreach (['get_terms', 'get_postings', 'all_terms', 'all_doc_ids'] as $method) {
+        foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'get_terms', 'get_postings', 'all_terms', 'all_doc_ids'] as $method) {
             assert_true(!method_exists($storage, $method), "production storage should not expose {$method}");
         }
         assert_same($queriesBefore, count($wpdb->queries), 'capability inspection must not execute SQL');
     });
 
-    test_case('quality mysql documents retain bounded identity without legacy statistics', function (): void {
+    test_case('quality mysql documents retain bounded identity without component statistics', function (): void {
         $wpdb = new WP_FTS_Test_WPDB();
         $storage = new WP_FTS_Storage_Mysql($wpdb);
 
         $storage->replace_prepared_documents([[
             'doc_id' => 101,
             'primary_lang' => 'und',
-            'content_hash' => 'legacy-hash',
+            'content_hash' => 'unspecified-hash',
             'term_frequencies' => [],
             'surface_frequencies' => [],
         ]]);
-        $legacy = $storage->get_doc(101);
-        assert_same('und', $legacy['primary_lang'], 'the bounded writer should preserve the unspecified partition');
-        assert_same([], $legacy['lang_lengths'], 'production documents should not recreate a legacy length projection');
+        assert_same('und', $wpdb->docs[101]['primary_lang'] ?? null, 'the bounded writer should preserve the unspecified partition');
+        assert_same([101 => 'unspecified-hash'], $storage->document_hashes([101]), 'the set-oriented fingerprint reader should expose the stored hash');
 
         $docs = [
             [201, 'pl_PL', ['pl_PL' => 4, 'en' => 2, 'empty' => 0], 'hash-pl', 'pl-PL', 6],
@@ -479,23 +478,19 @@ namespace {
                 'term_frequencies' => [],
                 'surface_frequencies' => [],
             ]]);
-            $doc = $storage->get_doc($docId);
-            assert_same($expectedPrimary, $doc['primary_lang'], "{$docId} primary language should be canonicalized");
-            assert_same([], $doc['lang_lengths'], "{$docId} should not persist analyzed document lengths");
-            assert_same(0, $doc['doc_len'], "{$docId} compatibility shape should report no stored document length");
-            assert_same($hash, $doc['content_hash'], "{$docId} content hash should round trip");
-            assert_true(!$doc['deleted'], "{$docId} v4 document should be active");
+            assert_same($expectedPrimary, $wpdb->docs[$docId]['primary_lang'] ?? null, "{$docId} primary language should be canonicalized");
+            assert_same([$docId => $hash], $storage->document_hashes([$docId]), "{$docId} content hash should round trip");
         }
 
         $putSql = wp_fts_quality_last_prepared_like($wpdb, 'INSERT INTO wp_fts_documents');
-        assert_contains('ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(content_hash)', $putSql['sql'], 'the bounded writer should upsert the v4 identity row');
-        assert_true(!str_contains($putSql['sql'], 'doc_len'), 'the bounded writer should not write a legacy document length');
-        foreach (['get_doc_lengths', 'get_meta', 'add_meta'] as $method) {
-            assert_true(!method_exists($storage, $method), "production storage should not expose legacy {$method}");
+        assert_contains('ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(content_hash)', $putSql['sql'], 'the bounded writer should upsert the current identity row');
+        assert_true(!str_contains($putSql['sql'], 'doc_len'), 'the bounded writer should not write a document length');
+        foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'get_doc_lengths', 'get_meta', 'add_meta'] as $method) {
+            assert_true(!method_exists($storage, $method), "production storage should not expose {$method}");
         }
 
         $storage->replace_prepared_documents([], [201]);
-        assert_same(null, $storage->get_doc(201), 'physical deletion should not retain a tombstone document');
+        assert_same([], $storage->document_hashes([201]), 'physical deletion should not retain a tombstone document');
         assert_same([101, 202, 203], wp_fts_quality_fake_mysql_document_ids($wpdb), 'bounded relational inspection should contain only physical document rows');
     });
 
@@ -656,9 +651,9 @@ namespace {
                 'term_frequencies' => [],
                 'surface_frequencies' => [],
             ]]);
-            $doc = $storage->get_doc(400);
             $storageExpected = WP_FTS_TermNamespace::canonicalize_lang($input, 'und');
-            assert_same($storageExpected, $doc['primary_lang'], "{$input} should canonicalize the bounded writer's primary language without inventing an English partition");
+            $storedPrimary = $wpdb->dbh->query('SELECT primary_lang FROM wp_fts_documents WHERE post_id = 400')->fetchColumn();
+            assert_same($storageExpected, $storedPrimary, "{$input} should canonicalize the bounded writer's primary language without inventing an English partition");
 
             $fake = new WP_FTS_Test_WPDB();
             wp_fts_test_reset_wordpress_fakes();
@@ -1024,7 +1019,7 @@ namespace {
         sort($hooks, SORT_STRING);
         $expectedHooks = [
             WP_FTS_Plugin::CRON_HOOK,
-            WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK,
+            WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK,
             WP_FTS_Plugin::SCHEMA_SITE_CRON_HOOK,
             'add_meta_boxes',
             'add_post_meta',

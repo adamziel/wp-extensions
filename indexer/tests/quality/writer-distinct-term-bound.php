@@ -245,7 +245,7 @@ test_case('mixed scope and maximum-identity post work alternates inside the work
         )
     ));
 
-    assert_same(1, $summary['processed'] ?? null, 'the mixed pass should commit its already-materialized changed document');
+    assert_same(1, $summary['indexed'] ?? null, 'the mixed pass should commit its already-materialized changed document');
     assert_same(true, $summary['has_more'] ?? null, 'the released scope should request an immediate bounded successor');
     assert_same(8192, $postingCountAfterMaximum, 'the maximum document should retain all lexical and surface postings');
     assert_same(1, count($scopeYields), 'the mixed pass should replace scope expansion with one indexed turn-marked yield CAS');
@@ -259,7 +259,7 @@ test_case('mixed scope and maximum-identity post work alternates inside the work
     assert_same($scopeBefore['payload'] ?? null, $scopeAfterPost['payload'] ?? null, 'post-first alternation must preserve the scope payload');
     assert_same(1, $scopeSummary['backfill_scanned'] ?? null, 'the immediate scope-only successor should scan exactly its remaining source row');
     assert_same(1, $scopeSummary['backfill_queued'] ?? null, 'the immediate scope-only successor should enqueue exactly one bounded page row');
-    assert_same(1, $exhaustedMixed['processed'] ?? null, 'the next mixed pass should drain the newly materialized post before proving scope EOF');
+    assert_same(1, $exhaustedMixed['indexed'] ?? null, 'the next mixed pass should drain the newly materialized post before proving scope EOF');
     assert_same(0, $exhaustedMixed['backfill_scanned'] ?? null, 'an exhausted mixed pass should issue no scope selector');
     assert_same(false, $exhaustedMixed['scope_completed'] ?? null, 'an exhausted mixed pass must not acknowledge scope authority beside document writes');
     assert_same(true, $exhaustedMixed['has_more'] ?? null, 'the exhausted deferred scope should request its scope-only completion pass');

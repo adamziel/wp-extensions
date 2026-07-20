@@ -272,11 +272,10 @@ test_case('PHP source stream matches ext-tokenizer on the complete plugin method
     $queueMutationNames = array_fill_keys([
         'enqueue', 'enqueue_many', 'enqueue_scope', 'fence_post', 'fence_scope',
         'promote_post', 'promote_scope', 'handoff_foreground_mutation_scope',
-        'coalesce_corpus_successor', 'retry_many', 'claim', 'claim_batch',
-        'claim_scope', 'fail_scope', 'fail_many', 'release_scope', 'release_many',
+        'coalesce_corpus_successor', 'retry_many', 'claim_batch',
+        'fail_scope', 'fail_many', 'release_scope', 'release_many',
         'discard_replaced_scope', 'yield_scope_and_release_posts',
         'acknowledge_scope', 'acknowledge_many', 'enqueue_corpus_scope',
-        'migrate_legacy_queue_option',
     ], true);
     $streamCalls = [];
     $pendingOperator = null;

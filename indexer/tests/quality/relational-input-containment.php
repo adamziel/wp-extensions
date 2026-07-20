@@ -327,7 +327,7 @@ test_case('quality relational input containment replaces tables with unexpected 
         $before = (new WP_FTS_Storage_Mysql($fake))->verify_schema();
         assert_same(['wp_fts_postings.duplicate_post_first(post_id,term_id,impact)'], $before['unexpected_indexes'] ?? null, 'the verifier should identify the exact redundant index before repair');
 
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
         $after = (new WP_FTS_Storage_Mysql($fake))->verify_schema();
         assert_same(true, $after['valid'] ?? null, 'dedicated maintenance should restore the exact physical schema');
         assert_true(!isset($fake->schemaIndexes['wp_fts_postings']['duplicate_post_first']), 'repair should remove an unexpected duplicate index instead of leaving verification permanently failed');
@@ -340,7 +340,7 @@ test_case('quality relational input containment replaces tables with unexpected 
     }
 });
 
-test_case('quality schema v5-to-v9 runs additive metadata steps before fail-closed profile reconciliation', function (): void {
+test_case('quality schema repair recreates a missing work table and reconciles the corpus', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -349,209 +349,13 @@ test_case('quality schema v5-to-v9 runs additive metadata steps before fail-clos
     wp_fts_test_reset_wordpress_fakes();
     wp_fts_test_mark_search_takeover_ready();
     $fake->options = 'wp_options';
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 5;
-    unset($fake->schemaIndexes['wp_fts_work']['recoverable']);
-    $readinessBefore = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::READINESS_INCARNATION_OPTION] ?? null;
-    $searchReadyBefore = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION] ?? null;
-    $profile = new ReflectionMethod(WP_FTS_Plugin::class, 'current_index_profile');
-    $profile->setAccessible(true);
-    $profileBefore = $profile->invoke(null);
-    $fake->queries = [];
-    $fake->prepared = [];
-
-    try {
-        WP_FTS_Plugin::upgrade_schema();
-
-        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'the complete migration should publish the current schema version');
-        assert_same(
-            ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key'],
-            $fake->schemaIndexes['wp_fts_work']['recoverable'] ?? null,
-            'version 6 should add exactly the lease-recovery queue index'
-        );
-        $health = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
-        assert_same('pending', $health['initial_index_status'] ?? null, 'the v9 surface generation must invalidate an older accepted index before migration work');
-        assert_true(
-            !hash_equals((string) $readinessBefore, (string) ($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::READINESS_INCARNATION_OPTION] ?? '')),
-            'the incompatible index generation must receive a new desired readiness incarnation'
-        );
-        assert_true(
-            !hash_equals(serialize($searchReadyBefore), serialize($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION] ?? '')),
-            'the incompatible migration must revoke the previously published search capability'
-        );
-        $corpusScopes = array_values(array_filter(
-            $fake->queue,
-            static fn(array $row): bool => ($row['kind'] ?? null) === 'scope'
-                && ($row['scope_coverage'] ?? null) === WP_FTS_Index_Queue::SCOPE_COVERAGE_CORPUS
-        ));
-        assert_same(1, count($corpusScopes), 'the v9 profile change must enqueue one coalesced corpus reconciliation');
-        assert_same('schema_repair', json_decode((string) ($corpusScopes[0]['payload'] ?? ''), true)['reason'] ?? null, 'the durable corpus fence should record the physical queue-index repair cause');
-        assert_same(1, count(array_filter(
-            $fake->queries,
-            static fn(mixed $sql): bool => is_string($sql) && str_starts_with($sql, 'CREATE INDEX recoverable ON ')
-        )), 'version 6 should execute one bounded CREATE INDEX');
-        $autoloadPrepared = array_values(array_filter(
-            $fake->prepared,
-            static fn(array $entry): bool => str_starts_with(
-                (string) ($entry['sql'] ?? ''),
-                "UPDATE `wp_options` SET autoload = 'yes'"
-            )
-        ));
-        assert_same(1, count($autoloadPrepared), 'version 7 should migrate every hot request option in one bounded statement');
-        assert_same([
-            WP_FTS_Plugin::SCHEMA_VERSION_OPTION,
-            WP_FTS_Plugin::INDEX_HEALTH_OPTION,
-            WP_FTS_Plugin::READINESS_INCARNATION_OPTION,
-            WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION,
-            WP_FTS_Plugin::SETTINGS_OPTION,
-            WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION,
-            WP_FTS_PostContentExtractor::CUSTOM_FIELDS_OPTION,
-        ], $autoloadPrepared[0]['args'] ?? null, 'the autoload migration must cover the exact request-state inventory');
-        $requestOptionInserts = array_values(array_filter(
-            $fake->prepared,
-            static fn(array $entry): bool => str_starts_with(
-                (string) ($entry['sql'] ?? ''),
-                'INSERT IGNORE INTO `wp_options` (option_name,option_value,autoload) VALUES'
-            )
-        ));
-        assert_same(1, count($requestOptionInserts), 'version 7 should persist all formerly implicit request defaults in one statement');
-        assert_same(3, substr_count((string) ($requestOptionInserts[0]['sql'] ?? ''), "'yes'"), 'each default row must be inserted as autoloaded');
-        assert_same([
-            WP_FTS_Plugin::SETTINGS_OPTION,
-            serialize([]),
-            WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION,
-            serialize([]),
-            WP_FTS_PostContentExtractor::CUSTOM_FIELDS_OPTION,
-            serialize([]),
-        ], $requestOptionInserts[0]['args'] ?? null, 'stored empty overrides must preserve future settings and analyzer defaults');
-        $settings = new ReflectionMethod(WP_FTS_Plugin::class, 'settings');
-        $settings->setAccessible(true);
-        assert_same(WP_FTS_Plugin::default_settings(), $settings->invoke(null), 'an empty stored override must continue to inherit every current product default');
-        WP_FTS_Plugin::reset_request_caches();
-        $profileAfter = $profile->invoke(null);
-        assert_same($profileBefore['hash'] ?? null, $profileAfter['hash'] ?? null, 'persisting canonical defaults must not change the accepted analyzer/index profile');
-        assert_same(0, count(array_filter(
-            $fake->queries,
-            static fn(mixed $sql): bool => is_string($sql) && (str_starts_with($sql, 'CREATE TABLE') || str_starts_with($sql, 'DROP TABLE'))
-        )), 'an already-current physical shape should not need table DDL even though its content profile must be reconciled');
-        assert_same(false, WP_FTS_Plugin::search_takeover_status()['ready'] ?? null, 'the older content generation must stay unavailable until corpus reconciliation completes');
-    } finally {
-        $wpdb = $oldWpdb;
-    }
-});
-
-test_case('quality schema v8-to-v9 fences an old content profile even when its physical shape is current', function (): void {
-    global $wpdb;
-
-    $oldWpdb = $wpdb ?? null;
-    $fake = new WP_FTS_Test_WPDB();
-    $wpdb = $fake;
-    wp_fts_test_reset_wordpress_fakes();
-    wp_fts_test_mark_search_takeover_ready();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 8;
-    $oldSurfaceKey = "\x01" . 1 . "\0" . WP_FTS_TermNamespace::namespace_term('en', 'materialized');
-    $fake->ftsTerms[$oldSurfaceKey] = ['doc_freq' => 1];
-    $fake->postings[$oldSurfaceKey] = [991 => 4096];
-    $fake->queries = [];
-    $fake->prepared = [];
-
-    try {
-        assert_same(true, (new WP_FTS_Storage_Mysql($fake))->verify_schema()['valid'] ?? null, 'the fixture must begin with the current five-column physical schema');
-        WP_FTS_Plugin::upgrade_schema();
-
-        $health = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
-        $corpusScopes = array_values(array_filter(
-            $fake->queue,
-            static fn(array $row): bool => ($row['kind'] ?? null) === 'scope'
-                && ($row['scope_coverage'] ?? null) === WP_FTS_Index_Queue::SCOPE_COVERAGE_CORPUS
-        ));
-        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'v9 should publish only after installing the durable corpus fence');
-        assert_same('pending', $health['initial_index_status'] ?? null, 'physical compatibility must not authorize content written under the abandoned prefix profile');
-        assert_same(1, count($corpusScopes), 'one coalesced corpus reconciliation must own the content-profile transition');
-        assert_same('schema_upgrade', json_decode((string) ($corpusScopes[0]['payload'] ?? ''), true)['reason'] ?? null, 'a physically valid old generation should retain the logical-upgrade cause');
-        assert_true(isset($fake->ftsTerms[$oldSurfaceKey]), 'physical compatibility should avoid destructive DDL while the fail-closed reconciliation replaces old rows');
-        assert_same(0, count(array_filter(
-            $fake->queries,
-            static fn(mixed $sql): bool => is_string($sql)
-                && (str_starts_with($sql, 'CREATE TABLE') || str_starts_with($sql, 'DROP TABLE'))
-        )), 'a current physical shape should require no search-table DDL');
-        assert_same(false, WP_FTS_Plugin::search_takeover_status()['ready'] ?? null, 'old-profile rows must remain unavailable until full corpus publication');
-    } finally {
-        $wpdb = $oldWpdb;
-    }
-});
-
-test_case('quality schema v6-to-v9 repairs the recoverable index and retains durable work under a corpus fence', function (): void {
-    global $wpdb;
-
-    $oldWpdb = $wpdb ?? null;
-    $fake = new WP_FTS_Test_WPDB();
-    $wpdb = $fake;
-    wp_fts_test_reset_wordpress_fakes();
-    wp_fts_test_mark_search_takeover_ready();
-    $fake->options = 'wp_options';
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 6;
-    unset($fake->schemaIndexes['wp_fts_work']['recoverable']);
-    $queue = new WP_FTS_Index_Queue($fake);
-    $queue->enqueue(701, 1700000000, ['reason' => 'preserve-post-generation']);
-    $queue->enqueue_scope(
-        'preserve-targeted-generation',
-        ['reason' => 'preserve-targeted-generation'],
-        1700000000,
-        WP_FTS_Index_Queue::SCOPE_COVERAGE_TARGETED,
-        'term_taxonomy',
-        88
-    );
-    $workBefore = $fake->queue;
-    $fake->queries = [];
-    $fake->prepared = [];
-
-    try {
-        WP_FTS_Plugin::upgrade_schema();
-
-        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'the repaired v6 install should publish the current logical schema');
-        assert_same(
-            ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key'],
-            $fake->schemaIndexes['wp_fts_work']['recoverable'] ?? null,
-            'the v6 migration should restore its sole additive work index in place'
-        );
-        foreach ($workBefore as $jobKey => $row) {
-            assert_same($row, $fake->queue[$jobKey] ?? null, 'in-place queue-index repair must preserve every preexisting post, scope, generation, and epoch row');
-        }
-        assert_same(1, count(array_filter(
-            $fake->queries,
-            static fn(mixed $sql): bool => is_string($sql) && str_starts_with($sql, 'CREATE INDEX recoverable ON ')
-        )), 'the v6 migration should issue exactly one additive recoverable-index statement');
-        assert_same(0, count(array_filter(
-            $fake->queries,
-            static fn(mixed $sql): bool => is_string($sql) && str_starts_with($sql, 'DROP TABLE')
-        )), 'a sole missing recoverable index must never enter destructive generic table repair');
-        assert_same(1, count(array_filter(
-            $fake->queue,
-            static fn(array $row): bool => ($row['kind'] ?? null) === 'scope'
-                && ($row['scope_coverage'] ?? null) === WP_FTS_Index_Queue::SCOPE_COVERAGE_CORPUS
-        )), 'the v9 content-profile change must add exactly one corpus reconciliation beside retained targeted work');
-        assert_same(false, WP_FTS_Plugin::search_takeover_status()['ready'] ?? null, 'the older content generation must remain unavailable until the v9 corpus fence completes');
-    } finally {
-        $wpdb = $oldWpdb;
-    }
-});
-
-test_case('quality schema v6-to-v9 repairs a missing work table generically and reconciles the corpus', function (): void {
-    global $wpdb;
-
-    $oldWpdb = $wpdb ?? null;
-    $fake = new WP_FTS_Test_WPDB();
-    $wpdb = $fake;
-    wp_fts_test_reset_wordpress_fakes();
-    wp_fts_test_mark_search_takeover_ready();
-    $fake->options = 'wp_options';
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 6;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     unset($fake->schemaColumns['wp_fts_work'], $fake->schemaIndexes['wp_fts_work']);
     $fake->queries = [];
     $fake->prepared = [];
 
     try {
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
 
         $health = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
         $scopeRows = array_values(array_filter(
@@ -566,14 +370,14 @@ test_case('quality schema v6-to-v9 repairs a missing work table generically and 
         assert_same(0, count(array_filter(
             $fake->queries,
             static fn(mixed $sql): bool => is_string($sql) && str_starts_with($sql, 'CREATE INDEX recoverable ON ')
-        )), 'the additive v6 helper must not issue an orphan CREATE INDEX against a missing work table');
+        )), 'schema repair must not issue an orphan CREATE INDEX against a missing work table');
         assert_same(false, WP_FTS_Plugin::search_takeover_status()['ready'] ?? null, 'search must fail closed until the recreated work generation converges');
     } finally {
         $wpdb = $oldWpdb;
     }
 });
 
-test_case('quality schema v6-to-v9 replaces a conflicting recoverable index and reconciles the corpus', function (): void {
+test_case('quality schema repair replaces a conflicting recoverable index and reconciles the corpus', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -582,13 +386,13 @@ test_case('quality schema v6-to-v9 replaces a conflicting recoverable index and 
     wp_fts_test_reset_wordpress_fakes();
     wp_fts_test_mark_search_takeover_ready();
     $fake->options = 'wp_options';
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 6;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $fake->schemaIndexes['wp_fts_work']['recoverable'] = ['kind', 'state', 'available_at'];
     $fake->queries = [];
     $fake->prepared = [];
 
     try {
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
 
         $health = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
         $scopeRows = array_values(array_filter(
@@ -609,14 +413,14 @@ test_case('quality schema v6-to-v9 replaces a conflicting recoverable index and 
         assert_same(0, count(array_filter(
             $fake->queries,
             static fn(mixed $sql): bool => is_string($sql) && str_starts_with($sql, 'CREATE INDEX recoverable ON ')
-        )), 'the additive helper must not try to create a duplicate recoverable name before generic replacement');
+        )), 'schema repair must not try to create a duplicate recoverable name before generic replacement');
         assert_same(false, WP_FTS_Plugin::search_takeover_status()['ready'] ?? null, 'search must stay unavailable until the replacement work generation converges');
     } finally {
         $wpdb = $oldWpdb;
     }
 });
 
-test_case('quality schema v5-to-v9 migration fails closed when queue-index work is not the only damage', function (): void {
+test_case('quality schema repair replaces work-table engine and index damage together', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -624,21 +428,21 @@ test_case('quality schema v5-to-v9 migration fails closed when queue-index work 
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     wp_fts_test_mark_search_takeover_ready();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 5;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     unset($fake->schemaIndexes['wp_fts_work']['recoverable']);
     $fake->schemaEngines['wp_fts_work'] = 'MyISAM';
     $fake->queries = [];
     $fake->prepared = [];
 
     try {
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
 
         $health = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
         $scopeRows = array_values(array_filter(
             $fake->queue,
             static fn(array $row): bool => ($row['kind'] ?? null) === 'scope'
         ));
-        assert_same(true, (new WP_FTS_Storage_Mysql($fake))->verify_schema()['valid'] ?? null, 'metadata maintenance should repair additional physical damage instead of accepting a partial index-only upgrade');
+        assert_same(true, (new WP_FTS_Storage_Mysql($fake))->verify_schema()['valid'] ?? null, 'metadata maintenance should repair all physical damage instead of accepting a partial index-only result');
         assert_same('pending', $health['initial_index_status'] ?? null, 'additional physical damage must invalidate search readiness');
         assert_same(1, count($scopeRows), 'additional physical damage must enqueue one bounded corpus reconciliation scope');
         assert_same('schema_repair', json_decode((string) ($scopeRows[0]['payload'] ?? ''), true)['reason'] ?? null, 'the recovery scope should retain the physical-repair reason');
@@ -674,7 +478,7 @@ test_case('quality relational input containment requires transactional engines f
             'an engine-only schema failure should retain its bounded physical cause'
         );
 
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
         $after = (new WP_FTS_Storage_Mysql($fake))->verify_schema();
         assert_same(true, $after['valid'] ?? null, 'dedicated maintenance should rebuild a non-transactional derived table as InnoDB');
         assert_same('InnoDB', $fake->schemaEngines['wp_fts_terms'] ?? null, 'schema repair should restore transaction participation for dictionary writes');
@@ -702,7 +506,7 @@ test_case('plugin schema repair replaces damaged work state with one bounded cor
     $fake->prepared = [];
 
     try {
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
 
         $after = (new WP_FTS_Storage_Mysql($fake))->verify_schema();
         assert_same(true, $after['valid'] ?? null, 'plugin repair should rebuild a non-transactional work table as the exact current InnoDB schema');
@@ -751,7 +555,7 @@ test_case('quality relational input containment rejects truncated or disabled re
         assert_contains('wp_fts_terms.term_identity(lang,kind,term)', implode(',', $before['missing_indexes'] ?? []), 'a prefix-truncated unique identity must not satisfy the exact lexical identity contract');
         assert_contains('wp_fts_postings.post_term_impact(post_id,term_id,impact)', implode(',', $before['missing_indexes'] ?? []), 'a disabled candidate index must not satisfy the production access contract');
 
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
         assert_same(true, (new WP_FTS_Storage_Mysql($fake))->verify_schema()['valid'] ?? null, 'maintenance should rebuild truncated and disabled required indexes');
         assert_same([], $fake->schemaIndexSubParts, 'schema repair should remove every prefix-index override');
         assert_same([], $fake->schemaInvisibleIndexes, 'schema repair should restore every required index as usable');

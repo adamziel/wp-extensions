@@ -1313,35 +1313,16 @@ test_case('quality MySQL set-oriented APIs reject explosive inputs before normal
     ));
     assert_true($rankError instanceof InvalidArgumentException, 'direct storage alternative ranks should be bounded before integer normalization');
 
-    $wideIdError = psic_caught(static fn(): array => $storage->get_doc_metadata([str_repeat('1', 65)]));
-    assert_true($wideIdError instanceof InvalidArgumentException, 'compatibility document ids should be bounded before integer mapping');
-    assert_same($before, $fake->num_queries, 'all direct compatibility input rejections should happen before SQL');
-
-    $storage->get_doc_metadata([1]);
-    $queries = array_map(
-        static fn(mixed $query): string => is_array($query) ? (string) ($query[0] ?? '') : (string) $query,
-        $fake->queries
-    );
-    $metadataSql = implode("\n", $queries);
-    assert_contains('SUBSTR(p.post_title, 1, 5000)', $metadataSql, 'compatibility metadata reads should bound title transport in SQL');
-    assert_contains('SUBSTR(p.post_excerpt, 1, 5000)', $metadataSql, 'compatibility metadata reads should bound excerpt transport in SQL');
-    assert_same($before + 1, $fake->num_queries, 'a bounded compatibility metadata read should use one query');
-
-    $storage->terms_for_doc(1);
-    $queries = array_map(
-        static fn(mixed $query): string => is_array($query) ? (string) ($query[0] ?? '') : (string) $query,
-        $fake->queries
-    );
-    assert_contains('LIMIT 4097', implode("\n", $queries), 'one-document compatibility term reads should stop at the fixed writer envelope');
+    assert_same($before, $fake->num_queries, 'all direct input rejections should happen before SQL');
 
     $guardCalls = 0;
     $guardedStorage = new WP_FTS_Storage_Mysql($fake, null, static function () use (&$guardCalls): void {
         $guardCalls++;
     });
-    foreach (['put_doc', 'put_doc_metadata', 'delete_doc'] as $method) {
-        assert_true(!method_exists($guardedStorage, $method), "guarded production storage should not expose legacy {$method}");
+    foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'put_doc', 'put_doc_metadata', 'delete_doc'] as $method) {
+        assert_true(!method_exists($guardedStorage, $method), "guarded production storage should not expose {$method}");
     }
-    assert_same(0, $guardCalls, 'legacy capability inspection should not invoke the mutation guard');
+    assert_same(0, $guardCalls, 'capability inspection should not invoke the mutation guard');
     psic_caught(static fn(): array => $guardedStorage->replace_prepared_documents([[
         'doc_id' => 1,
         'term_frequencies' => [],

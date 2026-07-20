@@ -171,9 +171,7 @@ function wp_fts_lifecycle_scheduler_queue_mutation_map(): array
         'handoff_foreground_mutation_scope',
         'coalesce_corpus_successor',
         'retry_many',
-        'claim',
         'claim_batch',
-        'claim_scope',
         'fail_scope',
         'fail_many',
         'release_scope',
@@ -184,7 +182,6 @@ function wp_fts_lifecycle_scheduler_queue_mutation_map(): array
         'acknowledge_many',
         // These helpers are capabilities only when every caller is classified.
         'enqueue_corpus_scope',
-        'migrate_legacy_queue_option',
     ], true);
     $callsByMethod = [];
     $sourceByMethod = [];
@@ -415,22 +412,22 @@ test_case('lifecycle scheduler capability direct writers retain their normal sta
 
     $oldWpdb = $wpdb ?? null;
     $cases = [
-        'readiness watchdog' => [5, static function (): void {
+        'readiness watchdog' => [3, 0, static function (): void {
             $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
                 'last_run_at' => '2026-07-18 00:00:00',
             ];
             WP_FTS_Plugin::maybe_schedule_initial_index_readiness();
         }],
-        'direct reindex batch' => [3, static function (): void {
+        'direct reindex batch' => [3, 1, static function (): void {
             WP_FTS_Plugin::enqueue_posts_for_reindex([88301], ['lang' => 'en']);
         }],
-        'filtered reindex scope' => [3, static function (): void {
+        'filtered reindex scope' => [3, 1, static function (): void {
             WP_FTS_Plugin::enqueue_reindex_scope([
                 'post_status' => ['publish'],
                 'post_type' => ['post'],
             ]);
         }],
-        'failed-item retry' => [4, static function (): void {
+        'failed-item retry' => [4, 1, static function (): void {
             $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['failure_history'] = [[
                 'post_id' => 88302,
                 'title' => 'Retry target',
@@ -445,7 +442,7 @@ test_case('lifecycle scheduler capability direct writers retain their normal sta
     ];
 
     try {
-        foreach ($cases as $label => [$expectedStatements, $writer]) {
+        foreach ($cases as $label => [$expectedStatements, $expectedQueueWrites, $writer]) {
             $fake = new WP_FTS_Test_WPDB();
             $fake->options = 'wp_options';
             $fake->recordReadQueries = true;
@@ -455,13 +452,13 @@ test_case('lifecycle scheduler capability direct writers retain their normal sta
             $fake->prepared = [];
             $writer();
             assert_same($expectedStatements, count($fake->queries), "{$label}: shared lifecycle exclusion must add zero normal-path statements");
-            assert_same(1, count(array_filter(
+            assert_same($expectedQueueWrites, count(array_filter(
                 $fake->queries,
                 static fn(mixed $sql): bool => str_starts_with(
                     is_array($sql) ? (string) ($sql[0] ?? '') : (string) $sql,
                     'INSERT INTO wp_fts_work'
                 )
-            )), "{$label}: normal operation must retain one set-oriented queue statement");
+            )), "{$label}: normal operation must retain its set-oriented queue statement count");
             assert_same(
                 null,
                 (new ReflectionProperty(WP_FTS_Plugin::class, 'foreground_owner_guard'))->getValue(),
@@ -481,8 +478,8 @@ test_case('lifecycle scheduler capability tokenized queue writer allowlist canno
         'activate' => ['enqueue_corpus_scope'],
         'provision_site_schema' => ['enqueue_corpus_scope'],
         'maybe_schedule_initial_index_readiness' => ['enqueue_scope'],
-        'upgrade_schema_under_lock' => ['migrate_legacy_queue_option', 'enqueue_corpus_scope'],
-        'run_scheduled_schema_upgrade' => ['enqueue_corpus_scope'],
+        'create_or_repair_schema_under_lock' => ['enqueue_corpus_scope'],
+        'run_scheduled_schema_repair' => ['enqueue_corpus_scope'],
         'flush_foreground_bulk_mutations' => ['handoff_foreground_mutation_scope'],
         'enqueue_posts_for_reindex' => ['enqueue_many'],
         'enqueue_reindex_scope' => ['enqueue_scope'],
@@ -514,7 +511,6 @@ test_case('lifecycle scheduler capability tokenized queue writer allowlist canno
         ],
         'finalize_initial_index_readiness_in_maintenance' => ['enqueue_scope'],
         'enqueue_corpus_scope' => ['coalesce_corpus_successor'],
-        'migrate_legacy_queue_option' => ['enqueue_corpus_scope'],
     ];
     assert_same($expected, $inspection['calls'], 'every new direct queue mutation or helper caller must receive an explicit lifecycle-capability review');
 
@@ -547,8 +543,8 @@ test_case('lifecycle scheduler capability tokenized queue writer allowlist canno
     }
     assert_contains('run_index_writer_with_lock', $inspection['source']['activate'] ?? '', 'activation queue writes must remain inside the lifecycle/writer boundary');
     assert_contains('run_index_writer_with_lock', $inspection['source']['provision_site_schema'] ?? '', 'site provisioning queue writes must remain inside the lifecycle/writer boundary');
-    assert_contains('assert_index_writer_ownership', $inspection['source']['upgrade_schema_under_lock'] ?? '', 'schema upgrade queue writes must assert the live writer lease');
-    assert_contains('acquire_index_lock', $inspection['source']['run_scheduled_schema_upgrade'] ?? '', 'scheduled schema queue writes must acquire the live writer lease');
+    assert_contains('assert_index_writer_ownership', $inspection['source']['create_or_repair_schema_under_lock'] ?? '', 'schema repair queue writes must assert the live writer lease');
+    assert_contains('acquire_index_lock', $inspection['source']['run_scheduled_schema_repair'] ?? '', 'scheduled schema queue writes must acquire the live writer lease');
     assert_contains('assert_index_writer_ownership', $inspection['source']['reset_index'] ?? '', 'reset queue writes must assert the live writer lease');
     assert_contains('assert_index_writer_ownership', $inspection['source']['process_indexing_batch'] ?? '', 'worker queue mutations must begin behind a live writer lease');
 });

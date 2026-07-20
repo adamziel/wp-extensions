@@ -98,7 +98,7 @@ function wp_fts_mysql_proof_run_inside_wordpress(): void
     $prefix = (string) ($wpdb->prefix ?? '');
     wp_fts_mysql_proof_identifier($prefix . 'fts_terms');
 
-    WP_FTS_Plugin::upgrade_schema();
+    WP_FTS_Plugin::create_or_repair_schema();
     $tables = wp_fts_mysql_proof_tables($prefix);
     wp_fts_mysql_proof_assert_tables($wpdb, $tables);
     wp_fts_mysql_proof_assert_schema($wpdb, $tables);
@@ -636,7 +636,6 @@ function wp_fts_mysql_proof_cleanup(array $postIds): void
     }
 
     if (function_exists('delete_option') && class_exists('WP_FTS_Plugin')) {
-        delete_option(WP_FTS_Plugin::QUEUE_OPTION);
     }
     if (class_exists('WP_FTS_Plugin')) {
         $cleanup = WP_FTS_Plugin::run_index_writer_with_lock(
@@ -829,7 +828,7 @@ function wp_fts_mysql_proof_drain_reindex_work(): array
         wp_fts_mysql_proof_assert(is_array($payload), "wp fts process-batch pass {$pass} should return a JSON object.");
         $passes[] = wp_fts_mysql_proof_command_summary($result) + [
             'pass' => $pass,
-            'processed' => max(0, (int) ($payload['processed'] ?? 0)),
+            'indexed' => max(0, (int) ($payload['indexed'] ?? 0)),
             'has_more' => !empty($payload['has_more']),
         ];
         if (empty($payload['has_more'])) {
