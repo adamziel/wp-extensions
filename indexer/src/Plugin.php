@@ -739,6 +739,10 @@ final class WP_FTS_Plugin
                 throw new RuntimeException('Could not activate FTS while another index writer owns the active lease.');
             }
 
+            if (function_exists('register_uninstall_hook')) {
+                register_uninstall_hook(dirname(__DIR__) . '/indexer.php', [self::class, 'uninstall']);
+            }
+
             if ($network_wide) {
                 $network_activation_token = is_string($locked['result'] ?? null)
                     ? (string) $locked['result']

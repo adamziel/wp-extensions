@@ -1232,11 +1232,12 @@ function wp_fts_wc_classify_cold_request_events(array $attribution): array
         $lower = strtolower($sql);
         $literals = wp_fts_wc_sql_string_literals($sql);
         $referenced = array_values(array_intersect($optionNames, $literals));
+        $searchStatement = wp_fts_wc_search_statement_kind($sql) !== null;
         $pluginAttributed = str_contains($sql, 'wp_fts_wc_plugin_query');
         if ($pluginAttributed) {
             $pluginEvents[(int) ($event['event_id'] ?? 0)] = $event;
         }
-        if ($pluginAttributed && (str_contains($lower, $optionsTable) || str_contains($lower, $siteMetaTable))) {
+        if ($pluginAttributed && !$searchStatement && (str_contains($lower, $optionsTable) || str_contains($lower, $siteMetaTable))) {
             $event['referenced_option_names'] = $referenced;
             $directOptionEvents[] = $event;
             if (in_array('wp_fts_network_activation_token', $referenced, true)) {
@@ -19975,7 +19976,9 @@ add_action('init', static function (): void {
         'method' => isset($_SERVER['REQUEST_METHOD']) && is_string($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '',
         'sapi' => PHP_SAPI,
         'php_pid' => getmypid(),
-        'external_object_cache' => function_exists('wp_using_ext_object_cache') ? wp_using_ext_object_cache() : null,
+        'external_object_cache' => function_exists('wp_using_ext_object_cache')
+            ? (bool) wp_using_ext_object_cache()
+            : is_file(WP_CONTENT_DIR . '/object-cache.php'),
         'schema_version' => (int) get_option(WP_FTS_Plugin::SCHEMA_VERSION_OPTION, 0),
         'ready' => false,
         'result_count' => 0,

@@ -10807,10 +10807,9 @@ PHP;
 
     $activation = $GLOBALS['wp_fts_test_activation_hooks'][0] ?? null;
     $deactivation = $GLOBALS['wp_fts_test_deactivation_hooks'][0] ?? null;
-    $uninstall = $GLOBALS['wp_fts_test_uninstall_hooks'][0] ?? null;
     assert_same([WP_FTS_Plugin::class, 'activate'], $activation['callback'] ?? null, 'bootstrap should register activation lifecycle hook');
     assert_same([WP_FTS_Plugin::class, 'deactivate'], $deactivation['callback'] ?? null, 'bootstrap should register deactivation lifecycle hook');
-    assert_same([WP_FTS_Plugin::class, 'uninstall'], $uninstall['callback'] ?? null, 'bootstrap should register explicit uninstall hook');
+    assert_same([], $GLOBALS['wp_fts_test_uninstall_hooks'], 'ordinary plugin bootstrap should not query or rewrite the uninstall callback option');
 
     $hooks = array_column($GLOBALS['wp_fts_test_actions'], 'hook');
     sort($hooks, SORT_STRING);
@@ -11779,6 +11778,9 @@ test_case('activation sets redirect flag and safe admin init redirects to Health
         wp_fts_test_reset_wordpress_fakes();
         $_GET = [];
         WP_FTS_Plugin::activate();
+        $uninstall = $GLOBALS['wp_fts_test_uninstall_hooks'][0] ?? null;
+        assert_same((string) realpath(__DIR__ . '/../indexer.php'), $uninstall['file'] ?? null, 'activation should register uninstall against the plugin entrypoint');
+        assert_same([WP_FTS_Plugin::class, 'uninstall'], $uninstall['callback'] ?? null, 'activation should register the explicit uninstall callback');
         assert_same(1, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ACTIVATION_REDIRECT_OPTION] ?? null, 'single-site activation should set a one-shot redirect flag');
 
         $GLOBALS['wp_fts_test_is_admin'] = true;
