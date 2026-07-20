@@ -524,6 +524,16 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
         break;
     }
 
+    $initialReadiness = null;
+    if ($initialIndex) {
+        // Production publishes search readiness from the maintenance callback
+        // that the completed corpus scope schedules. Run that callback now;
+        // this harness must not depend on ambient WP-Cron timing.
+        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::reset_request_caches();
+        $initialReadiness = WP_FTS_Plugin::search_takeover_status(false);
+    }
+
     $remaining = wp_fts_wc_checked_count(
         "SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')",
         'final asynchronous full-reindex work'
@@ -560,6 +570,18 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
         wp_fts_wc_gate('reindex_php_peak_bytes', '<= 268435456', memory_get_peak_usage(true), memory_get_peak_usage(true) <= 268435456),
         wp_fts_wc_gate('reindex_rss_peak_bytes', '<= 536870912', wp_fts_wc_rss_bytes('VmHWM'), wp_fts_wc_rss_bytes('VmHWM') <= 536870912),
     ];
+    if ($initialIndex) {
+        $gates[] = wp_fts_wc_gate(
+            'initial_index_search_ready',
+            ['ready' => true, 'reason' => 'ready'],
+            [
+                'ready' => $initialReadiness['ready'] ?? null,
+                'reason' => $initialReadiness['reason'] ?? null,
+            ],
+            ($initialReadiness['ready'] ?? false) === true
+                && ($initialReadiness['reason'] ?? '') === 'ready'
+        );
+    }
     $evidence = [
         'schema' => $initialIndex ? 'relational-fts-initial-index-drain-v1' : 'relational-fts-reindex-drain-v1',
         'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
