@@ -2,14 +2,12 @@
 declare(strict_types=1);
 
 /**
- * Extracts searchable WordPress post fields into weighted index fields.
+ * Extracts searchable WordPress post fields for the relational indexer.
  *
  * This class deliberately separates extraction from indexing: site owners can
  * filter the field list, choose custom fields through options, and tune field
- * boosts without changing the postings storage format. Static block text is
- * extracted from post_content. Dynamic block and shortcode rendering are
- * opt-in because their callbacks can execute arbitrary application code and
- * depend on state outside the post being indexed.
+ * boosts without changing the relational storage format. Indexing reads the
+ * persisted post source; it never renders blocks, shortcodes, or post content.
  */
 final class WP_FTS_PostContentExtractor
 {
@@ -18,13 +16,12 @@ final class WP_FTS_PostContentExtractor
     public const MAX_CUSTOM_FIELD_KEY_BYTES = 191;
     public const MAX_INDEX_FIELDS = 32;
     public const MAX_INDEX_FIELD_NAME_BYTES = 191;
-    private const DEFAULT_RENDERED_TEXT_LIMIT = 20000;
-    private const MAX_RENDERED_TEXT_LIMIT = 200000;
     private const MAX_STRUCTURED_VALUE_DEPTH = 16;
     private const MAX_STRUCTURED_VALUE_NODES = 2048;
     private const MAX_STRUCTURED_TEXT_BYTES = 262144;
-    private const MAX_METADATA_MAP_KEYS = 32;
+    private const MAX_STRUCTURED_MAP_KEYS = 32;
     private const MAX_FIELD_BOOSTS = 32;
+    private const MAX_SNIPPET_TEXT_BYTES = 20000;
 
     /** @var array<string,float> */
     private array $defaultFieldBoosts = [
@@ -33,31 +30,26 @@ final class WP_FTS_PostContentExtractor
         'excerpt' => 2.0,
         'terms' => 2.0,
         'custom_fields' => 1.0,
-        'rendered' => 1.0,
     ];
 
     /**
-     * Build weighted fields and product metadata for a WordPress post-like row.
+     * Build weighted fields and bounded post-content snippet text.
      *
      * `$post` may be a `WP_Post`, a `$wpdb->posts` row, or a test fixture object
-     * with equivalent properties. The returned `search_text` metadata is plain
-     * text and bounded by `metadata_text_limit` to avoid unbounded storage growth.
+     * with equivalent properties. Snippet text comes only from saved post
+     * content; title, excerpt, taxonomy, and custom-field matches must not be
+     * presented as the post body.
      *
      * @param object $post WordPress post object or compatible row.
      * @param array<string,mixed> $opts Extraction options:
-     *        `custom_fields`/`custom_field_keys`, `field_boosts`,
-     *        `render_blocks`, `render_shortcodes`, `render_content_callback`,
-     *        `rendered_text_limit`, `metadata_text_limit`, and `filters`.
+     *        `custom_field_keys`, `field_boosts`, and `filters`.
      * @return array{
      *   fields:array<int,array{name:string,text:string,html?:string,boost:float}>,
-     *   metadata:array<string,mixed>,
-     *   field_boosts:array<string,float>
+     *   snippet_text:string
      * }
      */
     public function extract(object $post, array $opts = []): array
     {
-        $postId = $this->post_id($post);
-        $postType = $this->post_prop($post, 'post_type');
         $title = $this->post_prop($post, 'post_title');
         $content = $this->post_prop($post, 'post_content');
         $excerpt = $this->post_prop($post, 'post_excerpt');
@@ -69,32 +61,11 @@ final class WP_FTS_PostContentExtractor
         }
         $contentText = '';
         if ($content !== '') {
-            if ($this->dynamic_rendering_enabled($opts)) {
-                $this->assert_rendered_source_occurrences($content);
-            }
             $contentText = $this->plain_text($content);
             $fields[] = $this->field('content', $contentText, $fieldBoosts['content'] ?? 1.0, $content);
         }
         if ($excerpt !== '') {
             $fields[] = $this->field('excerpt', $excerpt, $fieldBoosts['excerpt'] ?? 2.0);
-        }
-
-        $rendered = $this->render_content($content, $post, $opts);
-        if ($rendered !== '' && $rendered !== $content) {
-            $renderedTextLimit = max(
-                1,
-                min(self::MAX_RENDERED_TEXT_LIMIT, (int) ($opts['rendered_text_limit'] ?? self::DEFAULT_RENDERED_TEXT_LIMIT))
-            );
-            $this->assert_rendered_source_occurrences($rendered);
-            $renderedText = $this->plain_text($rendered);
-            $renderedDeltaText = $this->rendered_delta_text(
-                $contentText,
-                $renderedText,
-                $renderedTextLimit
-            );
-            if ($renderedDeltaText !== '') {
-                $fields[] = $this->field('rendered', $renderedDeltaText, $fieldBoosts['rendered'] ?? 1.0);
-            }
         }
 
         $terms = $this->extract_terms($post, $opts);
@@ -110,30 +81,9 @@ final class WP_FTS_PostContentExtractor
         }
 
         $fields = $this->normalize_fields($this->apply_filter('wp_fts_post_index_fields', $fields, $post, $opts), $fieldBoosts);
-        $searchText = $this->limit_text($this->structured_text(array_column($fields, 'text')), (int) ($opts['metadata_text_limit'] ?? 20000));
-        $contentSearchText = $this->limit_text($contentText, (int) ($opts['metadata_text_limit'] ?? 20000));
-
-        $metadata = [
-            'post_id' => $postId,
-            'post_type' => $postType,
-            'post_status' => $this->post_prop($post, 'post_status'),
-            'post_date_gmt' => $this->post_prop($post, 'post_date_gmt') ?: $this->post_prop($post, 'post_date'),
-            'title' => $this->plain_text($title),
-            'excerpt' => $this->plain_text($excerpt),
-            'search_text' => $searchText,
-            // Front-end content replacement must never reuse the aggregate
-            // title/excerpt/taxonomy/custom-field search source as post body.
-            'content_search_text' => $contentSearchText,
-            'terms' => $terms,
-            'custom_fields' => $customFields,
-            'field_boosts' => $fieldBoosts,
-        ];
-        $metadata = $this->normalize_metadata($this->apply_filter('wp_fts_post_index_metadata', $metadata, $post, $opts));
-
         return [
             'fields' => $fields,
-            'metadata' => $metadata,
-            'field_boosts' => $fieldBoosts,
+            'snippet_text' => $this->limit_text($contentText, self::MAX_SNIPPET_TEXT_BYTES),
         ];
     }
 
@@ -367,11 +317,9 @@ final class WP_FTS_PostContentExtractor
      */
     public function selected_custom_field_keys(object $post, array $opts = []): array
     {
-        $keys = array_key_exists('custom_fields', $opts)
-            ? $opts['custom_fields']
-            : (array_key_exists('custom_field_keys', $opts)
-                ? $opts['custom_field_keys']
-                : (is_array($post->custom_fields ?? null) ? array_keys($post->custom_fields) : []));
+        $keys = array_key_exists('custom_field_keys', $opts)
+            ? $opts['custom_field_keys']
+            : (is_array($post->custom_fields ?? null) ? array_keys($post->custom_fields) : []);
         $keys = $this->apply_filter('wp_fts_post_custom_fields', $keys, $post, $opts);
 
         return $this->normalize_selected_custom_field_keys($keys);
@@ -529,43 +477,6 @@ final class WP_FTS_PostContentExtractor
     }
 
     /**
-     * Render dynamic content only when a caller accepts its dependency surface.
-     */
-    private function render_content(string $content, object $post, array $opts): string
-    {
-        if ($content === '') {
-            return '';
-        }
-
-        if (isset($opts['render_content_callback']) && is_callable($opts['render_content_callback'])) {
-            $rendered = ($opts['render_content_callback'])($content, $post, $opts);
-            return is_scalar($rendered) ? (string) $rendered : '';
-        }
-
-        $rendered = $content;
-        if (($opts['render_blocks'] ?? false) && function_exists('do_blocks')) {
-            $rendered = (string) do_blocks($rendered);
-        }
-        if (($opts['render_shortcodes'] ?? false)) {
-            if (function_exists('apply_shortcodes')) {
-                $rendered = (string) apply_shortcodes($rendered);
-            } elseif (function_exists('do_shortcode')) {
-                $rendered = (string) do_shortcode($rendered);
-            }
-        }
-
-        return $rendered;
-    }
-
-    /** True only when extraction may execute a dynamic rendering surface. */
-    private function dynamic_rendering_enabled(array $opts): bool
-    {
-        return (isset($opts['render_content_callback']) && is_callable($opts['render_content_callback']))
-            || !empty($opts['render_blocks'])
-            || !empty($opts['render_shortcodes']);
-    }
-
-    /**
      * Apply an option-local callback and then a WordPress filter when available.
      *
      * @param mixed $value
@@ -583,115 +494,6 @@ final class WP_FTS_PostContentExtractor
         }
 
         return $value;
-    }
-
-    /**
-     * Normalize storage metadata into scalar fields plus structured extras.
-     *
-     * @param mixed $metadata
-     * @return array<string,mixed>
-     */
-    private function normalize_metadata(mixed $metadata): array
-    {
-        if (!is_array($metadata)) {
-            return [];
-        }
-        if (count($metadata) > self::MAX_METADATA_MAP_KEYS) {
-            throw new WP_FTS_Analysis_Limit_Exceeded(
-                'metadata_keys',
-                'An FTS document contains more than 32 metadata keys.'
-            );
-        }
-
-        $normalized = [
-            'post_id' => max(0, (int) ($metadata['post_id'] ?? 0)),
-        ];
-        $sourceBytes = 0;
-        $textKeys = ['post_type', 'post_status', 'post_date_gmt', 'title', 'excerpt', 'search_text', 'content_search_text'];
-        foreach ($textKeys as $key) {
-            $value = $metadata[$key] ?? '';
-            if (!is_scalar($value)) {
-                throw new WP_FTS_Analysis_Limit_Exceeded(
-                    'metadata_shape',
-                    'FTS metadata text values must be scalar.'
-                );
-            }
-            $value = (string) $value;
-            $sourceBytes += strlen($value);
-            WP_FTS_Analysis_Limits::assert_document_source_bytes($sourceBytes);
-            $normalized[$key] = $this->plain_text($value);
-        }
-
-        $nodes = 0;
-        $structuredSourceBytes = 0;
-        $structuredTextBytes = 0;
-        $normalized['terms'] = $this->normalize_string_lists_with_budget(
-            $metadata['terms'] ?? [],
-            $nodes,
-            $structuredSourceBytes,
-            $structuredTextBytes
-        );
-        $normalized['custom_fields'] = $this->normalize_string_lists_with_budget(
-            $metadata['custom_fields'] ?? [],
-            $nodes,
-            $structuredSourceBytes,
-            $structuredTextBytes
-        );
-
-        $rawBoosts = $metadata['field_boosts'] ?? [];
-        if (!is_array($rawBoosts) || count($rawBoosts) > self::MAX_FIELD_BOOSTS) {
-            throw new WP_FTS_Analysis_Limit_Exceeded(
-                'field_boosts',
-                'FTS metadata may contain at most 32 field boosts.'
-            );
-        }
-        $boosts = [];
-        foreach ($rawBoosts as $field => $boost) {
-            $field = (string) $field;
-            if (strlen($field) > self::MAX_INDEX_FIELD_NAME_BYTES) {
-                throw new WP_FTS_Analysis_Limit_Exceeded(
-                    'field_boost_name_bytes',
-                    'An FTS metadata field-boost name exceeds the 191-byte limit.'
-                );
-            }
-            if (is_string($boost) && strlen($boost) > 32) {
-                throw new WP_FTS_Analysis_Limit_Exceeded(
-                    'field_boost_value_bytes',
-                    'An FTS metadata field-boost value exceeds the 32-byte limit.'
-                );
-            }
-            if (is_numeric($boost)) {
-                $boosts[$field] = $this->positive_boost((float) $boost);
-            }
-        }
-        ksort($boosts, SORT_STRING);
-        $normalized['field_boosts'] = $boosts;
-
-        $known = array_fill_keys(['post_id', ...$textKeys, 'terms', 'custom_fields', 'field_boosts'], true);
-        $extras = [];
-        foreach ($metadata as $key => $value) {
-            $key = (string) $key;
-            if (isset($known[$key])) {
-                continue;
-            }
-            if (strlen($key) > self::MAX_INDEX_FIELD_NAME_BYTES) {
-                throw new WP_FTS_Analysis_Limit_Exceeded(
-                    'metadata_key_bytes',
-                    'An FTS metadata key exceeds the 191-byte limit.'
-                );
-            }
-            $extras[$key] = $value;
-        }
-        if ($extras !== []) {
-            $validatedExtras = WP_FTS_StorageCompat::normalize_doc_metadata($extras);
-            foreach (array_keys($extras) as $key) {
-                if (array_key_exists($key, $validatedExtras)) {
-                    $normalized[$key] = $validatedExtras[$key];
-                }
-            }
-        }
-
-        return $normalized;
     }
 
     /**
@@ -738,7 +540,7 @@ final class WP_FTS_PostContentExtractor
         if (!is_array($lists)) {
             return [];
         }
-        if (count($lists) > self::MAX_METADATA_MAP_KEYS) {
+        if (count($lists) > self::MAX_STRUCTURED_MAP_KEYS) {
             throw new WP_FTS_Analysis_Limit_Exceeded(
                 'structured_map_keys',
                 'An FTS structured map contains more than 32 keys.'
@@ -787,7 +589,7 @@ final class WP_FTS_PostContentExtractor
     }
 
     /**
-     * Traverse structured metadata without recursive-amplification or magic access.
+     * Traverse structured field values without recursive amplification or magic access.
      *
      * @param string[] $result
      */
@@ -856,245 +658,13 @@ final class WP_FTS_PostContentExtractor
     }
 
     /**
-     * Join nested text values into one searchable metadata string.
+     * Join nested text values into one searchable field string.
      *
      * @param mixed $value
      */
     private function structured_text(mixed $value): string
     {
         return $this->plain_text(implode(' ', $this->list_text_values($value)));
-    }
-
-    /**
-     * Keep rendered-only visible text without re-indexing raw static block text.
-     */
-    private function rendered_delta_text(string $rawText, string $renderedText, int $outputLimit): string
-    {
-        if ($renderedText === '' || $renderedText === $rawText) {
-            return '';
-        }
-
-        // Rendering is an extension point, so its output must cross the same
-        // lexical boundary before comparison. In particular, do not discover a
-        // million one-byte words by first materializing two preg_split arrays.
-        $rawOccurrences = $this->rendered_delta_occurrence_count($rawText);
-        $renderedOccurrences = $this->rendered_delta_occurrence_count($renderedText);
-        if ($rawText === '') {
-            $this->assert_rendered_delta_occurrences($rawOccurrences, $renderedOccurrences);
-            return $this->limit_text($renderedText, $outputLimit);
-        }
-        if (strpos($rawText, $renderedText) !== false) {
-            return '';
-        }
-
-        $position = strpos($renderedText, $rawText);
-        if ($position !== false) {
-            $delta = $this->plain_text(
-                substr($renderedText, 0, $position) . ' ' . substr($renderedText, $position + strlen($rawText))
-            );
-            $this->assert_rendered_delta_occurrences(
-                $rawOccurrences,
-                $this->rendered_delta_occurrence_count($delta)
-            );
-
-            return $this->limit_text($delta, $outputLimit);
-        }
-
-        $tokenDelta = $this->remove_token_subsequence_once($renderedText, $rawText, $outputLimit);
-        if ($tokenDelta === null) {
-            $tokenDelta = $this->remove_token_overlap_once($renderedText, $rawText, $outputLimit);
-        }
-
-        if ($tokenDelta === null) {
-            $this->assert_rendered_delta_occurrences($rawOccurrences, $renderedOccurrences);
-            return $this->limit_text($renderedText, $outputLimit);
-        }
-
-        $this->assert_rendered_delta_occurrences($rawOccurrences, $tokenDelta['occurrences']);
-        return $tokenDelta['text'];
-    }
-
-    /**
-     * Remove one ordered copy of raw visible tokens from rendered visible tokens.
-     *
-     * @return array{text:string,occurrences:int}|null
-     */
-    private function remove_token_subsequence_once(
-        string $renderedText,
-        string $rawText,
-        int $outputLimit
-    ): ?array
-    {
-        $rawTokens = $this->rendered_delta_token_stream($rawText);
-        $rawTokens->rewind();
-        if (!$rawTokens->valid()) {
-            return null;
-        }
-
-        $rawToken = $this->comparison_token((string) $rawTokens->current());
-        $delta = '';
-        $deltaOccurrences = 0;
-        foreach ($this->rendered_delta_token_stream($renderedText) as $token) {
-            if (!$rawTokens->valid() || $this->comparison_token($token) !== $rawToken) {
-                $this->append_rendered_delta_token($delta, $token, $outputLimit);
-                $deltaOccurrences++;
-                continue;
-            }
-
-            $rawTokens->next();
-            if ($rawTokens->valid()) {
-                $rawToken = $this->comparison_token((string) $rawTokens->current());
-            }
-        }
-
-        if ($rawTokens->valid()) {
-            return null;
-        }
-
-        return [
-            'text' => $this->limit_text($this->plain_text($delta), $outputLimit),
-            'occurrences' => $deltaOccurrences,
-        ];
-    }
-
-    /**
-     * Remove raw-visible token overlaps when rendered text is not a clean superset.
-     *
-     * @return array{text:string,occurrences:int}|null
-     */
-    private function remove_token_overlap_once(
-        string $renderedText,
-        string $rawText,
-        int $outputLimit
-    ): ?array
-    {
-        $rawCounts = [];
-        foreach ($this->rendered_delta_token_stream($rawText) as $token) {
-            $key = $this->comparison_token($token);
-            $rawCounts[$key] = ($rawCounts[$key] ?? 0) + 1;
-        }
-        if ($rawCounts === []) {
-            return null;
-        }
-
-        $delta = '';
-        $deltaOccurrences = 0;
-        $removedAny = false;
-        foreach ($this->rendered_delta_token_stream($renderedText) as $token) {
-            $key = $this->comparison_token($token);
-            if (($rawCounts[$key] ?? 0) > 0) {
-                $rawCounts[$key]--;
-                $removedAny = true;
-                continue;
-            }
-
-            $this->append_rendered_delta_token($delta, $token, $outputLimit);
-            $deltaOccurrences++;
-        }
-
-        return $removedAny
-            ? [
-                'text' => $this->limit_text($this->plain_text($delta), $outputLimit),
-                'occurrences' => $deltaOccurrences,
-            ]
-            : null;
-    }
-
-    /** Count a plain-text token stream without retaining one PHP value per word. */
-    private function rendered_delta_occurrence_count(string $text): int
-    {
-        $occurrences = 0;
-        foreach ($this->rendered_delta_token_stream($text) as $_token) {
-            if (++$occurrences > WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES) {
-                throw new WP_FTS_Analysis_Limit_Exceeded(
-                    'occurrences',
-                    'FTS rendered-content analysis exceeds the 20,000-occurrence limit.'
-                );
-            }
-        }
-
-        return $occurrences;
-    }
-
-    /** Reject dense rendered HTML before plain_text() scans and allocates it. */
-    private function assert_rendered_source_occurrences(string $source): void
-    {
-        WP_FTS_Analysis_Limits::assert_source_bytes($source);
-        // This scan runs before plain_text(), and dynamic rendering may return
-        // arbitrary markup. Reject its syntax before either streaming parser
-        // allocates a deep breadcrumb stack.
-        WP_FTS_Html_Text_Stream::assert_analysis_markup_limits($source);
-        $occurrences = 0;
-        foreach (WP_FTS_Html_Text_Stream::visible_word_stream($source) as $_word) {
-            if (++$occurrences > WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES) {
-                throw new WP_FTS_Analysis_Limit_Exceeded(
-                    'occurrences',
-                    'FTS rendered-content analysis exceeds the 20,000-occurrence limit.'
-                );
-            }
-        }
-    }
-
-    /**
-     * Yield whitespace-delimited tokens from text already normalized by
-     * plain_text(). That normalizer collapses every whitespace run to one ASCII
-     * space, so an explicit byte scan is sufficient and does not parse markup.
-     *
-     * @return Generator<int,string>
-     */
-    private function rendered_delta_token_stream(string $text): Generator
-    {
-        $offset = 0;
-        $length = strlen($text);
-        while ($offset < $length) {
-            $separator = strpos($text, ' ', $offset);
-            $end = $separator === false ? $length : $separator;
-            if ($end > $offset) {
-                $token = substr($text, $offset, $end - $offset);
-                WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($token));
-                yield $token;
-            }
-            if ($separator === false) {
-                return;
-            }
-            $offset = $separator + 1;
-        }
-    }
-
-    /** Retain only the configured rendered field prefix while scanning all input. */
-    private function append_rendered_delta_token(string &$delta, string $token, int $outputLimit): void
-    {
-        $remaining = max(0, $outputLimit - strlen($delta));
-        if ($remaining <= 0) {
-            return;
-        }
-        if ($delta !== '') {
-            if ($remaining <= 1) {
-                return;
-            }
-            $delta .= ' ';
-            $remaining--;
-        }
-        $delta .= WP_FTS_Utf8::truncate_bytes($token, $remaining);
-    }
-
-    /** The raw field plus its rendered-only delta share one document budget. */
-    private function assert_rendered_delta_occurrences(int $rawOccurrences, int $deltaOccurrences): void
-    {
-        if ($rawOccurrences + $deltaOccurrences > WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES) {
-            throw new WP_FTS_Analysis_Limit_Exceeded(
-                'occurrences',
-                'FTS raw and rendered-only content exceed the 20,000-occurrence document limit.'
-            );
-        }
-    }
-
-    /**
-     * Normalize token text for rendered/raw visible-text comparisons.
-     */
-    private function comparison_token(string $token): string
-    {
-        return strtolower(html_entity_decode($token, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8'));
     }
 
     /**
@@ -1108,7 +678,7 @@ final class WP_FTS_PostContentExtractor
         WP_FTS_Analysis_Limits::assert_source_bytes($text);
         // Extraction precedes Indexer preparation. The shared syntax pass must
         // therefore happen here, before visible_text() builds parser state for
-        // post content, filtered fields, or structured metadata values.
+        // post content, filtered fields, or structured field values.
         WP_FTS_Html_Text_Stream::assert_analysis_markup_limits($text);
 
         return WP_FTS_Html_Text_Stream::visible_text($text);
@@ -1130,11 +700,4 @@ final class WP_FTS_PostContentExtractor
         return isset($post->{$prop}) && is_scalar($post->{$prop}) ? (string) $post->{$prop} : '';
     }
 
-    /**
-     * Read a non-negative post id.
-     */
-    private function post_id(object $post): int
-    {
-        return max(0, (int) ($post->ID ?? $post->id ?? 0));
-    }
 }

@@ -200,8 +200,8 @@ test_case_with_pdo_sqlite_fixture('quality SQLite scope index names are complete
     $site = new WP_FTS_Storage_Mysql($wpdb, 'wp_2_');
     $main->ensure_scope_keyset_indexes();
     $site->ensure_scope_keyset_indexes();
-    assert_same(true, $main->verify_scope_keyset_indexes()['valid'] ?? null, 'main-site SQLite supporting indexes should verify exactly');
-    assert_same(true, $site->verify_scope_keyset_indexes()['valid'] ?? null, 'subsite SQLite supporting indexes should verify exactly');
+    assert_same(true, $main->verify_schema_and_scope_keyset_indexes()['scope_keyset_indexes']['valid'] ?? null, 'main-site SQLite supporting indexes should verify exactly');
+    assert_same(true, $site->verify_schema_and_scope_keyset_indexes()['scope_keyset_indexes']['valid'] ?? null, 'subsite SQLite supporting indexes should verify exactly');
 
     $names = [];
     foreach (['wp_posts', 'wp_2_posts', 'wp_term_relationships', 'wp_2_term_relationships'] as $table) {
@@ -215,12 +215,12 @@ test_case_with_pdo_sqlite_fixture('quality SQLite scope index names are complete
     }
     assert_same(4, count(array_unique($names)), 'SQLite database-wide names must not collide across two site prefixes');
 
-    $targetHint = $main->targeted_scope_index_hint();
+    $targetHint = $main->validated_targeted_scope_index_hint();
     preg_match('/`([^`]+)`/', $targetHint, $match);
     $targetName = (string) ($match[1] ?? '');
     $wpdb->query("DROP INDEX `{$targetName}`");
     $wpdb->query("CREATE INDEX `{$targetName}` ON wp_term_relationships(term_taxonomy_id,object_id) WHERE object_id > 10");
-    $verification = $main->verify_scope_keyset_indexes();
+    $verification = $main->verify_schema_and_scope_keyset_indexes()['scope_keyset_indexes'];
     assert_same(false, $verification['valid'] ?? null, 'a same-column partial SQLite index must fail the complete keyset contract');
     assert_contains('conflicts', (string) ($verification['error'] ?? ''), 'partial-index rejection should identify a definition collision');
 });

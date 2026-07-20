@@ -1556,6 +1556,19 @@ test_case_with_pdo_sqlite_fixture('relational v4 SQLite schema repair is idempot
         'documents' => 0,
         'work' => 1,
     ], $payload['mismatched_document'] ?? null, 'one incompatible search table must replace the complete three-table generation');
+    assert_same(
+        ['wp_fts_documents.content_hash', 'wp_fts_documents.snippet_text'],
+        $payload['invalid_document_definitions_before']['invalid_columns'] ?? null,
+        'SQLite verification must reject the wrong content-hash affinity and a nullable snippet projection'
+    );
+    assert_same([
+        'valid' => true,
+        'drops' => 3,
+        'terms' => 0,
+        'postings' => 0,
+        'documents' => 0,
+        'work' => 1,
+    ], $payload['invalid_document_definitions'] ?? null, 'invalid SQLite column definitions must replace the complete search generation');
     assert_same([
         'valid' => true,
         'drops' => 3,
@@ -2570,10 +2583,10 @@ function wp_fts_v4_regression_create_schema(WP_FTS_V4_Regression_SQLite_WPDB $wp
         'CREATE TABLE wp_fts_terms (term_id INTEGER PRIMARY KEY AUTOINCREMENT, lang BLOB NOT NULL, kind INTEGER NOT NULL, term BLOB NOT NULL, doc_freq INTEGER NOT NULL)',
         'CREATE UNIQUE INDEX wp_fts_term_identity ON wp_fts_terms(lang,kind,term)',
         'CREATE INDEX wp_fts_empty_terms ON wp_fts_terms(doc_freq)',
-        'CREATE TABLE wp_fts_postings (term_id INTEGER NOT NULL, post_id INTEGER NOT NULL, impact REAL NOT NULL, PRIMARY KEY(term_id,post_id))',
+        'CREATE TABLE wp_fts_postings (term_id INTEGER NOT NULL, post_id INTEGER NOT NULL, impact INTEGER NOT NULL, PRIMARY KEY(term_id,post_id))',
         'CREATE INDEX wp_fts_post_term_impact ON wp_fts_postings(post_id,term_id,impact)',
-        'CREATE TABLE wp_fts_documents (post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL, content_hash BLOB, snippet_text TEXT, indexed_at INTEGER NOT NULL)',
-        "CREATE TABLE wp_fts_work (job_key BLOB PRIMARY KEY, kind TEXT NOT NULL, post_id INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'pending', available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT NOT NULL DEFAULT '', claimed_generation INTEGER NOT NULL DEFAULT 0, claim_expires_at INTEGER NOT NULL DEFAULT 0, cursor_post_id INTEGER NOT NULL DEFAULT 0, scope_coverage TEXT NOT NULL DEFAULT '', scope_incarnation BLOB NOT NULL DEFAULT '', scope_subject_type TEXT NOT NULL DEFAULT '', scope_subject_id INTEGER NOT NULL DEFAULT 0, payload TEXT, last_error_code TEXT NOT NULL DEFAULT '', last_error_at INTEGER NOT NULL DEFAULT 0)",
+        'CREATE TABLE wp_fts_documents (post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL, content_hash BLOB NOT NULL, snippet_text TEXT NOT NULL, indexed_at INTEGER NOT NULL)',
+        "CREATE TABLE wp_fts_work (job_key BLOB NOT NULL PRIMARY KEY, kind TEXT NOT NULL, post_id INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'pending', available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT NOT NULL DEFAULT '', claimed_generation INTEGER NOT NULL DEFAULT 0, claim_expires_at INTEGER NOT NULL DEFAULT 0, cursor_post_id INTEGER NOT NULL DEFAULT 0, scope_coverage TEXT NOT NULL DEFAULT '', scope_incarnation BLOB NOT NULL DEFAULT '', scope_subject_type TEXT NOT NULL DEFAULT '', scope_subject_id INTEGER NOT NULL DEFAULT 0, payload TEXT, last_error_code TEXT NOT NULL DEFAULT '', last_error_at INTEGER NOT NULL DEFAULT 0)",
         'CREATE INDEX wp_fts_work_ready ON wp_fts_work(kind,state,available_at,post_id,job_key)',
         'CREATE INDEX wp_fts_work_claim_token ON wp_fts_work(claim_token,post_id)',
         'CREATE INDEX wp_fts_work_kind_job ON wp_fts_work(kind,job_key)',

@@ -155,7 +155,6 @@ final class WP_FTS_Plugin
     private const ADMIN_POSTS_PAGE_FIELD = 'wp_fts_sandbox_posts_page';
     private const ADMIN_POSTS_CURSOR_FIELD = 'wp_fts_sandbox_posts_cursor';
     private const ADMIN_POSTS_CURSOR_DIRECTION_FIELD = 'wp_fts_sandbox_posts_cursor_direction';
-    private const ADMIN_SHOW_INDEXED_TERMS_FIELD = 'wp_fts_sandbox_show_indexed_terms';
     private const ADMIN_TAB_FIELD = 'tab';
     private const ADMIN_HEALTH_TAB = 'health';
     private const ADMIN_SETTINGS_TAB = 'settings';
@@ -181,7 +180,6 @@ final class WP_FTS_Plugin
     private const POST_LANGUAGE_FIELD = 'wp_fts_post_language';
     private const POST_LANGUAGE_NONCE_ACTION = 'wp_fts_post_language';
     private const POST_LANGUAGE_NONCE_FIELD = 'wp_fts_post_language_nonce';
-    private const SANDBOX_INDEXED_TERMS_LIMIT = 24;
     private const SANDBOX_INDEXED_POSTS_PER_PAGE = 10;
     private const SETTINGS_SNIPPET_MIN = 40;
     private const SETTINGS_SNIPPET_MAX = 500;
@@ -202,7 +200,6 @@ final class WP_FTS_Plugin
         'excerpt' => 2.0,
         'terms' => 2.0,
         'custom_fields' => 1.0,
-        'rendered' => 1.0,
     ];
     private const FIELD_BOOST_LABELS = [
         'title' => [
@@ -224,10 +221,6 @@ final class WP_FTS_Plugin
         'custom_fields' => [
             'label' => 'Selected custom fields',
             'description' => 'Matches in custom fields selected for indexing.',
-        ],
-        'rendered' => [
-            'label' => 'Rendered-only content',
-            'description' => 'Matches in block-rendered output that is not already in the saved content.',
         ],
     ];
     private const SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS = 'prefer_fts';
@@ -2842,7 +2835,7 @@ final class WP_FTS_Plugin
         try {
             $selected_keys = (new WP_FTS_PostContentExtractor())->selected_custom_field_keys(
                 (object) ['ID' => max(0, $post_id)],
-                ['custom_fields' => $configured]
+                ['custom_field_keys' => $configured]
             );
         } catch (Throwable) {
             // Malformed selection remains worker-visible poison. Foreground
@@ -2913,10 +2906,10 @@ final class WP_FTS_Plugin
             $language = WP_FTS_TermNamespace::language_from_options(
                 $index_options,
                 null,
-                ['lang', 'language', 'primary_lang', 'document_lang']
+                ['document_lang']
             );
             if ($language !== null) {
-                $payload['index_options'] = ['lang' => $language, 'document_lang' => $language];
+                $payload['index_options'] = ['document_lang' => $language];
             }
             $queued = $queue->enqueue_many($post_ids, null, $payload);
             if ($queued > 0) {
@@ -2938,7 +2931,7 @@ final class WP_FTS_Plugin
      * their next page, so a large site never receives one queue row per matching
      * post before indexing starts.
      *
-     * @param array{post_status:array<int,string>,post_type:array<int,string>,limit?:int,lang?:string} $options
+     * @param array{post_status:array<int,string>,post_type:array<int,string>,limit?:int,document_lang?:string} $options
      * @return string Durable hashed scope job key.
      */
     public static function enqueue_reindex_scope(array $options): string
@@ -2988,10 +2981,10 @@ final class WP_FTS_Plugin
             $language = WP_FTS_TermNamespace::language_from_options(
                 $options,
                 null,
-                ['lang', 'language', 'primary_lang', 'document_lang']
+                ['document_lang']
             );
             if ($language !== null) {
-                $payload['index_options'] = ['lang' => $language, 'document_lang' => $language];
+                $payload['index_options'] = ['document_lang' => $language];
             }
 
             $identity = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
@@ -7024,8 +7017,7 @@ final class WP_FTS_Plugin
             'callback' => [self::class, 'rest_search'],
             'permission_callback' => [self::class, 'rest_search_permission'],
             'args' => [
-                'q' => ['required' => false],
-                'query' => ['required' => false],
+                'q' => ['required' => true],
                 'lang' => ['required' => false],
                 'mode' => ['required' => false],
                 'limit' => ['required' => false],
@@ -8703,7 +8695,7 @@ final class WP_FTS_Plugin
     /** Renders the bounded search sandbox without running a query implicitly. */
     private static function render_admin_sandbox_tab(): void
     {
-        $state = self::admin_sandbox_state(false);
+        $state = self::admin_sandbox_state();
         foreach ($state['messages'] as $message) {
             self::render_sandbox_notice($message[0], $message[1]);
         }
@@ -8727,9 +8719,8 @@ final class WP_FTS_Plugin
     private static function render_indexed_content_tab(): void
     {
         $messages = [];
-        $show_indexed_terms = self::sandbox_indexed_terms_debug_enabled();
         try {
-            $indexed_posts = self::sandbox_indexed_posts_page(self::sandbox_indexed_posts_page_number(), $show_indexed_terms);
+            $indexed_posts = self::sandbox_indexed_posts_page(self::sandbox_indexed_posts_page_number());
         } catch (Throwable $e) {
             $messages[] = ['error', 'Could not read indexed posts: ' . $e->getMessage()];
             $indexed_posts = self::empty_sandbox_indexed_posts_page(self::sandbox_indexed_posts_page_number());
@@ -8744,8 +8735,7 @@ final class WP_FTS_Plugin
             $indexed_posts,
             self::sandbox_search_query(),
             self::sandbox_selected_language(),
-            self::sandbox_search_submitted(),
-            $show_indexed_terms
+            self::sandbox_search_submitted()
         );
     }
 
@@ -8768,11 +8758,10 @@ final class WP_FTS_Plugin
      *   selected_language:string,
      *   search_submitted:bool,
      *   controls:array<string,mixed>,
-     *   show_indexed_terms:bool,
      *   results:array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>}
      * }
      */
-    private static function admin_sandbox_state(bool $include_indexed_posts): array
+    private static function admin_sandbox_state(): array
     {
         $messages = [];
 
@@ -8780,8 +8769,6 @@ final class WP_FTS_Plugin
         $query = self::sandbox_search_query();
         $selected_language = self::sandbox_selected_language();
         $controls = self::sandbox_search_controls($search_submitted);
-        $show_indexed_terms = self::sandbox_indexed_terms_debug_enabled();
-
         $results = self::empty_sandbox_search_results($selected_language);
         if ($search_submitted) {
             if ($query === '') {
@@ -8808,7 +8795,6 @@ final class WP_FTS_Plugin
             'selected_language' => $selected_language,
             'search_submitted' => $search_submitted,
             'controls' => $controls,
-            'show_indexed_terms' => $show_indexed_terms,
             'results' => $results,
         ];
     }
@@ -8915,7 +8901,7 @@ final class WP_FTS_Plugin
             'rest_prefix_matching' => array_key_exists('rest_prefix_matching', $value) ? self::truthy_admin_value($value['rest_prefix_matching']) : $defaults['rest_prefix_matching'],
             'result_limit' => self::clamp_int($value['result_limit'] ?? $defaults['result_limit'], 1, self::MAX_SEARCH_LIMIT),
             'field_boosts' => self::sanitize_field_boosts($value['field_boosts'] ?? []),
-            'recency_boost_strength' => self::sanitize_recency_boost_strength($value['recency_boost_strength'] ?? ($value['recency_boost'] ?? $defaults['recency_boost_strength'])),
+            'recency_boost_strength' => self::sanitize_recency_boost_strength($value['recency_boost_strength'] ?? $defaults['recency_boost_strength']),
             'recency_boost_half_life_days' => self::sanitize_recency_boost_half_life($value['recency_boost_half_life_days'] ?? $defaults['recency_boost_half_life_days']),
         ];
     }
@@ -9853,11 +9839,9 @@ final class WP_FTS_Plugin
         if (!array_key_exists('field_boosts', $options)) {
             $options['field_boosts'] = self::settings_field_boosts(self::settings()['field_boosts'] ?? []);
         }
-        $options['render_blocks'] ??= false;
-
         if (
             $post_language_preloaded
-            && WP_FTS_TermNamespace::language_from_options($options, null, ['lang', 'language', 'primary_lang', 'document_lang']) === null
+            && WP_FTS_TermNamespace::language_from_options($options, null, ['document_lang']) === null
         ) {
             $metadata_language = self::wordpress_post_language($post);
             if ($metadata_language !== null) {
@@ -9983,21 +9967,6 @@ final class WP_FTS_Plugin
         }
 
         return wp_verify_nonce($nonce, self::ADMIN_ANALYZER_NONCE_ACTION) !== false;
-    }
-
-    /**
-     * @param array<string,mixed> $metadata
-     * @param array<string,mixed> $doc
-     */
-    private static function sandbox_indexed_language(array $metadata, array $doc, string $fallback): string
-    {
-        foreach ([$metadata['language'] ?? null, $metadata['lang'] ?? null, $doc['primary_lang'] ?? null, $doc['lang'] ?? null] as $candidate) {
-            if (is_scalar($candidate) && trim((string) $candidate) !== '') {
-                return WP_FTS_TermNamespace::canonicalize_lang((string) $candidate, $fallback);
-            }
-        }
-
-        return WP_FTS_TermNamespace::canonicalize_lang($fallback);
     }
 
     /**
@@ -10182,11 +10151,11 @@ final class WP_FTS_Plugin
         self::debug_set_search_explain($trace_id, $payload['explain'] ?? null);
 
         $results = [];
-        foreach (is_array($payload['results'] ?? null) ? $payload['results'] : [] as $row) {
+        foreach ($payload['results'] as $row) {
             if (!is_array($row)) {
                 continue;
             }
-            $post_id = max(0, (int) ($row['doc_id'] ?? $row['post_id'] ?? 0));
+            $post_id = max(0, (int) ($row['doc_id'] ?? 0));
             if ($post_id <= 0) {
                 continue;
             }
@@ -11780,7 +11749,7 @@ final class WP_FTS_Plugin
     /**
      * @param array<string,mixed> $page
      */
-    private static function render_sandbox_indexed_posts_table(array $page, string $query, string $selected_language, bool $search_submitted, bool $show_indexed_terms): void
+    private static function render_sandbox_indexed_posts_table(array $page, string $query, string $selected_language, bool $search_submitted): void
     {
         if (($page['rows'] ?? []) === []) {
             echo '<p>No indexed posts are available yet.</p>';
@@ -11788,14 +11757,8 @@ final class WP_FTS_Plugin
         }
 
         echo '<p>Showing one bounded page of indexed posts. Exact totals are intentionally not calculated.</p>';
-        if ($show_indexed_terms) {
-            echo '<p><a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'], $query, $selected_language, $search_submitted, false, (int) ($page['input_cursor'] ?? 0), (string) ($page['cursor_direction'] ?? 'after'))) . '">Hide indexed terms</a></p>';
-        } else {
-            echo '<p><a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'], $query, $selected_language, $search_submitted, true, (int) ($page['input_cursor'] ?? 0), (string) ($page['cursor_direction'] ?? 'after'))) . '">Show indexed terms</a> <span class="description">Loads stored terms for the visible rows.</span></p>';
-        }
-
         echo '<table class="widefat striped">';
-        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Language</th><th scope="col">Indexed terms</th><th scope="col">Content preview</th></tr></thead>';
+        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Language</th><th scope="col">Content preview</th></tr></thead>';
         echo '<tbody>';
         foreach ($page['rows'] as $row) {
             echo '<tr>';
@@ -11804,9 +11767,6 @@ final class WP_FTS_Plugin
             echo '<td><code>' . self::esc_html($row['post_type']) . '</code></td>';
             echo '<td><code>' . self::esc_html($row['post_status']) . '</code></td>';
             echo '<td>' . self::esc_html($row['language']) . '</td>';
-            echo '<td>';
-            self::render_sandbox_indexed_terms($row['indexed_terms'], $row['indexed_terms_more'], $show_indexed_terms);
-            echo '</td>';
             echo '<td>' . self::esc_html($row['preview']) . '</td>';
             echo '</tr>';
         }
@@ -11819,10 +11779,10 @@ final class WP_FTS_Plugin
         echo '<p class="tablenav-pages">';
         echo '<span class="displaying-num">Page ' . self::esc_html((string) $page['page']) . '</span> ';
         if (!empty($page['previous_cursor'])) {
-            echo '<a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'] - 1, $query, $selected_language, $search_submitted, $show_indexed_terms, (int) $page['previous_cursor'], 'before')) . '">Previous</a> ';
+            echo '<a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'] - 1, $query, $selected_language, $search_submitted, (int) $page['previous_cursor'], 'before')) . '">Previous</a> ';
         }
         if (!empty($page['next_cursor'])) {
-            echo '<a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'] + 1, $query, $selected_language, $search_submitted, $show_indexed_terms, (int) $page['next_cursor'], 'after')) . '">Next</a>';
+            echo '<a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'] + 1, $query, $selected_language, $search_submitted, (int) $page['next_cursor'], 'after')) . '">Next</a>';
         }
         echo '</p>';
     }
@@ -12007,19 +11967,6 @@ JS;
             : 'after';
     }
 
-    private static function sandbox_indexed_terms_debug_enabled(): bool
-    {
-        return self::sandbox_indexed_terms_debug_enabled_from_source($_GET);
-    }
-
-    /**
-     * @param array<string,mixed> $source
-     */
-    private static function sandbox_indexed_terms_debug_enabled_from_source(array $source): bool
-    {
-        return self::request_bool_value($source, self::ADMIN_SHOW_INDEXED_TERMS_FIELD, false, true);
-    }
-
     /**
      * @return array<string,mixed>
      */
@@ -12044,13 +11991,12 @@ JS;
      *
      * @return array<string,mixed>
      */
-    private static function sandbox_indexed_posts_page(int $page, bool $show_indexed_terms = false): array
+    private static function sandbox_indexed_posts_page(int $page): array
     {
         global $wpdb;
         if (!isset($wpdb) || !is_object($wpdb) || !is_callable([$wpdb, 'prepare']) || !is_callable([$wpdb, 'get_results'])) {
             return self::empty_sandbox_indexed_posts_page($page);
         }
-        $storage = self::storage(false);
         $per_page = self::SANDBOX_INDEXED_POSTS_PER_PAGE;
         $cursor = self::sandbox_indexed_posts_cursor();
         $direction = $cursor > 0 ? self::sandbox_indexed_posts_cursor_direction() : 'after';
@@ -12081,10 +12027,6 @@ LIMIT %d",
             static fn(object $row): int => max(0, (int) ($row->post_id ?? 0)),
             $rows
         )));
-        $terms_by_post = $show_indexed_terms && method_exists($storage, 'terms_for_docs')
-            ? $storage->terms_for_docs($page_ids, self::SANDBOX_INDEXED_TERMS_LIMIT + 1)
-            : [];
-
         $result_rows = [];
         foreach ($rows as $row) {
             $post_id = max(0, (int) ($row->post_id ?? 0));
@@ -12100,12 +12042,10 @@ LIMIT %d",
                 'primary_lang' => $lang,
                 'search_text' => (string) ($row->snippet_text ?? ''),
             ];
-            $doc = ['primary_lang' => $lang, 'lang_lengths' => []];
             $result_rows[] = self::sandbox_indexed_post_row(
                 $post_id,
                 $metadata,
-                $doc,
-                is_array($terms_by_post[$post_id] ?? null) ? $terms_by_post[$post_id] : []
+                $lang
             );
         }
 
@@ -12134,15 +12074,12 @@ LIMIT %d",
 
     /**
      * @param array<string,mixed> $metadata
-     * @param array<string,mixed> $doc
-     * @param string[] $indexed_terms
-     * @return array{post_id:int,title:string,post_type:string,post_status:string,language:string,indexed_terms:string[],indexed_terms_more:bool,preview:string}
+     * @return array{post_id:int,title:string,post_type:string,post_status:string,language:string,preview:string}
      */
-    private static function sandbox_indexed_post_row(int $post_id, array $metadata, array $doc, array $indexed_terms): array
+    private static function sandbox_indexed_post_row(int $post_id, array $metadata, string $language): array
     {
         $post_type = is_scalar($metadata['post_type'] ?? null) ? (string) $metadata['post_type'] : '';
         $post_status = is_scalar($metadata['post_status'] ?? null) ? (string) $metadata['post_status'] : '';
-        $lengths = WP_FTS_StorageCompat::doc_lang_lengths($doc);
         $preview = (string) ($metadata['search_text'] ?? $metadata['excerpt'] ?? '');
         $title = is_scalar($metadata['title'] ?? null) ? trim((string) $metadata['title']) : '';
 
@@ -12151,86 +12088,28 @@ LIMIT %d",
             'title' => $title !== '' ? $title : '(untitled)',
             'post_type' => $post_type !== '' ? $post_type : 'unknown',
             'post_status' => $post_status !== '' ? $post_status : 'unknown',
-            'language' => self::sandbox_indexed_post_language_display($metadata, $doc, $lengths),
-            'indexed_terms' => self::sandbox_indexed_terms_for_display(array_slice($indexed_terms, 0, self::SANDBOX_INDEXED_TERMS_LIMIT)),
-            'indexed_terms_more' => count($indexed_terms) > self::SANDBOX_INDEXED_TERMS_LIMIT,
+            'language' => self::sandbox_indexed_post_language_display($language),
             'preview' => self::sanitize_text($preview),
         ];
     }
 
-    /**
-     * @param string[] $terms
-     * @return string[]
-     */
-    private static function sandbox_indexed_terms_for_display(array $terms): array
+    /** Describe the analyzer support for one indexed language partition. */
+    private static function sandbox_indexed_post_language_display(string $language): string
     {
-        $display = [];
-        foreach ($terms as $term) {
-            $split = WP_FTS_TermNamespace::split_term($term);
-            $label = $split !== null
-                ? $split['lang'] . ':' . $split['term']
-                : $term;
-            $label = trim(str_replace(["\r", "\n", "\t"], ' ', WP_FTS_Utf8::repair($label)));
-            if ($label !== '') {
-                $display[$label] = true;
+        $language = WP_FTS_TermNamespace::canonicalize_lang($language, 'und');
+        $support = self::language_support_details($language, true);
+        $suffix = '';
+        if (!$support['full']) {
+            if ($support['label'] === 'Conservative fallback') {
+                $suffix = ' (exact forms only)';
+            } elseif ($support['label'] === 'Fixture morphology') {
+                $suffix = ' (limited demo coverage)';
+            } elseif ($support['label'] === 'Tokenizer pack') {
+                $suffix = ' (word boundaries only)';
             }
         }
 
-        return array_keys($display);
-    }
-
-    /**
-     * @param string[] $terms
-     */
-    private static function render_sandbox_indexed_terms(array $terms, bool $has_more, bool $loaded): void
-    {
-        if (!$loaded) {
-            echo '<span class="description">Hidden</span>';
-            return;
-        }
-
-        if ($terms === []) {
-            echo '<span aria-hidden="true">-</span>';
-            return;
-        }
-
-        foreach ($terms as $term) {
-            echo '<code>' . self::esc_html($term) . '</code> ';
-        }
-        if ($has_more) {
-            echo '<span class="description">...</span>';
-        }
-    }
-
-    /**
-     * @param array<string,mixed> $metadata
-     * @param array<string,mixed> $doc
-     * @param array<string,int> $lengths
-     */
-    private static function sandbox_indexed_post_language_display(array $metadata, array $doc, array $lengths): string
-    {
-        $languages = array_keys($lengths);
-        if ($languages === []) {
-            $languages[] = self::sandbox_indexed_language($metadata, $doc, 'en');
-        }
-
-        $display = [];
-        foreach ($languages as $language) {
-            $support = self::language_support_details($language, true);
-            $suffix = '';
-            if (!$support['full']) {
-                if ($support['label'] === 'Conservative fallback') {
-                    $suffix = ' (exact forms only)';
-                } elseif ($support['label'] === 'Fixture morphology') {
-                    $suffix = ' (limited demo coverage)';
-                } elseif ($support['label'] === 'Tokenizer pack') {
-                    $suffix = ' (word boundaries only)';
-                }
-            }
-            $display[] = self::sandbox_language_display($language) . ' - ' . $support['label'] . $suffix;
-        }
-
-        return implode(', ', array_values(array_unique($display)));
+        return self::sandbox_language_display($language) . ' - ' . $support['label'] . $suffix;
     }
 
     private static function sandbox_language_display(string $language): string
@@ -12445,7 +12324,6 @@ LIMIT %d",
         string $query,
         string $selected_language,
         bool $search_submitted,
-        bool $show_indexed_terms = false,
         int $cursor = 0,
         string $direction = 'after'
     ): string
@@ -12456,9 +12334,6 @@ LIMIT %d",
             self::ADMIN_POSTS_PAGE_FIELD => (string) max(1, $page),
         ];
 
-        if ($show_indexed_terms) {
-            $params[self::ADMIN_SHOW_INDEXED_TERMS_FIELD] = '1';
-        }
         if ($cursor > 0) {
             $params[self::ADMIN_POSTS_CURSOR_FIELD] = (string) $cursor;
             $params[self::ADMIN_POSTS_CURSOR_DIRECTION_FIELD] = $direction === 'before' ? 'before' : 'after';
@@ -12658,7 +12533,7 @@ LIMIT %d",
             if ($query === '') {
                 return self::rest_error(
                     'wp_fts_missing_query',
-                    'REST search requires a non-empty q or query parameter.',
+                    'REST search requires a non-empty q parameter.',
                     400
                 );
             }
@@ -12832,19 +12707,15 @@ LIMIT %d",
         ] + self::searcher_prefix_threshold_options($settings, $opts) + self::searcher_recency_boost_options($settings);
         if (array_key_exists('lang', $opts) && $opts['lang'] !== null) {
             if (trim((string) $opts['lang']) !== '') {
-                $search_options['lang'] = (string) $opts['lang'];
+                $search_options['query_lang'] = (string) $opts['lang'];
             }
         }
         foreach ([
             'max_query_terms',
             'request_budget_guard',
             'cursor',
-            'after_cursor',
-            'before_cursor',
             'direction',
-            'post_type',
             'post_types',
-            'post_status',
             'post_statuses',
             'date_after',
             'date_before',
@@ -12852,7 +12723,6 @@ LIMIT %d",
             'include_snippets',
             'highlight',
             'snippet_length',
-            'recency_boost',
             'recency_boost_strength',
             'recency_boost_half_life_days',
             'now_gmt',
@@ -12868,7 +12738,7 @@ LIMIT %d",
             $search_options['_include_canonical_post_rows'] = true;
         }
 
-        $searcher = WP_FTS_Searcher::for_set_oriented_storage(self::storage(false), self::runtime_analyzer());
+        $searcher = new WP_FTS_Searcher(self::storage(false), self::runtime_analyzer());
         try {
             self::invoke_search_budget_guard($search_options);
             $payload = $searcher->search($query, $search_options);
@@ -12879,9 +12749,7 @@ LIMIT %d",
             self::latch_search_runtime_failure($error);
             throw new WP_FTS_Search_Unavailable('Full-text search failed closed and scheduled repair.', 0, $error);
         }
-        $rows = is_array($payload['results'] ?? null)
-            ? $payload['results']
-            : (is_array($payload) ? $payload : []);
+        $rows = $payload['results'];
 
         $explain = [];
         if ($include_explain && is_array($payload['explain'] ?? null)) {
@@ -13029,8 +12897,7 @@ LIMIT %d",
     }
 
     /**
-     * Reject unsupported public knobs and canonicalize the aliases the PHP
-     * facade deliberately supports before readiness, analysis, or SQL.
+     * Validate the one public PHP search option shape before analysis or SQL.
      *
      * @param array<mixed,mixed> $opts
      * @return array<string,mixed>
@@ -13042,38 +12909,25 @@ LIMIT %d",
         }
         $allowed = array_fill_keys([
             'mode',
-            'offset',
             'limit',
             'lang',
             'cursor',
-            'after_cursor',
-            'before_cursor',
             'direction',
             'prefix_matching',
-            'prefix',
             'prefix_min_length',
             'max_query_terms',
             'request_budget_guard',
-            'post_type',
             'post_types',
-            'post_status',
             'post_statuses',
             'date_after',
             'date_before',
             'include_metadata',
             'include_snippets',
-            'snippets',
             'highlight',
             'snippet_length',
-            'recency_boost',
-            'freshness_boost',
             'recency_boost_strength',
-            'freshness_boost_strength',
             'recency_boost_half_life_days',
-            'freshness_boost_half_life_days',
-            'recency_boost_window_days',
             'now_gmt',
-            'recency_now',
         ], true);
         foreach ($opts as $key => $_value) {
             if (!is_string($key)) {
@@ -13098,7 +12952,6 @@ LIMIT %d",
             }
         }
         foreach ([
-            'offset' => [0, 0],
             'limit' => [1, self::MAX_SEARCH_LIMIT],
             'max_query_terms' => [1, self::REST_MAX_QUERY_TERMS],
             'prefix_min_length' => [self::PREFIX_MIN_LENGTH_MIN, self::PREFIX_MIN_LENGTH_MAX],
@@ -13114,79 +12967,34 @@ LIMIT %d",
             }
         }
 
-        $cursorKey = null;
-        foreach (['cursor', 'after_cursor', 'before_cursor'] as $key) {
-            if (!array_key_exists($key, $normalized)) {
-                continue;
-            }
-            if ($cursorKey !== null) {
-                throw new InvalidArgumentException('Pass only one of cursor, after_cursor, or before_cursor.');
-            }
+        if (array_key_exists('cursor', $normalized)) {
             if (
-                !is_string($normalized[$key])
-                || trim($normalized[$key]) === ''
-                || strlen($normalized[$key]) > self::MAX_SEARCH_CURSOR_BYTES
+                !is_string($normalized['cursor'])
+                || trim($normalized['cursor']) === ''
+                || strlen($normalized['cursor']) > self::MAX_SEARCH_CURSOR_BYTES
             ) {
-                throw new InvalidArgumentException('Search cursors must be nonempty strings of at most 2,048 bytes.');
+                throw new InvalidArgumentException('Search cursor must be a nonempty string of at most 2,048 bytes.');
             }
-            $cursorKey = $key;
         }
-        $direction = null;
         if (array_key_exists('direction', $normalized)) {
             if (!is_string($normalized['direction']) || !in_array($normalized['direction'], ['after', 'before'], true)) {
                 throw new InvalidArgumentException('Search cursor direction must be exactly after or before.');
             }
-            $direction = $normalized['direction'];
-            if ($cursorKey === null) {
+            if (!array_key_exists('cursor', $normalized)) {
                 throw new InvalidArgumentException('Search cursor direction requires a nonempty cursor.');
             }
         }
-        if ($cursorKey !== null) {
-            $inferredDirection = $cursorKey === 'before_cursor' ? 'before' : 'after';
-            if ($cursorKey !== 'cursor' && $direction !== null && $direction !== $inferredDirection) {
-                throw new InvalidArgumentException("{$cursorKey} conflicts with the requested cursor direction.");
-            }
-            $normalized['cursor'] = $normalized[$cursorKey];
-            if ($cursorKey !== 'cursor' || $direction !== null) {
-                $normalized['direction'] = $direction ?? $inferredDirection;
-            }
-        }
-        unset($normalized['after_cursor'], $normalized['before_cursor']);
 
-        foreach (['include_metadata', 'highlight'] as $key) {
+        foreach (['include_metadata', 'include_snippets', 'highlight', 'prefix_matching'] as $key) {
             if (array_key_exists($key, $normalized)) {
                 $normalized[$key] = self::strict_search_switch($normalized[$key], $key);
             }
         }
-        foreach ([
-            ['prefix_matching', 'prefix', 'prefix matching'],
-            ['include_snippets', 'snippets', 'snippet inclusion'],
-        ] as [$primary, $alias, $label]) {
-            $primarySet = array_key_exists($primary, $normalized);
-            $aliasSet = array_key_exists($alias, $normalized);
-            $primaryValue = $primarySet ? self::strict_search_switch($normalized[$primary], $primary) : null;
-            $aliasValue = $aliasSet ? self::strict_search_switch($normalized[$alias], $alias) : null;
-            if ($primarySet && $aliasSet && $primaryValue !== $aliasValue) {
-                throw new InvalidArgumentException("Search {$label} aliases must agree.");
+        foreach (['post_types', 'post_statuses'] as $key) {
+            if (array_key_exists($key, $normalized)) {
+                $normalized[$key] = self::search_scope_values($normalized[$key]);
             }
-            if ($primarySet || $aliasSet) {
-                $normalized[$primary] = $primarySet ? $primaryValue : $aliasValue;
-            }
-            unset($normalized[$alias]);
         }
-
-        foreach ([['post_type', 'post_types'], ['post_status', 'post_statuses']] as [$singular, $plural]) {
-            if (array_key_exists($singular, $normalized) && array_key_exists($plural, $normalized)) {
-                throw new InvalidArgumentException("Pass only one of {$singular} or {$plural}.");
-            }
-            if (array_key_exists($singular, $normalized) || array_key_exists($plural, $normalized)) {
-                $normalized[$plural] = self::search_scope_values(
-                    array_key_exists($plural, $normalized) ? $normalized[$plural] : $normalized[$singular]
-                );
-            }
-            unset($normalized[$singular]);
-        }
-
         foreach (['date_after', 'date_before'] as $key) {
             if (array_key_exists($key, $normalized)) {
                 self::strict_search_gmt_timestamp($normalized[$key], $key);
@@ -13195,72 +13003,25 @@ LIMIT %d",
         if (array_key_exists('request_budget_guard', $normalized) && !is_callable($normalized['request_budget_guard'])) {
             throw new InvalidArgumentException('Search request_budget_guard must be callable.');
         }
-
-        $toggleValues = [];
-        foreach (['recency_boost', 'freshness_boost'] as $key) {
-            if (array_key_exists($key, $normalized)) {
-                $toggleValues[$key] = self::strict_search_recency_toggle($normalized[$key], $key);
-            }
+        if (array_key_exists('recency_boost_strength', $normalized)) {
+            $normalized['recency_boost_strength'] = self::strict_search_float(
+                $normalized['recency_boost_strength'],
+                'recency_boost_strength',
+                self::RECENCY_BOOST_STRENGTH_MIN,
+                self::RECENCY_BOOST_STRENGTH_MAX
+            );
         }
-        if (count(array_unique($toggleValues, SORT_REGULAR)) > 1) {
-            throw new InvalidArgumentException('Search recency boost aliases must agree.');
+        if (array_key_exists('recency_boost_half_life_days', $normalized)) {
+            $normalized['recency_boost_half_life_days'] = self::strict_search_float(
+                $normalized['recency_boost_half_life_days'],
+                'recency_boost_half_life_days',
+                self::RECENCY_BOOST_HALF_LIFE_MIN,
+                self::RECENCY_BOOST_HALF_LIFE_MAX
+            );
         }
-        if ($toggleValues !== []) {
-            $normalized['recency_boost'] = (float) reset($toggleValues);
+        if (array_key_exists('now_gmt', $normalized)) {
+            self::strict_search_gmt_timestamp($normalized['now_gmt'], 'now_gmt');
         }
-        unset($normalized['freshness_boost']);
-
-        $strengthValues = [];
-        foreach (['recency_boost_strength', 'freshness_boost_strength'] as $key) {
-            if (array_key_exists($key, $normalized)) {
-                $strengthValues[$key] = self::strict_search_float(
-                    $normalized[$key],
-                    $key,
-                    self::RECENCY_BOOST_STRENGTH_MIN,
-                    self::RECENCY_BOOST_STRENGTH_MAX
-                );
-            }
-        }
-        if (count(array_unique($strengthValues, SORT_REGULAR)) > 1) {
-            throw new InvalidArgumentException('Search recency boost strength aliases must agree.');
-        }
-        if ($strengthValues !== []) {
-            $normalized['recency_boost_strength'] = (float) reset($strengthValues);
-        }
-        unset($normalized['freshness_boost_strength']);
-
-        $halfLifeValues = [];
-        foreach (['recency_boost_half_life_days', 'freshness_boost_half_life_days', 'recency_boost_window_days'] as $key) {
-            if (array_key_exists($key, $normalized)) {
-                $halfLifeValues[$key] = self::strict_search_float(
-                    $normalized[$key],
-                    $key,
-                    self::RECENCY_BOOST_HALF_LIFE_MIN,
-                    self::RECENCY_BOOST_HALF_LIFE_MAX
-                );
-            }
-        }
-        if (count(array_unique($halfLifeValues, SORT_REGULAR)) > 1) {
-            throw new InvalidArgumentException('Search recency half-life aliases must agree.');
-        }
-        if ($halfLifeValues !== []) {
-            $normalized['recency_boost_half_life_days'] = (float) reset($halfLifeValues);
-        }
-        unset($normalized['freshness_boost_half_life_days'], $normalized['recency_boost_window_days']);
-
-        $clockValues = [];
-        foreach (['now_gmt', 'recency_now'] as $key) {
-            if (array_key_exists($key, $normalized)) {
-                $clockValues[$key] = self::strict_search_gmt_timestamp($normalized[$key], $key);
-            }
-        }
-        if (count(array_unique($clockValues, SORT_NUMERIC)) > 1) {
-            throw new InvalidArgumentException('Search recency clock aliases must agree.');
-        }
-        if (array_key_exists('recency_now', $normalized) && !array_key_exists('now_gmt', $normalized)) {
-            $normalized['now_gmt'] = $normalized['recency_now'];
-        }
-        unset($normalized['recency_now']);
 
         return $normalized;
     }
@@ -13340,31 +13101,7 @@ LIMIT %d",
         return $value !== '' && strspn($value, '0123456789') === strlen($value);
     }
 
-    /** Recency toggles accept explicit switches or a strength in the documented range. */
-    private static function strict_search_recency_toggle(mixed $value, string $key): float
-    {
-        if (is_bool($value)) {
-            return $value ? self::RECENCY_BOOST_STRENGTH_DEFAULT : 0.0;
-        }
-        if (is_string($value)) {
-            $lower = strtolower($value);
-            if (in_array($lower, ['true', 'yes', 'on'], true)) {
-                return self::RECENCY_BOOST_STRENGTH_DEFAULT;
-            }
-            if (in_array($lower, ['false', 'no', 'off'], true)) {
-                return 0.0;
-            }
-        }
-
-        return self::strict_search_float(
-            $value,
-            $key,
-            self::RECENCY_BOOST_STRENGTH_MIN,
-            self::RECENCY_BOOST_STRENGTH_MAX
-        );
-    }
-
-    /** Validate one exact UTC date/datetime and return its timestamp for alias comparison. */
+    /** Validate one exact UTC date/datetime. */
     private static function strict_search_gmt_timestamp(mixed $value, string $key): int
     {
         if (
@@ -13586,10 +13323,6 @@ LIMIT %d",
     {
         if (array_key_exists('prefix_matching', $opts)) {
             return self::truthy_admin_value($opts['prefix_matching']);
-        }
-
-        if (array_key_exists('prefix', $opts)) {
-            return self::truthy_admin_value($opts['prefix']);
         }
 
         return (bool) ($settings['prefix_matching'] ?? true);
@@ -18552,7 +18285,7 @@ LIMIT %d",
                 $existing_hashes[$post_id] = (string) $post->fts_existing_hash;
             }
         }
-        $indexer = new WP_FTS_Indexer($storage, $analyzer, new WP_FTS_PostContentExtractor());
+        $indexer = new WP_FTS_Indexer($analyzer, new WP_FTS_PostContentExtractor());
 
         $prepared = [];
         $delete_ids = [];
@@ -18851,7 +18584,7 @@ LIMIT %d",
             if ($prepared !== [] || $delete_ids !== []) {
                 $new_posting_counts = [];
                 foreach ($prepared as $document) {
-                    $post_id = max(0, (int) ($document['doc_id'] ?? $document['post_id'] ?? 0));
+                    $post_id = max(0, (int) ($document['doc_id'] ?? 0));
                     if ($post_id > 0) {
                         $new_posting_counts[$post_id] = count($document['term_frequencies'] ?? [])
                             + count($document['surface_frequencies'] ?? []);
@@ -18871,7 +18604,7 @@ LIMIT %d",
                     $prepared = array_values(array_filter(
                         $prepared,
                         static fn(array $document): bool => !isset($deferred_post_ids[
-                            (int) ($document['doc_id'] ?? $document['post_id'] ?? 0)
+                            (int) ($document['doc_id'] ?? 0)
                         ])
                     ));
                     foreach ($replacement_plan->deferred_post_ids as $post_id) {
@@ -19514,11 +19247,8 @@ ORDER BY p.ID ASC",
             }
             try {
                 $index_options = $index_options_by_post_id[(int) $post_id] ?? [];
-                if (
-                    !array_key_exists('custom_fields', $index_options)
-                    && !array_key_exists('custom_field_keys', $index_options)
-                ) {
-                    $index_options['custom_fields'] = $configured;
+                if (!array_key_exists('custom_field_keys', $index_options)) {
+                    $index_options['custom_field_keys'] = $configured;
                 }
                 $index_options = self::prepare_post_index_options($post, $index_options);
                 $custom_keys = $extractor->selected_custom_field_keys($post, $index_options);
@@ -23840,26 +23570,20 @@ STRAIGHT_JOIN {$work_table} work_row
         return $default;
     }
 
-    /**
-     * Resolve the REST query alias without letting an empty `q` mask `query`.
-     */
+    /** Return the bounded REST query string. */
     private static function rest_query(mixed $request): string
     {
-        foreach (['q', 'query'] as $key) {
-            $value = self::request_param($request, $key, null);
-            if ($value !== null && !is_scalar($value)) {
-                throw new InvalidArgumentException("REST search {$key} must be a scalar value.");
-            }
-            if (is_scalar($value)) {
-                $rawQuery = self::bounded_unslash_scalar($value, 200);
-                $query = self::truncate_request_text(self::sanitize_text($rawQuery), 200);
-                if ($query !== '') {
-                    return $query;
-                }
-            }
+        $value = self::request_param($request, 'q', null);
+        if ($value !== null && !is_scalar($value)) {
+            throw new InvalidArgumentException('REST search q must be a scalar value.');
         }
 
-        return '';
+        return is_scalar($value)
+            ? self::truncate_request_text(
+                self::sanitize_text(self::bounded_unslash_scalar($value, 200)),
+                200
+            )
+            : '';
     }
 
     /**

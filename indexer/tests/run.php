@@ -5660,12 +5660,15 @@ final class WP_FTS_Test_WPDB
                     $primary = $this->schemaIndexes[$table]['PRIMARY'] ?? [];
                     foreach ($columns as $columnOffset => $column) {
                         $primaryOffset = array_search($column, $primary, true);
+                        $definition = $this->sqlite_schema_column_definition($table, $column);
                         $rows[] = (object) [
                             'row_kind' => 'column',
                             'table_name' => $table,
                             'column_name' => $column,
                             'ordinal_position' => $columnOffset,
                             'primary_position' => $primaryOffset === false ? 0 : $primaryOffset + 1,
+                            'column_type' => $definition['type'],
+                            'column_not_null' => $definition['notnull'],
                         ];
                     }
                     $unexpected = false;
@@ -7971,7 +7974,7 @@ final class WP_FTS_Test_WPDB
             str_ends_with($table, 'fts_documents') => [
                 'post_id' => 'bigint(20) unsigned',
                 'primary_lang' => 'varbinary(32)',
-                'content_hash' => 'varbinary(64)',
+                'content_hash' => 'varbinary(40)',
                 'snippet_text' => 'mediumtext',
                 'indexed_at' => 'bigint(20) unsigned',
             ],
@@ -7997,7 +8000,7 @@ final class WP_FTS_Test_WPDB
             ],
             default => [],
         };
-        $nullable = in_array($column, ['content_hash', 'snippet_text', 'payload'], true);
+        $nullable = $column === 'payload';
         $definition = [
             'Field' => $column,
             'Type' => $types[$column] ?? 'text',
@@ -8006,6 +8009,43 @@ final class WP_FTS_Test_WPDB
         ];
 
         return array_replace($definition, $this->schemaColumnDefinitions[$table][$column] ?? []);
+    }
+
+    /** @return array{type:string,notnull:int} */
+    private function sqlite_schema_column_definition(string $table, string $column): array
+    {
+        $termsTable = str_ends_with($table, 'fts_terms');
+        $documentsTable = str_ends_with($table, 'fts_documents');
+        $workTable = str_ends_with($table, 'fts_work');
+        $blob = ($termsTable && in_array($column, ['lang', 'term'], true))
+            || ($documentsTable && in_array($column, ['primary_lang', 'content_hash'], true))
+            || ($workTable && in_array($column, ['job_key', 'scope_incarnation'], true));
+        $text = ($documentsTable && $column === 'snippet_text')
+            || ($workTable && in_array($column, [
+                'kind',
+                'state',
+                'claim_token',
+                'scope_coverage',
+                'scope_subject_type',
+                'payload',
+                'last_error_code',
+            ], true));
+        $type = $blob ? 'BLOB' : ($text ? 'TEXT' : 'INTEGER');
+        $notNull = $column !== 'payload';
+        if (
+            ($column === 'term_id' && str_ends_with($table, 'fts_terms'))
+            || ($column === 'post_id' && str_ends_with($table, 'fts_documents'))
+        ) {
+            // SQLite reports notnull=0 for an INTEGER PRIMARY KEY rowid alias.
+            $notNull = false;
+        }
+        $override = $this->schemaColumnDefinitions[$table][$column] ?? [];
+        $type = (string) ($override['Type'] ?? $type);
+        if (isset($override['Null'])) {
+            $notNull = strtoupper((string) $override['Null']) === 'NO';
+        }
+
+        return ['type' => $type, 'notnull' => $notNull ? 1 : 0];
     }
 
     /**
@@ -8870,7 +8910,6 @@ function wp_fts_test_replace_post(
         : '';
     $options = WP_FTS_Plugin::prepare_post_index_options($post, $options);
     $indexer = new WP_FTS_Indexer(
-        $storage,
         $analyzer ?? WP_FTS_Plugin::runtime_analyzer(),
         new WP_FTS_PostContentExtractor()
     );
@@ -8888,7 +8927,7 @@ function wp_fts_test_replace_document_fields(
     array $fields,
     array $options = []
 ): array {
-    $prepared = (new WP_FTS_Indexer($storage, $analyzer))->prepare_document_fields(
+    $prepared = (new WP_FTS_Indexer($analyzer))->prepare_document_fields(
         $post_id,
         $fields,
         $options
@@ -35084,46 +35123,13 @@ test_case('mysql set-oriented storage exposes no point or posting-list API', fun
         'all_terms',
         'all_doc_ids',
         'terms_with_prefix',
+        'document_hashes',
         'flush',
     ] as $method) {
         assert_true(!method_exists($storage, $method), "mysql should not expose {$method}");
     }
     assert_same([], $wpdb->prepared, 'capability inspection should not prepare SQL');
     assert_same([], $wpdb->queries, 'capability inspection should not execute SQL');
-});
-
-test_case('mysql bounded diagnostic list APIs reject oversized id sets before SQL', function (): void {
-    $wpdb = new WP_FTS_Test_WPDB();
-    $wpdb->recordReadQueries = true;
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
-    $pageCap = WP_FTS_Set_Oriented_Search_Storage::MAX_PAGE_SIZE;
-    assert_same(50, $pageCap, 'result-page diagnostics should share the 50-row production page cap');
-
-    $storage->terms_for_docs(range(1, $pageCap), 1);
-    $storage->document_hashes(range(1, WP_FTS_Storage_Mysql::MAX_BATCH_DOCUMENTS));
-    assert_same(2, count($wpdb->prepared), 'each exact-bound diagnostic list should execute one set-oriented statement');
-
-    $operations = [
-        'terms_for_docs' => static fn(): array => $storage->terms_for_docs(range(1, $pageCap + 1), 1),
-        'document_hashes' => static fn(): array => $storage->document_hashes(range(1, WP_FTS_Storage_Mysql::MAX_BATCH_DOCUMENTS + 1)),
-    ];
-    foreach ($operations as $method => $operation) {
-        $preparedBefore = count($wpdb->prepared);
-        $queriesBefore = count($wpdb->queries);
-        $queryCountBefore = $wpdb->num_queries;
-        $failure = null;
-        try {
-            $operation();
-        } catch (InvalidArgumentException $error) {
-            $failure = $error;
-        }
-
-        assert_true($failure instanceof InvalidArgumentException, "{$method} should reject an oversized identifier list");
-        assert_contains('accept at most', $failure?->getMessage() ?? '', "{$method} should report its hard identifier cap");
-        assert_same($preparedBefore, count($wpdb->prepared), "{$method} should reject oversized input before preparing SQL");
-        assert_same($queriesBefore, count($wpdb->queries), "{$method} should reject oversized input before executing SQL");
-        assert_same($queryCountBefore, $wpdb->num_queries, "{$method} oversized rejection should not increment the database query counter");
-    }
 });
 
 test_case('phrase search still requires explicit extension point', function (): void {
@@ -35374,7 +35380,7 @@ test_case_with_pdo_sqlite_fixture('wp cli reindex preserves language filters and
             );
         }
     }
-    $scopeIndexHint = (new WP_FTS_Storage_Mysql($fake))->filtered_scope_index_hint();
+    $scopeIndexHint = (new WP_FTS_Storage_Mysql($fake))->validated_filtered_scope_index_hint();
     assert_same(4, substr_count($postSelects[0], 'p' . $scopeIndexHint), 'every filtered lane must force the plugin-owned composite source index');
     assert_same(5, substr_count($postSelects[0], 'LIMIT 1'), 'four bounded lanes and their outer merge should retain the requested one-document limit');
     assert_true(!str_contains($postSelects[0], 'post_content'), 'the later selector should not materialize post bodies');
@@ -36182,7 +36188,7 @@ test_case_with_pdo_sqlite_fixture('wp cli reindex scopes default admin statuses 
             'each default admin-searchable status should use one exact composite-index lane'
         );
     }
-    $defaultIndexHint = (new WP_FTS_Storage_Mysql($fake))->filtered_scope_index_hint();
+    $defaultIndexHint = (new WP_FTS_Storage_Mysql($fake))->validated_filtered_scope_index_hint();
     assert_same(5, substr_count($defaultSelects[0], 'p' . $defaultIndexHint), 'all five default status lanes must force the plugin-owned composite source index');
 
     $publishOnly = new WP_FTS_V4_Regression_SQLite_WPDB();
@@ -36219,7 +36225,7 @@ test_case_with_pdo_sqlite_fixture('wp cli reindex scopes default admin statuses 
     assert_same(2, substr_count($publishSelects[0], 'LIMIT 1'), 'the one selected document should bound both its lane and outer merge');
     assert_same(1, substr_count(
         $publishSelects[0],
-        'p' . (new WP_FTS_Storage_Mysql($publishOnly))->filtered_scope_index_hint()
+        'p' . (new WP_FTS_Storage_Mysql($publishOnly))->validated_filtered_scope_index_hint()
     ), 'the publish-only lane must force the plugin-owned composite source index');
 });
 

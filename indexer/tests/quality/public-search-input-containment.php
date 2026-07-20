@@ -1227,9 +1227,6 @@ test_case('quality MySQL set-oriented APIs reject explosive inputs before normal
     ));
     assert_true($alternativeError instanceof WP_FTS_Search_Budget_Exceeded, 'a thirteenth direct-storage alternative should fail at the documented boundary');
 
-    $idError = psic_caught(static fn(): array => $storage->document_hashes(array_fill(0, 101, 1)));
-    assert_true($idError instanceof InvalidArgumentException, 'bounded document reads should reject raw cardinality before array_map/filter/unique copies');
-
     $deleteError = psic_caught(static fn(): array => $storage->replace_prepared_documents([], array_fill(0, 101, 1)));
     assert_true($deleteError instanceof InvalidArgumentException, 'prepared writes should reject raw delete cardinality before traversal');
 

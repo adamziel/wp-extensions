@@ -81,9 +81,9 @@ final class WP_FTS_Prepared_Replacement_Plan
  * is resolved with one dictionary read, a second set-oriented statement
  * performs candidate discovery, visibility filtering, and ranking, and an
  * optional third statement hydrates only the returned page.
- * Bounded diagnostic methods remain for explicit production callers. Legacy
- * posting-list reads and point mutations are not part of this backend's type or
- * public API; production search must use `search_page()`.
+ * Bounded diagnostic methods remain for explicit production callers. Posting-list
+ * reads and point mutations are not part of this backend's type or public API;
+ * production search must use `search_page()`.
  */
 final class WP_FTS_Storage_Mysql implements WP_FTS_Set_Oriented_Search_Storage, WP_FTS_Resettable_Storage
 {
@@ -184,12 +184,6 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Set_Oriented_Search_Storage, 
         $this->issuedReplacementPlans = new WeakMap();
     }
 
-    /** Tell the framework-neutral indexer to emit normalized surface rows. */
-    public function indexes_surface_postings(): bool
-    {
-        return true;
-    }
-
     /**
      * Create the complete relational physical schema.
      *
@@ -224,8 +218,8 @@ KEY post_term_impact (post_id,term_id,impact)
             "CREATE TABLE {$this->documentsTable} (
 post_id bigint unsigned NOT NULL,
 primary_lang varbinary(32) NOT NULL DEFAULT 'und',
-content_hash varbinary(64) NULL,
-snippet_text mediumtext NULL,
+content_hash varbinary(40) NOT NULL,
+snippet_text mediumtext NOT NULL,
 indexed_at bigint unsigned NOT NULL DEFAULT 0,
 PRIMARY KEY  (post_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
@@ -318,26 +312,6 @@ KEY dirty (post_id,kind)
         return $missing;
     }
 
-    /** @return array{valid:bool,missing:string[],error:string} */
-    public function verify_scope_keyset_indexes(): array
-    {
-        try {
-            $missing = $this->scope_keyset_indexes_requiring_creation();
-        } catch (Throwable $error) {
-            return [
-                'valid' => false,
-                'missing' => [],
-                'error' => substr($error->getMessage(), 0, 240),
-            ];
-        }
-
-        return [
-            'valid' => $missing === [],
-            'missing' => $missing,
-            'error' => '',
-        ];
-    }
-
     /** Install the two indexes that make selective scope pages direct keysets. */
     public function ensure_scope_keyset_indexes(): void
     {
@@ -415,18 +389,6 @@ KEY dirty (post_id,kind)
             $this->query("DROP INDEX {$name} ON {$table}", "remove {$key} FTS scope keyset index");
             $this->guard_mutation();
         }
-    }
-
-    /** SQL suffix that makes a missing targeted-scope capability fail closed. */
-    public function targeted_scope_index_hint(): string
-    {
-        return $this->scope_keyset_index_hint('targeted');
-    }
-
-    /** SQL suffix that makes a missing filtered-scope capability fail closed. */
-    public function filtered_scope_index_hint(): string
-    {
-        return $this->scope_keyset_index_hint('filtered');
     }
 
     /** Verify the physical targeted keyset immediately before scope SQL. */
@@ -794,6 +756,13 @@ KEY dirty (post_id,kind)
             $this->termsTable => [
                 'engine' => 'innodb',
                 'columns' => ['term_id', 'lang', 'kind', 'term', 'doc_freq'],
+                'sqlite_definitions' => [
+                    'term_id' => ['type' => 'integer', 'nullable' => false],
+                    'lang' => ['type' => 'blob', 'nullable' => false],
+                    'kind' => ['type' => 'integer', 'nullable' => false],
+                    'term' => ['type' => 'blob', 'nullable' => false],
+                    'doc_freq' => ['type' => 'integer', 'nullable' => false],
+                ],
                 'mysql_definitions' => [
                     'term_id' => ['type' => 'bigint unsigned', 'nullable' => false, 'auto_increment' => true],
                     'lang' => ['type' => 'varbinary(32)', 'nullable' => false],
@@ -810,6 +779,11 @@ KEY dirty (post_id,kind)
             $this->postingsTable => [
                 'engine' => 'innodb',
                 'columns' => ['term_id', 'post_id', 'impact'],
+                'sqlite_definitions' => [
+                    'term_id' => ['type' => 'integer', 'nullable' => false],
+                    'post_id' => ['type' => 'integer', 'nullable' => false],
+                    'impact' => ['type' => 'integer', 'nullable' => false],
+                ],
                 'mysql_definitions' => [
                     'term_id' => ['type' => 'bigint unsigned', 'nullable' => false],
                     'post_id' => ['type' => 'bigint unsigned', 'nullable' => false],
@@ -823,11 +797,18 @@ KEY dirty (post_id,kind)
             $this->documentsTable => [
                 'engine' => 'innodb',
                 'columns' => ['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at'],
+                'sqlite_definitions' => [
+                    'post_id' => ['type' => 'integer', 'nullable' => false],
+                    'primary_lang' => ['type' => 'blob', 'nullable' => false],
+                    'content_hash' => ['type' => 'blob', 'nullable' => false],
+                    'snippet_text' => ['type' => 'text', 'nullable' => false],
+                    'indexed_at' => ['type' => 'integer', 'nullable' => false],
+                ],
                 'mysql_definitions' => [
                     'post_id' => ['type' => 'bigint unsigned', 'nullable' => false],
                     'primary_lang' => ['type' => 'varbinary(32)', 'nullable' => false],
-                    'content_hash' => ['type' => 'varbinary(64)', 'nullable' => true],
-                    'snippet_text' => ['type' => 'mediumtext', 'nullable' => true],
+                    'content_hash' => ['type' => 'varbinary(40)', 'nullable' => false],
+                    'snippet_text' => ['type' => 'mediumtext', 'nullable' => false],
                     'indexed_at' => ['type' => 'bigint unsigned', 'nullable' => false],
                 ],
                 'indexes' => [['name' => 'PRIMARY', 'columns' => ['post_id'], 'unique' => true]],
@@ -835,6 +816,26 @@ KEY dirty (post_id,kind)
             $this->workTable => [
                 'engine' => 'innodb',
                 'columns' => ['job_key', 'kind', 'post_id', 'generation', 'state', 'available_at', 'attempts', 'claim_token', 'claimed_generation', 'claim_expires_at', 'cursor_post_id', 'scope_coverage', 'scope_incarnation', 'scope_subject_type', 'scope_subject_id', 'payload', 'last_error_code', 'last_error_at'],
+                'sqlite_definitions' => [
+                    'job_key' => ['type' => 'blob', 'nullable' => false],
+                    'kind' => ['type' => 'text', 'nullable' => false],
+                    'post_id' => ['type' => 'integer', 'nullable' => false],
+                    'generation' => ['type' => 'integer', 'nullable' => false],
+                    'state' => ['type' => 'text', 'nullable' => false],
+                    'available_at' => ['type' => 'integer', 'nullable' => false],
+                    'attempts' => ['type' => 'integer', 'nullable' => false],
+                    'claim_token' => ['type' => 'text', 'nullable' => false],
+                    'claimed_generation' => ['type' => 'integer', 'nullable' => false],
+                    'claim_expires_at' => ['type' => 'integer', 'nullable' => false],
+                    'cursor_post_id' => ['type' => 'integer', 'nullable' => false],
+                    'scope_coverage' => ['type' => 'text', 'nullable' => false],
+                    'scope_incarnation' => ['type' => 'blob', 'nullable' => false],
+                    'scope_subject_type' => ['type' => 'text', 'nullable' => false],
+                    'scope_subject_id' => ['type' => 'integer', 'nullable' => false],
+                    'payload' => ['type' => 'text', 'nullable' => true],
+                    'last_error_code' => ['type' => 'text', 'nullable' => false],
+                    'last_error_at' => ['type' => 'integer', 'nullable' => false],
+                ],
                 'mysql_definitions' => [
                     'job_key' => ['type' => 'varbinary(191)', 'nullable' => false],
                     'kind' => ['type' => 'varchar(16)', 'nullable' => false],
@@ -1274,6 +1275,7 @@ WITH wanted(table_name, detect_unexpected, auto_limit) AS (
 SELECT 'table' AS row_kind, wanted.table_name,
        CASE WHEN schema.name IS NULL THEN 0 ELSE 1 END AS table_exists,
        NULL AS column_name, NULL AS ordinal_position, NULL AS primary_position,
+       NULL AS column_type, NULL AS column_not_null,
        NULL AS index_name, NULL AS is_unique, NULL AS is_partial,
        NULL AS index_position, NULL AS index_column
 FROM wanted
@@ -1282,17 +1284,20 @@ LEFT JOIN sqlite_schema schema
 UNION ALL
 SELECT 'column', wanted.table_name, 1,
        info.name, info.cid, info.pk,
+       info.type, info.\"notnull\",
        NULL, NULL, NULL, NULL, NULL
 FROM wanted
 JOIN pragma_table_info(wanted.table_name) info
 UNION ALL
 SELECT 'index', table_name, 1,
        NULL, NULL, NULL,
+       NULL, NULL,
        index_name, is_unique, partial, index_position, index_column
 FROM candidate_rows
 UNION ALL
 SELECT 'index', table_name, 1,
        NULL, NULL, NULL,
+       NULL, NULL,
        index_name, is_unique, partial, index_position, index_column
 FROM unexpected_rows
 ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
@@ -1334,6 +1339,14 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
                 $position = max(0, (int) $this->schema_row_value($row, ['ordinal_position']));
                 $columnsByTable[$table][$position] = $name;
                 $primaryPosition = max(0, (int) $this->schema_row_value($row, ['primary_position']));
+                $type = $this->sqlite_type_affinity($this->schema_row_value($row, ['column_type']));
+                $declaredNotNull = (int) $this->schema_row_value($row, ['column_not_null']) === 1;
+                $physical[$table]['definitions'][$name] = [
+                    'type' => $type,
+                    // INTEGER PRIMARY KEY aliases the rowid and cannot be null
+                    // even though pragma_table_info reports notnull=0.
+                    'nullable' => !$declaredNotNull && !($primaryPosition > 0 && $type === 'integer'),
+                ];
                 if ($primaryPosition > 0) {
                     $primaryByTable[$table][$primaryPosition] = $name;
                 }
@@ -1505,7 +1518,19 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
     private function schema_column_definition_mismatches(string $table, array $physical, array $contract): array
     {
         if ($this->is_sqlite_runtime()) {
-            return [];
+            $mismatches = [];
+            foreach ($contract['sqlite_definitions'] ?? [] as $column => $expected) {
+                $actual = $physical['definitions'][$column] ?? null;
+                if (
+                    $actual !== null
+                    && (($actual['type'] ?? '') !== $expected['type']
+                        || (bool) ($actual['nullable'] ?? false) !== $expected['nullable'])
+                ) {
+                    $mismatches[] = $table . '.' . $column;
+                }
+            }
+
+            return $mismatches;
         }
         $mismatches = [];
         foreach ($contract['mysql_definitions'] ?? [] as $column => $expected) {
@@ -1524,6 +1549,26 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         }
 
         return $mismatches;
+    }
+
+    /** Normalize a declared SQLite type to the affinity used for storage. */
+    private function sqlite_type_affinity(string $type): string
+    {
+        $type = strtoupper(trim($type));
+        if (str_contains($type, 'INT')) {
+            return 'integer';
+        }
+        if (str_contains($type, 'CHAR') || str_contains($type, 'CLOB') || str_contains($type, 'TEXT')) {
+            return 'text';
+        }
+        if ($type === '' || str_contains($type, 'BLOB')) {
+            return 'blob';
+        }
+        if (str_contains($type, 'REAL') || str_contains($type, 'FLOA') || str_contains($type, 'DOUB')) {
+            return 'real';
+        }
+
+        return 'numeric';
     }
 
     /** Remove version-dependent integer display widths before schema comparison. */
@@ -1558,7 +1603,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         foreach ($docs as $offset => $doc) {
             try {
                 $normalized = $this->normalize_prepared_document($doc, $offset);
-                $postId = $normalized['post_id'];
+                $postId = $normalized['doc_id'];
                 if (isset($acceptedPostIds[$postId])) {
                     throw new WP_FTS_Prepared_Document_Rejected(
                         $postId,
@@ -1579,20 +1624,20 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             $acceptedDocuments = $transport['accepted_documents'];
             if ($acceptedDocuments === 0) {
                 $rejected = array_shift($documents);
-                $postId = max(0, (int) ($rejected['post_id'] ?? 0));
+                $postId = max(0, (int) ($rejected['doc_id'] ?? 0));
                 $rejections[] = new WP_FTS_Prepared_Document_Rejected(
                     $postId,
                     'sqlite_transport_limit',
                     "Prepared FTS document {$postId} cannot fit one SQLite dictionary write and identity read inside the 4 MiB statement contract."
                 );
                 $deferredPostIds = array_map(
-                    static fn(array $document): int => max(0, (int) ($document['post_id'] ?? 0)),
+                    static fn(array $document): int => max(0, (int) ($document['doc_id'] ?? 0)),
                     $documents
                 );
                 $documents = [];
             } elseif ($acceptedDocuments < count($documents)) {
                 $deferredPostIds = array_map(
-                    static fn(array $document): int => max(0, (int) ($document['post_id'] ?? 0)),
+                    static fn(array $document): int => max(0, (int) ($document['doc_id'] ?? 0)),
                     array_slice($documents, $acceptedDocuments)
                 );
                 $documents = array_slice($documents, 0, $acceptedDocuments);
@@ -1638,7 +1683,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         $batchTerms = [];
         foreach ($docs as $offset => $doc) {
             $normalized = $this->normalize_prepared_document($doc, $offset);
-            $postId = $normalized['post_id'];
+            $postId = $normalized['doc_id'];
             if (isset($prepared[$postId])) {
                 throw new WP_FTS_Prepared_Document_Rejected(
                     $postId,
@@ -1680,6 +1725,8 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             foreach ($newTerms as $key => $_present) {
                 $batchTerms[$key] = true;
             }
+            $normalized['post_id'] = $postId;
+            unset($normalized['doc_id']);
             $prepared[$postId] = $normalized;
         }
         if ($this->is_sqlite_runtime() && $prepared !== []) {
@@ -1711,15 +1758,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         unset($batchTerms, $transport);
         $deleteIds = [];
         foreach ($delete_ids as $offset => $id) {
-            if (!is_scalar($id) || (is_string($id) && strlen($id) > self::MAX_NUMERIC_INPUT_BYTES)) {
-                throw new WP_FTS_Prepared_Document_Rejected(
-                    0,
-                    'invalid_delete_id',
-                    "Prepared FTS deletion at batch offset {$offset} must be a bounded positive integer post id."
-                );
-            }
-            $id = filter_var($id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-            if (!is_int($id)) {
+            if (!is_int($id) || $id <= 0) {
                 throw new WP_FTS_Prepared_Document_Rejected(
                     0,
                     'invalid_delete_id',
@@ -1868,7 +1907,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         ];
     }
 
-    /** @return array{post_id:int,primary_lang:string,content_hash:string,snippet_text:string,term_frequencies:array<string,int>,surface_frequencies:array<string,int>} */
+    /** @return array{doc_id:int,primary_lang:string,content_hash:string,snippet_text:string,term_frequencies:array<string,int>,surface_frequencies:array<string,int>} */
     private function normalize_prepared_document(mixed $doc, int|string $offset): array
     {
         if (!is_array($doc)) {
@@ -1878,76 +1917,116 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
                 "Prepared FTS document at batch offset {$offset} must be an array."
             );
         }
-        $rawPostId = $doc['doc_id'] ?? $doc['post_id'] ?? null;
-        if (!is_scalar($rawPostId) || (is_string($rawPostId) && strlen($rawPostId) > self::MAX_NUMERIC_INPUT_BYTES)) {
+
+        $requiredKeys = [
+            'doc_id',
+            'primary_lang',
+            'content_hash',
+            'snippet_text',
+            'term_frequencies',
+            'surface_frequencies',
+        ];
+        if (count($doc) !== count($requiredKeys)) {
+            throw new WP_FTS_Prepared_Document_Rejected(
+                0,
+                'invalid_shape',
+                "Prepared FTS document at batch offset {$offset} must contain the six documented fields."
+            );
+        }
+        foreach ($requiredKeys as $key) {
+            if (!array_key_exists($key, $doc)) {
+                throw new WP_FTS_Prepared_Document_Rejected(
+                    0,
+                    'invalid_shape',
+                    "Prepared FTS document at batch offset {$offset} is missing {$key}."
+                );
+            }
+        }
+
+        if (!is_int($doc['doc_id']) || $doc['doc_id'] <= 0) {
             throw new WP_FTS_Prepared_Document_Rejected(
                 0,
                 'invalid_post_id',
-                "Prepared FTS document at batch offset {$offset} must have a bounded positive integer post id."
+                "Prepared FTS document at batch offset {$offset} must have a positive integer doc_id."
             );
         }
-        $postId = filter_var($rawPostId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-        if (!is_int($postId)) {
-            throw new WP_FTS_Prepared_Document_Rejected(
-                0,
-                'invalid_post_id',
-                "Prepared FTS document at batch offset {$offset} must have a positive integer post id."
-            );
-        }
-        if (isset($doc['term_frequencies']) && !is_array($doc['term_frequencies'])) {
+        $postId = $doc['doc_id'];
+        if (!is_string($doc['primary_lang']) || $doc['primary_lang'] === '' || strlen($doc['primary_lang']) > self::MAX_LANGUAGE_INPUT_BYTES) {
             throw new WP_FTS_Prepared_Document_Rejected(
                 $postId,
-                'invalid_term_frequencies',
-                "Prepared FTS document {$postId} has a non-array term frequency map."
+                'invalid_language',
+                "Prepared FTS document {$postId} must have a language string of at most 64 bytes."
             );
         }
-        if (isset($doc['surface_frequencies']) && !is_array($doc['surface_frequencies'])) {
+        $primaryLang = WP_FTS_TermNamespace::canonicalize_lang($doc['primary_lang'], 'und');
+        if (strlen($primaryLang) > 32 || !hash_equals($primaryLang, $doc['primary_lang'])) {
             throw new WP_FTS_Prepared_Document_Rejected(
                 $postId,
-                'invalid_surface_frequencies',
-                "Prepared FTS document {$postId} has a non-array surface frequency map."
+                'invalid_language',
+                "Prepared FTS document {$postId} must have a canonical language of at most 32 bytes."
             );
         }
-        if (count($doc['term_frequencies'] ?? []) > WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS) {
+        if (
+            !is_string($doc['content_hash'])
+            || strlen($doc['content_hash']) !== 40
+            || strspn($doc['content_hash'], '0123456789abcdef') !== 40
+        ) {
+            throw new WP_FTS_Prepared_Document_Rejected(
+                $postId,
+                'invalid_content_hash',
+                "Prepared FTS document {$postId} must have a lowercase 40-byte content hash."
+            );
+        }
+        if (!is_string($doc['snippet_text']) || strlen($doc['snippet_text']) > self::MAX_SNIPPET_BYTES) {
+            throw new WP_FTS_Prepared_Document_Rejected(
+                $postId,
+                'invalid_snippet',
+                "Prepared FTS document {$postId} must have snippet text of at most 20,000 bytes."
+            );
+        }
+        if (!is_array($doc['term_frequencies']) || !is_array($doc['surface_frequencies'])) {
+            throw new WP_FTS_Prepared_Document_Rejected(
+                $postId,
+                'invalid_frequencies',
+                "Prepared FTS document {$postId} must have lexical and surface frequency maps."
+            );
+        }
+        if (count($doc['term_frequencies']) > WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS) {
             throw new WP_FTS_Prepared_Document_Rejected(
                 $postId,
                 'term_limit',
                 "Prepared FTS document {$postId} exceeds the " . WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS . '-term writer contract.'
             );
         }
-        if (count($doc['surface_frequencies'] ?? []) > WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES) {
+        if (count($doc['surface_frequencies']) > WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES) {
             throw new WP_FTS_Prepared_Document_Rejected(
                 $postId,
                 'surface_limit',
                 "Prepared FTS document {$postId} exceeds the " . WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES . '-surface writer contract.'
             );
         }
-        if (count($doc['term_frequencies'] ?? []) + count($doc['surface_frequencies'] ?? []) > self::MAX_DOCUMENT_POSTINGS) {
+        if (count($doc['term_frequencies']) + count($doc['surface_frequencies']) > self::MAX_DOCUMENT_POSTINGS) {
             throw new WP_FTS_Prepared_Document_Rejected(
                 $postId,
                 'posting_limit',
                 "Prepared FTS document {$postId} exceeds the " . self::MAX_DOCUMENT_POSTINGS . '-posting writer contract.'
             );
         }
-        foreach ([...array_values($doc['term_frequencies'] ?? []), ...array_values($doc['surface_frequencies'] ?? [])] as $tf) {
-            if (is_string($tf) && strlen($tf) > self::MAX_NUMERIC_INPUT_BYTES) {
-                throw new WP_FTS_Prepared_Document_Rejected(
-                    $postId,
-                    'invalid_term_frequency',
-                    "Prepared FTS document {$postId} has an overlong term frequency."
-                );
-            }
-            if (!is_int($tf) && !(is_string($tf) && filter_var($tf, FILTER_VALIDATE_INT) !== false)) {
-                throw new WP_FTS_Prepared_Document_Rejected(
-                    $postId,
-                    'invalid_term_frequency',
-                    "Prepared FTS document {$postId} has a non-integer term frequency."
-                );
+        foreach ([$doc['term_frequencies'], $doc['surface_frequencies']] as $frequencies) {
+            foreach ($frequencies as $key => $frequency) {
+                if (!is_string($key) || !is_int($frequency) || $frequency <= 0) {
+                    throw new WP_FTS_Prepared_Document_Rejected(
+                        $postId,
+                        'invalid_term_frequency',
+                        "Prepared FTS document {$postId} contains an invalid frequency row."
+                    );
+                }
             }
         }
+
         try {
-            $frequencies = $this->normalize_term_frequencies($doc['term_frequencies'] ?? []);
-            $surfaceFrequencies = $this->normalize_surface_frequencies($doc['surface_frequencies'] ?? []);
+            $termFrequencies = $this->normalize_term_frequencies($doc['term_frequencies']);
+            $surfaceFrequencies = $this->normalize_surface_frequencies($doc['surface_frequencies']);
         } catch (InvalidArgumentException) {
             throw new WP_FTS_Prepared_Document_Rejected(
                 $postId,
@@ -1955,86 +2034,13 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
                 "Prepared FTS document {$postId} contains an invalid term identity."
             );
         }
-        if (count($frequencies) + count($surfaceFrequencies) > self::MAX_DOCUMENT_POSTINGS) {
-            throw new WP_FTS_Prepared_Document_Rejected(
-                $postId,
-                'posting_limit',
-                "Prepared FTS document {$postId} exceeds the " . self::MAX_DOCUMENT_POSTINGS . '-posting writer contract.'
-            );
-        }
-        if (isset($doc['metadata']) && $doc['metadata'] !== null && !is_array($doc['metadata'])) {
-            throw new WP_FTS_Prepared_Document_Rejected(
-                $postId,
-                'invalid_metadata',
-                "Prepared FTS document {$postId} has invalid metadata."
-            );
-        }
-        $metadata = is_array($doc['metadata'] ?? null) ? $doc['metadata'] : [];
-        if (
-            (isset($metadata['search_text']) && !is_scalar($metadata['search_text']))
-            || (isset($metadata['content_search_text']) && !is_scalar($metadata['content_search_text']))
-            || (isset($doc['snippet_text']) && !is_scalar($doc['snippet_text']))
-        ) {
-            throw new WP_FTS_Prepared_Document_Rejected(
-                $postId,
-                'invalid_snippet',
-                "Prepared FTS document {$postId} has a non-scalar snippet source."
-            );
-        }
-        if (isset($doc['primary_lang']) && !is_scalar($doc['primary_lang'])) {
-            throw new WP_FTS_Prepared_Document_Rejected(
-                $postId,
-                'invalid_language',
-                "Prepared FTS document {$postId} has a non-scalar primary language."
-            );
-        }
-        if (isset($doc['content_hash']) && !is_scalar($doc['content_hash'])) {
-            throw new WP_FTS_Prepared_Document_Rejected(
-                $postId,
-                'invalid_content_hash',
-                "Prepared FTS document {$postId} has a non-scalar content hash."
-            );
-        }
-        $rawPrimaryLang = (string) ($doc['primary_lang'] ?? 'und');
-        if (strlen($rawPrimaryLang) > self::MAX_LANGUAGE_INPUT_BYTES) {
-            throw new WP_FTS_Prepared_Document_Rejected(
-                $postId,
-                'invalid_language',
-                "Prepared FTS document {$postId} has a primary language input longer than 64 bytes."
-            );
-        }
-        $primaryLang = WP_FTS_TermNamespace::canonicalize_lang($rawPrimaryLang, 'und');
-        if (strlen($primaryLang) > 32) {
-            throw new WP_FTS_Prepared_Document_Rejected(
-                $postId,
-                'invalid_language',
-                "Prepared FTS document {$postId} has a primary language longer than 32 bytes."
-            );
-        }
-        $snippetSource = $metadata['content_search_text']
-            ?? $metadata['search_text']
-            ?? $doc['snippet_text']
-            ?? '';
-        $snippet = is_scalar($snippetSource) ? (string) $snippetSource : '';
-        if (strlen($snippet) > WP_FTS_Analysis_Limits::MAX_SOURCE_BYTES) {
-            throw new WP_FTS_Prepared_Document_Rejected(
-                $postId,
-                'invalid_snippet',
-                "Prepared FTS document {$postId} has a snippet source longer than 2 MiB."
-            );
-        }
 
         return [
-            'post_id' => $postId,
+            'doc_id' => $postId,
             'primary_lang' => $primaryLang,
-            'content_hash' => is_scalar($doc['content_hash'] ?? null) ? substr((string) $doc['content_hash'], 0, 64) : '',
-            // Canonical post fields remain in wp_posts. Persist only the
-            // bounded snippet needed to hydrate one result page.
-            'snippet_text' => WP_FTS_Utf8::truncate_bytes(
-                substr($snippet, 0, self::MAX_SNIPPET_BYTES),
-                self::MAX_SNIPPET_BYTES
-            ),
-            'term_frequencies' => $frequencies,
+            'content_hash' => $doc['content_hash'],
+            'snippet_text' => WP_FTS_Utf8::truncate_bytes($doc['snippet_text'], self::MAX_SNIPPET_BYTES),
+            'term_frequencies' => $termFrequencies,
             'surface_frequencies' => $surfaceFrequencies,
         ];
     }
@@ -2200,7 +2206,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             if (isset($options['cursor']) && trim((string) $options['cursor']) !== '') {
                 throw new InvalidArgumentException('Search cursor cannot be used with an empty query plan.');
             }
-            return $this->empty_search_page((string) ($options['query_lang'] ?? 'und'));
+            return $this->empty_search_page($options, 0, 0);
         }
 
         $prefix = $this->search_prefix_descriptor($plan, $options);
@@ -2261,7 +2267,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         if ($mode === 'AND') {
             foreach (array_keys($plan['groups']) as $groupId) {
                 if (($resolvedGroups[$groupId] ?? []) === [] && ($prefix === null || $prefix['group_id'] !== $groupId)) {
-                    return $this->empty_search_page((string) ($options['query_lang'] ?? 'und'));
+                    return $this->empty_search_page($options, count($plan['groups']), 1);
                 }
                 if (
                     ($resolvedGroups[$groupId] ?? []) === []
@@ -2269,12 +2275,12 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
                     && $prefix['group_id'] === $groupId
                     && !$surfaceAvailable
                 ) {
-                    return $this->empty_search_page((string) ($options['query_lang'] ?? 'und'));
+                    return $this->empty_search_page($options, count($plan['groups']), 1);
                 }
             }
         }
         if ($resolvedAlternativeCount === 0 && ($prefix === null || !$surfaceAvailable)) {
-            return $this->empty_search_page((string) ($options['query_lang'] ?? 'und'));
+            return $this->empty_search_page($options, count($plan['groups']), 1);
         }
 
         // Keep the typed prefix in the cursor fingerprint above, but do not
@@ -2410,7 +2416,6 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             'has_more' => $hasMore,
             'next_cursor' => $nextCursor,
             'previous_cursor' => $previousCursor,
-            'query_lang' => WP_FTS_TermNamespace::canonicalize_lang((string) ($options['query_lang'] ?? 'und'), 'und'),
         ];
         if (!empty($options['explain'])) {
             $recencyStrength = is_numeric($options['recency_boost_strength'] ?? null)
@@ -2452,7 +2457,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
      *
      * @param object[] $rows Ranked rows in cursor order, including lookahead.
      * The cursor boundary follows every inspected row, including an oversized
-     * legacy row that cannot be returned. That makes a finite K+1 window
+     * row that cannot be returned. That makes a finite K+1 window
      * traversable instead of repeatedly returning the same empty page.
      *
      * @return array{rows:object[],first_scanned:?object,last_scanned:?object,has_uninspected:bool}
@@ -2579,23 +2584,15 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
                 if (!is_array($candidate)) {
                     throw new InvalidArgumentException('Each FTS query alternative must be an array.');
                 }
-                $key = isset($candidate['key']) && is_scalar($candidate['key']) ? (string) $candidate['key'] : '';
+                $key = is_string($candidate['key'] ?? null) ? $candidate['key'] : '';
                 if ($key === '' || trim($key) === '') {
                     throw new InvalidArgumentException('Each FTS query alternative requires a nonempty term key.');
                 }
                 $identity = $this->term_identity($key);
-                if (array_key_exists('rank', $candidate)) {
-                    $rawRank = $candidate['rank'];
-                    if (
-                        (!is_int($rawRank) && (!is_string($rawRank) || preg_match('/^(0|[1-9][0-9]*)$/D', $rawRank) !== 1))
-                        || (is_string($rawRank) && strlen($rawRank) > self::MAX_NUMERIC_INPUT_BYTES)
-                        || (int) $rawRank < 0
-                        || (int) $rawRank > self::MAX_QUERY_ALTERNATIVES
-                    ) {
-                        throw new InvalidArgumentException('FTS query alternative ranks must be bounded nonnegative integers.');
-                    }
+                $rank = $candidate['rank'] ?? null;
+                if (!is_int($rank) || $rank < 0 || $rank > self::MAX_QUERY_ALTERNATIVES) {
+                    throw new InvalidArgumentException('FTS query alternative ranks must be bounded nonnegative integers.');
                 }
-                $rank = max(0, (int) ($candidate['rank'] ?? 0));
                 if (!isset($byKey[$key]) || $rank < $byKey[$key]['rank']) {
                     $byKey[$key] = [
                         'key' => $key,
@@ -2626,13 +2623,8 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
     /** Reject direct-storage input before it can enlarge a plan or binding. */
     private function assert_search_option_bounds(array $options): void
     {
-        foreach (['fast_top_k', 'approximate_top_k', 'exact_top_k', 'exact', 'candidate_cap', 'max_candidates'] as $unsupported) {
-            if (array_key_exists($unsupported, $options)) {
-                throw new InvalidArgumentException("Relational FTS storage does not support {$unsupported}.");
-            }
-        }
         $allowed = array_fill_keys([
-            'mode', 'page_size', 'limit', 'cursor', 'direction', 'query_lang',
+            'mode', 'page_size', 'limit', 'cursor', 'direction',
             'prefix_matching', 'prefix_group_index', 'prefix_min_length', 'prefix_surface',
             'post_types', 'post_statuses', 'date_after', 'date_before',
             'include_metadata', 'include_snippets', 'include_canonical_post_row',
@@ -2677,28 +2669,22 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
             }
         }
 
-        $rawMode = $options['mode'] ?? 'OR';
-        if (!is_scalar($rawMode) || strlen((string) $rawMode) > self::MAX_MODE_BYTES) {
-            throw new InvalidArgumentException('FTS search mode may contain at most 8 bytes.');
+        $rawMode = $options['mode'] ?? null;
+        if (!is_string($rawMode) || !in_array($rawMode, ['OR', 'AND'], true)) {
+            throw new InvalidArgumentException('FTS search mode must be exactly OR or AND.');
         }
-        if (!in_array(strtoupper((string) $rawMode), ['OR', 'AND'], true)) {
-            throw new InvalidArgumentException('FTS search mode must be OR or AND.');
-        }
-        $rawDirection = $options['direction'] ?? 'after';
-        if (!is_scalar($rawDirection) || strlen((string) $rawDirection) > self::MAX_MODE_BYTES) {
-            throw new InvalidArgumentException('FTS cursor direction may contain at most 8 bytes.');
-        }
-        if (!in_array(strtolower((string) $rawDirection), ['after', 'before'], true)) {
-            throw new InvalidArgumentException('FTS cursor direction must be after or before.');
+        $rawDirection = $options['direction'] ?? null;
+        if (!is_string($rawDirection) || !in_array($rawDirection, ['after', 'before'], true)) {
+            throw new InvalidArgumentException('FTS cursor direction must be exactly after or before.');
         }
         if (array_key_exists('cursor', $options) && $options['cursor'] !== null) {
             $this->assert_cursor_input_bounds($options['cursor']);
         }
-        foreach (['query_lang', 'date_after', 'date_before', 'now_gmt'] as $key) {
+        foreach (['date_after', 'date_before', 'now_gmt'] as $key) {
             if (!array_key_exists($key, $options) || $options[$key] === null) {
                 continue;
             }
-            if (!is_scalar($options[$key]) || strlen((string) $options[$key]) > self::MAX_FILTER_VALUE_BYTES) {
+            if (!is_string($options[$key]) || strlen($options[$key]) > self::MAX_FILTER_VALUE_BYTES) {
                 throw new InvalidArgumentException("FTS {$key} values may contain at most 64 bytes.");
             }
         }
@@ -2722,12 +2708,7 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
                 continue;
             }
             $value = $options[$key];
-            if (
-                (!is_int($value) && (!is_string($value) || preg_match('/^(0|[1-9][0-9]*)$/D', $value) !== 1))
-                || (is_string($value) && strlen($value) > self::MAX_NUMERIC_INPUT_BYTES)
-                || (int) $value < $minimum
-                || (int) $value > $maximum
-            ) {
+            if (!is_int($value) || $value < $minimum || $value > $maximum) {
                 throw new InvalidArgumentException("FTS {$key} must be an integer from {$minimum} through {$maximum}.");
             }
         }
@@ -2740,8 +2721,7 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
                 continue;
             }
             $value = $options[$key];
-            $numeric = (is_int($value) || is_float($value))
-                || (is_string($value) && strlen($value) <= self::MAX_NUMERIC_INPUT_BYTES && is_numeric($value));
+            $numeric = is_int($value) || is_float($value);
             $number = $numeric ? (float) $value : NAN;
             if (!$numeric || !is_finite($number) || $number < $minimum || $number > $maximum) {
                 throw new InvalidArgumentException("FTS {$key} must be a finite number from {$minimum} through {$maximum}.");
@@ -2749,11 +2729,11 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
         }
         if (array_key_exists('prefix_surface', $options) && $options['prefix_surface'] !== null) {
             $surface = $options['prefix_surface'];
-            if (!is_array($surface) || count($surface) > 2) {
+            if (!is_array($surface) || count($surface) !== 2) {
                 throw new InvalidArgumentException('FTS prefix surfaces must contain one language and one term.');
             }
             foreach (['lang' => self::MAX_LANGUAGE_INPUT_BYTES, 'term' => WP_FTS_Analysis_Limits::MAX_LEXICAL_RUN_BYTES] as $key => $maxBytes) {
-                if (!is_scalar($surface[$key] ?? null) || strlen((string) $surface[$key]) > $maxBytes) {
+                if (!is_string($surface[$key] ?? null) || strlen($surface[$key]) > $maxBytes) {
                     throw new InvalidArgumentException('FTS prefix-surface values exceed the bounded analyzer source contract.');
                 }
             }
@@ -2768,6 +2748,11 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
             }
             if (array_key_exists($key, $options) && !is_array($options[$key])) {
                 throw new InvalidArgumentException("FTS {$key} filters must be arrays.");
+            }
+            foreach ($options[$key] ?? [] as $value) {
+                if (!is_string($value)) {
+                    throw new InvalidArgumentException("FTS {$key} filters must contain strings.");
+                }
             }
             $this->normalize_filter_values($options[$key] ?? []);
         }
@@ -2797,11 +2782,14 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
         }
         $groupId = max(0, min(count($plan['groups']) - 1, (int) ($options['prefix_group_index'] ?? count($plan['groups']) - 1)));
         $surface = $options['prefix_surface'] ?? null;
-        if (!is_array($surface) || !is_scalar($surface['lang'] ?? null) || !is_scalar($surface['term'] ?? null)) {
+        if (!is_array($surface) || !is_string($surface['lang'] ?? null) || !is_string($surface['term'] ?? null)) {
             throw new InvalidArgumentException('FTS prefix matching requires the final normalized typed surface.');
         }
-        $surfaceLang = WP_FTS_TermNamespace::canonicalize_lang((string) $surface['lang'], 'und');
-        $surfaceTerm = (string) $surface['term'];
+        $surfaceLang = WP_FTS_TermNamespace::canonicalize_lang($surface['lang'], 'und');
+        $surfaceTerm = $surface['term'];
+        if (!hash_equals($surfaceLang, $surface['lang'])) {
+            throw new InvalidArgumentException('FTS prefix surface language must already be canonical.');
+        }
         if (
             $surfaceTerm === ''
             || strlen($surfaceTerm) > 255
@@ -3348,110 +3336,6 @@ WHERE {$range['sql']}",
         return gmdate('Y-m-d H:i:s', $timestamp === false ? time() : max(0, $timestamp));
     }
 
-    /**
-     * Read existing source fingerprints for a worker batch in one statement.
-     *
-     * @param int[] $doc_ids
-     * @return array<int,string>
-     */
-    public function document_hashes(array $doc_ids): array
-    {
-        $ids = $this->normalize_bounded_doc_ids(
-            $doc_ids,
-            self::MAX_BATCH_DOCUMENTS,
-            'FTS document fingerprint reads'
-        );
-        if ($ids === []) {
-            return [];
-        }
-        $placeholders = implode(',', array_fill(0, count($ids), '%d'));
-        $rows = $this->get_results($this->wpdb->prepare(
-            "SELECT post_id, content_hash FROM {$this->documentsTable} WHERE post_id IN ({$placeholders})",
-            ...$ids
-        ), 'read FTS document fingerprints');
-        $hashes = [];
-        foreach ($rows as $row) {
-            $postId = max(0, (int) ($row->post_id ?? 0));
-            if ($postId > 0 && is_scalar($row->content_hash ?? null)) {
-                $hashes[$postId] = (string) $row->content_hash;
-            }
-        }
-
-        return $hashes;
-    }
-
-    /**
-     * Read a bounded term preview for a whole result page in one statement.
-     *
-     * @param int[] $doc_ids
-     * @return array<int,string[]>
-     */
-    public function terms_for_docs(array $doc_ids, int $per_doc_limit): array
-    {
-        $ids = $this->normalize_bounded_doc_ids(
-            $doc_ids,
-            WP_FTS_Set_Oriented_Search_Storage::MAX_PAGE_SIZE,
-            'FTS result-page term previews'
-        );
-        $perDocLimit = max(1, min(256, $per_doc_limit));
-        if ($ids === []) {
-            return [];
-        }
-
-        $placeholders = implode(',', array_fill(0, count($ids), '%d'));
-        if ($this->is_sqlite_runtime()) {
-            $statement = $this->wpdb->prepare(
-                "SELECT ranked.post_id, ranked.lang, ranked.term
-FROM (
-    SELECT p.post_id, t.lang, t.term,
-           ROW_NUMBER() OVER (PARTITION BY p.post_id ORDER BY t.lang, t.term) AS term_rank
-    FROM {$this->postingsTable} p
-    JOIN {$this->termsTable} t ON t.term_id = p.term_id
-    WHERE p.post_id IN ({$placeholders}) AND t.kind = " . self::LEXICAL_KIND . "
-) ranked
-WHERE ranked.term_rank <= %d
-ORDER BY ranked.post_id, ranked.lang, ranked.term",
-                ...[...$ids, $perDocLimit]
-            );
-        } else {
-            // Keep each document's lexical limit inside its own UNION branch:
-            // unlike session-variable row numbers, this does not depend on the
-            // optimizer preserving a derived table's ORDER BY during expression
-            // evaluation, and it preserves the same shape on MariaDB.
-            $branches = [];
-            $args = [];
-            foreach ($ids as $postId) {
-                $branches[] = "(SELECT p.post_id, t.lang, t.term
-FROM {$this->postingsTable} p FORCE INDEX (post_term_impact)
-STRAIGHT_JOIN {$this->termsTable} t FORCE INDEX (PRIMARY) ON t.term_id = p.term_id
-WHERE p.post_id = %d AND t.kind = " . self::LEXICAL_KIND . "
-ORDER BY t.lang, t.term
-LIMIT %d)";
-                array_push($args, $postId, $perDocLimit);
-            }
-            $statement = $this->wpdb->prepare(
-                "SELECT bounded.post_id, bounded.lang, bounded.term
-FROM (\n" . implode("\nUNION ALL\n", $branches) . "\n) bounded
-ORDER BY bounded.post_id, bounded.lang, bounded.term",
-                ...$args
-            );
-        }
-        $rows = $this->get_results($statement, 'read bounded FTS document terms');
-        $terms = [];
-        foreach ($rows as $row) {
-            $postId = max(0, (int) ($row->post_id ?? 0));
-            if ($postId <= 0) {
-                continue;
-            }
-            $terms[$postId][] = WP_FTS_TermNamespace::namespace_term(
-                (string) ($row->lang ?? ''),
-                (string) ($row->term ?? '')
-            );
-        }
-
-        return $terms;
-    }
-
     /** Start the single writer transaction after enforcing mutation ownership. */
     public function begin_transaction(): void
     {
@@ -3715,8 +3599,8 @@ VALUES (%s, 'meta', 0, %d, 'meta', 0, 0, '', 0, 0, 0, '', 0, %s, '', 0)",
             'CREATE INDEX ' . $index($this->termsTable, 'empty_terms') . " ON {$terms}(doc_freq)",
             "CREATE TABLE {$postings} (term_id INTEGER NOT NULL, post_id INTEGER NOT NULL, impact INTEGER NOT NULL, PRIMARY KEY(term_id,post_id))",
             'CREATE INDEX ' . $index($this->postingsTable, 'post_term_impact') . " ON {$postings}(post_id,term_id,impact)",
-            "CREATE TABLE {$documents} (post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL DEFAULT 'und', content_hash BLOB NULL, snippet_text TEXT NULL, indexed_at INTEGER NOT NULL DEFAULT 0)",
-            "CREATE TABLE {$work} (job_key BLOB PRIMARY KEY, kind TEXT NOT NULL, post_id INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'pending', available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT NOT NULL DEFAULT '', claimed_generation INTEGER NOT NULL DEFAULT 0, claim_expires_at INTEGER NOT NULL DEFAULT 0, cursor_post_id INTEGER NOT NULL DEFAULT 0, scope_coverage TEXT NOT NULL DEFAULT '', scope_incarnation BLOB NOT NULL DEFAULT '', scope_subject_type TEXT NOT NULL DEFAULT '', scope_subject_id INTEGER NOT NULL DEFAULT 0, payload TEXT NULL, last_error_code TEXT NOT NULL DEFAULT '', last_error_at INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE {$documents} (post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL DEFAULT 'und', content_hash BLOB NOT NULL, snippet_text TEXT NOT NULL, indexed_at INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE {$work} (job_key BLOB NOT NULL PRIMARY KEY, kind TEXT NOT NULL, post_id INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'pending', available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT NOT NULL DEFAULT '', claimed_generation INTEGER NOT NULL DEFAULT 0, claim_expires_at INTEGER NOT NULL DEFAULT 0, cursor_post_id INTEGER NOT NULL DEFAULT 0, scope_coverage TEXT NOT NULL DEFAULT '', scope_incarnation BLOB NOT NULL DEFAULT '', scope_subject_type TEXT NOT NULL DEFAULT '', scope_subject_id INTEGER NOT NULL DEFAULT 0, payload TEXT NULL, last_error_code TEXT NOT NULL DEFAULT '', last_error_at INTEGER NOT NULL DEFAULT 0)",
             'CREATE INDEX ' . $index($this->workTable, 'ready') . " ON {$work}(kind,state,available_at,post_id,job_key)",
             'CREATE INDEX ' . $index($this->workTable, 'recoverable') . " ON {$work}(kind,state,claim_expires_at,available_at,post_id,job_key)",
             'CREATE INDEX ' . $index($this->workTable, 'claim_token') . " ON {$work}(claim_token,post_id)",
@@ -3782,16 +3666,22 @@ STRAIGHT_JOIN {$this->termsTable} cleanup_target
     private function term_identity(string $key, int $kind = self::LEXICAL_KIND): array
     {
         if (strlen($key) > self::MAX_TERM_IDENTITY_INPUT_BYTES) {
-            throw new InvalidArgumentException('FTS term identity exceeds the v4 lexical key contract.');
+            throw new InvalidArgumentException('FTS term identity exceeds the relational lexical key contract.');
         }
         $split = WP_FTS_TermNamespace::split_term($key);
-        $lang = $split === null ? 'und' : $split['lang'];
-        $term = $split === null ? $key : $split['term'];
+        if ($split === null) {
+            throw new InvalidArgumentException('FTS term identities must include a language namespace.');
+        }
+        $lang = $split['lang'];
+        $term = $split['term'];
         $lang = WP_FTS_TermNamespace::canonicalize_lang($lang, 'und');
         if ($term === '' || strlen($term) > 255 || strlen($lang) > 32) {
-            throw new InvalidArgumentException('FTS term identity exceeds the v4 lexical key contract.');
+            throw new InvalidArgumentException('FTS term identity exceeds the relational lexical key contract.');
         }
         $canonicalKey = WP_FTS_TermNamespace::namespace_term($lang, $term);
+        if (!hash_equals($canonicalKey, $key)) {
+            throw new InvalidArgumentException('FTS term identities must already be canonical.');
+        }
         if (!in_array($kind, [self::LEXICAL_KIND, self::SURFACE_KIND], true)) {
             throw new InvalidArgumentException('FTS term identity has an unsupported kind.');
         }
@@ -4797,11 +4687,8 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
     {
         $normalized = [];
         foreach ($frequencies as $key => $tf) {
-            $identity = $this->term_identity((string) $key, $kind);
-            $tf = (int) $tf;
-            if ($tf > 0) {
-                $normalized[$identity['key']] = max($normalized[$identity['key']] ?? 0, $tf);
-            }
+            $identity = $this->term_identity($key, $kind);
+            $normalized[$identity['key']] = $tf;
         }
         ksort($normalized, SORT_STRING);
         return $normalized;
@@ -4988,9 +4875,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
         $nowGmt = isset($data['n']) && is_string($data['n'])
             ? $this->normalize_scoring_now($data['n'])
             : '';
-        // V6 cursors encoded small scores as JSON integers. Continue to accept
-        // those while requiring all new and large boundaries to be exact text.
-        if (!is_string($data['s']) && !is_int($data['s'])) {
+        if (!is_string($data['s'])) {
             throw new InvalidArgumentException('Invalid FTS cursor score.');
         }
         return [
@@ -5091,24 +4976,42 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
     }
 
     /** @return array<string,mixed> */
-    private function empty_search_page(string $lang): array
+    private function empty_search_page(array $options, int $logicalGroupCount, int $queryStatements): array
     {
-        return [
+        $page = [
             'results' => [],
             'has_more' => false,
             'next_cursor' => null,
             'previous_cursor' => null,
-            'query_lang' => WP_FTS_TermNamespace::canonicalize_lang($lang, 'und'),
         ];
+        if (!empty($options['explain'])) {
+            $recencyStrength = (float) ($options['recency_boost_strength'] ?? 0.0);
+            $page['explain'] = [
+                'storage' => 'set_oriented_v6',
+                'logical_group_count' => $logicalGroupCount,
+                'resolved_alternatives' => 0,
+                'anchor_group' => null,
+                'prefix_range' => false,
+                'prefix_strategy' => 'none',
+                'query_statements' => $queryStatements,
+                'interactive_total' => 'unknown',
+                'recency_boost' => [
+                    'enabled' => $recencyStrength > 0.0,
+                    'strength' => $recencyStrength,
+                    'half_life_days' => (float) ($options['recency_boost_half_life_days'] ?? 30.0),
+                    'scoring_now_gmt' => '',
+                ],
+                'canonical_page_bytes' => 0,
+            ];
+        }
+
+        return $page;
     }
 
-    /** Report a structural plan overflow without falling back to legacy search. */
+    /** Report a structural plan overflow. */
     private function throw_search_plan_limit(string $name): never
     {
-        if (class_exists('WP_FTS_Search_Budget_Exceeded')) {
-            throw new WP_FTS_Search_Budget_Exceeded($name);
-        }
-        throw new InvalidArgumentException("FTS search exceeded its {$name} limit.");
+        throw new WP_FTS_Search_Budget_Exceeded($name);
     }
 
     /** Detect WordPress' SQLite integration without issuing SQLite-only SQL. */

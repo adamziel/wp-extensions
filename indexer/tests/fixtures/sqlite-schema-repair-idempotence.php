@@ -75,8 +75,8 @@ function wp_fts_schema_repair_schema(): array
         'CREATE INDEX IF NOT EXISTS wp_fts_empty_terms ON wp_fts_terms(doc_freq)',
         'CREATE TABLE IF NOT EXISTS wp_fts_postings (term_id INTEGER NOT NULL, post_id INTEGER NOT NULL, impact INTEGER NOT NULL, PRIMARY KEY(term_id,post_id))',
         'CREATE INDEX IF NOT EXISTS wp_fts_post_term_impact ON wp_fts_postings(post_id,term_id,impact)',
-        'CREATE TABLE IF NOT EXISTS wp_fts_documents (post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL DEFAULT \'und\', content_hash BLOB, snippet_text TEXT, indexed_at INTEGER NOT NULL DEFAULT 0)',
-        'CREATE TABLE IF NOT EXISTS wp_fts_work (job_key BLOB PRIMARY KEY, kind TEXT NOT NULL, post_id INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT \'pending\', available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT NOT NULL DEFAULT \'\', claimed_generation INTEGER NOT NULL DEFAULT 0, claim_expires_at INTEGER NOT NULL DEFAULT 0, cursor_post_id INTEGER NOT NULL DEFAULT 0, scope_coverage TEXT NOT NULL DEFAULT \'\', scope_incarnation BLOB NOT NULL DEFAULT \'\', scope_subject_type TEXT NOT NULL DEFAULT \'\', scope_subject_id INTEGER NOT NULL DEFAULT 0, payload TEXT, last_error_code TEXT NOT NULL DEFAULT \'\', last_error_at INTEGER NOT NULL DEFAULT 0)',
+        'CREATE TABLE IF NOT EXISTS wp_fts_documents (post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL DEFAULT \'und\', content_hash BLOB NOT NULL, snippet_text TEXT NOT NULL, indexed_at INTEGER NOT NULL DEFAULT 0)',
+        'CREATE TABLE IF NOT EXISTS wp_fts_work (job_key BLOB NOT NULL PRIMARY KEY, kind TEXT NOT NULL, post_id INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT \'pending\', available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT NOT NULL DEFAULT \'\', claimed_generation INTEGER NOT NULL DEFAULT 0, claim_expires_at INTEGER NOT NULL DEFAULT 0, cursor_post_id INTEGER NOT NULL DEFAULT 0, scope_coverage TEXT NOT NULL DEFAULT \'\', scope_incarnation BLOB NOT NULL DEFAULT \'\', scope_subject_type TEXT NOT NULL DEFAULT \'\', scope_subject_id INTEGER NOT NULL DEFAULT 0, payload TEXT, last_error_code TEXT NOT NULL DEFAULT \'\', last_error_at INTEGER NOT NULL DEFAULT 0)',
         'CREATE INDEX IF NOT EXISTS wp_fts_work_ready ON wp_fts_work(kind,state,available_at,post_id,job_key)',
         'CREATE INDEX IF NOT EXISTS wp_fts_work_claim_token ON wp_fts_work(claim_token,post_id)',
         'CREATE INDEX IF NOT EXISTS wp_fts_work_kind_job ON wp_fts_work(kind,job_key)',
@@ -173,6 +173,24 @@ try {
     $mismatchedDocument['storage']->create_tables();
     $mismatchedDocumentResult = wp_fts_schema_repair_result($mismatchedDocument['wpdb'], $mismatchedDocument['storage']);
 
+    $invalidDocumentDefinitions = wp_fts_schema_repair_fixture();
+    $invalidDocumentDefinitions['wpdb']->dbh->exec('DROP TABLE wp_fts_documents');
+    $invalidDocumentDefinitions['wpdb']->dbh->exec(
+        'CREATE TABLE wp_fts_documents ('
+        . "post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL DEFAULT 'und', "
+        . 'content_hash TEXT NOT NULL, snippet_text TEXT, indexed_at INTEGER NOT NULL DEFAULT 0)'
+    );
+    $invalidDocumentDefinitions['wpdb']->dbh->exec(
+        "INSERT INTO wp_fts_documents(post_id,primary_lang,content_hash,snippet_text,indexed_at) VALUES(42,'en','hash','kept',1)"
+    );
+    $invalidDocumentDefinitionsBefore = $invalidDocumentDefinitions['storage']->verify_schema();
+    $invalidDocumentDefinitions['wpdb']->queries = [];
+    $invalidDocumentDefinitions['storage']->create_tables();
+    $invalidDocumentDefinitionsResult = wp_fts_schema_repair_result(
+        $invalidDocumentDefinitions['wpdb'],
+        $invalidDocumentDefinitions['storage']
+    );
+
     // Model the immediately preceding dictionary contract. Removing the
     // redundant hash is a search-generation change: terms, postings, and
     // documents must be rebuilt together while queue work and the cursor epoch
@@ -232,6 +250,8 @@ try {
         'missing_document' => $missingDocumentResult,
         'missing_term' => $missingTermResult,
         'mismatched_document' => $mismatchedDocumentResult,
+        'invalid_document_definitions_before' => $invalidDocumentDefinitionsBefore,
+        'invalid_document_definitions' => $invalidDocumentDefinitionsResult,
         'legacy_term_hash' => $legacyTermHashResult,
         'missing_work' => $missingWorkResult,
         'mismatched_work' => $mismatchedWorkResult,
