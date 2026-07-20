@@ -549,7 +549,7 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
         // Production publishes search readiness from the maintenance callback
         // that the completed corpus scope schedules. Run that callback now;
         // this harness must not depend on ambient WP-Cron timing.
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         WP_FTS_Plugin::reset_request_caches();
         $initialReadiness = WP_FTS_Plugin::search_takeover_status(false);
     }

@@ -2687,6 +2687,15 @@ test_case('relational worst-case runs exact isolated accepted and rejected bound
 test_case('relational worst-case evidence gates query shape, memory, rows, latency, and failures', function (): void {
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     $acceptance = (string) file_get_contents(dirname(__DIR__, 2) . '/docs/relational-search-acceptance.md');
+    assert_contains(
+        'WP_FTS_Plugin::run_scheduled_schema_repair();',
+        $integration,
+        'initial readiness should run through the current schema-repair callback'
+    );
+    assert_true(
+        !str_contains($integration, 'run_scheduled_schema_upgrade'),
+        'the real-database workload must not call the removed schema-upgrade alias'
+    );
     foreach ([
         'relational-fts-evidence-v5',
         "'acceptance_lane' => wp_fts_wc_required_env('WP_FTS_WC_ALLOW_DIRTY') !== '1'",
