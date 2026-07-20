@@ -7,8 +7,6 @@ PROFILE="50k"
 ENGINE="mariadb-10.11"
 OUTPUT=""
 SOURCE_REF="HEAD"
-BASELINE_COMMIT="36a26f4ad1aaef9758922f24677069045c5291ab"
-BASELINE_REF="${BASELINE_COMMIT}"
 JIEBA_GITLINK="67fa2e36e72f69d9134b8a1037b83fbb070b9775"
 JIEBA_URL="https://github.com/fxsjy/jieba"
 JIEBA_DICTIONARY_SHA256="7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8"
@@ -18,17 +16,12 @@ JIEBA_LICENSE_BYTES=1075
 ALLOW_DIRTY=0
 KEEP=0
 CONCURRENCY_SECONDS=60
-MIGRATION_DISK_MONITOR_PID=""
 WPCLI_PROBE_CONTAINER=""
 WATCHDOG_PID=""
 WATCHDOG_ESCALATING=0
 WHOLE_RUN_TIMEOUT_SECONDS=19800
 WATCHDOG_CLEANUP_GRACE_SECONDS=300
 DB_PRE_CORPUS_PEAK_LIMIT_BYTES=805306368
-MIGRATION_FAILPOINT_DEADLINE_SECONDS=7200
-MIGRATION_FAILPOINT_BATCH_BUDGET_SECONDS=300
-MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS=$((MIGRATION_FAILPOINT_DEADLINE_SECONDS + MIGRATION_FAILPOINT_BATCH_BUDGET_SECONDS + 60))
-MIGRATION_FAILPOINT_OUTER_TIMEOUT_SECONDS=$((MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS + 60))
 MARIADB_IMAGE="mariadb@sha256:5a5c675881ef3fd1c1da9b0a3bfd6ee82edbe39cd9e32e06be18034c37235e0e"
 MYSQL_IMAGE="mysql@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
 WORDPRESS_IMAGE="wordpress@sha256:bfc320ed4f02dd3939186b8020de64203a48a939d6dedcf44cb92cf2368923f5"
@@ -129,13 +122,10 @@ BUILD_DIR="${PROOF_ROOT}/build"
 REPRO_BUILD_DIR="${PROOF_ROOT}/repro-build"
 ZIP_PATH="${PROOF_ROOT}/wp-fts-indexer.zip"
 REPRO_ZIP_PATH="${PROOF_ROOT}/wp-fts-indexer-repro.zip"
-BASELINE_ZIP_PATH="${PROOF_ROOT}/wp-fts-indexer-baseline.zip"
 PHP_INI="${PROOF_ROOT}/worst-case.ini"
 SOURCE_ROOT="${REPO_ROOT}"
 SOURCE_SHA=""
-BASELINE_ROOT="${PROOF_ROOT}/baseline-source"
 WORKTREE_CREATED=0
-BASELINE_WORKTREE_CREATED=0
 SOURCE_DIRTY=0
 RUN_COMPLETED=0
 RUN_PUBLISHED=0
@@ -777,24 +767,6 @@ cleanup() {
             failure_workloads_quiesced=0
         fi
     fi
-    if [[ -n "${MIGRATION_DISK_MONITOR_PID:-}" ]]; then
-        touch "${EVIDENCE_DIR}/migration-disk-monitor.stop" 2>/dev/null || true
-        for _ in $(seq 1 40); do
-            if ! kill -0 "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null; then
-                break
-            fi
-            sleep 0.25
-        done
-        if kill -0 "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null; then
-            kill "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null || true
-            sleep 1
-        fi
-        if kill -0 "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null; then
-            kill -9 "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null || true
-        fi
-        wait "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null || true
-        MIGRATION_DISK_MONITOR_PID=""
-    fi
     if (( status != 0 && failure_workloads_quiesced == 1 )); then
         if (( COMPOSE_TORN_DOWN == 0 )); then
             capture_failure_environment_artifacts || true
@@ -822,9 +794,6 @@ cleanup() {
     if (( KEEP == 0 )); then
         if (( WORKTREE_CREATED == 1 )); then
             timeout --signal=TERM --kill-after=30s 60s git -C "${REPO_ROOT}" worktree remove --force "${SOURCE_ROOT}" >/dev/null 2>&1 || true
-        fi
-        if (( BASELINE_WORKTREE_CREATED == 1 )); then
-            timeout --signal=TERM --kill-after=30s 60s git -C "${REPO_ROOT}" worktree remove --force "${BASELINE_ROOT}" >/dev/null 2>&1 || true
         fi
         rm -rf "${PROOF_ROOT}"
     else
@@ -897,18 +866,11 @@ if [[ "${SOURCE_REF}" != "HEAD" || "${ALLOW_DIRTY}" == "0" ]]; then
     timed_host source-worktree-create 300 git -C "${REPO_ROOT}" worktree add --detach "${SOURCE_ROOT}" "${SOURCE_COMMIT}"
     WORKTREE_CREATED=1
 fi
-timed_host baseline-worktree-create 300 git -C "${REPO_ROOT}" worktree add --detach "${BASELINE_ROOT}" "${BASELINE_REF}"
-BASELINE_WORKTREE_CREATED=1
 TEST_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/relational-fts-worst-case.php"
 MUTATION_PROOF_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/mutation-fence-concurrency.php"
 ISOLATED_BOUNDARIES_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/relational-fts-isolated-boundaries.php"
 OLD_POSTING_FRONTIER_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/old-posting-frontier.php"
 SOURCE_SHA="$(git -C "${SOURCE_ROOT}" rev-parse HEAD)"
-BASELINE_SHA="$(git -C "${BASELINE_ROOT}" rev-parse HEAD)"
-if [[ "${BASELINE_SHA}" != "${BASELINE_COMMIT}" ]]; then
-    echo "BLOCKED: legacy comparison must resolve to immutable v3 ${BASELINE_COMMIT}, got ${BASELINE_SHA}." >&2
-    exit 1
-fi
 if (( WORKTREE_CREATED == 1 )) && [[ -n "$(git -C "${SOURCE_ROOT}" status --porcelain --untracked-files=all)" ]]; then
     SOURCE_DIRTY=1
 fi
@@ -935,9 +897,6 @@ fi
 initialize_and_attest_jieba_source \
     current "${SOURCE_ROOT}" "components/full-text-search/resources/sources/jieba" \
     "${EVIDENCE_DIR}/jieba-source-current.json"
-initialize_and_attest_jieba_source \
-    baseline "${BASELINE_ROOT}" "indexer/resources/sources/jieba" \
-    "${EVIDENCE_DIR}/jieba-source-baseline.json"
 TEST_SCRIPT_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${TEST_SCRIPT}")"
 MUTATION_PROOF_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${MUTATION_PROOF_SCRIPT}")"
 ISOLATED_BOUNDARIES_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${ISOLATED_BOUNDARIES_SCRIPT}")"
@@ -1079,22 +1038,6 @@ if(!$passed){fwrite(STDERR,"FAIL: independent release package builds are not rep
   "${SOURCE_SHA}" "${COMPOSER_SHA256}" "${COMPOSER_VERSION}" "${PHP_BINARY_SHA256}" "${EVIDENCE_DIR}/package-reproducibility.json" \
   "${BUILD_DIR}" "${REPRO_BUILD_DIR}"
 ZIP_SHA256="$(php -r '$e=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);if(($e["status"]??null)!=="PASS"){exit(1);}echo $e["primary"]["zip_sha256"]??"";' "${EVIDENCE_DIR}/package-reproducibility.json")"
-# Package immutable legacy runtime source with the current hardened packager.
-# Executing historical packaging code would re-enable whatever Composer plugin,
-# script, auth, and global-config behavior happened to exist at that old ref.
-timed_host baseline-package-build 1800 php "${SOURCE_ROOT}/indexer/tools/build-release-zip.php" \
-    --plugin-src="${BASELINE_ROOT}/indexer" \
-    --monorepo-root="${BASELINE_ROOT}" \
-    --build-dir="${PROOF_ROOT}/baseline-build" \
-    --output="${BASELINE_ZIP_PATH}" > "${EVIDENCE_DIR}/baseline-package-build.json"
-timed_host baseline-package-zip-test 300 unzip -t "${BASELINE_ZIP_PATH}" > "${EVIDENCE_DIR}/baseline-zip-test.log"
-BASELINE_ZIP_SHA256="$(php -r '
-$build=json_decode((string)file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
-$zipHash=hash_file("sha256",$argv[2]);
-if(($build["status"]??null)!=="ok"||($build["sha256"]??null)!==$zipHash||($build["composer_plugins"]??null)!==false||($build["composer_scripts"]??null)!==false){fwrite(STDERR,"FAIL: immutable baseline package did not use the hardened source-bound Composer policy.\n");exit(1);}
-echo $zipHash;
-' "${EVIDENCE_DIR}/baseline-package-build.json" "${BASELINE_ZIP_PATH}")"
-
 cat > "${PHP_INI}" <<'INI'
 memory_limit=128M
 max_execution_time=0
@@ -1182,7 +1125,6 @@ ${DB_ENV}
     volumes:
       - wp_data:/var/www/html
       - ${ZIP_PATH}:/proof/wp-fts-indexer.zip:ro
-      - ${BASELINE_ZIP_PATH}:/proof/wp-fts-indexer-baseline.zip:ro
       - ${TEST_SCRIPT}:/proof/relational-fts-worst-case.php:ro
       - ${MUTATION_PROOF_SCRIPT}:/proof/mutation-fence-concurrency.php:ro
       - ${ISOLATED_BOUNDARIES_SCRIPT}:/proof/relational-fts-isolated-boundaries.php:ro
@@ -1208,7 +1150,6 @@ ${DB_ENV}
     volumes:
       - wp_data:/var/www/html
       - ${ZIP_PATH}:/proof/wp-fts-indexer.zip:ro
-      - ${BASELINE_ZIP_PATH}:/proof/wp-fts-indexer-baseline.zip:ro
       - ${TEST_SCRIPT}:/proof/relational-fts-worst-case.php:ro
       - ${MUTATION_PROOF_SCRIPT}:/proof/mutation-fence-concurrency.php:ro
       - ${ISOLATED_BOUNDARIES_SCRIPT}:/proof/relational-fts-isolated-boundaries.php:ro
@@ -1223,7 +1164,7 @@ YAML
 
 phase_timeout_seconds() {
     case "$1" in
-        setup|indexing-prepare|reindex-drain|migration-finalize|migration-rerun|multisite-migration|drain) printf '7200\n' ;;
+        setup|indexing-prepare|initial-index-drain|reindex-drain|drain) printf '7200\n' ;;
         cold-prepare|dependency-lob|max-valid-setup|max-valid-search|search-memory-sample|validate|writer-aggregate|old-posting-frontier|scope-ddl-writer|scope-proof) printf '1800\n' ;;
         concurrent-reader|concurrent-writer) printf '%s\n' "$((CONCURRENCY_SECONDS + 180))" ;;
         *) printf '600\n' ;;
@@ -1273,10 +1214,8 @@ timed_compose wordpress-core-install 600 run --rm wpcli core install \
 timed_compose wordpress-multisite-convert 600 run --rm wpcli core multisite-convert \
     --title='Relational FTS Worst Case Network' \
     --base=/
-timed_compose wordpress-site2-create 600 run --rm wpcli --url=http://wordpress site create --slug=site2 --title='FTS migration site two' --email=admin@example.test
-timed_compose wordpress-site3-create 600 run --rm wpcli --url=http://wordpress site create --slug=site3 --title='FTS migration site three' --email=admin@example.test
 timed_compose wordpress-disposable-marker 30 exec -T wordpress touch /var/www/html/.wp-fts-relational-worst-case
-timed_compose baseline-plugin-install 600 run --rm wpcli --url=http://wordpress plugin install /proof/wp-fts-indexer-baseline.zip --force --activate-network
+timed_compose current-plugin-install 600 run --rm wpcli --url=http://wordpress plugin install /proof/wp-fts-indexer.zip --force --activate-network
 timed_compose wordpress-config-lock 300 run --rm wpcli --url=http://wordpress config set WP_FTS_INDEX_LOCK_TTL 30 --raw
 timed_compose wordpress-config-cron 300 run --rm wpcli --url=http://wordpress config set DISABLE_WP_CRON true --raw
 
@@ -1723,10 +1662,10 @@ if ($gates !== []) {
   "${EVIDENCE_DIR}/package-reproducibility.json" "${RUNNER_OS:-local}" "${RUNNER_ARCH:-unknown}" "${ImageOS:-unknown}" "${ImageVersion:-unknown}" \
   "${DB_PRE_CORPUS_MEMORY}" "${DB_PRE_CORPUS_PEAK_LIMIT_BYTES}" "${WP_PRE_CORPUS_MEMORY}" "${WP_CONTAINER}"
 
-ACTIVE_SOURCE_SHA="${BASELINE_SHA}"
-ACTIVE_ZIP_SHA256="${BASELINE_ZIP_SHA256}"
-ACTIVE_SOURCE_DIRTY=0
-ACTIVE_ALLOW_DIRTY=0
+ACTIVE_SOURCE_SHA="${SOURCE_SHA}"
+ACTIVE_ZIP_SHA256="${ZIP_SHA256}"
+ACTIVE_SOURCE_DIRTY="${SOURCE_DIRTY}"
+ACTIVE_ALLOW_DIRTY="${ALLOW_DIRTY}"
 
 env_options() {
     local phase="$1"
@@ -1919,118 +1858,6 @@ wait_for_database() {
     return 1
 }
 
-start_migration_disk_monitor() {
-    rm -f "${EVIDENCE_DIR}/migration-disk-monitor.stop" "${EVIDENCE_DIR}/migration-disk-samples.tsv" "${EVIDENCE_DIR}/migration-disk-window.tsv"
-    timed_compose migration-disk-monitor 15000 exec -T db sh -c '
-monotonic() { cut -d " " -f 1 /proc/uptime; }
-sample() {
-    sample_started=$(monotonic)
-    total_kib=$(du -sk /var/lib/mysql | awk "{print \$1}")
-    fts_kib=0
-    for path in /var/lib/mysql/wpfts/wp_fts_*; do
-        [ -e "$path" ] || continue
-        path_kib=$(du -sk "$path" | awk "{print \$1}")
-        fts_kib=$((fts_kib + path_kib))
-    done
-    sample_finished=$(monotonic)
-    printf "%s\t%s\t%s\t%s\n" "$sample_started" "$sample_finished" "$((total_kib * 1024))" "$((fts_kib * 1024))" >> /evidence/migration-disk-samples.tsv
-}
-printf "start\t%s\n" "$(monotonic)" > /evidence/migration-disk-window.tsv
-while [ ! -f /evidence/migration-disk-monitor.stop ]; do
-    sample
-    sleep 0.25
-done
-sample
-printf "end\t%s\n" "$(monotonic)" >> /evidence/migration-disk-window.tsv
-' >/dev/null 2>&1 &
-    MIGRATION_DISK_MONITOR_PID=$!
-    for _ in $(seq 1 40); do
-        if [[ -s "${EVIDENCE_DIR}/migration-disk-samples.tsv" ]]; then
-            return 0
-        fi
-        if ! kill -0 "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null; then
-            echo "FAIL: physical migration disk monitor exited before its first sample." >&2
-            return 1
-        fi
-        sleep 0.25
-    done
-    echo "FAIL: physical migration disk monitor produced no sample." >&2
-    return 1
-}
-
-stop_migration_disk_monitor() {
-    touch "${EVIDENCE_DIR}/migration-disk-monitor.stop"
-    for _ in $(seq 1 40); do
-        if ! kill -0 "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null; then
-            break
-        fi
-        sleep 0.25
-    done
-    if kill -0 "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null; then
-        kill -9 "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null || true
-        wait "${MIGRATION_DISK_MONITOR_PID}" 2>/dev/null || true
-        MIGRATION_DISK_MONITOR_PID=""
-        echo "FAIL: physical migration disk monitor did not stop within 10 seconds." >&2
-        return 1
-    fi
-    if ! wait "${MIGRATION_DISK_MONITOR_PID}"; then
-        MIGRATION_DISK_MONITOR_PID=""
-        echo "FAIL: physical migration disk monitor exited unsuccessfully." >&2
-        return 1
-    fi
-    MIGRATION_DISK_MONITOR_PID=""
-    php -r '
-$lines=file($argv[1],FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES);
-$samples=[];
-foreach($lines as $line){
-    $parts=explode("\t",$line);
-    if(count($parts)!==4||!is_numeric($parts[0])||!is_numeric($parts[1])||$parts[2]===""||strspn($parts[2],"0123456789")!==strlen($parts[2])||$parts[3]===""||strspn($parts[3],"0123456789")!==strlen($parts[3])){fwrite(STDERR,"Malformed migration disk sample.\n");exit(1);}
-    $samples[]=["started_monotonic_seconds"=>(float)$parts[0],"finished_monotonic_seconds"=>(float)$parts[1],"volume_bytes"=>(int)$parts[2],"fts_bytes"=>(int)$parts[3]];
-}
-if($samples===[]){fwrite(STDERR,"No migration disk samples.\n");exit(1);}
-$windowLines=file($argv[2],FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES);
-$window=[];
-foreach($windowLines as $line){$parts=explode("\t",$line);if(count($parts)!==2||!in_array($parts[0],["start","end"],true)||!is_numeric($parts[1])){fwrite(STDERR,"Malformed migration disk window.\n");exit(1);}$window[$parts[0]]=(float)$parts[1];}
-if(!isset($window["start"],$window["end"])||$window["end"]<$window["start"]){fwrite(STDERR,"Incomplete migration disk window.\n");exit(1);}
-$volume=array_column($samples,"volume_bytes");$fts=array_column($samples,"fts_bytes");
-$first=$samples[0];$final=$samples[array_key_last($samples)];$peakVolume=max($volume);$peakFts=max($fts);
-$volumeDenominator=max(1,$first["volume_bytes"],$final["volume_bytes"]);
-$ftsDenominator=max(1,$first["fts_bytes"],$final["fts_bytes"]);
-$volumeRatio=$peakVolume/$volumeDenominator;$ftsRatio=$peakFts/$ftsDenominator;
-$maxGap=0.0;$sampleDurations=[];
-foreach($samples as $index=>$sample){
- if($sample["finished_monotonic_seconds"]<$sample["started_monotonic_seconds"]){fwrite(STDERR,"Migration disk sample clock moved backwards.\n");exit(1);}
- $sampleDurations[]=$sample["finished_monotonic_seconds"]-$sample["started_monotonic_seconds"];
- if($index>0){$maxGap=max($maxGap,$sample["finished_monotonic_seconds"]-$samples[$index-1]["finished_monotonic_seconds"]);}
-}
-$maxSampleDuration=max($sampleDurations);
-$leadingGap=max(0.0,$first["finished_monotonic_seconds"]-$window["start"]);
-$trailingGap=max(0.0,$window["end"]-$final["finished_monotonic_seconds"]);
-$coverage=max(0.0,$final["finished_monotonic_seconds"]-$first["finished_monotonic_seconds"]);
-$windowSeconds=$window["end"]-$window["start"];
-$gates=[
- ["id"=>"migration_physical_disk_sample_count","expected"=>">= 20","actual"=>count($samples),"passed"=>count($samples)>=20],
- ["id"=>"migration_physical_disk_baseline_fts_bytes","expected"=>"> 0","actual"=>$first["fts_bytes"],"passed"=>$first["fts_bytes"]>0],
- ["id"=>"migration_physical_disk_final_fts_bytes","expected"=>"> 0","actual"=>$final["fts_bytes"],"passed"=>$final["fts_bytes"]>0],
- ["id"=>"migration_physical_volume_peak_ratio","expected"=>"<= 2.2","actual"=>$volumeRatio,"passed"=>$volumeRatio<=2.2],
- ["id"=>"migration_physical_fts_peak_ratio","expected"=>"<= 2.2","actual"=>$ftsRatio,"passed"=>$ftsRatio<=2.2],
- ["id"=>"migration_physical_monotonic_coverage","expected"=>"entire marked window","actual"=>["window_seconds"=>$windowSeconds,"coverage_seconds"=>$coverage,"leading_gap_seconds"=>$leadingGap,"trailing_gap_seconds"=>$trailingGap],"passed"=>$windowSeconds>0.0&&$leadingGap<=0.75&&$trailingGap<=0.75&&$coverage+1.5>=$windowSeconds],
- ["id"=>"migration_physical_max_observed_gap","expected"=>"<= 0.75","actual"=>$maxGap,"passed"=>$maxGap<=0.75],
- ["id"=>"migration_physical_max_sample_duration","expected"=>"<= 0.75","actual"=>$maxSampleDuration,"passed"=>$maxSampleDuration<=0.75],
-];
-$passed=count(array_filter($gates,static fn(array $gate):bool=>!$gate["passed"]))===0;
-$data=[
- "schema"=>"relational-fts-migration-physical-disk-v2","status"=>$passed?"PASS":"FAIL","source_sha"=>$argv[3],"profile"=>$argv[4],
- "target_interval_seconds"=>0.25,"sample_count"=>count($samples),"samples_sha256"=>hash_file("sha256",$argv[1]),"window_sha256"=>hash_file("sha256",$argv[2]),
- "monotonic_window"=>$window,"window_seconds"=>$windowSeconds,"coverage_seconds"=>$coverage,"leading_gap_seconds"=>$leadingGap,"trailing_gap_seconds"=>$trailingGap,"max_observed_gap_seconds"=>$maxGap,"max_sample_duration_seconds"=>$maxSampleDuration,
- "first"=>$first,"final"=>$final,"peak_volume_bytes"=>$peakVolume,"peak_fts_bytes"=>$peakFts,
- "peak_volume_ratio"=>$volumeRatio,"peak_fts_ratio"=>$ftsRatio,"gates"=>$gates,
-];
-file_put_contents($argv[5],json_encode($data,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n");
-if(!$passed){fwrite(STDERR,"Physical migration disk evidence failed.\n");exit(1);}
-' "${EVIDENCE_DIR}/migration-disk-samples.tsv" "${EVIDENCE_DIR}/migration-disk-window.tsv" "${SOURCE_SHA}" "${PROFILE}" "${EVIDENCE_DIR}/migration-disk.json"
-}
-
 kill_uncommitted_transaction() {
     local options=()
     while IFS= read -r option; do options+=("${option}"); done < <(env_options transaction-crash)
@@ -2126,336 +1953,14 @@ if(file_put_contents($temporary,$json,LOCK_EX)!==strlen($json)||!rename($tempora
     '
 }
 
-kill_migration_phase() {
-    local target="$1"
-    local ready="${EVIDENCE_DIR}/migration-phase-${target}.json"
-    local options=()
-    while IFS= read -r option; do options+=("${option}"); done < <(env_options migration-failpoint)
-    rm -f "${ready}" "${EVIDENCE_DIR}/migration-worker-${target}.ndjson"
-    timed_compose "migration-failpoint-${target}" "${MIGRATION_FAILPOINT_OUTER_TIMEOUT_SECONDS}" exec -T "${options[@]}" \
-      -e "WP_FTS_WC_MIGRATION_TARGET=${target}" \
-      -e "WP_FTS_WC_MIGRATION_DEADLINE_SECONDS=${MIGRATION_FAILPOINT_DEADLINE_SECONDS}" \
-      -e "WP_FTS_WC_MIGRATION_BATCH_BUDGET_SECONDS=${MIGRATION_FAILPOINT_BATCH_BUDGET_SECONDS}" \
-      wordpress sh -c '
-        target="$1"
-        ready_timeout="$2"
-        php /proof/relational-fts-worst-case.php >"/evidence/migration-${target}-process.log" 2>&1 &
-        child=$!
-        ready=0
-        i=0
-        while [ "$i" -lt "$ready_timeout" ]; do
-            if [ -f "/evidence/migration-phase-${target}.json" ]; then ready=1; break; fi
-            if ! kill -0 "$child" 2>/dev/null; then wait "$child"; exit $?; fi
-            i=$((i+1)); sleep 1
-        done
-        if [ "$ready" -ne 1 ]; then kill -9 "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; exit 1; fi
-        ready_pid="$(php -r '\''
-$evidence=json_decode((string)file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
-$valid=($evidence["schema"]??null)==="relational-fts-migration-phase-v3"
-    &&($evidence["status"]??null)==="PASS"
-    &&($evidence["phase"]??null)===$argv[2]
-    &&is_int($evidence["pid"]??null)&&$evidence["pid"]>0;
-if(!$valid){exit(1);}echo $evidence["pid"];
-'\'' "/evidence/migration-phase-${target}.json" "$target")" || {
-            kill -9 "$child" 2>/dev/null || true
-            wait "$child" 2>/dev/null || true
-            exit 1
-        }
-        if [ "$ready_pid" -ne "$child" ]; then
-            kill -9 "$child" 2>/dev/null || true
-            wait "$child" 2>/dev/null || true
-            exit 1
-        fi
-        if ! kill -9 "$child" 2>/dev/null; then
-            wait "$child" 2>/dev/null || true
-            exit 1
-        fi
-        if wait "$child" 2>/dev/null; then status=0; else status=$?; fi
-        [ "$status" -eq 137 ]
-    ' sh "${target}" "${MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS}"
-}
-
-run_migration_post_kill_probe() {
-    local target="$1"
-    local options=()
-    while IFS= read -r option; do options+=("${option}"); done < <(env_options migration-post-kill-probe)
-    rm -f "${EVIDENCE_DIR}/migration-post-kill-${target}.json"
-    timed_compose "migration-post-kill-${target}" 180 exec -T "${options[@]}" \
-        -e "WP_FTS_WC_MIGRATION_TARGET=${target}" \
-        wordpress timeout -s KILL 120 php /proof/relational-fts-worst-case.php
-}
-
-run_migration_snapshot_case() {
-    local case_id="$1"
-    local path="${EVIDENCE_DIR}/migration-snapshot-case-${case_id}.json"
-    local pre_failure_path="${path}.pre-failure.json"
-    local log_path="${EVIDENCE_DIR}/migration-snapshot-case-${case_id}.log"
-    local options=()
-    while IFS= read -r option; do options+=("${option}"); done < <(env_options migration-snapshot-case)
-    rm -f "${path}" "${pre_failure_path}" "${log_path}"
-    local started finished elapsed_ms
-    started="$(php -r 'echo hrtime(true);')"
-    RUN_PHASE="migration-snapshot-case-${case_id}"
-    set +e
-    timed_compose "migration-snapshot-case-${case_id}" 150 exec -T "${options[@]}" -e "WP_FTS_WC_CASE=${case_id}" wordpress \
-      timeout -s KILL 120 php -d memory_limit=128M /proof/relational-fts-worst-case.php \
-      2>&1 | php -r '
-$path=$argv[1];$limit=1048576;$tailLimit=65536;$marker="\n[output truncated; final 65536 bytes follow]\n";
-$output=fopen($path,"wb");
-if($output===false){fwrite(STDERR,"Could not open bounded migration snapshot log.\n");exit(1);}
-$written=0;$truncated=false;$tail="";
-while(!feof(STDIN)){
-    $chunk=fread(STDIN,8192);
-    if($chunk===false){fclose($output);fwrite(STDERR,"Could not read migration snapshot output.\n");exit(1);}
-    if($chunk===""){continue;}
-    $tail=substr($tail.$chunk,-$tailLimit);
-    $remaining=$limit-$written;
-    if($remaining>0){
-        $slice=substr($chunk,0,$remaining);$offset=0;$length=strlen($slice);
-        while($offset<$length){
-            $count=fwrite($output,substr($slice,$offset));
-            if($count===false||$count===0){fclose($output);fwrite(STDERR,"Could not write bounded migration snapshot log.\n");exit(1);}
-            $offset+=$count;
-        }
-        $written+=$length;
-    }
-    if(strlen($chunk)>$remaining){$truncated=true;}
-}
-if($truncated){
-    $payloadLimit=$limit-strlen($marker)-$tailLimit;
-    if(!ftruncate($output,$payloadLimit)||fseek($output,$payloadLimit)!==0){
-        fclose($output);fwrite(STDERR,"Could not mark truncated migration snapshot log.\n");exit(1);
-    }
-    foreach([$marker,$tail] as $suffix){
-        $offset=0;$length=strlen($suffix);
-        while($offset<$length){
-            $count=fwrite($output,substr($suffix,$offset));
-            if($count===false||$count===0){fclose($output);fwrite(STDERR,"Could not write migration snapshot log tail.\n");exit(1);}
-            $offset+=$count;
-        }
-    }
-}
-if(!fclose($output)){fwrite(STDERR,"Could not close bounded migration snapshot log.\n");exit(1);}
-' "${log_path}"
-    local -a statuses=("${PIPESTATUS[@]}")
-    local status="${statuses[0]:-1}"
-    local sink_status="${statuses[1]:-1}"
-    set -e
-    if (( sink_status != 0 )); then
-        status=1
-    fi
-    finished="$(php -r 'echo hrtime(true);')"
-    elapsed_ms="$(php -r 'printf("%.3f", ((int)$argv[2]-(int)$argv[1])/1000000);' "${started}" "${finished}")"
-    if (( status != 0 )) && [[ -f "${path}" ]]; then
-        mv "${path}" "${pre_failure_path}"
-    fi
-    if (( status != 0 )) || [[ ! -f "${path}" ]]; then
-        local failure_status=0
-        timeout --signal=TERM --kill-after=2s 10s php -r '
-$exit=(int)$argv[2];
-$elapsed=(float)$argv[6];
-$timedOut=$exit===124||($exit===137&&$elapsed>=119000.0);
-$logHash=is_file($argv[9])?hash_file("sha256",$argv[9]):hash("sha256","");
-$memoryFatal=false;
-if(is_file($argv[9])){
-    $handle=fopen($argv[9],"rb");
-    if($handle===false){fwrite(STDERR,"Could not scan migration snapshot log.\n");exit(1);}
-    while(($line=fgets($handle))!==false){
-        if(str_contains($line,"Allowed memory size of 134217728 bytes exhausted")){$memoryFatal=true;break;}
-    }
-    if(!feof($handle)&&!$memoryFatal){fclose($handle);fwrite(STDERR,"Could not scan migration snapshot log.\n");exit(1);}
-    fclose($handle);
-}
-$class=$timedOut?"Timeout":($exit===137?"KilledOrOOM":($exit===255&&$memoryFatal?"MemoryLimitFatal":"ProcessFailure"));
-$message=$timedOut?"Legacy snapshot case exceeded the 120-second process limit":($exit===137?"Legacy snapshot case was SIGKILLed or OOM-killed before its timeout":($memoryFatal?"Legacy snapshot case exhausted its 128 MiB PHP memory limit":"Legacy snapshot case exited before writing PASS evidence"));
-$data=[
- "schema"=>"relational-fts-migration-snapshot-case-v1","status"=>"FAIL","phase"=>"migration-snapshot-case","case"=>$argv[1],
- "source_sha"=>$argv[3],"zip_sha256"=>$argv[4],"manifest_sha256"=>null,"profile"=>$argv[5],
- "process_timeout_seconds"=>120,"memory_limit_bytes"=>134217728,"process_identity"=>null,
- "duration_ms"=>$elapsed,"query_count"=>null,"max_sql_bytes"=>null,"php_memory_delta_bytes"=>null,"rss_delta_bytes"=>null,
- "php_lifetime_peak_before_reset_bytes"=>null,
- "php_phase_peak_bytes"=>null,"php_peak_bytes"=>null,"rss_peak_bytes"=>null,
- "query"=>null,"options"=>null,"legacy_execution"=>null,
- "error"=>["class"=>$class,"message"=>$message,"exit"=>$exit,"log_sha256"=>$logHash],
- "discarded_pre_failure_artifact"=>is_file($argv[8])?[
-     "sha256"=>hash_file("sha256",$argv[8]),
-     "bytes"=>filesize($argv[8]),
- ]:null
-];
-$json=json_encode($data,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n";
-$temporary=$argv[7].".tmp.".getmypid();
-if(file_put_contents($temporary,$json,LOCK_EX)!==strlen($json)||!rename($temporary,$argv[7])){@unlink($temporary);fwrite(STDERR,"Could not atomically publish migration snapshot failure evidence.\n");exit(1);}
-' "${case_id}" "${status}" "${ACTIVE_SOURCE_SHA}" "${ACTIVE_ZIP_SHA256}" "${PROFILE}" "${elapsed_ms}" "${path}" "${pre_failure_path}" "${log_path}" || failure_status=$?
-        if (( failure_status != 0 )); then
-            echo "FAIL: could not publish bounded failure evidence for migration snapshot case ${case_id}." >&2
-            return "${failure_status}"
-        fi
-        if migration_snapshot_memory_limit_failure_is_continuable "${case_id}" "${path}" "${log_path}"; then
-            if ! wait_for_legacy_snapshot_database_quiescence; then
-                echo "FAIL: legacy snapshot memory failure left active database work." >&2
-                return 1
-            fi
-            echo "WARN: retained the rare_anchor_and legacy 128 MiB memory failure; continuing with current-runtime validation." >&2
-            return 0
-        fi
-        # A killed PHP client can leave its server-side statement running. Stop
-        # this lane immediately so the EXIT cleanup removes the database instead
-        # of contaminating a later case with residual legacy work.
-        if (( status == 0 )); then
-            return 1
-        fi
-        return "${status}"
-    fi
-}
-
-migration_snapshot_memory_limit_failure_is_continuable() {
-    local case_id="$1"
-    local path="$2"
-    local log_path="$3"
-    if [[ "${case_id}" != "rare_anchor_and" ]]; then
-        return 1
-    fi
-    php -r '
-$artifact=json_decode((string)file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
-$error=is_array($artifact["error"]??null)?$artifact["error"]:[];
-$hash=$error["log_sha256"]??null;
-$memoryFatal=false;
-if(is_file($argv[2])){
-    $handle=fopen($argv[2],"rb");
-    if($handle===false){exit(1);}
-    while(($line=fgets($handle))!==false){
-        if(str_contains($line,"Allowed memory size of 134217728 bytes exhausted")){$memoryFatal=true;break;}
-    }
-    if(!feof($handle)&&!$memoryFatal){fclose($handle);exit(1);}
-    fclose($handle);
-}
-$valid=array_keys($artifact)===["schema","status","phase","case","source_sha","zip_sha256","manifest_sha256","profile","process_timeout_seconds","memory_limit_bytes","process_identity","duration_ms","query_count","max_sql_bytes","php_memory_delta_bytes","rss_delta_bytes","php_lifetime_peak_before_reset_bytes","php_phase_peak_bytes","php_peak_bytes","rss_peak_bytes","query","options","legacy_execution","error","discarded_pre_failure_artifact"]
-    &&($artifact["schema"]??null)==="relational-fts-migration-snapshot-case-v1"
-    &&($artifact["status"]??null)==="FAIL"
-    &&($artifact["phase"]??null)==="migration-snapshot-case"
-    &&($artifact["case"]??null)==="rare_anchor_and"
-    &&($artifact["source_sha"]??null)===$argv[3]
-    &&$argv[3]===$argv[6]
-    &&($artifact["zip_sha256"]??null)===$argv[4]
-    &&($artifact["profile"]??null)===$argv[5]
-    &&($artifact["manifest_sha256"]??null)===null
-    &&($artifact["process_timeout_seconds"]??null)===120
-    &&($artifact["memory_limit_bytes"]??null)===134217728
-    &&($artifact["process_identity"]??null)===null
-    &&is_numeric($artifact["duration_ms"]??null)
-    &&(float)$artifact["duration_ms"]>=0.0
-    &&(float)$artifact["duration_ms"]<119000.0
-    &&($artifact["query_count"]??null)===null
-    &&($artifact["max_sql_bytes"]??null)===null
-    &&($artifact["php_memory_delta_bytes"]??null)===null
-    &&($artifact["rss_delta_bytes"]??null)===null
-    &&($artifact["php_lifetime_peak_before_reset_bytes"]??null)===null
-    &&($artifact["php_phase_peak_bytes"]??null)===null
-    &&($artifact["php_peak_bytes"]??null)===null
-    &&($artifact["rss_peak_bytes"]??null)===null
-    &&($artifact["query"]??null)===null
-    &&($artifact["options"]??null)===null
-    &&($artifact["legacy_execution"]??null)===null
-    &&array_keys($error)===["class","message","exit","log_sha256"]
-    &&($error["class"]??null)==="MemoryLimitFatal"
-    &&($error["message"]??null)==="Legacy snapshot case exhausted its 128 MiB PHP memory limit"
-    &&($error["exit"]??null)===255
-    &&$memoryFatal
-    &&is_string($hash)&&strlen($hash)===64&&ctype_xdigit($hash)&&strtolower($hash)===$hash
-    &&hash_equals($hash,(string)hash_file("sha256",$argv[2]))
-    &&($artifact["discarded_pre_failure_artifact"]??null)===null;
-exit($valid?0:1);
-' "${path}" "${log_path}" "${ACTIVE_SOURCE_SHA}" "${ACTIVE_ZIP_SHA256}" "${PROFILE}" "${BASELINE_COMMIT}"
-}
-
-wait_for_legacy_snapshot_database_quiescence() {
-    local client
-    if [[ "${DB_KIND}" == "mariadb" ]]; then
-        client=mariadb
-    else
-        client=mysql
-    fi
-    timed_compose legacy-snapshot-database-quiescence 45 exec -T db sh -c '
-client="$1"
-attempt=0
-while [ "$attempt" -lt 30 ]; do
-    active="$("$client" -uroot -pwpfts_root_dev_only --batch --skip-column-names --execute "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER='\''wpfts'\'' AND COMMAND<>'\''Sleep'\''")" || exit 2
-    case "$active" in
-        0) exit 0 ;;
-        ""|*[!0-9]*) exit 2 ;;
-    esac
-    attempt=$((attempt+1))
-    sleep 1
-done
-exit 1
-' sh "${client}"
-}
-
-set_run_stage "baseline-corpus-and-index"
-run_php_phase setup > "${EVIDENCE_DIR}/baseline-setup.log"
-BASELINE_INDEX_STARTED="$(php -r 'echo hrtime(true);')"
-set +e
-timed_compose baseline-reindex 7200 run --rm wpcli --url=http://wordpress fts reindex \
+set_run_stage "current-corpus-and-initial-index"
+record_installed_tree_binding post-install
+run_php_phase setup > "${EVIDENCE_DIR}/setup.log"
+timed_compose initial-reindex-enqueue 1800 run --rm wpcli --url=http://wordpress fts reindex \
     --post_type=post \
     --post_status=publish,draft,pending,future,private \
-    > "${EVIDENCE_DIR}/baseline-reindex.log" 2>&1
-BASELINE_INDEX_EXIT=$?
-set -e
-BASELINE_INDEX_FINISHED="$(php -r 'echo hrtime(true);')"
-BASELINE_INDEX_ELAPSED="$(php -r 'printf("%.6f", ((int)$argv[2]-(int)$argv[1])/1000000000);' "${BASELINE_INDEX_STARTED}" "${BASELINE_INDEX_FINISHED}")"
-php -r '
-$out=file_get_contents($argv[5]);
-$data=["schema"=>"relational-fts-indexing-v1","status"=>(int)$argv[7]===0?"PASS":"FAIL","source_sha"=>$argv[1],"zip_sha256"=>$argv[2],"profile"=>$argv[3],"documents"=>(int)$argv[4],"elapsed_seconds"=>(float)$argv[6],"exit"=>(int)$argv[7],"output_sha256"=>hash("sha256",$out),"output_tail"=>substr($out,-2000)];
-file_put_contents($argv[8],json_encode($data,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n");
-' "${BASELINE_SHA}" "${BASELINE_ZIP_SHA256}" "${PROFILE}" "${DOCUMENTS}" "${EVIDENCE_DIR}/baseline-reindex.log" "${BASELINE_INDEX_ELAPSED}" "${BASELINE_INDEX_EXIT}" "${EVIDENCE_DIR}/baseline-indexing.json"
-if (( BASELINE_INDEX_EXIT != 0 )); then
-    echo "FAIL: populated baseline WP-CLI reindex failed; see ${EVIDENCE_DIR}/baseline-reindex.log" >&2
-    exit 1
-fi
-run_php_phase multisite-baseline-setup > "${EVIDENCE_DIR}/multisite-baseline-setup.log"
-for migration_case in common_or max_valid_or_prefix rare_anchor_and prefix_fanout ambiguous_morphology_or ambiguous_morphology_and; do
-    run_migration_snapshot_case "${migration_case}"
-done
-snapshot_finalize_options=()
-while IFS= read -r option; do snapshot_finalize_options+=("${option}"); done < <(env_options migration-snapshot-finalize)
-timed_compose migration-snapshot-finalize 150 exec -T "${snapshot_finalize_options[@]}" wordpress \
-    timeout -s KILL 120 php -d memory_limit=128M /proof/relational-fts-worst-case.php \
-    > "${EVIDENCE_DIR}/migration-snapshot-finalize.log"
-# Replace the active plugin files without an activation request. The next fresh
-# PHP process installs each failpoint before it explicitly starts the migration.
-timed_compose current-plugin-install 600 run --rm wpcli --url=http://wordpress plugin install /proof/wp-fts-indexer.zip --force
-record_installed_tree_binding post-install
-ACTIVE_SOURCE_SHA="${SOURCE_SHA}"
-ACTIVE_ZIP_SHA256="${ZIP_SHA256}"
-ACTIVE_SOURCE_DIRTY="${SOURCE_DIRTY}"
-ACTIVE_ALLOW_DIRTY="${ALLOW_DIRTY}"
-set_run_stage "migration-failpoints"
-run_php_phase migration-oracle > "${EVIDENCE_DIR}/migration-oracle.log"
-start_migration_disk_monitor
-for migration_phase in \
-    legacy_renamed_fts_terms \
-    legacy_renamed_fts_postings \
-    legacy_renamed_fts_docs \
-    legacy_renamed_fts_doc_lengths \
-    legacy_renamed_fts_docmeta \
-    legacy_renamed_fts_meta \
-    legacy_renamed_fts_queue \
-    v4_created \
-    reconciliation_enqueued \
-    ready_verified \
-    legacy_cleaned; do
-    kill_migration_phase "${migration_phase}"
-    # The very next fresh WordPress process must prove that the durable state
-    # left by SIGKILL still serves ordinary options, posts, and saves while the
-    # enabled public search replacement fails closed without core LIKE or FTS.
-    run_migration_post_kill_probe "${migration_phase}" \
-        > "${EVIDENCE_DIR}/migration-post-kill-${migration_phase}.log"
-done
-run_php_phase migration-finalize > "${EVIDENCE_DIR}/migration-finalize.log"
-stop_migration_disk_monitor
-run_php_phase migration-rerun > "${EVIDENCE_DIR}/migration-rerun.log"
-run_php_phase multisite-migration > "${EVIDENCE_DIR}/multisite-migration.log"
-run_php_phase migration-rebind > "${EVIDENCE_DIR}/migration-rebind.log"
+    --format=json > "${EVIDENCE_DIR}/initial-reindex-enqueue.json"
+run_php_phase initial-index-drain > "${EVIDENCE_DIR}/initial-index-drain.log"
 
 # The queue fake tests cannot prove session-lock behavior. Exercise the exact
 # source-bound queue implementation through three independent connections to
@@ -2508,8 +2013,8 @@ if(!$passed){
 }
 ' "${EVIDENCE_DIR}/runtime-profile-web.json" "${EVIDENCE_DIR}/runtime-profile-wpcli.json" "${EVIDENCE_DIR}/runtime-profile-parity.json"
 
-# The migration has already populated v4. Deliberately invalidate every derived
-# content hash before timing so this measures a full extraction/analyzer/writer
+# Deliberately invalidate every derived content hash before timing so this
+# measures a full extraction/analyzer/writer
 # rebuild rather than a fast unchanged reconciliation.
 run_php_phase indexing-prepare > "${EVIDENCE_DIR}/indexing-prepare.log"
 INDEX_REBUILD_DOCUMENTS="$(php -r '$e=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if(($e["schema"]??null)!=="relational-fts-indexing-prepare-v2"||($e["status"]??null)!=="PASS"||(int)($e["documents"]??0)<1){exit(1);} echo (int)$e["documents"];' "${EVIDENCE_DIR}/indexing-prepare.json")"

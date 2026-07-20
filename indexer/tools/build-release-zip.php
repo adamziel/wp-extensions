@@ -243,7 +243,7 @@ final class WP_FTS_ReleasePackageBuilder
             "--working-dir={$stagePlugin}",
         ], $composerEnv);
         self::assert_component_runtime_matches_source($componentStage, $stagePlugin);
-        self::install_pinned_jieba_runtime($componentStage, $pluginSource, $stagePlugin);
+        self::install_pinned_jieba_runtime($componentStage, $stagePlugin);
 
         $installedSymlinks = self::find_symlink_paths($stagePlugin, self::PLUGIN_DIR_NAME);
         if ($installedSymlinks !== []) {
@@ -343,19 +343,9 @@ final class WP_FTS_ReleasePackageBuilder
      */
     private static function install_pinned_jieba_runtime(
         string $componentStage,
-        string $pluginSource,
         string $stagePlugin
     ): void {
         $sourceRoot = $componentStage . '/resources/sources/jieba';
-        $historicalSourceLayout = false;
-        if (!is_file($sourceRoot . '/jieba/dict.txt')) {
-            // Immutable pre-component-move baselines owned the same pinned
-            // gitlink under indexer/resources. Accept that exact historical
-            // location so the hardened current packager can build a faithful
-            // baseline without borrowing current-branch source data.
-            $sourceRoot = $pluginSource . '/resources/sources/jieba';
-            $historicalSourceLayout = true;
-        }
         $dictionary = $sourceRoot . '/jieba/dict.txt';
         $license = $sourceRoot . '/LICENSE';
         $lookup = $componentStage . '/resources/runtime/jieba/dict.idx';
@@ -376,22 +366,20 @@ final class WP_FTS_ReleasePackageBuilder
             throw new RuntimeException('The pinned Jieba MIT license is missing or invalid.');
         }
         if (
-            !$historicalSourceLayout
-            && (
-                !is_file($lookup)
-                || filesize($lookup) !== self::JIEBA_LOOKUP_BYTES
-                || hash_file('sha256', $lookup) !== self::JIEBA_LOOKUP_SHA256
-            )
+            !is_file($lookup)
+            || filesize($lookup) !== self::JIEBA_LOOKUP_BYTES
+            || hash_file('sha256', $lookup) !== self::JIEBA_LOOKUP_SHA256
         ) {
             throw new RuntimeException('The attested Jieba dictionary lookup index is missing or invalid.');
         }
 
         $runtime = $stagePlugin . '/vendor/wp-php-toolkit/full-text-search/resources/runtime/jieba';
         self::ensure_directory($runtime);
-        $runtimeFiles = [$dictionary => $runtime . '/dict.txt', $license => $runtime . '/LICENSE'];
-        if (!$historicalSourceLayout) {
-            $runtimeFiles[$lookup] = $runtime . '/dict.idx';
-        }
+        $runtimeFiles = [
+            $dictionary => $runtime . '/dict.txt',
+            $license => $runtime . '/LICENSE',
+            $lookup => $runtime . '/dict.idx',
+        ];
         foreach ($runtimeFiles as $source => $destination) {
             if (!copy($source, $destination)) {
                 throw new RuntimeException("Could not stage the pinned Jieba runtime file: {$destination}");
@@ -913,7 +901,7 @@ final class WP_FTS_ReleasePackageBuilder
         self::ensure_directory($composerHome);
 
         // A caller may explicitly provide an archive cache for an offline
-        // historical build. Ambient cache state is never selected implicitly.
+        // source-archived build. Ambient cache state is never selected implicitly.
         $usesExplicitCache = $explicitCacheDir !== null && $explicitCacheDir !== '';
         $composerCacheDir = $usesExplicitCache
             ? $explicitCacheDir

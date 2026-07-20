@@ -13,16 +13,13 @@ both supported database families. None uses an in-memory substitute.
 
 A change passes only when the machine-readable real-database evidence described
 below passes. A missing dependency, `SKIP`, `PENDING`, timeout, OOM, absent
-metric, or incomplete evidence file is a failure.
-The sole nonterminal legacy child outcome is the classified 128 MiB PHP limit
-described in the migration section; it remains FAIL and does not weaken any
-current-runtime gate.
+metric, or incomplete report is a failure.
 
 ## Search-path invariants
 
 Every production WordPress PHP, REST, front-end, admin, Sandbox/AJAX, and WP-CLI
 search path must satisfy all of these invariants. The component's File and
-InMemory posting-list engines are legacy test/demo fixtures: the production
+InMemory posting-list engines are test-only fixtures: the production
 factory rejects them, and a source-level call-graph contract prevents a
 WordPress adapter from bypassing that factory.
 
@@ -75,7 +72,7 @@ WordPress adapter from bypassing that factory.
     WordPress search. In particular, arbitrary PHP visibility callbacks and
     numbered wp-admin pages cannot participate in the relational path. Core-owned
     membership includes title/menu-order/comment/password/parent constraints,
-    legacy or archive page-size overrides, meta/tax/date/ID arrays, frontend
+    non-default or archive page-size overrides, meta/tax/date/ID arrays, frontend
     permission scopes, and requested post-type query vars that core maps to a
     slug predicate only after `pre_get_posts`. Quoted phrases and token-leading
     exclusion syntax such as `apple -banana` also remain on core because the
@@ -99,8 +96,8 @@ WordPress adapter from bypassing that factory.
     or auxiliary value is malformed. The WordPress query adapter follows core's
     1,600-byte `s` ceiling; direct plugin/REST PHP search retains the separate
     4,096-byte public search ceiling.
-12. Perform no `SHOW`, `DESCRIBE`, `information_schema`, migration, or repair
-    work during normal readiness/search.
+12. Perform no `SHOW`, `DESCRIBE`, `information_schema`, schema inspection, or
+    repair work during normal readiness/search.
 13. Keep every valid worst-case search statement at or below 32 KiB, PHP
     allocation, live RSS, and Linux high-water RSS deltas at or below 16 MiB,
     and both PHP peak and absolute Linux `VmHWM` at or below 128 MiB.
@@ -184,18 +181,13 @@ statement set.
 Global/tag-only history queries or filters limited to `wp_posts`/FTS tables do
 not prove a request's query count.
 
-A separate cold-request artifact seeds a real schema-v6 state with the schema,
-health, and readiness rows marked `autoload=no` and the settings, analyzer, and
-custom-field override rows absent. A fresh web request must migrate that state
-to schema v9, initialize the three missing overrides as stored empty arrays,
-preserve the exact pre-upgrade effective profile hash and published readiness
-tuple, enqueue no work, and leave exactly these seven bounded request inputs in
-WordPress's autoload set: schema version, health, desired readiness,
-search-ready capability, settings, analyzer overrides, and indexed custom
-fields. The proof primes `alloptions`, performs real direct-SQL CAS writes for
-health and search-ready capability, and requires the replacement and restored
-values to be immediately visible through `get_option()` without manual cache
-repair.
+A separate cold-request artifact requires the exact current schema and all
+seven bounded request inputs in WordPress's autoload set: schema version,
+health, desired readiness, search-ready capability, settings, analyzer
+overrides, and indexed custom fields. The proof primes `alloptions`, performs
+real direct-SQL CAS writes for health and search-ready capability, and requires
+the replacement and restored values to be immediately visible through
+`get_option()` without manual cache repair.
 
 Four subsequent requests use new database connections and no persistent object
 cache. Ready initialization executes **0 plugin-attributed statements**; an
@@ -327,9 +319,9 @@ concern:
 - `fts_documents`: source hash and bounded result/snippet material;
 - `fts_work`: post generations, claims, capped retry state, and scope work.
 
-The completed migration leaves no production document-length,
-collection-statistics, duplicate scalar/JSON metadata, tombstone, or parallel
-legacy retrieval table. `(term_id, post_id)` is unique, post-first candidate
+The current schema has no production document-length, collection-statistics,
+duplicate scalar/JSON metadata, tombstone, or parallel retrieval table.
+`(term_id, post_id)` is unique, post-first candidate
 probes are indexed, normalized term ranges are indexed, document frequency
 matches distinct live postings, and the last durable work record is never
 removed before its desired generation commits.
@@ -420,10 +412,9 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    at most two bounded row-id merge passes, is at most 4 KiB, and completes
    within five seconds.
    Each pass takes at most five seconds and stays below the 128 MiB PHP ceiling.
-3. Deactivation retains tables/data. Uninstall removes the four current and
-   twelve distinct legacy/recoverable table names with **one idempotent `DROP
-   TABLE` statement per site**. A fresh v9 install first issues exactly two
-   `DROP INDEX` statements for its recorded, exactly matching core-table
+3. Deactivation retains tables/data. Uninstall removes the four current tables
+   with **one idempotent `DROP TABLE` statement per site** and issues exactly
+   two `DROP INDEX` statements for its recorded, exactly matching core-table
    indexes; a reused unowned index or a missing/changed owned index is never
    dropped. Under the shared writer lease, uninstall first persists the exact
    non-autoloaded scalar fence `1`, then drops owned indexes and tables and
@@ -630,7 +621,7 @@ combination cannot substitute for one of these four lanes.
 
 The 100k pull-request job is one two-engine matrix. MariaDB 10.11 and MySQL 8.0
 therefore execute the identical structural, performance, memory, concurrency,
-migration, report validation, finalization, and failure-artifact requirements;
+schema-repair, report validation, finalization, and failure-artifact requirements;
 neither engine has a reduced boundary path.
 
 The 2,000-document profile is the explicit local small-site validation profile,
@@ -699,7 +690,7 @@ the production analyzer, indexer, MySQL storage, searcher, and queue:
   128-MiB-absolute memory gates;
 - custom CJK-tokenizer, token-normalizer, and stemmer scalars accept exactly
   4,096 bytes and reject byte 4,097 before trim, Unicode normalization, or
-  character-length work. Legacy analyzer arrays accept exactly 20,000 rows and
+  character-length work. Configured analyzer arrays accept exactly 20,000 rows and
   reject row 20,001 before `array_values()`; term, language, surface, and
   position fields independently accept their exact storage boundary and reject
   the first excess byte before casts or normalization;
@@ -852,14 +843,14 @@ identities beside one requested identity and require exact planning to return
 one row through the unique full-identity index. They delete a cursor's exact
 identity while advancing its epoch and require one plan statement and zero rank
 statements, with analyzer-empty cursors rejected at zero SQL. A forward and
-reverse pagination fixture makes two oversized legacy rows fill the complete
+reverse pagination fixture makes two oversized canonical rows fill the complete
 `K+1` window, then proves the signed progress cursor reaches the next returnable
 row without repeating that empty window.
 
 Every required MariaDB and MySQL lane repeats that identity-byte proof against
 the populated corpus and retains the tagged plan, Performance Schema event, and
 JSON `EXPLAIN`: 4,096 unrelated identities must still send exactly one exact
-planning row, use `term_identity`, and preserve the baseline result and score
+planning row, use `term_identity`, and preserve the reference result and score
 signature. The lane then deletes the requested identity and advances the epoch
 in one writer-locked transaction; replaying its cursor must issue exactly one
 plan statement, zero rank/hydrate statements, and raise a cursor error.
@@ -935,9 +926,8 @@ initializes and attests gitlink
 `67fa2e36e72f69d9134b8a1037b83fbb070b9775`, its configured
 `https://github.com/fxsjy/jieba` URL, the 5,071,852-byte dictionary digest, and
 the 1,075-byte MIT license digest. The worst-case runner repeats that operation
-inside both detached package worktrees: the current
-`components/full-text-search/resources/sources/jieba` path and the immutable
-baseline's historical `indexer/resources/sources/jieba` path. A source-bound
+inside the detached current package worktree at
+`components/full-text-search/resources/sources/jieba`. A source-bound
 128 MiB process then analyzes **256 punctuation-separated, distinct CJK runs**
 both cold and after saturating the high-fanout cache. Each complete analysis
 must take less than five seconds, perform zero complete dictionary scans and
@@ -1175,19 +1165,19 @@ conditioned cold samples uses the same formula and absolute gates in its own
 source-bound process, with an exact forty-file and forty-process inventory.
 The ten-page maximum-valid front-end traversal likewise uses its complete fresh
 process lifetime, records the raw before/after values, and is self-hashed and
-source-bound. Long-lived dependency-LOB and populated scope-index-upgrade
+source-bound. Long-lived dependency-LOB and populated scope-index-repair
 measurements cannot reset Linux high water, so they deliberately use the same
 conservative `VmHWM`-after minus `VmRSS`-before attribution plus the positive
 128 MiB absolute ceiling.
 
-After installing and migrating the current ZIP, and before its timed reindex,
+After installing the current ZIP and building its initial index, and before its timed reindex,
 the proof derives the complete index profile through both the real web PHP
 runtime and a real WP-CLI bootstrap. The full profile, analyzer signature, and
 Unicode-normalizer signature must match exactly. Both raw profiles and runtime
 versions are retained in evidence; changing one side to conceal a production
 runtime difference is not an acceptable test workaround.
 
-The migrated current index is deliberately not accepted as a reindex benchmark:
+The initial current index is deliberately not accepted as a reindex benchmark:
 before the clock starts, the proof verifies one derived document per eligible
 canonical post, an empty work queue, and no pre-existing marker, then replaces
 every derived content hash and timestamp with an invalid marker. The timed
@@ -1273,7 +1263,7 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | pending post/scope work / terminal rows | 0 / no terminal state |
 | durable search-epoch metadata rows | exactly 1 singleton |
 | hot-path physical schema statements | 0 |
-| worker legacy-table / physical-schema statements | 0 / 0 |
+| worker schema-inspection / repair statements | 0 / 0 |
 
 At 50k, warm p95 limits are 300 ms OR, 1,000 ms valid 12-group OR+prefix,
 100 ms AND, and 300 ms prefix; its valid 12-group p99 limit is 1,500 ms. All
@@ -1441,7 +1431,7 @@ The captured plans and metrics must also prove:
   256 rows and sends no revoked rank rows;
 - planning never sends prefix completions to PHP.
 
-## Write, failure, and migration gates
+## Write, failure, and repair gates
 
 The worker statement gate wraps the entire production worker call in the
 WordPress `query` filter and counts every statement it observes: source reads,
@@ -1874,7 +1864,7 @@ The structural negative-access proof creates a separate canonical indexed
 relationship shape with 100,000 objects and 512 relationships per object:
 exactly 51,200,000 physical rows. It uses MyISAM only to make construction of a
 table that production must not touch practical; its bytes and seed time are not
-claims about production storage or query latency. The populated migration and
+claims about production storage or query latency. The populated repair and
 concurrent-write proof below remains canonical InnoDB. With no scope, a real
 hydrated broad prefix search must execute plan+rank+hydrate, return twenty results, and
 contain zero references to that dense relationship table in captured SQL or
@@ -1888,9 +1878,8 @@ Performance Schema SQL identity and finish within 2,000 ms per client/server
 measurement. This removes taxonomy fanout from search complexity entirely
 rather than merely budgeting a relationship probe per candidate.
 
-The scope-index migration, introduced in schema v8 and required by schema v9,
-installs two plugin-namespaced supporting indexes on WordPress's core
-tables: `wp_fts_term_object(term_taxonomy_id, object_id)` and
+The current schema requires two plugin-namespaced supporting indexes on
+WordPress's core tables: `wp_fts_term_object(term_taxonomy_id, object_id)` and
 `wp_fts_type_status_id(post_type, post_status, ID)`. The proof reads their exact
 real definitions before substituting any fixture. Creation intent is persisted
 first in the nonautoloaded `wp_fts_scope_index_ownership` option. An exact
@@ -1898,39 +1887,34 @@ pre-existing namespaced index may be reused without claiming it; a same-name
 different-definition collision fails closed. Uninstall drops only an exact
 index whose ownership was recorded, never a merely similar site-owned index.
 
-The migration proof clones WordPress's canonical posts and relationships tables
-with their real InnoDB definitions, removes only the two scope composites, then
-populates 100,001 posts and 300,001 relationships before invoking the actual
-v7-to-v9 plugin upgrade. It redirects WordPress's canonical core-table
+The populated repair proof clones WordPress's canonical posts and relationships
+tables with their real InnoDB definitions, removes only the two scope
+composites, then populates 100,001 posts and 300,001 relationships while the
+stored schema stays current. It redirects WordPress's canonical core-table
 properties to these clones and executes the production ownership, writer-lease,
-DDL, verification, and publication path, not copied DDL. It must issue exactly
-exactly the two canonical `CREATE INDEX` statements, persist nonautoloaded ownership
-before the first, and publish schema v9 only after the second definition
-verifies. Completed Performance Schema events must match both wpdb DDL hashes
-exactly.
+repair, and verification path, not copied DDL. It must issue exactly the two
+canonical `CREATE INDEX` statements, persist nonautoloaded ownership before the
+first, keep the schema version unchanged, and verify both definitions.
+Completed Performance Schema events must match both wpdb DDL hashes exactly.
 
 Four separate WordPress processes synchronize at those query boundaries. A
 canonical INSERT and UPDATE against each populated core clone must have a
 server-timer interval that overlaps the corresponding `CREATE INDEX`, affect
 exactly one row, and finish within 5,000 ms on both client and server clocks.
 Their reported Performance Schema lock time is retained rather than inferred
-from total DDL time. This measures whether synchronous activation blocks normal
+from total DDL time. This measures whether synchronous repair blocks normal
 core writes; it does not describe a 60-second ceiling without concurrent work.
 
-That populated upgrade has a 180,000 ms total client ceiling, a 120,000 ms
+That populated repair has a 180,000 ms total client ceiling, a 120,000 ms
 per-statement and 180,000 ms aggregate database-server ceiling, at most 64 wpdb
 statements including exactly two DDL statements, and at most 16 MiB additional
 PHP and RSS high-water usage. The fixture records actual data/index bytes before
 and after and requires a positive index-byte delta no larger than 128 MiB. The
 exact index-health/readiness/incarnation options, public takeover signature,
-and grouped durable-work cardinality must be unchanged; only logical schema v9
-and the already-persisted index ownership may publish. The real phase runs under
-a 1,800-second external kill, so a hung DDL or process OOM cannot masquerade as
-missing evidence. Unit failpoints separately reject a same-name collision,
-simulate database rejection of the second `CREATE INDEX`, resume from the one
-completed index without duplicate DDL, and steal the writer lease after the
-first `CREATE INDEX` to prove that the stale upgrader issues neither the second
-DDL nor schema publication.
+grouped durable-work cardinality, and schema version must be unchanged; only
+the already-persisted index ownership may change. The real phase runs under a
+1,800-second external kill, so a hung DDL or process OOM cannot masquerade as a
+missing report.
 
 The later query-plan proof uses separate disposable MyISAM posts and
 relationships tables already carrying both production composites. Its
@@ -2040,8 +2024,8 @@ scores, a frozen recency clock, token tampering, and replay under a changed
 query, type, status, date bound, or prefix cap. Replayed or tampered cursors
 must fail before ranking SQL.
 
-Missing tables, killed transactions, maintenance-lease contention, MariaDB
-restart, and a failure after every migration phase must leave ordinary pages
+Missing tables, killed transactions, maintenance-lease contention, and a MariaDB
+restart must leave ordinary pages
 and saves available while FTS fails closed. Repair, worker drain, and the
 automatically scheduled maintenance finalizer must restore search without
 manual row surgery. Normal requests and workers never run DDL.
@@ -2082,173 +2066,13 @@ must remain unavailable and must resume one profile- and incarnation-specific
 scope; an old nonempty completion timestamp or a missing scope may never publish
 the new profile.
 
-The populated migration proof builds a 50k legacy index from the exact
-immutable legacy-v3 `36a26f4ad1aaef9758922f24677069045c5291ab` ZIP, installs the pull-request ZIP, then SIGKILLs and resumes after
-each of the seven physical table renames and the `v4_created`,
-`reconciliation_enqueued`, `ready_verified`, and `legacy_cleaned` boundaries.
-At every boundary the wrapper verifies the ready artifact belongs to its exact
-child PID, requires its own `kill -9` call to succeed, and then requires wait
-status 137 before continuing.
-Every callback must expose the exact expected table-name set, logical schema
-version, pending health/readiness state, and exact post/scope/meta work
-cardinality. `work_rows` is semantic claimable debt (`post` plus `scope`), never
-the persistent `meta:search-epoch` control row:
-prior rename mappings stay on their source names, completed mappings stay on
-their legacy names, the current schema and all seven legacy tables coexist only at the defined
-boundaries, and readiness remains false until after `legacy_cleaned` returns.
-The killed worker writes an append-only NDJSON record for every actual batch;
-final evidence merges all eleven journals with finalizer batches and rejects a
-single failure, malformed/missing journal, or zero recorded progress.
-Each failpoint worker gets the full 7,200-second migration deadline used by the
-PHP loop and a 300-second production batch budget. The in-container readiness
-watcher is derived as 7,200 + 300 + 60 seconds, and the host timeout adds another
-60 seconds. Thus the wrapper cannot preempt the 100k corpus at the accepted
-minimum 20 documents/second (5,000 seconds), a final legitimate batch, or PHP
-bootstrap/cleanup headroom; the whole-run watchdog remains the terminal bound.
-
-Immediately after every SIGKILL and before the next migration phase, a fresh PHP
-process must read an ordinary option and corpus post, run a real no-op
-`wp_update_post()` save, and execute an enabled main front-end `WP_Query` for a
-known corpus token. The v3 post-kill artifact retains the option value again
-after the save so final validation can independently prove it remained exact.
-The save must leave its searchable source unchanged and
-produce phase-exact work and generations. At each of the seven rename
-boundaries, it attempts exactly one bounded recovery-scope DML against the
-absent work table, leaves no durable work or control generation, rotates the
-32-hex readiness incarnation, and records pending/unhealthy Health with a
-global visibility fence and bounded error. At `v4_created`, that same one DML
-creates one corpus scope plus the epoch row and advances both generations once.
-At `reconciliation_enqueued`, it adds no row but advances both existing
-generations once and rebinds the scope to the new readiness incarnation with
-reason `foreground_queue_failure`. At `ready_verified` and `legacy_cleaned`,
-after logical schema v9 is installed, Health and readiness remain byte-for-byte
-unchanged while exactly two
-mutation-fence/promotion DML statements add one direct-post job and advance the
-epoch twice. Every ordinary-path FTS DML statement must be at most 32 KiB.
-The public query must return an empty result with
-`wp_fts_search_unavailable`, execute no FTS SQL and no core `LIKE`, and neither
-path may inspect or mutate plugin-owned physical schema. WordPress core may
-emit first-write `SHOW FULL COLUMNS` diagnostics for its own posts, options,
-blogs, or postmeta tables; those statements are retained separately in the
-artifact and cannot excuse any FTS physical-schema statement.
-Each in-process save/search probe must finish within five seconds, public search
-may execute at most two statements with no statement above 32 KiB, and the
-fresh process has a 120-second hard wall-clock kill rather than an unbounded
-test timeout.
-The immutable legacy snapshot records six exact case outcomes. Normally each is
-either a non-empty ordered BM25 score signature or the typed
-`WP_FTS_Search_Budget_Exceeded` rejection with budget `candidate rows`, zero
-results, null result hashes, and message
-`Search request exceeded its candidate rows budget.` The proof must not raise,
-disable, or bypass the legacy 100,000-row budget. Construction-known workload
-pressure remains explicit: `common_or` supplies 138,564 candidate postings at
-50k and 277,128 at 100k; the eleven `max_valid_or_prefix` groups supply 544,500
-and 1,089,000; and `rare_anchor_and` supplies 96,564 and 193,128. Those counts
-define adversarial input size, not a guessed execution outcome: the legacy
-implementation's fetch ordering and short-circuit behavior decide whether a
-given run returns complete results or reaches its typed cap. The sole additional
-outcome is a `rare_anchor_and` child that exits 255 with
-`MemoryLimitFatal` after PHP prints the exact 134,217,728-byte exhaustion marker.
-That child remains `FAIL`; it is not converted to a result, rejection, or PASS.
-
-Each case runs exactly once in its own fresh PHP process with `memory_limit=128M`,
-an inner 120-second kill, and an outer 150-second container deadline. Its
-source-, ZIP-, manifest-, profile-, query-, and option-bound artifact records a
-distinct PID/start-tick/boot-ID identity, ordered execution, duration, emitted
-query count, maximum SQL bytes, PHP allocation delta, RSS delta, reset phase PHP
-peak, lifetime PHP peak, and process RSS high-water mark. PHP phase and absolute
-peaks must stay within 128 MiB. The lightweight assembler executes no legacy
-search; it accepts only the exact six filenames, each raw pretty-JSON SHA-256,
-and distinct process identities for every PASS child.
-Only those two exact six-case outcome sets are valid: six PASS children, or
-five PASS children plus
-the classified `rare_anchor_and` memory failure. Missing, extra, stale-sidecar,
-malformed, timed-out, killed, generic, or differently classified failures are
-terminal.
-
-Before continuing from that one memory failure, the runner performs at most 30
-one-second database probes under a 45-second outer deadline. It may continue
-only when `information_schema.PROCESSLIST` reports zero non-sleeping `wpfts`
-sessions. A probe error, malformed count, active statement at the deadline, or
-any other failed child aborts the lane so cleanup stops the database before
-capturing diagnostics. Child output and failure serialization remain
-independently bounded. The six snapshot invocations provide all available
-before metrics, so there is no redundant four-case replay.
-
-The completed populated-migration envelope is v6; the final report accepts only
-that version, so a
-stale envelope that does not authenticate the target-v4 rarity basis fails.
-
-Legacy BM25 results are informational evidence of the intentional scoring-model
-cutover. The `relational-fts-v4-migration-oracle-v5` independent oracle selects
-its fixed five migration cases from the six-case snapshot and computes expected
-v4 order and integer scores directly from the untouched v3 logical postings,
-regardless of whether legacy execution returned results, hit its candidate-row
-budget, or the rare legacy child exhausted 128 MiB. It independently proves
-that relevant v3 dictionary `doc_freq` values
-still match active legacy postings, but never reuses those values as target-v4
-rarity. Instead, one exact-key `IN` relation and, where needed, one exclusive
-binary prefix-range relation count distinct active legacy posting documents
-joined to canonical posts with an empty password, one of the configured
-`post`, `page`, or `attachment` types, and one of `publish`, `draft`, `pending`,
-`future`, or `private` status. This is the global production indexability scope:
-per-query type/status visibility filters apply only to final results and cannot
-change rarity. The prefix score retains production's signed `CAST` around
-`1000000 / doc_freq`, including its rounding. The artifact publishes this exact
-`target_doc_freq_basis`; neither relation groups the whole dictionary or runs a
-correlated count per candidate posting. Those v4 results are checked exactly
-after migration, repeated after cache reset, and repeated again in a fresh PHP
-process. Legacy tables may be removed only after all work drains and takeover
-is ready.
-
-The same proof seeds one, two, and three deterministic searchable documents in
-the three real multisite prefixes before migration. After an injected failure
-on site two it verifies site-one search membership, DF, semantic document state,
-and independent v4 scores immediately, proves the recorded site-three schema and physical
-term/posting/document/length/metadata/collection-metadata sentinel fingerprints
-are unchanged and that raw foreign-term and foreign-posting probes are empty,
-then resumes all sites. Every prefix must preserve search membership, term DFs,
-exact sentinel IDs, shared metadata, and source signatures while binding the v4
-content-only `search_text` representation to unchanged canonical post content
-for these deterministic plain-text sentinels.
-Complete profile hashes must be rewritten once and remain stable, and every
-prefix must retain its recorded prefix. Current result order and exact integer
-scores must equal a cardinality-checked per-site v4 oracle; legacy tie order is
-not a target invariant across the documented scoring-model cutover. Each site
-snapshot positively classifies the exact physical
-dictionary columns once: baseline DF probes bind the legacy single-column binary term identity, while post-migration probes bind the current composite identity.
-Unknown or partial dictionary shapes fail before either query is
-selected. Content-hash stability is measured across a new durable
-generation for every sentinel and a real bounded worker drain, never two
-back-to-back reads of the same rows. Because every sentinel already has its
-current content hash, each stability generation must be acknowledged and
-classified unchanged with zero indexed or analyzed documents and zero adverse
-outcomes. `processed=0` is therefore the expected result, not evidence that the
-worker stalled.
-A 3×3 site-specific token matrix must have three populated diagonal cells and
-six empty off-diagonal cells, and all six foreign term DFs must be zero. During
-the entire main-site destructive migration loop and finalization, a database-
-container monitor targets a 250 ms cadence while polling the persistent
-`/var/lib/mysql` volume and physical `wp_fts_*` files. Each raw TSV row records
-host-monotonic sample start and completion, not a fabricated scheduled
-timestamp. The separately marked destructive window must have a sample whose
-start is at or before it and a sample whose completion is at or after it; the
-maximum observed completion-to-completion gap and maximum sample duration must
-each be at most 750 ms. Evidence retains the raw TSV and its SHA-256, requires
-at least twenty samples and non-empty first/final FTS footprints, and gates both
-the physical FTS peak and whole-volume peak at 2.2× the larger first/final
-footprint. A claimed `sleep 0.25` cadence without these measured coverage/gap/
-duration gates does not pass. `information_schema` phase snapshots remain
-useful diagnostics but cannot substitute for this physical high-water
-measurement.
-
-## Evidence and before/after comparison
+## Reports and source binding
 
 The runner writes `relational-fts-evidence-v5` JSON containing source and ZIP
 hashes, image digests, effective resources, corpus seed/hash/counts, schema and
 DB bytes, raw latency samples, result IDs/hashes, SQL count/bytes/text,
 `EXPLAIN`/`ANALYZE`, rows examined/sent, temporary/sort/lock metrics, PHP
-allocation/RSS, worker samples, concurrency samples, fault/migration assertions,
+allocation/RSS, worker samples, concurrency samples, fault/repair assertions,
 and every expected/actual gate.
 The validation phase writes `completed=false`; only the terminal finalizer may
 replace it with `completed=true` and recompute the canonical evidence hash. The
@@ -2259,16 +2083,7 @@ incomplete report. Every other acceptance phase likewise writes its terminal
 diagnostic artifact and then exits nonzero on a failed gate, so WP-CLI adapter,
 transaction-recovery, idle-HTTP, concurrent-worker, taxonomy-scope, and final
 drain failures cannot consume later expensive phases or survive until the
-finalizer. Each old-version snapshot child atomically replaces a stale or
-partial file with bounded `FAIL` output for timeout, memory exhaustion, process
-death, or a missing terminal artifact. Only the exact rare-anchor 128 MiB
-classification may continue, and only after the bounded database-idle check;
-every other failure tears down the lane before more work runs. The no-search
-assembler accepts exactly the two six-case outcome sets defined above. The
-runner publishes validation output only as partial output and
-does not spend additional cold-cache or concurrency capacity on an already
-failed revision.
-
+finalizer.
 The final report embeds the complete source-bound resource, mutation-statement,
 and isolated-boundary artifacts plus the SHA-256 of each original file. The
 terminal finalizer requires the reread mutation artifact to be canonically
@@ -2322,11 +2137,7 @@ workflow selects the maintained stable PHP 8.4 release line and exact Composer
 2.9.8. Acceptance rejects prerelease or non-8.4 PHP versions and records the
 exact resolved PHP patch, extension and library versions, and PHP/Composer
 binary hashes, so every artifact binds the toolchain that actually produced it
-instead of claiming an ineffective patch pin. The immutable
-legacy runtime source is also packaged by this current hardened builder; the
-runner never executes historical packaging code that could re-enable obsolete
-Composer plugin, script, authentication, or global-configuration behavior.
-
+instead of claiming an ineffective patch pin.
 The packaged `vendor/wp-php-toolkit/full-text-search` runtime must also match
 the staged `components/full-text-search` source byte-for-byte after the
 documented release-only pruning of tests, raw upstream sources, and development
@@ -2350,7 +2161,7 @@ acceptance.
 Every independently written phase artifact has a fixed schema and PASS status.
 Where a phase emits gates, the list must be non-empty, structurally complete,
 uniquely named, and contain every required gate. Finalization also checks the
-exact reader/writer counts and worker IDs, frozen baseline case oracles,
+exact reader/writer counts and worker IDs, frozen concurrency case oracles,
 disjoint writer assignments, request/batch accounting, measured concurrency
 duration, the explicit changed-and-analyzed 100-document batch described above,
 and zero remaining work. An empty gate list or a plausible summary with missing
@@ -2362,40 +2173,9 @@ ordered gate IDs, gate count, and gate-list hash. The finalizer authenticates
 the preliminary self-hash and this inventory before it consumes any PASS gate,
 then requires the exact gate sequence rather than a subset. Critical mutation
 publication/deletion, runtime, adapter, HTTP attribution, search-shape,
-migration-sampling, schema, reindex, pack, and recovery gates remain an
+scope-index-repair, schema, reindex, pack, and recovery gates remain an
 independent required set, so deleting one gate and recomputing both the report
 and inventory hashes still fails. Deleting a section or case likewise fails.
-
-Before/after numbers use clean worktrees and source-bound ZIPs for legacy v3 at
-`36a26f4ad1aaef9758922f24677069045c5291ab` and the pull-request head, identical
-images/resources, and the same corpus manifest. A baseline timeout, kill, silent
-provider switch, arbitrary exception, or malformed partial result is recorded as
-`FAIL (<reason>)`, never as zero or omitted. The exact candidate-row exception
-is a valid `PASS` snapshot outcome only when its complete typed execution has
-zero results and the exact class, budget, and message. The one classified
-`rare_anchor_and` 128 MiB failure also remains `FAIL`; it merely permits current
-code to run after the bounded database-idle check. The PR description reports
-absolute values and links raw artifacts; speedup ratios alone are insufficient.
-
-Every PASS snapshot artifact is schema-, source-, ZIP-, manifest-, profile-,
-query-, option-, and case-bound. The classified FAIL is source-, ZIP-, profile-,
-case-, memory-limit-, exit-, and bounded-log-bound; its manifest, query, options,
-execution, process identity, and memory metrics are explicitly null. Before the
-runner continues, it recomputes the log hash and rescans that log for the exact
-134,217,728-byte exhaustion marker. If the old process dies before writing its
-record, the wrapper retains measured host wall time, the 120-second ceiling,
-exit status, bounded log hash, and a distinct timeout/killed/memory/process-
-failure reason.
-Migration rejects a missing or malformed artifact. A nonzero or timed-out
-process can never retain an earlier `PASS` file: the wrapper preserves that
-pre-failure object only as a diagnostic sidecar and replaces the canonical
-artifact with measured `FAIL`. It aborts for every failure except the exact
-rare-anchor memory classification followed by a successful database-idle check.
-A completed snapshot otherwise contains the complete ordered result signature
-or the exact typed candidate-row rejection. Six raw hashes, distinct identities
-for all PASS children, and the optional classified FAIL make that populated-v3
-state the authenticated baseline; no second execution is mislabeled as a
-comparison.
 
 ## Validation sequence
 
@@ -2406,22 +2186,18 @@ Each required lane performs the same fail-closed sequence:
    cleanliness, the exact allowed lane ID, source/ZIP hashes, and the
    deterministic corpus manifest. The initial `RUNNING` envelope and whole-run
    watchdog already exist before these preflights.
-2. Build the immutable legacy ZIP, create and index the full legacy corpus, run
-   the exact six legacy snapshot cases in six fresh 128-MiB processes, and have a
-   no-search assembler authenticate the exact filename inventory, distinct PASS
-   identities, raw hashes, valid result-or-typed-rejection executions, and at
-   most the one classified rare-anchor memory failure after database quiescence.
-3. Install the pull-request ZIP without resetting the populated database and
-   bind the installed tree byte-for-byte to its ZIP manifest. Kill and resume
-   every physical rename and logical migration boundary, running a fresh
-   ordinary-save/fail-closed-search probe immediately after each kill, while the
-   monotonic physical disk sampler proves leading/trailing coverage, <=750 ms
-   completion gaps, and <=750 ms sample duration across the complete migration
-   window.
-4. Verify exact four-table columns/indexes, migration and multisite semantic parity,
-   document-frequency consistency, and web/WP-CLI runtime-profile parity. Force
-   and time a complete current-version rebuild, then prove every invalidated row
-   was rewritten.
+2. Package the current source twice in independent clean build directories and
+   require byte-identical ZIPs and manifests. Install that ZIP with network
+   activation, then bind the installed tree byte-for-byte to its package
+   manifest.
+3. Create the deterministic corpus directly under the current schema, build its
+   initial current index, and verify the exact eligible-document count and empty
+   work queue. Prove the mutation fence, then derive matching web and WP-CLI
+   runtime profiles. Invalidate every derived row, force and time a complete
+   current-version rebuild, and prove every invalidated row was rewritten.
+4. Verify exact four-table columns/indexes, populated current-schema repair,
+   per-site semantics, document-frequency consistency, and current request
+   behavior before the search and failure boundaries run.
 5. Exercise exhaustive oracle pagination, every adapter against the independent
    direct-searcher oracle, actual one-pack and all-pack runtime configurations,
    missing-table faults, huge dependency LOBs, and all warm cases for 20 warmups
@@ -2433,7 +2209,7 @@ Each required lane performs the same fail-closed sequence:
    Linux process identities, self-hashes, conservative peak formulas, <=16 MiB
    deltas, and positive <=128 MiB absolute PHP/`VmHWM` peaks. Treat the reused
    200-sample warm-loop `VmHWM` increments only as cumulative diagnostics. Then
-   seed and migrate the cold schema-v6 request state, then prove fresh ready,
+   verify the exact current schema and autoloaded request options, then prove fresh ready,
    impossible, nonhydrating, and hydrated requests execute exactly 0, 1, 2,
    and 3 plugin statements with zero plugin-caused option/sitemeta reads. For
    each missing-table adapter, capture the production post-fault option state
@@ -2455,7 +2231,7 @@ Each required lane performs the same fail-closed sequence:
    each <=4 MiB; the resolver must send exactly 8,192 rows, examine <=65,536
    rows, create no disk temporary table, and finish within 5 seconds. Verify
    exact stored counts and exact zero-row cleanup. Then run the 819,200-row
-   old-posting frontier and the source-bound, self-hashed 1.9-MB source/search
+   existing-posting frontier and the source-bound, self-hashed 1.9-MB source/search
    processes with the setup statement/time/memory bounds above, followed by the fresh
    externally bounded isolated process for exact 4-KiB CJK, infinite-tokenizer,
    12/13-plan, 4,096/4,097-term, and 1,000/1,001-enqueue boundaries. Verify its
@@ -2488,7 +2264,7 @@ Each required lane performs the same fail-closed sequence:
    window, and prove a >=60-second all-worker intersection plus independent
    progress and final-state parity for both writers. Then traverse the complete
    100,000-member targeted fixture, maximum 32-lane filtered fixture, and
-   100,000-row corpus gap. Before those reads, run the actual v7-to-v9 upgrade
+   100,000-row corpus gap. Before those reads, run the actual current-schema repair
    against populated 100,001-post/300,001-relationship canonical InnoDB clones
    while four synchronized INSERT/UPDATE processes measure write overlap and
    blocking. Retain exact DDL timing, attribution, storage, memory, publication,

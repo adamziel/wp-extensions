@@ -11,10 +11,8 @@ declare(strict_types=1);
  */
 
 const WP_FTS_WC_EVIDENCE_SCHEMA = 'relational-fts-evidence-v5';
-const WP_FTS_WC_IMMUTABLE_BASELINE_SHA = '36a26f4ad1aaef9758922f24677069045c5291ab';
 const WP_FTS_WC_MANIFEST_OPTION = 'wp_fts_relational_wc_manifest';
 const WP_FTS_WC_POST_TITLE_PREFIX = 'WP FTS relational worst case ';
-const WP_FTS_WC_MULTISITE_POST_TITLE_PREFIX = 'WP FTS multisite migration sentinel ';
 const WP_FTS_WC_INDEX_POST_TYPES = ['post', 'page', 'attachment'];
 const WP_FTS_WC_INDEX_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];
 const WP_FTS_WC_DEPENDENCY_LOB_BYTES = 262144;
@@ -47,19 +45,6 @@ const WP_FTS_WC_DENSE_PREFIX_COMPLETIONS = [
     'prefixprobedenseccqx',
 ];
 const WP_FTS_WC_WORK_TYPE_POST = 'post';
-const WP_FTS_WC_MIGRATION_FAILPOINTS = [
-    'legacy_renamed_fts_terms',
-    'legacy_renamed_fts_postings',
-    'legacy_renamed_fts_docs',
-    'legacy_renamed_fts_doc_lengths',
-    'legacy_renamed_fts_docmeta',
-    'legacy_renamed_fts_meta',
-    'legacy_renamed_fts_queue',
-    'v4_created',
-    'reconciliation_enqueued',
-    'ready_verified',
-    'legacy_cleaned',
-];
 
 try {
     wp_fts_wc_bootstrap_wordpress();
@@ -67,6 +52,7 @@ try {
     $result = match ($phase) {
         'setup' => wp_fts_wc_setup(),
         'indexing-prepare' => wp_fts_wc_indexing_prepare(),
+        'initial-index-drain' => wp_fts_wc_reindex_drain(true),
         'reindex-drain' => wp_fts_wc_reindex_drain(),
         'runtime-profile' => wp_fts_wc_runtime_profile(),
         'wpcli-adapter' => wp_fts_wc_wpcli_adapter(),
@@ -83,16 +69,6 @@ try {
         'scope-proof' => wp_fts_wc_scope_proof(),
         'transaction-crash' => wp_fts_wc_transaction_crash(),
         'verify-transaction-crash' => wp_fts_wc_verify_transaction_crash(),
-        'migration-snapshot-case' => wp_fts_wc_migration_snapshot_case(),
-        'migration-snapshot-finalize' => wp_fts_wc_migration_snapshot_finalize(),
-        'migration-oracle' => wp_fts_wc_migration_oracle(),
-        'multisite-baseline-setup' => wp_fts_wc_multisite_baseline_setup(),
-        'migration-rebind' => wp_fts_wc_migration_rebind(),
-        'migration-failpoint' => wp_fts_wc_migration_failpoint(),
-        'migration-post-kill-probe' => wp_fts_wc_migration_post_kill_probe(),
-        'migration-finalize' => wp_fts_wc_migration_finalize(),
-        'migration-rerun' => wp_fts_wc_migration_rerun(),
-        'multisite-migration' => wp_fts_wc_multisite_migration(),
         'dependency-lob' => wp_fts_wc_dependency_lob(),
         'writer-aggregate' => wp_fts_wc_writer_aggregate(),
         'max-valid-setup' => wp_fts_wc_max_valid_setup(),
@@ -128,7 +104,8 @@ function wp_fts_wc_setup(): array
         throw new RuntimeException('Worst-case corpus already exists; the proof requires a fresh disposable database.');
     }
 
-    WP_FTS_Plugin::upgrade_schema();
+    $schemaRepair = WP_FTS_Plugin::repair_schema();
+    wp_fts_wc_assert(empty($schemaRepair['skipped_locked']), 'Clean-install schema repair unexpectedly lost its writer lease.');
     wp_fts_wc_enable_search_settings();
     $packEvidence = wp_fts_wc_enable_all_runtime_lemma_packs();
 
@@ -249,6 +226,28 @@ VALUES " . implode(',', $rows),
     ));
     wp_fts_wc_assert($relationshipCount === count($actualIds), 'Worst-case taxonomy relationship count is incomplete.');
 
+    // Activation and fixture-option changes may have queued work for the empty
+    // site that existed before this direct corpus seed. Make the explicit
+    // current-version reindex below the only producer for the seeded corpus.
+    $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
+    $postings = wp_fts_wc_identifier($wpdb->prefix . 'fts_postings');
+    $documents = wp_fts_wc_identifier($wpdb->prefix . 'fts_documents');
+    $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
+    $derivedRows = [
+        'terms' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$terms}`", 'terms before the initial current index'),
+        'postings' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$postings}`", 'postings before the initial current index'),
+        'documents' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$documents}`", 'documents before the initial current index'),
+    ];
+    wp_fts_wc_assert($derivedRows === ['terms' => 0, 'postings' => 0, 'documents' => 0], 'The clean install contains derived rows before its explicit initial index.');
+    wp_fts_wc_assert(
+        $wpdb->query("DELETE FROM `{$work}` WHERE kind IN ('post','scope')") !== false,
+        'Could not clear pre-corpus work before the explicit initial index.'
+    );
+    wp_fts_wc_assert(
+        wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')", 'work before the explicit initial index') === 0,
+        'Pre-corpus work remains before the explicit initial index.'
+    );
+
     $manifest = [
         'schema' => 'relational-worst-case-corpus-v1',
         'seed' => 'relational-worst-case-v1',
@@ -281,8 +280,8 @@ VALUES " . implode(',', $rows),
 /**
  * Force the timed current-version reindex to rebuild every derived document.
  *
- * The populated migration has already produced current hashes, so merely
- * enqueueing the corpus would benchmark the unchanged fast path. The complete
+ * The initial clean-install index has already produced current hashes, so
+ * merely enqueueing the corpus would benchmark the unchanged fast path. The complete
  * derived state is signed before every posting impact, document hash, snippet,
  * and timestamp is poisoned. A hash-only shortcut cannot restore that state:
  * the timed command has to extract and analyze every source and commit its
@@ -383,7 +382,7 @@ function wp_fts_wc_indexing_prepare(): array
  *
  * @return array<string,mixed>
  */
-function wp_fts_wc_reindex_drain(): array
+function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
 {
     global $wpdb;
 
@@ -392,26 +391,33 @@ function wp_fts_wc_reindex_drain(): array
     wp_fts_wc_assert_source_binding();
     wp_fts_wc_require_plugin();
 
-    $preparation = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/indexing-prepare.json');
-    wp_fts_wc_require_evidence_gates(
-        $preparation,
-        'forced full-rebuild preparation',
-        [
-            'full_rebuild_canonical_document_count',
-            'full_rebuild_initial_work_rows',
-            'full_rebuild_hashes_invalidated',
-            'full_rebuild_snippets_invalidated',
-            'full_rebuild_timestamps_invalidated',
-            'full_rebuild_posting_impacts_invalidated',
-            'full_rebuild_pre_state_signature_complete',
-            'full_rebuild_pre_surface_rows_present',
-            'full_rebuild_pre_posting_kind_totals',
-            'full_rebuild_pre_doc_freq_matches_physical_rows',
-        ],
-        'relational-fts-indexing-prepare-v2'
-    );
-    $expectedDocuments = (int) ($preparation['documents'] ?? 0);
-    wp_fts_wc_assert($expectedDocuments > 0, 'The asynchronous reindex drain has no prepared documents.');
+    if ($initialIndex) {
+        $expectedDocuments = wp_fts_wc_checked_count(
+            "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type='post' AND post_status IN ('publish','draft','pending','future','private') AND post_password=''",
+            'eligible canonical documents before the initial index'
+        );
+    } else {
+        $preparation = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/indexing-prepare.json');
+        wp_fts_wc_require_evidence_gates(
+            $preparation,
+            'forced full-rebuild preparation',
+            [
+                'full_rebuild_canonical_document_count',
+                'full_rebuild_initial_work_rows',
+                'full_rebuild_hashes_invalidated',
+                'full_rebuild_snippets_invalidated',
+                'full_rebuild_timestamps_invalidated',
+                'full_rebuild_posting_impacts_invalidated',
+                'full_rebuild_pre_state_signature_complete',
+                'full_rebuild_pre_surface_rows_present',
+                'full_rebuild_pre_posting_kind_totals',
+                'full_rebuild_pre_doc_freq_matches_physical_rows',
+            ],
+            'relational-fts-indexing-prepare-v2'
+        );
+        $expectedDocuments = (int) ($preparation['documents'] ?? 0);
+    }
+    wp_fts_wc_assert($expectedDocuments > 0, 'The asynchronous reindex drain has no target documents.');
     $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
     $initial = [
         'post' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='post'", 'post work after the WP-CLI reindex enqueue'),
@@ -519,9 +525,9 @@ function wp_fts_wc_reindex_drain(): array
         wp_fts_wc_gate('reindex_rss_peak_bytes', '<= 536870912', wp_fts_wc_rss_bytes('VmHWM'), wp_fts_wc_rss_bytes('VmHWM') <= 536870912),
     ];
     $evidence = [
-        'schema' => 'relational-fts-reindex-drain-v1',
+        'schema' => $initialIndex ? 'relational-fts-initial-index-drain-v1' : 'relational-fts-reindex-drain-v1',
         'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
-        'phase' => 'reindex-drain',
+        'phase' => $initialIndex ? 'initial-index-drain' : 'reindex-drain',
         'source_sha' => wp_fts_wc_required_env('WP_FTS_SOURCE_SHA'),
         'profile' => wp_fts_wc_required_env('WP_FTS_WC_PROFILE'),
         'expected_documents' => $expectedDocuments,
@@ -537,12 +543,13 @@ function wp_fts_wc_reindex_drain(): array
         'rss_peak_bytes' => wp_fts_wc_rss_bytes('VmHWM'),
         'gates' => $gates,
     ];
-    wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/reindex-drain.json', $evidence);
+    $artifact = $initialIndex ? '/initial-index-drain.json' : '/reindex-drain.json';
+    wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . $artifact, $evidence);
     if ($evidence['status'] !== 'PASS') {
         throw new RuntimeException('Asynchronous full-reindex drain failed: ' . implode(', ', wp_fts_wc_gate_failures($gates)));
     }
 
-    return ['status' => 'PASS', 'phase' => 'reindex-drain', 'documents' => $totals['processed'], 'batches' => count($batches)];
+    return ['status' => 'PASS', 'phase' => $evidence['phase'], 'documents' => $totals['processed'], 'batches' => count($batches)];
 }
 
 /**
@@ -823,32 +830,33 @@ function wp_fts_wc_wpcli_adapter(): array
 /**
  * Prove the steady-state request SQL bound from the beginning of fresh web
  * requests, not from an in-process query filter installed after bootstrap.
- * The same phase first exercises the real v6-to-v9 metadata/index migration with
- * missing override rows and every surviving request option marked nonautoload.
  *
  * @return array<string,mixed>
  */
 function wp_fts_wc_cold_ready_request(): array
 {
-    global $wpdb;
-
     wp_fts_wc_assert_disposable_guard();
     wp_fts_wc_assert_runtime();
     wp_fts_wc_assert_source_binding();
     wp_fts_wc_require_plugin();
 
     $optionNames = wp_fts_wc_cold_request_option_names();
-    $originalRows = wp_fts_wc_cold_option_rows($optionNames);
-    wp_fts_wc_assert(count($originalRows) === count($optionNames), 'Cold-request proof requires all seven v7 request-option rows before its destructive migration seed.');
-    $originalHealth = maybe_unserialize((string) $originalRows[WP_FTS_Plugin::INDEX_HEALTH_OPTION]['option_value']);
-    $originalReadiness = [
-        WP_FTS_Plugin::INDEX_HEALTH_OPTION => $originalHealth,
-        WP_FTS_Plugin::READINESS_INCARNATION_OPTION => maybe_unserialize((string) $originalRows[WP_FTS_Plugin::READINESS_INCARNATION_OPTION]['option_value']),
-        WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION => maybe_unserialize((string) $originalRows[WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION]['option_value']),
-    ];
-    $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
-    $workBefore = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')", 'cold-request pre-upgrade work');
-    wp_fts_wc_assert($workBefore === 0, 'Cold-request metadata upgrade requires an empty durable work queue.');
+    $optionRows = wp_fts_wc_cold_option_rows($optionNames);
+    wp_fts_wc_assert(count($optionRows) === count($optionNames), 'Cold-request proof requires every current request option.');
+    $schemaVersion = (int) maybe_unserialize((string) $optionRows[WP_FTS_Plugin::SCHEMA_VERSION_OPTION]['option_value']);
+    $acceptedProfile = wp_fts_wc_current_index_profile_hash();
+    $takeover = WP_FTS_Plugin::search_takeover_status(false);
+    $autoloadValues = function_exists('wp_autoload_values_to_autoload')
+        ? array_map('strval', wp_autoload_values_to_autoload())
+        : ['yes'];
+    $autoloadActual = [];
+    foreach ($optionNames as $name) {
+        $autoloadActual[$name] = (string) ($optionRows[$name]['autoload'] ?? '');
+    }
+    $autoloaded = count(array_filter(
+        $autoloadActual,
+        static fn(string $value): bool => !in_array($value, $autoloadValues, true)
+    )) === 0;
 
     $attributionPlugin = wp_fts_wc_install_request_attribution_mu_plugin();
     register_shutdown_function(static function () use ($attributionPlugin): void {
@@ -856,97 +864,17 @@ function wp_fts_wc_cold_ready_request(): array
     });
 
     try {
-        $table = wp_fts_wc_identifier((string) $wpdb->options);
-        $missingNames = [
-            WP_FTS_Plugin::SETTINGS_OPTION,
-            WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION,
-            WP_FTS_PostContentExtractor::CUSTOM_FIELDS_OPTION,
-        ];
-        $missingPlaceholders = implode(',', array_fill(0, count($missingNames), '%s'));
-        $deleted = $wpdb->query($wpdb->prepare(
-            "DELETE FROM `{$table}` WHERE option_name IN ({$missingPlaceholders})",
-            ...$missingNames
-        ));
-        wp_fts_wc_assert($deleted === count($missingNames) && trim((string) $wpdb->last_error) === '', 'Could not install the missing-option half of the v6 cold-request migration seed.');
-
-        $survivingNames = array_values(array_diff($optionNames, $missingNames));
-        $survivingPlaceholders = implode(',', array_fill(0, count($survivingNames), '%s'));
-        $marked = $wpdb->query($wpdb->prepare(
-            "UPDATE `{$table}` SET autoload='no' WHERE option_name IN ({$survivingPlaceholders})",
-            ...$survivingNames
-        ));
-        wp_fts_wc_assert($marked !== false && trim((string) $wpdb->last_error) === '', 'Could not install the nonautoload half of the v6 cold-request migration seed.');
-        $schemaSeeded = $wpdb->query($wpdb->prepare(
-            "UPDATE `{$table}` SET option_value=%s,autoload='no' WHERE option_name=%s",
-            maybe_serialize(6),
-            WP_FTS_Plugin::SCHEMA_VERSION_OPTION
-        ));
-        wp_fts_wc_assert($schemaSeeded === 1 && trim((string) $wpdb->last_error) === '', 'Could not publish the real schema-v6 cold-request migration seed.');
-        wp_fts_wc_clear_option_caches($optionNames);
-
-        $seedRows = wp_fts_wc_cold_option_rows($optionNames);
-        $profileBeforeUpgrade = wp_fts_wc_current_index_profile_hash();
-        $seedShapeValid = count($seedRows) === count($survivingNames)
-            && !isset($seedRows[WP_FTS_Plugin::SETTINGS_OPTION])
-            && !isset($seedRows[WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION])
-            && !isset($seedRows[WP_FTS_PostContentExtractor::CUSTOM_FIELDS_OPTION])
-            && (int) maybe_unserialize((string) ($seedRows[WP_FTS_Plugin::SCHEMA_VERSION_OPTION]['option_value'] ?? '0')) === 6
-            && count(array_filter($seedRows, static fn(array $row): bool => (string) ($row['autoload'] ?? '') !== 'no')) === 0;
-
-        $upgrade = wp_fts_wc_measure_cold_ready_http('upgrade');
-        wp_fts_wc_clear_option_caches($optionNames);
-        $upgradedRows = wp_fts_wc_cold_option_rows($optionNames);
-        $profileAfterUpgrade = wp_fts_wc_current_index_profile_hash();
-        $workAfter = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')", 'cold-request post-upgrade work');
-        $upgradedDefaults = [];
-        foreach ($missingNames as $name) {
-            $upgradedDefaults[$name] = isset($upgradedRows[$name])
-                ? maybe_unserialize((string) $upgradedRows[$name]['option_value'])
-                : null;
-        }
-        $upgradedReadiness = [];
-        foreach (array_keys($originalReadiness) as $name) {
-            $upgradedReadiness[$name] = isset($upgradedRows[$name])
-                ? maybe_unserialize((string) $upgradedRows[$name]['option_value'])
-                : null;
-        }
-
-        // The live corpus was built with deliberate nondefault search settings.
-        // Restore those exact values after proving that absent overrides and
-        // stored empty overrides have the same profile hash; the four measured
-        // searches must exercise the already-accepted corpus generation.
-        wp_fts_wc_restore_cold_option_rows(array_intersect_key($originalRows, array_fill_keys($missingNames, true)));
-        wp_fts_wc_clear_option_caches($optionNames);
-        $restoredProfile = wp_fts_wc_current_index_profile_hash();
-        $acceptedProfile = is_array($originalHealth) && is_scalar($originalHealth['accepted_index_profile_hash'] ?? null)
-            ? (string) $originalHealth['accepted_index_profile_hash']
-            : '';
-        $restoredReady = WP_FTS_Plugin::search_takeover_status(false);
-
         $cas = wp_fts_wc_cold_ready_cas_visibility();
         $cases = [];
         foreach (['ready', 'impossible', 'nonhydrate', 'hydrated'] as $caseId) {
             $cases[$caseId] = wp_fts_wc_measure_cold_ready_http($caseId);
         }
 
-        $autoloadRows = wp_fts_wc_cold_option_rows($optionNames);
-        $autoloadValues = function_exists('wp_autoload_values_to_autoload')
-            ? array_map('strval', wp_autoload_values_to_autoload())
-            : ['yes'];
-        $autoloadActual = [];
-        foreach ($optionNames as $name) {
-            $autoloadActual[$name] = (string) ($autoloadRows[$name]['autoload'] ?? '');
-        }
-        $autoloaded = count($autoloadRows) === count($optionNames)
-            && count(array_filter(
-                $autoloadActual,
-                static fn(string $value): bool => !in_array($value, $autoloadValues, true)
-            )) === 0;
-
         $caseThreads = array_map(static fn(array $case): int => (int) ($case['attribution']['thread_id'] ?? 0), $cases);
         $freshConnections = count(array_unique($caseThreads)) === count($cases)
             && count(array_filter($caseThreads, static fn(int $thread): bool => $thread <= 0)) === 0;
         $freshWebRequests = true;
+        $currentSchemaRequests = true;
         $externalObjectCaches = [];
         $directOptionEvents = [];
         $networkTokenEvents = [];
@@ -966,6 +894,8 @@ function wp_fts_wc_cold_ready_request(): array
                 && (int) ($attribution['first_connection_event_id'] ?? 0) > 0
                 && (int) ($attribution['first_connection_event_id'] ?? PHP_INT_MAX) <= (int) ($attribution['tagged_start_event_id'] ?? 0)
                 && (int) ($attribution['tagged_start_event_id'] ?? PHP_INT_MAX) <= (int) ($attribution['end_event_id'] ?? 0);
+            $currentSchemaRequests = $currentSchemaRequests
+                && ($response['schema_version'] ?? null) === WP_FTS_Plugin::SCHEMA_VERSION;
             $externalObjectCaches[$caseId] = $response['external_object_cache'] ?? null;
             foreach (is_array($case['direct_option_events'] ?? null) ? $case['direct_option_events'] : [] as $event) {
                 $directOptionEvents[] = ['case' => $caseId, 'event' => $event];
@@ -980,15 +910,12 @@ function wp_fts_wc_cold_ready_request(): array
         $nonhydrateShape = $cases['nonhydrate']['statement_shape'] ?? null;
         $hydratedShape = $cases['hydrated']['statement_shape'] ?? null;
         $gates = [
-            wp_fts_wc_gate('cold_ready_upgrade_v6_seed_shape', ['schema' => 6, 'missing' => $missingNames, 'surviving_autoload' => 'no'], ['rows' => wp_fts_wc_cold_option_row_evidence($seedRows), 'shape_valid' => $seedShapeValid], $seedShapeValid),
-            wp_fts_wc_gate('cold_ready_upgrade_request_completed', [200, 9, true, false, '> 0 option events'], [$upgrade['status'] ?? null, $upgrade['response']['schema_version'] ?? null, $upgrade['response']['ready'] ?? null, $upgrade['response']['external_object_cache'] ?? null, count(is_array($upgrade['direct_option_events'] ?? null) ? $upgrade['direct_option_events'] : [])], ($upgrade['status'] ?? null) === 200 && ($upgrade['response']['schema_version'] ?? null) === 9 && ($upgrade['response']['ready'] ?? null) === true && ($upgrade['response']['external_object_cache'] ?? null) === false && count(is_array($upgrade['direct_option_events'] ?? null) ? $upgrade['direct_option_events'] : []) > 0),
-            wp_fts_wc_gate('cold_ready_upgrade_missing_defaults_initialized', array_fill_keys($missingNames, []), $upgradedDefaults, $upgradedDefaults === array_fill_keys($missingNames, [])),
-            wp_fts_wc_gate('cold_ready_upgrade_profile_hash_preserved', $profileBeforeUpgrade, $profileAfterUpgrade, $profileBeforeUpgrade !== '' && hash_equals($profileBeforeUpgrade, $profileAfterUpgrade)),
-            wp_fts_wc_gate('cold_ready_upgrade_readiness_preserved', [$originalReadiness, 0], [$upgradedReadiness, $workAfter], $upgradedReadiness === $originalReadiness && $workAfter === 0),
-            wp_fts_wc_gate('cold_ready_request_autoloaded_options', ['names' => $optionNames, 'autoload_values' => $autoloadValues], ['names' => array_keys($autoloadRows), 'autoload' => $autoloadActual], $autoloaded && array_keys($autoloadRows) === $optionNames),
+            wp_fts_wc_gate('cold_ready_current_schema_option', WP_FTS_Plugin::SCHEMA_VERSION, $schemaVersion, $schemaVersion === WP_FTS_Plugin::SCHEMA_VERSION),
+            wp_fts_wc_gate('cold_ready_current_schema_requests', true, $currentSchemaRequests, $currentSchemaRequests),
+            wp_fts_wc_gate('cold_ready_request_autoloaded_options', ['names' => $optionNames, 'autoload_values' => $autoloadValues], ['names' => array_keys($optionRows), 'autoload' => $autoloadActual], $autoloaded && array_keys($optionRows) === $optionNames),
             wp_fts_wc_gate('cold_ready_cas_index_health_alloptions_visibility', true, $cas['index_health'] ?? null, ($cas['index_health'] ?? null) === true),
             wp_fts_wc_gate('cold_ready_cas_search_capability_alloptions_visibility', true, $cas['search_capability'] ?? null, ($cas['search_capability'] ?? null) === true),
-            wp_fts_wc_gate('cold_ready_request_fresh_connections', ['four unique DB threads', 'four fresh web requests', $acceptedProfile], [$caseThreads, $freshWebRequests, $restoredProfile, $restoredReady['ready'] ?? null], $freshConnections && $freshWebRequests && $acceptedProfile !== '' && hash_equals($acceptedProfile, $restoredProfile) && ($restoredReady['ready'] ?? null) === true),
+            wp_fts_wc_gate('cold_ready_request_fresh_connections', ['four unique DB threads', 'four fresh web requests', $acceptedProfile], [$caseThreads, $freshWebRequests, $takeover['ready'] ?? null], $freshConnections && $freshWebRequests && $acceptedProfile !== '' && ($takeover['ready'] ?? null) === true),
             wp_fts_wc_gate('cold_ready_request_no_external_object_cache', array_fill_keys(array_keys($cases), false), $externalObjectCaches, $externalObjectCaches === array_fill_keys(array_keys($cases), false)),
             wp_fts_wc_gate('cold_ready_request_no_option_or_sitemeta_sql', 0, count($directOptionEvents), $directOptionEvents === []),
             wp_fts_wc_gate('cold_ready_request_no_network_token_select', 0, count($networkTokenEvents), $networkTokenEvents === []),
@@ -1001,26 +928,20 @@ function wp_fts_wc_cold_ready_request(): array
         wp_fts_wc_assert(array_column($gates, 'id') === wp_fts_wc_cold_ready_gate_ids(), 'Cold-request producer gate inventory drifted from its validation consumer.');
 
         $evidence = [
-            'schema' => 'relational-fts-cold-ready-request-v1',
+            'schema' => 'relational-fts-cold-ready-request-v2',
             'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
             'source_sha' => wp_fts_wc_required_env('WP_FTS_SOURCE_SHA'),
             'zip_sha256' => wp_fts_wc_required_env('WP_FTS_ZIP_SHA256'),
             'option_names' => $optionNames,
-            'upgrade' => [
-                'seed_rows' => wp_fts_wc_cold_option_row_evidence($seedRows),
-                'request' => $upgrade,
-                'upgraded_rows' => wp_fts_wc_cold_option_row_evidence($upgradedRows),
-                'profile_hash_before' => $profileBeforeUpgrade,
-                'profile_hash_after' => $profileAfterUpgrade,
-                'readiness_before' => $originalReadiness,
-                'readiness_after' => $upgradedReadiness,
-                'work_before' => $workBefore,
-                'work_after' => $workAfter,
+            'current_schema' => [
+                'stored_version' => $schemaVersion,
+                'expected_version' => WP_FTS_Plugin::SCHEMA_VERSION,
+                'rows' => wp_fts_wc_cold_option_row_evidence($optionRows),
             ],
             'cas' => $cas,
             'autoload' => [
                 'accepted_values' => $autoloadValues,
-                'rows' => wp_fts_wc_cold_option_row_evidence($autoloadRows),
+                'rows' => wp_fts_wc_cold_option_row_evidence($optionRows),
             ],
             'cases' => $cases,
             'gates' => $gates,
@@ -1033,8 +954,6 @@ function wp_fts_wc_cold_ready_request(): array
 
         return ['status' => 'PASS', 'phase' => 'cold-ready-request', 'cases' => array_keys($cases), 'gate_failures' => []];
     } finally {
-        wp_fts_wc_restore_cold_option_rows($originalRows);
-        wp_fts_wc_clear_option_caches($optionNames);
         @unlink($attributionPlugin);
     }
 }
@@ -1057,11 +976,8 @@ function wp_fts_wc_cold_request_option_names(): array
 function wp_fts_wc_cold_ready_gate_ids(): array
 {
     return [
-        'cold_ready_upgrade_v6_seed_shape',
-        'cold_ready_upgrade_request_completed',
-        'cold_ready_upgrade_missing_defaults_initialized',
-        'cold_ready_upgrade_profile_hash_preserved',
-        'cold_ready_upgrade_readiness_preserved',
+        'cold_ready_current_schema_option',
+        'cold_ready_current_schema_requests',
         'cold_ready_request_autoloaded_options',
         'cold_ready_cas_index_health_alloptions_visibility',
         'cold_ready_cas_search_capability_alloptions_visibility',
@@ -1109,45 +1025,6 @@ function wp_fts_wc_cold_option_rows(array $names): array
     }
 
     return $ordered;
-}
-
-/** @param array<string,array{option_name:string,option_value:string,autoload:string}> $rows */
-function wp_fts_wc_restore_cold_option_rows(array $rows): void
-{
-    global $wpdb;
-
-    if ($rows === []) {
-        return;
-    }
-    $table = wp_fts_wc_identifier((string) $wpdb->options);
-    $names = array_keys($rows);
-    $placeholders = implode(',', array_fill(0, count($names), '%s'));
-    $deleted = $wpdb->query($wpdb->prepare(
-        "DELETE FROM `{$table}` WHERE option_name IN ({$placeholders})",
-        ...$names
-    ));
-    wp_fts_wc_assert($deleted !== false && trim((string) $wpdb->last_error) === '', 'Could not clear cold-request option rows before exact restoration.');
-    $valueRows = [];
-    $args = [];
-    foreach ($rows as $name => $row) {
-        $valueRows[] = '(%s,%s,%s)';
-        array_push($args, $name, (string) $row['option_value'], (string) $row['autoload']);
-    }
-    $inserted = $wpdb->query($wpdb->prepare(
-        "INSERT INTO `{$table}` (option_name,option_value,autoload) VALUES " . implode(',', $valueRows),
-        ...$args
-    ));
-    wp_fts_wc_assert($inserted === count($rows) && trim((string) $wpdb->last_error) === '', 'Could not restore the exact cold-request option rows.');
-}
-
-/** @param string[] $names */
-function wp_fts_wc_clear_option_caches(array $names): void
-{
-    foreach ($names as $name) {
-        wp_cache_delete($name, 'options');
-    }
-    wp_cache_delete('alloptions', 'options');
-    WP_FTS_Plugin::reset_request_caches();
 }
 
 /** @param array<string,array{option_name:string,option_value:string,autoload:string}> $rows @return array<string,array<string,mixed>> */
@@ -1721,111 +1598,6 @@ function wp_fts_wc_validate(): array
         'dependency_lob_custom_option_restored',
         'dependency_lob_health_restored',
     ], 'relational-fts-dependency-lob-v2'));
-    $migration = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration.json');
-    array_push($gates, ...wp_fts_wc_require_evidence_gates($migration, 'populated migration', [
-        'migration_immutable_baseline_source',
-        'migration_snapshot_case_artifacts_complete',
-        'migration_all_failpoints_resumed',
-        'migration_all_phase_state_contracts',
-        'migration_all_post_kill_probes',
-        'migration_all_worker_journals',
-        'migration_legacy_tables_removed',
-        'migration_work_drained',
-        'migration_search_takeover_ready',
-        'migration_document_count',
-        'migration_doc_freq_consistency',
-        'migration_peak_disk_ratio',
-        'migration_worker_failures',
-        'migration_worker_batch_count',
-        'migration_worker_no_progress_batches',
-        'migration_worker_recorded_progress',
-        'migration_index_profile_v6_forced_rebuild',
-        'migration_surface_rows_published',
-        'migration_common_or_v4_oracle_ordered_score_parity',
-        'migration_common_or_post_migration_rerun_stable',
-        'migration_rare_anchor_and_v4_oracle_ordered_score_parity',
-        'migration_rare_anchor_and_post_migration_rerun_stable',
-        'migration_prefix_fanout_v4_oracle_ordered_score_parity',
-        'migration_prefix_fanout_post_migration_rerun_stable',
-        'migration_ambiguous_morphology_or_v4_oracle_ordered_score_parity',
-        'migration_ambiguous_morphology_or_post_migration_rerun_stable',
-        'migration_ambiguous_morphology_and_v4_oracle_ordered_score_parity',
-        'migration_ambiguous_morphology_and_post_migration_rerun_stable',
-    ], 'relational-fts-migration-report-v6'));
-    $migrationDisk = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration-disk.json');
-    array_push($gates, ...wp_fts_wc_require_evidence_gates($migrationDisk, 'physical migration disk monitor', [
-        'migration_physical_disk_sample_count',
-        'migration_physical_disk_baseline_fts_bytes',
-        'migration_physical_disk_final_fts_bytes',
-        'migration_physical_volume_peak_ratio',
-        'migration_physical_fts_peak_ratio',
-        'migration_physical_monotonic_coverage',
-        'migration_physical_max_observed_gap',
-        'migration_physical_max_sample_duration',
-    ], 'relational-fts-migration-physical-disk-v2'));
-    $migrationDiskSamples = wp_fts_wc_evidence_dir() . '/migration-disk-samples.tsv';
-    $migrationDiskSamplesHash = is_file($migrationDiskSamples) ? hash_file('sha256', $migrationDiskSamples) : false;
-    $migrationDiskWindow = wp_fts_wc_evidence_dir() . '/migration-disk-window.tsv';
-    $migrationDiskWindowHash = is_file($migrationDiskWindow) ? hash_file('sha256', $migrationDiskWindow) : false;
-    $gates[] = wp_fts_wc_gate(
-        'migration_physical_disk_source_binding',
-        [wp_fts_wc_required_env('WP_FTS_SOURCE_SHA'), $profile['name']],
-        [$migrationDisk['source_sha'] ?? null, $migrationDisk['profile'] ?? null],
-        ($migrationDisk['source_sha'] ?? null) === wp_fts_wc_required_env('WP_FTS_SOURCE_SHA') && ($migrationDisk['profile'] ?? null) === $profile['name']
-    );
-    $gates[] = wp_fts_wc_gate(
-        'migration_physical_disk_raw_samples_hash',
-        $migrationDisk['samples_sha256'] ?? null,
-        $migrationDiskSamplesHash,
-        is_string($migrationDiskSamplesHash) && is_string($migrationDisk['samples_sha256'] ?? null) && hash_equals((string) $migrationDisk['samples_sha256'], $migrationDiskSamplesHash)
-    );
-    $gates[] = wp_fts_wc_gate('migration_physical_disk_window_hash', $migrationDisk['window_sha256'] ?? null, $migrationDiskWindowHash, is_string($migrationDiskWindowHash) && is_string($migrationDisk['window_sha256'] ?? null) && hash_equals((string) $migrationDisk['window_sha256'], $migrationDiskWindowHash));
-    $gates[] = wp_fts_wc_gate('migration_physical_disk_target_interval_seconds', 0.25, $migrationDisk['target_interval_seconds'] ?? null, ($migrationDisk['target_interval_seconds'] ?? null) === 0.25);
-    $gates[] = wp_fts_wc_gate('migration_physical_disk_measured_max_gap_seconds', '<= 0.75', $migrationDisk['max_observed_gap_seconds'] ?? null, is_numeric($migrationDisk['max_observed_gap_seconds'] ?? null) && (float) $migrationDisk['max_observed_gap_seconds'] <= 0.75);
-    $gates[] = wp_fts_wc_gate('migration_physical_disk_measured_max_sample_seconds', '<= 0.75', $migrationDisk['max_sample_duration_seconds'] ?? null, is_numeric($migrationDisk['max_sample_duration_seconds'] ?? null) && (float) $migrationDisk['max_sample_duration_seconds'] <= 0.75);
-    $migrationRerun = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration-rerun.json');
-    array_push($gates, ...wp_fts_wc_require_evidence_gates($migrationRerun, 'fresh-process migration stability', [
-        'migration_common_or_fresh_process_stable',
-        'migration_rare_anchor_and_fresh_process_stable',
-        'migration_prefix_fanout_fresh_process_stable',
-        'migration_ambiguous_morphology_or_fresh_process_stable',
-        'migration_ambiguous_morphology_and_fresh_process_stable',
-    ], 'relational-fts-migration-rerun-v1'));
-    $multisiteMigration = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/multisite-migration.json');
-    array_push($gates, ...wp_fts_wc_require_evidence_gates($multisiteMigration, 'multisite migration isolation', [
-        'multisite_site_two_failure_observed',
-        'multisite_site_one_search_membership_after_site_two_failure',
-        'multisite_site_one_df_unchanged_after_site_two_failure',
-        'multisite_site_one_document_semantics_preserved_after_site_two_failure',
-        'multisite_site_one_isolated_after_site_two_failure',
-        'multisite_site_one_foreign_dfs_empty_after_site_two_failure',
-        'multisite_site_one_v4_score_parity_after_site_two_failure',
-        'multisite_site_one_stability_generations_acknowledged_after_site_two_failure',
-        'multisite_site_one_index_content_hash_stable_after_site_two_failure',
-        'multisite_site_one_index_content_hash_rewritten_after_site_two_failure',
-        'multisite_site_three_untouched_after_site_two_failure',
-        'multisite_site_three_physical_sentinel_untouched_after_site_two_failure',
-        'multisite_three_prefixes_migrated',
-        'multisite_prefixes_distinct',
-        'multisite_recorded_prefix_parity',
-        'multisite_search_takeover_ready',
-        'multisite_search_membership_parity',
-        'multisite_doc_freq_parity',
-        'multisite_document_semantics_parity',
-        'multisite_cross_site_isolation',
-        'multisite_foreign_doc_freq_isolation',
-        'multisite_v4_oracle_score_parity',
-        'multisite_stability_acknowledged_sentinel_sites',
-        'multisite_stability_generation_outcomes',
-        'multisite_index_content_hash_stable',
-        'multisite_index_content_hash_rewritten',
-        'multisite_foreign_query_probes',
-        'multisite_empty_foreign_query_probes',
-        'multisite_empty_foreign_doc_freq_probes',
-        'multisite_diagonal_token_membership',
-        'multisite_off_diagonal_token_isolation',
-    ], 'relational-fts-multisite-migration-v5'));
-
     $storageBytes = wp_fts_wc_storage_bytes($tables);
     $eligibleDocs = max(1, (int) $profile['documents'] - (int) $profile['password']);
     $bytesPerDoc = (int) ceil($storageBytes['total_bytes'] / $eligibleDocs);
@@ -2028,10 +1800,6 @@ function wp_fts_wc_validate(): array
         'adapter_oracle' => $adapterOracle,
         'explosive_input' => $containment,
         'dependency_lob' => $dependencyLob,
-        'migration' => $migration,
-        'migration_physical_disk' => $migrationDisk,
-        'migration_rerun' => $migrationRerun,
-        'multisite_migration' => $multisiteMigration,
         'validation_inventory' => $validationInventory,
         'gates' => $gates,
         'concurrency' => null,
@@ -5771,7 +5539,7 @@ function wp_fts_wc_write_path_proof(array $manifest): array
 }
 
 /**
- * Direct Indexer mutations are a legacy-backend API. A relational caller must
+ * Direct Indexer mutations are unsupported by relational storage. A relational caller must
  * be rejected before source extraction, option callbacks, analysis, storage
  * reads, or SQL can turn one document into an unbounded request-time write.
  *
@@ -5854,7 +5622,7 @@ function wp_fts_wc_direct_set_oriented_mutation_rejection_proof(): array
         'index_document_fields' => static fn() => $indexer->index_document_fields(-1, [['name' => [], 'text' => $oversizedHtml]], $options),
         'delete_document' => static fn() => $indexer->delete_document(-1),
     ];
-    $legacyStorageMethodsAbsent = array_reduce(
+    $removedStorageMethodsAbsent = array_reduce(
         ['replace_doc_postings', 'put_doc', 'put_doc_metadata', 'delete_doc'],
         static fn(bool $absent, string $method): bool => $absent && !method_exists($storage, $method),
         true
@@ -5916,7 +5684,7 @@ function wp_fts_wc_direct_set_oriented_mutation_rejection_proof(): array
         && $returned === 0
         && $wrongExceptions === []
         && $recorded['queries'] === []
-        && $legacyStorageMethodsAbsent
+        && $removedStorageMethodsAbsent
         && $extractor->calls === 0
         && $optionCallback->calls === 0
         && $analyzer->calls === 0;
@@ -5924,7 +5692,7 @@ function wp_fts_wc_direct_set_oriented_mutation_rejection_proof(): array
     return [
         'storage_class' => get_class($storage),
         'storage_is_set_oriented' => true,
-        'legacy_storage_methods_absent' => $legacyStorageMethodsAbsent,
+        'removed_storage_methods_absent' => $removedStorageMethodsAbsent,
         'expected_exception_class' => LogicException::class,
         'expected_exception_message' => $expectedMessage,
         'attempts_per_method' => $attempts,
@@ -5944,7 +5712,7 @@ function wp_fts_wc_direct_set_oriented_mutation_rejection_proof(): array
             wp_fts_wc_gate(
                 'direct_set_oriented_mutation_guard_contract',
                 [LogicException::class, $expectedMessage, $expectedPerMethod, 400, 0, 0, 0, 0, true],
-                [LogicException::class, $expectedMessage, $exactExceptions, $exactTotal, count($recorded['queries']), $extractor->calls, $optionCallback->calls, $analyzer->calls, $legacyStorageMethodsAbsent],
+                [LogicException::class, $expectedMessage, $exactExceptions, $exactTotal, count($recorded['queries']), $extractor->calls, $optionCallback->calls, $analyzer->calls, $removedStorageMethodsAbsent],
                 $contractPassed
             ),
             wp_fts_wc_gate('direct_set_oriented_mutation_attempts', $expectedPerMethod, $attempts, $attempts === $expectedPerMethod),
@@ -8914,7 +8682,7 @@ function wp_fts_wc_measure_sparse_provider_branch(
  * WordPress's canonical relationship columns and all three relevant indexes;
  * MyISAM is used only to make a zero-access negative proof practical. Its seed
  * time, bytes, and engine are not production performance claims. The populated
- * v7-to-v9 DDL/concurrent-write proof separately exercises canonical InnoDB.
+ * current-schema repair/concurrent-write proof separately exercises canonical InnoDB.
  *
  * @param array<string,mixed> $manifest
  * @return array<string,mixed>
@@ -9456,7 +9224,7 @@ LIMIT 20";
 /**
  * Exercise every production scope-page shape across a 100,000-row gap.
  *
- * Dedicated MyISAM tables make the legacy taxonomy secondary key genuinely
+ * Dedicated MyISAM tables make the single-column taxonomy secondary key genuinely
  * non-covering. Production must use its explicit term/object and
  * type/status/ID composites, so targeted work is proportional only to affected
  * membership and filtered work only to at most 32 selected lanes. Corpus work
@@ -9556,8 +9324,8 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
         $seedDuration = wp_fts_wc_elapsed_ms($seedStarted);
 
         WP_FTS_Plugin::reset_request_caches();
-        $takeoverBeforeUpgrade = wp_fts_wc_scope_takeover_signature(WP_FTS_Plugin::search_takeover_status(false));
-        $indexUpgrade = wp_fts_wc_populated_scope_index_upgrade($takeoverBeforeUpgrade);
+        $takeoverBeforeRepair = wp_fts_wc_scope_takeover_signature(WP_FTS_Plugin::search_takeover_status(false));
+        $indexRepair = wp_fts_wc_populated_scope_index_repair($takeoverBeforeRepair);
 
         $engines = $wpdb->get_results($wpdb->prepare(
             'SELECT table_name,engine FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN (%s,%s) ORDER BY table_name',
@@ -9571,7 +9339,7 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
         $fixtureIndexes = [
             'targeted' => wp_fts_wc_scope_index_columns($relationships, WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME),
             'filtered' => wp_fts_wc_scope_index_columns($posts, WP_FTS_Storage_Mysql::FILTERED_SCOPE_INDEX_NAME),
-            'legacy_taxonomy' => wp_fts_wc_scope_index_columns($relationships, 'term_taxonomy_id'),
+            'single_column_taxonomy' => wp_fts_wc_scope_index_columns($relationships, 'term_taxonomy_id'),
         ];
 
         $fixtureCounts = [
@@ -9755,11 +9523,11 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
             wp_fts_wc_gate('scope_expansion_index_ownership', ['keys' => ['filtered', 'targeted'], 'autoload' => 'nonautoload'], ['keys' => $ownershipKeys, 'autoload' => $ownershipAutoload], $ownershipKeys === ['filtered', 'targeted'] && $ownershipRow !== null && !in_array($ownershipAutoload, $autoloadValues, true)),
             wp_fts_wc_gate('scope_expansion_myisam_fixture_engine', ['MyISAM', 'MyISAM'], array_values($engineMap), count($engineMap) === 2 && count(array_filter($engineMap, static fn(string $engine): bool => $engine !== 'MYISAM')) === 0),
             wp_fts_wc_gate('scope_expansion_fixture_composite_indexes', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID']], $fixtureIndexes, ($fixtureIndexes['targeted']['columns'] ?? null) === ['term_taxonomy_id', 'object_id'] && ($fixtureIndexes['targeted']['unique'] ?? null) === false && ($fixtureIndexes['filtered']['columns'] ?? null) === ['post_type', 'post_status', 'ID'] && ($fixtureIndexes['filtered']['unique'] ?? null) === false),
-            wp_fts_wc_gate('scope_expansion_noncovering_decoy_index', ['term_taxonomy_id'], $fixtureIndexes['legacy_taxonomy'] ?? null, ($fixtureIndexes['legacy_taxonomy']['columns'] ?? null) === ['term_taxonomy_id']),
+            wp_fts_wc_gate('scope_expansion_noncovering_decoy_index', ['term_taxonomy_id'], $fixtureIndexes['single_column_taxonomy'] ?? null, ($fixtureIndexes['single_column_taxonomy']['columns'] ?? null) === ['term_taxonomy_id']),
             wp_fts_wc_gate('scope_expansion_sparse_gap_rows', $gapCount + 1, [$fixtureCounts['posts'], $fixtureCounts['ineligible_posts']], $fixtureCounts['posts'] === $gapCount + 1 && $fixtureCounts['ineligible_posts'] === $gapCount),
             wp_fts_wc_gate('scope_expansion_unrelated_relationships', $gapCount, $fixtureCounts['unrelated_gap'], $fixtureCounts['unrelated_gap'] === $gapCount),
             wp_fts_wc_gate('scope_expansion_same_target_backlog', [$sameTargetBacklogCount, $denseTargetCount], [$fixtureCounts['same_target_backlog'], $fixtureCounts['target_rows']], $fixtureCounts['same_target_backlog'] === $sameTargetBacklogCount && $fixtureCounts['target_rows'] === $sameTargetBacklogCount + $denseTargetCount + 1),
-            ...$indexUpgrade['gates'],
+            ...$indexRepair['gates'],
             ...$targeted['gates'],
             ...$filtered['gates'],
             ...$corpus['gates'],
@@ -9788,7 +9556,7 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
                 'initial_seed_statements' => $postSeedStatements + $relationshipSeedStatements,
                 'dense_filtered_seed_statements' => $denseFiltered['statements'],
                 'initial_seed_duration_ms' => $seedDuration,
-                'populated_v7_to_v9_upgrade' => $indexUpgrade['evidence'],
+                'populated_scope_index_repair' => $indexRepair['evidence'],
             ],
             'targeted' => $targeted['evidence'],
             'filtered' => $filtered['evidence'],
@@ -9955,29 +9723,28 @@ function wp_fts_wc_seed_filtered_scope_lanes(string $table, int $firstPostId): a
 }
 
 /**
- * Run the actual v7-to-v9 plugin upgrade against populated InnoDB clones of
+ * Repair missing current-schema scope indexes on populated InnoDB clones of
  * WordPress's canonical core tables. Redirecting the canonical wpdb properties
- * here exercises the production ownership, DDL, writer-lease, verification,
- * and logical-publication path rather than a copied query.
+ * here exercises the production ownership, DDL, writer lease, and verification
+ * path rather than a copied query.
  *
  * @param array<string,mixed> $takeoverBefore
  * @return array{evidence:array<string,mixed>,gates:array<int,array<string,mixed>>}
  */
-function wp_fts_wc_populated_scope_index_upgrade(array $takeoverBefore): array
+function wp_fts_wc_populated_scope_index_repair(array $takeoverBefore): array
 {
     global $wpdb;
 
-    $posts = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_upgrade_posts');
-    $relationships = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_upgrade_relationships');
-    $sequence = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_upgrade_sequence');
+    $posts = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_repair_posts');
+    $relationships = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_repair_relationships');
+    $sequence = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_repair_sequence');
     $originalPosts = wp_fts_wc_identifier((string) ($wpdb->posts ?? ((string) $wpdb->prefix . 'posts')));
     $originalRelationships = wp_fts_wc_identifier((string) ($wpdb->term_relationships ?? ((string) $wpdb->prefix . 'term_relationships')));
     $schemaOption = WP_FTS_Plugin::SCHEMA_VERSION_OPTION;
     $ownershipOption = WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION;
-    $originalSchema = get_option($schemaOption, null);
     $originalOwnership = get_option($ownershipOption, []);
-    $readinessBefore = wp_fts_wc_scope_upgrade_readiness_options();
-    $workBefore = wp_fts_wc_scope_upgrade_work_signature();
+    $readinessBefore = wp_fts_wc_scope_repair_readiness_options();
+    $workBefore = wp_fts_wc_scope_repair_work_signature();
     $dropFixture = static function () use ($wpdb, $posts, $relationships, $sequence): void {
         foreach ([$relationships, $posts, $sequence] as $table) {
             wp_fts_wc_assert(
@@ -9992,19 +9759,19 @@ function wp_fts_wc_populated_scope_index_upgrade(array $takeoverBefore): array
     try {
         wp_fts_wc_assert(
             $wpdb->query("CREATE TABLE `{$posts}` LIKE `{$originalPosts}`") !== false,
-            'Could not clone the canonical InnoDB posts table for populated v9 DDL.'
+            'Could not clone the canonical InnoDB posts table for populated repair DDL.'
         );
         wp_fts_wc_assert(
             $wpdb->query("CREATE TABLE `{$relationships}` LIKE `{$originalRelationships}`") !== false,
-            'Could not clone the canonical InnoDB term-relationships table for populated v9 DDL.'
+            'Could not clone the canonical InnoDB term-relationships table for populated repair DDL.'
         );
         wp_fts_wc_assert(
             $wpdb->query("DROP INDEX `" . WP_FTS_Storage_Mysql::FILTERED_SCOPE_INDEX_NAME . "` ON `{$posts}`") !== false,
-            'Could not stage the cloned posts table without its v8 scope index.'
+            'Could not stage the cloned posts table without its current scope index.'
         );
         wp_fts_wc_assert(
             $wpdb->query("DROP INDEX `" . WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME . "` ON `{$relationships}`") !== false,
-            'Could not stage the cloned relationships table without its v8 scope index.'
+            'Could not stage the cloned relationships table without its current scope index.'
         );
         wp_fts_wc_assert(
             $wpdb->query("CREATE TABLE `{$sequence}` (n bigint unsigned NOT NULL, PRIMARY KEY (n)) ENGINE=InnoDB") !== false,
@@ -10025,7 +9792,7 @@ function wp_fts_wc_populated_scope_index_upgrade(array $takeoverBefore): array
         $postColumns = 'ID,post_author,post_date,post_date_gmt,post_content,post_title,post_excerpt,post_status,comment_status,ping_status,post_password,post_name,to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,guid,menu_order,post_type,post_mime_type,comment_count';
         $insertedPosts = $wpdb->query(
             "INSERT INTO `{$posts}` ({$postColumns})
-SELECT n,1,'2020-01-01 00:00:00','2020-01-01 00:00:00','scope upgrade body',CONCAT('Scope upgrade ',n),'','publish','closed','closed','',CONCAT('scope-upgrade-',n),'','','2020-01-01 00:00:00','2020-01-01 00:00:00','',0,CONCAT('https://example.invalid/?p=',n),0,'post','',0
+SELECT n,1,'2020-01-01 00:00:00','2020-01-01 00:00:00','scope repair body',CONCAT('Scope repair ',n),'','publish','closed','closed','',CONCAT('scope-repair-',n),'','','2020-01-01 00:00:00','2020-01-01 00:00:00','',0,CONCAT('https://example.invalid/?p=',n),0,'post','',0
 FROM `{$sequence}`
 WHERE n<=100001"
         );
@@ -10051,8 +9818,8 @@ WHERE n<=300001"
             $engineMap[(string) ($row['TABLE_NAME'] ?? '')] = strtoupper((string) ($row['ENGINE'] ?? ''));
         }
         $cardinality = [
-            'posts' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$posts}`", 'populated v7-to-v9 posts'),
-            'relationships' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$relationships}`", 'populated v7-to-v9 relationships'),
+            'posts' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$posts}`", 'populated scope-index repair posts'),
+            'relationships' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$relationships}`", 'populated scope-index repair relationships'),
         ];
         $beforeIndexes = [
             'targeted' => wp_fts_wc_scope_index_columns($relationships, WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME),
@@ -10061,12 +9828,12 @@ WHERE n<=300001"
         $beforeBytes = wp_fts_wc_scope_fixture_bytes($posts, $relationships);
 
         wp_fts_wc_assert(
-            update_option($schemaOption, 7) || (int) get_option($schemaOption, 0) === 7,
-            'Could not stage the populated scope-index fixture at schema v7.'
+            (int) get_option($schemaOption, 0) === WP_FTS_Plugin::SCHEMA_VERSION,
+            'The populated scope-index repair requires the current schema version.'
         );
         wp_fts_wc_assert(
             update_option($ownershipOption, [], false) || get_option($ownershipOption, null) === [],
-            'Could not clear scope-index ownership before the populated v9 upgrade.'
+            'Could not clear scope-index ownership before the populated current-schema repair.'
         );
         WP_FTS_Plugin::reset_request_caches();
         $stagedSchema = (int) get_option($schemaOption, 0);
@@ -10075,7 +9842,7 @@ WHERE n<=300001"
         $threadId = (int) $wpdb->get_var(
             'SELECT THREAD_ID FROM performance_schema.threads WHERE PROCESSLIST_ID = CONNECTION_ID()'
         );
-        wp_fts_wc_assert($threadId > 0, 'Could not map the populated scope-index upgrade to Performance Schema.');
+        wp_fts_wc_assert($threadId > 0, 'Could not map the populated scope-index repair to Performance Schema.');
         $beforeEvent = (int) $wpdb->get_var($wpdb->prepare(
             'SELECT COALESCE(MAX(EVENT_ID),0) FROM performance_schema.events_statements_history_long WHERE THREAD_ID=%d',
             $threadId
@@ -10121,7 +9888,8 @@ WHERE n<=300001"
         add_filter('query', $coordinationFilter, PHP_INT_MIN, 1);
         try {
             $recorded = wp_fts_wc_record_queries(static function (): void {
-                WP_FTS_Plugin::upgrade_schema();
+                $result = WP_FTS_Plugin::repair_schema();
+                wp_fts_wc_assert(empty($result['skipped_locked']), 'Current-schema repair unexpectedly lost its writer lease.');
             });
         } finally {
             remove_filter('query', $coordinationFilter, PHP_INT_MIN);
@@ -10148,7 +9916,6 @@ WHERE n<=300001"
         ));
         $ddlPositions = [];
         $ownershipMutationPositions = [];
-        $schemaMutationPositions = [];
         foreach ($queries as $position => $sql) {
             if (in_array($sql, $ddl, true)) {
                 $ddlPositions[] = $position;
@@ -10162,9 +9929,6 @@ WHERE n<=300001"
             }
             if (str_contains($sql, $ownershipOption)) {
                 $ownershipMutationPositions[] = $position;
-            }
-            if (str_contains($sql, $schemaOption)) {
-                $schemaMutationPositions[] = $position;
             }
         }
 
@@ -10239,8 +10003,8 @@ WHERE n<=300001"
             'filtered' => wp_fts_wc_scope_index_columns($posts, WP_FTS_Storage_Mysql::FILTERED_SCOPE_INDEX_NAME),
         ];
         $indexBytesDelta = $afterBytes['index_bytes'] - $beforeBytes['index_bytes'];
-        $readinessAfter = wp_fts_wc_scope_upgrade_readiness_options();
-        $workAfter = wp_fts_wc_scope_upgrade_work_signature();
+        $readinessAfter = wp_fts_wc_scope_repair_readiness_options();
+        $workAfter = wp_fts_wc_scope_repair_work_signature();
         WP_FTS_Plugin::reset_request_caches();
         $takeoverAfter = wp_fts_wc_scope_takeover_signature(WP_FTS_Plugin::search_takeover_status(false));
         $afterSchema = (int) get_option($schemaOption, 0);
@@ -10262,9 +10026,6 @@ WHERE n<=300001"
         $ownershipBeforeDdl = count($ddlPositions) === 2
             && $ownershipMutationPositions !== []
             && min($ownershipMutationPositions) < min($ddlPositions);
-        $schemaPublishedLast = count($ddlPositions) === 2
-            && $schemaMutationPositions !== []
-            && max($schemaMutationPositions) > max($ddlPositions);
         $exactIndexes = ($afterIndexes['targeted']['columns'] ?? null) === ['term_taxonomy_id', 'object_id']
             && ($afterIndexes['targeted']['unique'] ?? null) === false
             && ($afterIndexes['filtered']['columns'] ?? null) === ['post_type', 'post_status', 'ID']
@@ -10273,36 +10034,35 @@ WHERE n<=300001"
             && count(array_filter($engineMap, static fn(string $engine): bool => $engine !== 'INNODB')) === 0;
 
         $gates = [
-            wp_fts_wc_gate('scope_index_upgrade_innodb_core_clones', ['InnoDB', 'InnoDB'], array_values($engineMap), $exactEngines),
-            wp_fts_wc_gate('scope_index_upgrade_v7_fixture_cardinality', ['posts' => 100001, 'relationships' => 300001], $cardinality, $cardinality === ['posts' => 100001, 'relationships' => 300001]),
-            wp_fts_wc_gate('scope_index_upgrade_v7_missing_indexes', ['schema' => 7, 'targeted' => [], 'filtered' => []], ['schema' => $stagedSchema, 'targeted' => $beforeIndexes['targeted']['columns'], 'filtered' => $beforeIndexes['filtered']['columns']], $stagedSchema === 7 && $beforeIndexes['targeted']['columns'] === [] && $beforeIndexes['filtered']['columns'] === []),
-            wp_fts_wc_gate('scope_index_upgrade_exact_ddl', $expectedDdl, $physicalStatements, $ddl === $expectedDdl && $physicalStatements === $expectedDdl),
-            wp_fts_wc_gate('scope_index_upgrade_ownership_before_ddl', 'nonautoloaded [filtered,targeted] mutation before first CREATE', ['staged_autoload' => $stagedOwnershipAutoload, 'positions' => $ownershipMutationPositions, 'ddl_positions' => $ddlPositions, 'after' => $afterOwnership], $stagedOwnershipRow !== null && !in_array($stagedOwnershipAutoload, $autoloadValues, true) && $ownershipBeforeDdl && $afterOwnership === ['filtered', 'targeted']),
-            wp_fts_wc_gate('scope_index_upgrade_schema_publication_last', 'v9 mutation after second CREATE', ['positions' => $schemaMutationPositions, 'ddl_positions' => $ddlPositions, 'schema' => $afterSchema], $schemaPublishedLast && $afterSchema === 9),
-            wp_fts_wc_gate('scope_index_upgrade_performance_schema_attribution', $queryHashes, $eventHashes, count($ddlEvents) === 2 && $eventHashes === $queryHashes),
-            wp_fts_wc_gate('scope_index_upgrade_wall_duration_ms', '<= 180000', $wallDuration, $wallDuration <= 180000.0),
-            wp_fts_wc_gate('scope_index_upgrade_server_duration_ms', ['max_ms' => '<= 120000', 'total_ms' => '<= 180000'], ['max_ms' => $maxServerDuration, 'total_ms' => $totalServerDuration], count($ddlEvents) === 2 && $maxServerDuration <= 120000.0 && $totalServerDuration <= 180000.0),
-            wp_fts_wc_gate('scope_index_upgrade_concurrent_writes', '4 exact successful canonical writes', $writerEvidence, $writerValid && count($writerClientDurations) === 4),
-            wp_fts_wc_gate('scope_index_upgrade_write_overlap', 'every INSERT/UPDATE server interval overlaps its CREATE INDEX', $writerEvidence, $writerValid && $writerOverlap),
-            wp_fts_wc_gate('scope_index_upgrade_write_duration_ms', ['client_max' => '<= 5000', 'server_max' => '<= 5000'], ['client_max' => $maxWriterClientDuration, 'server_max' => $maxWriterServerDuration, 'lock_max' => $maxWriterLockDuration], $writerValid && $maxWriterClientDuration <= 5000.0 && $maxWriterServerDuration <= 5000.0),
-            wp_fts_wc_gate('scope_index_upgrade_storage_delta', '0 < index byte delta <= 134217728', ['before' => $beforeBytes, 'after' => $afterBytes, 'index_bytes_delta' => $indexBytesDelta], $indexBytesDelta > 0 && $indexBytesDelta <= 134217728),
-            wp_fts_wc_gate('scope_index_upgrade_memory', ['php_peak_delta' => '<= 16777216', 'php_peak' => '0 < lifetime peak <= 134217728', 'rss_peak_delta' => '<= 16777216 using VmHWM-after minus VmRSS-before', 'rss_peak' => '0 < VmHWM <= 134217728'], ['php_peak_delta' => $phpPeakDelta, 'php_peak' => $phpPeakBytes, 'rss_peak_delta' => $rssPeakDelta, 'rss_peak' => $rssPeakAfter], $phpUsageBefore > 0 && $phpPeakDelta === max(0, $phpPhasePeakAfter - $phpUsageBefore) && $phpPeakDelta <= 16777216 && $phpPeakBytes === max($phpLifetimePeakBeforeReset, $phpPhasePeakAfter) && $phpPeakBytes > 0 && $phpPeakBytes <= 134217728 && $rssBefore > 0 && $rssPeakDelta === max(0, $rssPeakAfter - $rssBefore) && $rssPeakDelta <= 16777216 && $rssPeakAfter > 0 && $rssPeakAfter <= 134217728),
-            wp_fts_wc_gate('scope_index_upgrade_query_count', '<= 64 total; exactly 2 DDL', ['total' => count($queries), 'ddl' => count($ddl)], count($queries) <= 64 && count($ddl) === 2),
-            wp_fts_wc_gate('scope_index_upgrade_exact_definitions', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID']], $afterIndexes, $exactIndexes),
-            wp_fts_wc_gate('scope_index_upgrade_version_published', 9, $afterSchema, $afterSchema === 9),
-            wp_fts_wc_gate('scope_index_upgrade_readiness_preserved', ['options' => $readinessBefore, 'takeover' => $takeoverBefore], ['options' => $readinessAfter, 'takeover' => $takeoverAfter], $readinessAfter === $readinessBefore && $takeoverAfter === $takeoverBefore),
-            wp_fts_wc_gate('scope_index_upgrade_work_preserved', $workBefore, $workAfter, $workAfter === $workBefore),
-            wp_fts_wc_gate('scope_index_upgrade_ownership_nonautoloaded', 'nonautoloaded', $ownershipAutoload, $ownershipRow !== null && !in_array($ownershipAutoload, $autoloadValues, true)),
+            wp_fts_wc_gate('scope_index_repair_innodb_core_clones', ['InnoDB', 'InnoDB'], array_values($engineMap), $exactEngines),
+            wp_fts_wc_gate('scope_index_repair_fixture_cardinality', ['posts' => 100001, 'relationships' => 300001], $cardinality, $cardinality === ['posts' => 100001, 'relationships' => 300001]),
+            wp_fts_wc_gate('scope_index_repair_missing_indexes', ['schema' => WP_FTS_Plugin::SCHEMA_VERSION, 'targeted' => [], 'filtered' => []], ['schema' => $stagedSchema, 'targeted' => $beforeIndexes['targeted']['columns'], 'filtered' => $beforeIndexes['filtered']['columns']], $stagedSchema === WP_FTS_Plugin::SCHEMA_VERSION && $beforeIndexes['targeted']['columns'] === [] && $beforeIndexes['filtered']['columns'] === []),
+            wp_fts_wc_gate('scope_index_repair_exact_ddl', $expectedDdl, $physicalStatements, $ddl === $expectedDdl && $physicalStatements === $expectedDdl),
+            wp_fts_wc_gate('scope_index_repair_ownership_before_ddl', 'nonautoloaded [filtered,targeted] mutation before first CREATE', ['staged_autoload' => $stagedOwnershipAutoload, 'positions' => $ownershipMutationPositions, 'ddl_positions' => $ddlPositions, 'after' => $afterOwnership], $stagedOwnershipRow !== null && !in_array($stagedOwnershipAutoload, $autoloadValues, true) && $ownershipBeforeDdl && $afterOwnership === ['filtered', 'targeted']),
+            wp_fts_wc_gate('scope_index_repair_schema_version_stable', WP_FTS_Plugin::SCHEMA_VERSION, $afterSchema, $afterSchema === WP_FTS_Plugin::SCHEMA_VERSION),
+            wp_fts_wc_gate('scope_index_repair_performance_schema_attribution', $queryHashes, $eventHashes, count($ddlEvents) === 2 && $eventHashes === $queryHashes),
+            wp_fts_wc_gate('scope_index_repair_wall_duration_ms', '<= 180000', $wallDuration, $wallDuration <= 180000.0),
+            wp_fts_wc_gate('scope_index_repair_server_duration_ms', ['max_ms' => '<= 120000', 'total_ms' => '<= 180000'], ['max_ms' => $maxServerDuration, 'total_ms' => $totalServerDuration], count($ddlEvents) === 2 && $maxServerDuration <= 120000.0 && $totalServerDuration <= 180000.0),
+            wp_fts_wc_gate('scope_index_repair_concurrent_writes', '4 exact successful canonical writes', $writerEvidence, $writerValid && count($writerClientDurations) === 4),
+            wp_fts_wc_gate('scope_index_repair_write_overlap', 'every INSERT/UPDATE server interval overlaps its CREATE INDEX', $writerEvidence, $writerValid && $writerOverlap),
+            wp_fts_wc_gate('scope_index_repair_write_duration_ms', ['client_max' => '<= 5000', 'server_max' => '<= 5000'], ['client_max' => $maxWriterClientDuration, 'server_max' => $maxWriterServerDuration, 'lock_max' => $maxWriterLockDuration], $writerValid && $maxWriterClientDuration <= 5000.0 && $maxWriterServerDuration <= 5000.0),
+            wp_fts_wc_gate('scope_index_repair_storage_delta', '0 < index byte delta <= 134217728', ['before' => $beforeBytes, 'after' => $afterBytes, 'index_bytes_delta' => $indexBytesDelta], $indexBytesDelta > 0 && $indexBytesDelta <= 134217728),
+            wp_fts_wc_gate('scope_index_repair_memory', ['php_peak_delta' => '<= 16777216', 'php_peak' => '0 < lifetime peak <= 134217728', 'rss_peak_delta' => '<= 16777216 using VmHWM-after minus VmRSS-before', 'rss_peak' => '0 < VmHWM <= 134217728'], ['php_peak_delta' => $phpPeakDelta, 'php_peak' => $phpPeakBytes, 'rss_peak_delta' => $rssPeakDelta, 'rss_peak' => $rssPeakAfter], $phpUsageBefore > 0 && $phpPeakDelta === max(0, $phpPhasePeakAfter - $phpUsageBefore) && $phpPeakDelta <= 16777216 && $phpPeakBytes === max($phpLifetimePeakBeforeReset, $phpPhasePeakAfter) && $phpPeakBytes > 0 && $phpPeakBytes <= 134217728 && $rssBefore > 0 && $rssPeakDelta === max(0, $rssPeakAfter - $rssBefore) && $rssPeakDelta <= 16777216 && $rssPeakAfter > 0 && $rssPeakAfter <= 134217728),
+            wp_fts_wc_gate('scope_index_repair_query_count', '<= 64 total; exactly 2 DDL', ['total' => count($queries), 'ddl' => count($ddl)], count($queries) <= 64 && count($ddl) === 2),
+            wp_fts_wc_gate('scope_index_repair_exact_definitions', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID']], $afterIndexes, $exactIndexes),
+            wp_fts_wc_gate('scope_index_repair_readiness_preserved', ['options' => $readinessBefore, 'takeover' => $takeoverBefore], ['options' => $readinessAfter, 'takeover' => $takeoverAfter], $readinessAfter === $readinessBefore && $takeoverAfter === $takeoverBefore),
+            wp_fts_wc_gate('scope_index_repair_work_preserved', $workBefore, $workAfter, $workAfter === $workBefore),
+            wp_fts_wc_gate('scope_index_repair_ownership_nonautoloaded', 'nonautoloaded', $ownershipAutoload, $ownershipRow !== null && !in_array($ownershipAutoload, $autoloadValues, true)),
         ];
         $result = [
             'evidence' => [
-                'schema' => 'relational-fts-populated-scope-index-upgrade-v2',
+                'schema' => 'relational-fts-populated-scope-index-repair-v1',
                 'engines' => $engineMap,
                 'cardinality' => $cardinality,
                 'sequence_rows' => $sequenceRows,
                 'sequence_seed_statements' => $sequenceStatements,
-                'logical_schema_before' => $stagedSchema,
-                'logical_schema_after' => $afterSchema,
+                'schema_version_before' => $stagedSchema,
+                'schema_version_after' => $afterSchema,
                 'wall_duration_ms' => $wallDuration,
                 'server_duration_ms' => ['per_ddl' => $serverDurations, 'max' => $maxServerDuration, 'total' => $totalServerDuration],
                 'concurrent_writes' => $writerEvidence,
@@ -10315,8 +10075,7 @@ WHERE n<=300001"
                 'performance_schema_events' => $ddlEvents,
                 'ownership_mutation_positions' => $ownershipMutationPositions,
                 'ddl_positions' => $ddlPositions,
-                'schema_mutation_positions' => $schemaMutationPositions,
-                'scope_index_ownership' => ['keys' => $afterOwnership, 'autoload' => $ownershipAutoload],
+                                'scope_index_ownership' => ['keys' => $afterOwnership, 'autoload' => $ownershipAutoload],
                 'indexes_before' => $beforeIndexes,
                 'indexes_after' => $afterIndexes,
                 'storage_before' => $beforeBytes,
@@ -10343,9 +10102,6 @@ WHERE n<=300001"
     } finally {
         $wpdb->posts = $originalPosts;
         $wpdb->term_relationships = $originalRelationships;
-        if ((int) get_option($schemaOption, 0) !== (int) $originalSchema) {
-            update_option($schemaOption, $originalSchema);
-        }
         if (get_option($ownershipOption, []) !== $originalOwnership) {
             update_option($ownershipOption, $originalOwnership, false);
         }
@@ -10353,10 +10109,10 @@ WHERE n<=300001"
         $dropFixture();
     }
 
-    wp_fts_wc_assert(is_array($result), 'The populated v7-to-v9 scope-index upgrade did not produce evidence.');
+    wp_fts_wc_assert(is_array($result), 'The populated current-schema scope-index repair did not produce a result.');
     if (!wp_fts_wc_gates_pass($result['gates'])) {
         throw new RuntimeException(
-            'Populated v7-to-v9 scope-index upgrade failed: '
+            'Populated current-schema scope-index repair failed: '
             . implode(', ', wp_fts_wc_gate_failures($result['gates']))
         );
     }
@@ -10366,7 +10122,7 @@ WHERE n<=300001"
 
 /**
  * Issue one canonical core-table write on a separate connection while a
- * populated v8 CREATE INDEX is active. Four runner processes cover INSERT and
+ * populated current-schema CREATE INDEX is active. Four runner processes cover INSERT and
  * UPDATE for both indexes; Performance Schema timer intervals prove overlap.
  *
  * @return array<string,mixed>
@@ -10381,8 +10137,8 @@ function wp_fts_wc_scope_ddl_writer(): array
     $operation = strtolower(wp_fts_wc_required_env('WP_FTS_WC_DDL_OPERATION'));
     wp_fts_wc_assert(in_array($ordinal, [1, 2], true), 'Scope DDL writer ordinal must be 1 or 2.');
     wp_fts_wc_assert(in_array($operation, ['insert', 'update'], true), 'Scope DDL writer operation must be INSERT or UPDATE.');
-    $posts = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_upgrade_posts');
-    $relationships = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_upgrade_relationships');
+    $posts = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_repair_posts');
+    $relationships = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_repair_relationships');
     $directory = wp_fts_wc_evidence_dir();
     $start = wp_fts_wc_wait_for_json_file(
         $directory . "/scope-ddl-start-{$ordinal}.json",
@@ -10411,7 +10167,7 @@ function wp_fts_wc_scope_ddl_writer(): array
             && ($release['ordinal'] ?? null) === $ordinal,
         'Scope DDL writer received a malformed release capability.'
     );
-    // Let the upgrader leave its query filter and enter mysqli_query() first.
+    // Let the repair worker leave its query filter and enter mysqli_query() first.
     // Both writes still start while a 100k/300k InnoDB index build is active;
     // the server timer intervals below prove that rather than assuming it.
     usleep(2000);
@@ -10493,7 +10249,7 @@ function wp_fts_wc_scope_ddl_writer_statement(
     $columns = 'ID,post_author,post_date,post_date_gmt,post_content,post_title,post_excerpt,post_status,comment_status,ping_status,post_password,post_name,to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,guid,menu_order,post_type,post_mime_type,comment_count';
 
     return "INSERT INTO `{$posts}` ({$columns})
-SELECT 4000000002,post_author,post_date,post_date_gmt,post_content,'Concurrent scope upgrade insert',post_excerpt,post_status,comment_status,ping_status,post_password,'concurrent-scope-upgrade-insert',to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,'https://example.invalid/?p=4000000002',menu_order,post_type,post_mime_type,comment_count
+SELECT 4000000002,post_author,post_date,post_date_gmt,post_content,'Concurrent scope repair insert',post_excerpt,post_status,comment_status,ping_status,post_password,'concurrent-scope-repair-insert',to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,'https://example.invalid/?p=4000000002',menu_order,post_type,post_mime_type,comment_count
 FROM `{$posts}` WHERE ID=1";
 }
 
@@ -10532,7 +10288,7 @@ function wp_fts_wc_scope_takeover_signature(array $status): array
 }
 
 /** @return array<string,mixed> */
-function wp_fts_wc_scope_upgrade_readiness_options(): array
+function wp_fts_wc_scope_repair_readiness_options(): array
 {
     return [
         'health' => get_option(WP_FTS_Plugin::INDEX_HEALTH_OPTION, null),
@@ -10542,7 +10298,7 @@ function wp_fts_wc_scope_upgrade_readiness_options(): array
 }
 
 /** @return array{total:int,groups:array<int,array{kind:string,state:string,rows:int}>} */
-function wp_fts_wc_scope_upgrade_work_signature(): array
+function wp_fts_wc_scope_repair_work_signature(): array
 {
     global $wpdb;
 
@@ -10551,7 +10307,7 @@ function wp_fts_wc_scope_upgrade_work_signature(): array
         "SELECT kind,state,COUNT(*) AS rows FROM `{$work}` GROUP BY kind,state ORDER BY kind,state",
         ARRAY_A
     );
-    wp_fts_wc_assert(is_array($rows), 'Could not inspect durable work during the populated scope-index upgrade.');
+    wp_fts_wc_assert(is_array($rows), 'Could not inspect durable work during the populated scope-index repair.');
     $groups = array_map(
         static fn(array $row): array => [
             'kind' => (string) ($row['kind'] ?? ''),
@@ -11122,2532 +10878,6 @@ function wp_fts_wc_transaction_crash_receipt_is_exact(array $ready, array $recei
         && ($receipt['signal'] ?? null) === 9;
 }
 
-/** Seed and index deterministic legacy sentinels under every real site prefix. */
-function wp_fts_wc_multisite_baseline_setup(): array
-{
-    wp_fts_wc_assert_disposable_guard();
-    wp_fts_wc_require_plugin();
-    if (!is_multisite() || !function_exists('get_sites')) {
-        throw new RuntimeException('The migration proof requires a real three-site WordPress network.');
-    }
-    $siteIds = array_map('intval', get_sites(['fields' => 'ids', 'number' => 10]));
-    sort($siteIds, SORT_NUMERIC);
-    wp_fts_wc_assert(count($siteIds) === 3, 'The migration proof requires exactly three WordPress sites.');
-    $prefixes = [];
-    $sites = [];
-    $sharedToken = 'qzxmultisharedtoken';
-    $uniqueTokens = [];
-    foreach ($siteIds as $ordinal => $siteId) {
-        $uniqueTokens[$siteId] = 'qzxmulti' . wp_fts_wc_alpha_id($ordinal + 1) . 'token';
-    }
-    foreach ($siteIds as $ordinal => $siteId) {
-        if (!switch_to_blog($siteId)) {
-            throw new RuntimeException("Could not switch to baseline migration site {$siteId}.");
-        }
-        try {
-            WP_FTS_Plugin::reset_request_caches();
-            WP_FTS_Plugin::upgrade_schema();
-            wp_fts_wc_enable_search_settings();
-            WP_FTS_Plugin::reset_request_caches();
-            global $wpdb;
-            $prefixes[$siteId] = (string) $wpdb->prefix;
-            $sentinelCount = $ordinal + 1;
-            $existing = (int) $wpdb->get_var($wpdb->prepare(
-                "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_title LIKE %s",
-                WP_FTS_WC_MULTISITE_POST_TITLE_PREFIX . $wpdb->esc_like((string) $siteId) . ' %'
-            ));
-            wp_fts_wc_assert($existing === 0, "Multisite migration sentinels already exist on site {$siteId}.");
-            $postIds = [];
-            for ($document = 1; $document <= $sentinelCount; $document++) {
-                $postId = wp_insert_post([
-                    'post_type' => 'post',
-                    'post_status' => 'publish',
-                    'post_title' => WP_FTS_WC_MULTISITE_POST_TITLE_PREFIX . $siteId . ' ' . $document,
-                    'post_name' => 'wp-fts-multisite-sentinel-' . $siteId . '-' . $document,
-                    'post_content' => 'This deterministic English migration document contains ' . $sharedToken . ' ' . $uniqueTokens[$siteId] . '.',
-                    'post_excerpt' => '',
-                    'post_date' => sprintf('2020-01-%02d 12:%02d:00', $ordinal + 1, $document),
-                ], true);
-                if (is_wp_error($postId)) {
-                    throw new RuntimeException("Could not create multisite sentinel on site {$siteId}: " . $postId->get_error_message());
-                }
-                update_post_meta((int) $postId, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
-                $postIds[] = (int) $postId;
-            }
-            wp_fts_wc_drain_legacy_site_queue($siteId);
-            $legacyTables = wp_fts_wc_checked_fts_table_names('multisite legacy baseline tables');
-            $definition = [
-                'site_id' => $siteId,
-                'prefix' => (string) $wpdb->prefix,
-                'legacy_tables' => $legacyTables,
-                'legacy_table_fingerprint' => wp_fts_wc_canonical_hash($legacyTables),
-                'sentinel_count' => $sentinelCount,
-                'post_ids' => $postIds,
-                'shared_token' => $sharedToken,
-                'unique_token' => $uniqueTokens[$siteId],
-                'foreign_term_keys' => array_values(array_map(
-                    'wp_fts_wc_multisite_primary_term_key',
-                    array_values(array_diff(array_values($uniqueTokens), [$uniqueTokens[$siteId]]))
-                )),
-                'queries' => [
-                    'shared' => ['query' => $sharedToken, 'options' => wp_fts_wc_multisite_search_options()],
-                    'unique' => ['query' => $uniqueTokens[$siteId], 'options' => wp_fts_wc_multisite_search_options()],
-                ],
-            ];
-            $state = wp_fts_wc_multisite_sentinel_state($definition);
-            $definition['term_keys'] = $state['term_keys'];
-            $physicalSentinel = wp_fts_wc_multisite_legacy_physical_sentinel_snapshot($definition);
-            wp_fts_wc_assert((int) $physicalSentinel['queue_rows'] === 0, "Baseline multisite queue is not empty on site {$siteId}.");
-            $definition['legacy_physical_sentinel'] = $physicalSentinel;
-            $definition['legacy_physical_sentinel_hash'] = wp_fts_wc_canonical_hash($physicalSentinel);
-            $definition['v4_oracle'] = wp_fts_wc_multisite_v4_oracle($definition);
-            foreach (['shared', 'unique'] as $queryKind) {
-                $resultIds = array_map('intval', array_column($state['search'][$queryKind]['results'], 'doc_id'));
-                $expectedIds = $postIds;
-                sort($resultIds, SORT_NUMERIC);
-                sort($expectedIds, SORT_NUMERIC);
-                wp_fts_wc_assert($resultIds === $expectedIds, "Baseline multisite {$queryKind} search membership is wrong on site {$siteId}.");
-                wp_fts_wc_assert((int) $state['doc_freq'][$queryKind] === $sentinelCount, "Baseline multisite {$queryKind} DF is wrong on site {$siteId}.");
-                $oracleIds = array_map('intval', array_column($definition['v4_oracle'][$queryKind] ?? [], 'doc_id'));
-                $expectedOracleIds = $postIds;
-                rsort($expectedOracleIds, SORT_NUMERIC);
-                wp_fts_wc_assert(
-                    count($oracleIds) === $sentinelCount && $oracleIds === $expectedOracleIds,
-                    "Baseline multisite {$queryKind} v4 oracle cardinality or membership is wrong on site {$siteId}."
-                );
-            }
-            wp_fts_wc_assert((int) $state['document_count'] === $sentinelCount, "Baseline multisite sentinel documents are incomplete on site {$siteId}.");
-            $definition['baseline'] = $state;
-            $sites[$siteId] = $definition;
-        } finally {
-            restore_current_blog();
-        }
-    }
-    $evidence = [
-        'schema' => 'relational-fts-multisite-baseline-v2',
-        'status' => 'PASS',
-        'site_ids' => $siteIds,
-        'prefixes' => $prefixes,
-        'sites' => $sites,
-    ];
-    wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/migration-multisite-baseline.json', $evidence);
-    return ['status' => 'PASS', 'phase' => 'multisite-baseline-setup', 'site_ids' => $siteIds, 'sentinel_documents' => array_sum(array_column($sites, 'sentinel_count'))];
-}
-
-/** Capture one exact legacy execution in its own 128 MiB PHP process. */
-function wp_fts_wc_migration_snapshot_case(): array
-{
-    wp_fts_wc_assert_disposable_guard();
-    wp_fts_wc_require_plugin();
-    $caseId = wp_fts_wc_required_env('WP_FTS_WC_CASE');
-    $manifest = wp_fts_wc_manifest();
-    wp_fts_wc_assert(in_array($caseId, wp_fts_wc_migration_case_ids(), true), "Unknown migration snapshot case: {$caseId}.");
-    $definition = wp_fts_wc_case_definitions($manifest)[$caseId] ?? null;
-    wp_fts_wc_assert(is_array($definition), "The migration case definition is missing: {$caseId}.");
-    $options = is_array($definition['options'] ?? null) ? $definition['options'] : [];
-    unset($options['explain']);
-    $options['include_snippets'] = false;
-    $query = (string) ($definition['query'] ?? '');
-    $memoryLimitBytes = function_exists('wp_convert_hr_to_bytes')
-        ? wp_convert_hr_to_bytes((string) ini_get('memory_limit'))
-        : 0;
-    wp_fts_wc_assert($memoryLimitBytes === 134217728, 'Migration snapshot cases require exactly 128 MiB of PHP memory.');
-
-    $phpLifetimePeakBeforeReset = memory_get_peak_usage(true);
-    wp_fts_wc_reset_php_peak_usage();
-    $memoryBefore = memory_get_usage(true);
-    $rssBefore = wp_fts_wc_rss_bytes('VmRSS');
-    $started = hrtime(true);
-    $recorded = wp_fts_wc_record_queries(static fn(): array => wp_fts_wc_legacy_execution($query, $options));
-    $execution = is_array($recorded['result'] ?? null) ? $recorded['result'] : [];
-    wp_fts_wc_assert(wp_fts_wc_legacy_execution_is_valid($execution), "The populated legacy index returned an invalid execution for migration case {$caseId}.");
-    $queries = array_values(array_map('strval', $recorded['queries']));
-    $phpPhasePeak = memory_get_peak_usage(true);
-    $artifact = [
-        'schema' => 'relational-fts-migration-snapshot-case-v1',
-        'status' => 'PASS',
-        'phase' => 'migration-snapshot-case',
-        'case' => $caseId,
-        'source_sha' => wp_fts_wc_required_env('WP_FTS_SOURCE_SHA'),
-        'zip_sha256' => wp_fts_wc_required_env('WP_FTS_ZIP_SHA256'),
-        'manifest_sha256' => $manifest['sha256'],
-        'profile' => $manifest['profile']['name'] ?? null,
-        'process_timeout_seconds' => 120,
-        'memory_limit_bytes' => $memoryLimitBytes,
-        'process_identity' => wp_fts_wc_process_identity(),
-        'duration_ms' => wp_fts_wc_elapsed_ms($started),
-        'query_count' => count($queries),
-        'max_sql_bytes' => max(array_map('strlen', $queries) ?: [0]),
-        'php_memory_delta_bytes' => max(0, memory_get_usage(true) - $memoryBefore),
-        'rss_delta_bytes' => max(0, wp_fts_wc_rss_bytes('VmRSS') - $rssBefore),
-        'php_lifetime_peak_before_reset_bytes' => $phpLifetimePeakBeforeReset,
-        'php_phase_peak_bytes' => $phpPhasePeak,
-        'php_peak_bytes' => max($phpLifetimePeakBeforeReset, $phpPhasePeak),
-        'rss_peak_bytes' => wp_fts_wc_rss_bytes('VmHWM'),
-        'query' => $query,
-        'options' => $options,
-        'legacy_execution' => $execution,
-        'error' => null,
-        'discarded_pre_failure_artifact' => null,
-    ];
-    wp_fts_wc_assert(
-        wp_fts_wc_migration_snapshot_case_is_valid($artifact, $manifest, $caseId),
-        "Migration snapshot case did not satisfy its exact process-bound contract: {$caseId}."
-    );
-    wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . "/migration-snapshot-case-{$caseId}.json", $artifact);
-
-    return ['status' => 'PASS', 'phase' => 'migration-snapshot-case', 'case' => $caseId, 'duration_ms' => $artifact['duration_ms']];
-}
-
-/** Aggregate six independently bounded legacy executions without rerunning them. */
-function wp_fts_wc_migration_snapshot_finalize(): array
-{
-    wp_fts_wc_assert_disposable_guard();
-    wp_fts_wc_require_plugin();
-    $manifest = wp_fts_wc_manifest();
-    $snapshotCases = [];
-    $processIdentities = [];
-    $memoryLimitFailures = [];
-    $expectedFiles = array_map(
-        static fn(string $caseId): string => "migration-snapshot-case-{$caseId}.json",
-        wp_fts_wc_migration_case_ids()
-    );
-    $actualFiles = array_values(array_map('basename', glob(wp_fts_wc_evidence_dir() . '/migration-snapshot-case-*.json') ?: []));
-    sort($expectedFiles, SORT_STRING);
-    sort($actualFiles, SORT_STRING);
-    wp_fts_wc_assert($actualFiles === $expectedFiles, 'Migration snapshot artifact inventory contains missing, extra, or stale case files.');
-    foreach (wp_fts_wc_migration_case_ids() as $caseId) {
-        $path = wp_fts_wc_evidence_dir() . "/migration-snapshot-case-{$caseId}.json";
-        $artifact = wp_fts_wc_read_json($path);
-        wp_fts_wc_assert(
-            wp_fts_wc_migration_snapshot_case_is_valid($artifact, $manifest, $caseId),
-            "Migration snapshot case evidence is missing, failed, malformed, or stale: {$caseId}."
-        );
-        $artifactHash = hash_file('sha256', $path);
-        wp_fts_wc_assert(wp_fts_wc_is_lowercase_sha256($artifactHash), "Migration snapshot case artifact hash is invalid: {$caseId}.");
-        $snapshotCases[$caseId] = [
-            'artifact_sha256' => $artifactHash,
-            'evidence' => $artifact,
-        ];
-        if (($artifact['status'] ?? null) === 'PASS') {
-            $processIdentities[] = (string) $artifact['process_identity']['sha256'];
-        } else {
-            $memoryLimitFailures[] = $caseId;
-        }
-    }
-    wp_fts_wc_assert(count(array_unique($processIdentities)) === count($processIdentities), 'Successful migration snapshot cases did not run in distinct PHP processes.');
-    wp_fts_wc_assert($memoryLimitFailures === [] || $memoryLimitFailures === ['rare_anchor_and'], 'Migration snapshot contains an unsupported failed case.');
-    wp_fts_wc_assert(count($processIdentities) + count($memoryLimitFailures) === 6, 'Migration snapshot does not contain six exact case outcomes.');
-    $snapshot = [
-        'schema' => 'relational-fts-migration-baseline-v5',
-        'source_sha' => wp_fts_wc_required_env('WP_FTS_SOURCE_SHA'),
-        'zip_sha256' => wp_fts_wc_required_env('WP_FTS_ZIP_SHA256'),
-        'manifest_sha256' => $manifest['sha256'],
-        'indexer_signatures' => wp_fts_wc_indexer_signature_evidence(),
-        'snapshot_cases' => $snapshotCases,
-        'tables' => wp_fts_wc_all_fts_table_bytes(),
-    ];
-    wp_fts_wc_assert(wp_fts_wc_migration_baseline_is_valid($snapshot, $manifest), 'Migration snapshot did not satisfy the exact six-process baseline contract.');
-    wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/migration-baseline.json', $snapshot);
-
-    return ['status' => 'PASS', 'phase' => 'migration-snapshot-finalize', 'cases' => count($snapshotCases), 'distinct_processes' => count(array_unique($processIdentities)), 'memory_limit_failures' => $memoryLimitFailures];
-}
-
-/**
- * Compute the target v4 order and scores directly from the still-unmodified v3
- * term/posting relation. This intentionally does not call the v4 storage search:
- * the independent SQL oracle quantizes legacy logical TFs to v4 impacts, applies
- * v4 rarity from the globally indexable target corpus, and filters/orders
- * against canonical wp_posts.
- */
-function wp_fts_wc_migration_oracle(): array
-{
-    global $wpdb;
-
-    wp_fts_wc_assert_disposable_guard();
-    wp_fts_wc_require_plugin();
-    $manifest = wp_fts_wc_unbound_manifest();
-    $baseline = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration-baseline.json');
-    wp_fts_wc_assert(wp_fts_wc_migration_baseline_is_valid($baseline, $manifest), 'Migration oracle requires the exact six-process v4 legacy execution baseline.');
-    $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
-    $columns = array_map('strval', $wpdb->get_col("SHOW COLUMNS FROM `{$terms}`") ?: []);
-    wp_fts_wc_assert(in_array('term', $columns, true) && !in_array('term_id', $columns, true), 'Migration oracle must run against the untouched v3 logical term table.');
-    $legacyQueue = wp_fts_wc_identifier($wpdb->prefix . 'fts_queue');
-    $legacyQueueRows = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$legacyQueue}`", 'migration oracle legacy queue');
-    wp_fts_wc_assert($legacyQueueRows === 0, 'Migration oracle requires a fully drained v3 queue.');
-    $plannedCases = [];
-    foreach (['common_or', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and'] as $caseId) {
-        $case = $baseline['snapshot_cases'][$caseId]['evidence'] ?? null;
-        wp_fts_wc_assert(is_array($case), "Migration baseline is missing oracle case {$caseId}.");
-        $definition = wp_fts_wc_case_definitions($manifest)[$caseId] ?? null;
-        wp_fts_wc_assert(is_array($definition), "Migration case definition is missing: {$caseId}.");
-        $query = (string) ($definition['query'] ?? '');
-        $options = is_array($definition['options'] ?? null) ? $definition['options'] : [];
-        unset($options['explain']);
-        $options['include_snippets'] = false;
-        $plan = wp_fts_wc_v4_oracle_query_plan($query, $options);
-        $plannedCases[$caseId] = ['case' => $case, 'query' => $query, 'options' => $options, 'plan' => $plan];
-    }
-    $docFreqMismatches = wp_fts_wc_v4_oracle_relevant_df_mismatches(array_column($plannedCases, 'plan'));
-    wp_fts_wc_assert($docFreqMismatches === 0, 'The v3 logical rows used by the oracle have inconsistent active-document frequencies.');
-    $targetDocFreqBasis = [
-        'legacy_docs' => 'is_deleted=0',
-        'post_password' => '',
-        'post_types' => WP_FTS_WC_INDEX_POST_TYPES,
-        'post_statuses' => WP_FTS_WC_INDEX_POST_STATUSES,
-        'per_query_filters' => false,
-    ];
-
-    $cases = [];
-    foreach ($plannedCases as $caseId => $planned) {
-        $case = $planned['case'];
-        $query = $planned['query'];
-        $options = $planned['options'];
-        $plan = $planned['plan'];
-        $results = wp_fts_wc_v4_oracle_from_legacy($plan, $options, $targetDocFreqBasis);
-        wp_fts_wc_assert($results !== [], "The independent v4 migration oracle returned no rows for {$caseId}.");
-        $cases[$caseId] = [
-            'query' => $query,
-            'options' => $options,
-            'logical_groups' => $plan['groups'],
-            'prefix' => $plan['prefix'],
-            'results' => $results,
-            'result_hash' => wp_fts_wc_canonical_hash($results),
-            'legacy_execution' => $case['legacy_execution'] ?? null,
-        ];
-    }
-    wp_fts_wc_assert(count($cases) === 5, 'Migration oracle did not compute every required OR, AND, prefix, and ambiguous case.');
-    $result = [
-        'schema' => 'relational-fts-v4-migration-oracle-v5',
-        'baseline_schema' => $baseline['schema'] ?? null,
-        'baseline_sha256' => wp_fts_wc_canonical_hash($baseline),
-        'source' => 'v3 logical terms/postings plus canonical wp_posts',
-        'scoring_cutover' => [
-            'from' => 'legacy_bm25_float',
-            'to' => 'v4_quantized_impact_times_integer_rarity',
-            'legacy_numeric_score_parity_expected' => false,
-        ],
-        'target_doc_freq_basis' => $targetDocFreqBasis,
-        'v3_doc_freq_mismatches' => $docFreqMismatches,
-        'v3_queue_rows' => $legacyQueueRows,
-        'cases' => $cases,
-    ];
-    wp_fts_wc_assert(wp_fts_wc_migration_oracle_is_valid($result, $baseline), 'Independent v4 migration oracle did not satisfy its exact five-case contract.');
-    wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/migration-oracle.json', $result);
-    return ['status' => 'PASS', 'phase' => 'migration-oracle', 'cases' => count($cases)];
-}
-
-/** @return string[] */
-function wp_fts_wc_migration_case_ids(): array
-{
-    return ['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and'];
-}
-
-/**
- * @param array<string,mixed> $artifact
- * @param array<string,mixed> $manifest
- */
-function wp_fts_wc_migration_snapshot_case_is_valid(array $artifact, array $manifest, string $caseId): bool
-{
-    if (array_keys($artifact) !== [
-        'schema',
-        'status',
-        'phase',
-        'case',
-        'source_sha',
-        'zip_sha256',
-        'manifest_sha256',
-        'profile',
-        'process_timeout_seconds',
-        'memory_limit_bytes',
-        'process_identity',
-        'duration_ms',
-        'query_count',
-        'max_sql_bytes',
-        'php_memory_delta_bytes',
-        'rss_delta_bytes',
-        'php_lifetime_peak_before_reset_bytes',
-        'php_phase_peak_bytes',
-        'php_peak_bytes',
-        'rss_peak_bytes',
-        'query',
-        'options',
-        'legacy_execution',
-        'error',
-        'discarded_pre_failure_artifact',
-    ]
-        || ($artifact['schema'] ?? null) !== 'relational-fts-migration-snapshot-case-v1'
-        || ($artifact['phase'] ?? null) !== 'migration-snapshot-case'
-        || ($artifact['case'] ?? null) !== $caseId
-        || ($artifact['source_sha'] ?? null) !== WP_FTS_WC_IMMUTABLE_BASELINE_SHA
-        || ($artifact['source_sha'] ?? null) !== ($manifest['source_sha'] ?? null)
-        || ($artifact['zip_sha256'] ?? null) !== ($manifest['zip_sha256'] ?? null)
-        || ($artifact['profile'] ?? null) !== ($manifest['profile']['name'] ?? null)
-        || ($artifact['process_timeout_seconds'] ?? null) !== 120
-        || ($artifact['memory_limit_bytes'] ?? null) !== 134217728
-        || !is_numeric($artifact['duration_ms'] ?? null)
-        || (float) $artifact['duration_ms'] < 0.0
-    ) {
-        return false;
-    }
-
-    if (($artifact['status'] ?? null) === 'FAIL') {
-        $error = is_array($artifact['error'] ?? null) ? $artifact['error'] : [];
-        $logHash = $error['log_sha256'] ?? null;
-        return $caseId === 'rare_anchor_and'
-            && (float) $artifact['duration_ms'] < 119000.0
-            && ($artifact['manifest_sha256'] ?? null) === null
-            && ($artifact['process_identity'] ?? null) === null
-            && ($artifact['query_count'] ?? null) === null
-            && ($artifact['max_sql_bytes'] ?? null) === null
-            && ($artifact['php_memory_delta_bytes'] ?? null) === null
-            && ($artifact['rss_delta_bytes'] ?? null) === null
-            && ($artifact['php_lifetime_peak_before_reset_bytes'] ?? null) === null
-            && ($artifact['php_phase_peak_bytes'] ?? null) === null
-            && ($artifact['php_peak_bytes'] ?? null) === null
-            && ($artifact['rss_peak_bytes'] ?? null) === null
-            && ($artifact['query'] ?? null) === null
-            && ($artifact['options'] ?? null) === null
-            && ($artifact['legacy_execution'] ?? null) === null
-            && array_keys($error) === ['class', 'message', 'exit', 'log_sha256']
-            && ($error['class'] ?? null) === 'MemoryLimitFatal'
-            && ($error['message'] ?? null) === 'Legacy snapshot case exhausted its 128 MiB PHP memory limit'
-            && ($error['exit'] ?? null) === 255
-            && wp_fts_wc_is_lowercase_sha256($logHash)
-            && ($artifact['discarded_pre_failure_artifact'] ?? null) === null;
-    }
-
-    if (($artifact['status'] ?? null) !== 'PASS'
-        || ($artifact['manifest_sha256'] ?? null) !== ($manifest['sha256'] ?? null)
-        || !is_array($artifact['process_identity'] ?? null)
-        || !wp_fts_wc_process_identity_valid($artifact['process_identity'])
-        || (float) $artifact['duration_ms'] >= 120000.0
-        || !is_int($artifact['query_count'] ?? null)
-        || (int) $artifact['query_count'] <= 0
-        || !is_int($artifact['max_sql_bytes'] ?? null)
-        || (int) $artifact['max_sql_bytes'] <= 0
-        || !is_int($artifact['php_memory_delta_bytes'] ?? null)
-        || (int) $artifact['php_memory_delta_bytes'] < 0
-        || (int) $artifact['php_memory_delta_bytes'] > 134217728
-        || !is_int($artifact['rss_delta_bytes'] ?? null)
-        || (int) $artifact['rss_delta_bytes'] < 0
-        || !is_int($artifact['php_lifetime_peak_before_reset_bytes'] ?? null)
-        || (int) $artifact['php_lifetime_peak_before_reset_bytes'] <= 0
-        || (int) $artifact['php_lifetime_peak_before_reset_bytes'] > 134217728
-        || !is_int($artifact['php_phase_peak_bytes'] ?? null)
-        || (int) $artifact['php_phase_peak_bytes'] <= 0
-        || (int) $artifact['php_phase_peak_bytes'] > 134217728
-        || !is_int($artifact['php_peak_bytes'] ?? null)
-        || (int) $artifact['php_peak_bytes'] <= 0
-        || (int) $artifact['php_peak_bytes'] > 134217728
-        || ($artifact['php_peak_bytes'] ?? null) !== max($artifact['php_lifetime_peak_before_reset_bytes'], $artifact['php_phase_peak_bytes'])
-        || !is_int($artifact['rss_peak_bytes'] ?? null)
-        || (int) $artifact['rss_peak_bytes'] <= 0
-        || (int) $artifact['php_memory_delta_bytes'] > (int) $artifact['php_peak_bytes']
-        || (int) $artifact['rss_delta_bytes'] > (int) $artifact['rss_peak_bytes']
-        || ($artifact['error'] ?? null) !== null
-        || ($artifact['discarded_pre_failure_artifact'] ?? null) !== null
-    ) {
-        return false;
-    }
-
-    $definition = wp_fts_wc_case_definitions($manifest)[$caseId] ?? null;
-    if (!is_array($definition)) {
-        return false;
-    }
-    $expectedOptions = is_array($definition['options'] ?? null) ? $definition['options'] : [];
-    unset($expectedOptions['explain']);
-    $expectedOptions['include_snippets'] = false;
-
-    return ($artifact['query'] ?? null) === ($definition['query'] ?? null)
-        && ($artifact['options'] ?? null) === $expectedOptions
-        && is_array($artifact['legacy_execution'] ?? null)
-        && wp_fts_wc_legacy_execution_is_valid($artifact['legacy_execution']);
-}
-
-/**
- * Run one immutable v3 search without weakening its request budgets.
- *
- * @param array<string,mixed> $options
- * @return array<string,mixed>
- */
-function wp_fts_wc_legacy_execution(string $query, array $options): array
-{
-    try {
-        $rows = WP_FTS_Plugin::search($query, $options);
-    } catch (WP_FTS_Search_Budget_Exceeded $caught) {
-        if (get_class($caught) !== WP_FTS_Search_Budget_Exceeded::class
-            || $caught->budget() !== 'candidate rows'
-            || $caught->getMessage() !== 'Search request exceeded its candidate rows budget.'
-        ) {
-            throw $caught;
-        }
-        return [
-            'outcome' => 'candidate_rows_budget_rejection',
-            'result_count' => 0,
-            'ordered_score_results' => [],
-            'ordered_score_result_hash' => null,
-            'error' => [
-                'class' => WP_FTS_Search_Budget_Exceeded::class,
-                'budget' => 'candidate rows',
-                'message' => 'Search request exceeded its candidate rows budget.',
-            ],
-        ];
-    }
-
-    wp_fts_wc_assert(is_array($rows) && $rows !== [], 'The populated legacy index returned no rows.');
-    $results = wp_fts_wc_ordered_score_signature($rows);
-    return [
-        'outcome' => 'results',
-        'result_count' => count($results),
-        'ordered_score_results' => $results,
-        'ordered_score_result_hash' => wp_fts_wc_canonical_hash($results),
-        'error' => null,
-    ];
-}
-
-/** @param array<string,mixed> $execution */
-function wp_fts_wc_legacy_execution_is_valid(array $execution): bool
-{
-    if (array_keys($execution) !== ['outcome', 'result_count', 'ordered_score_results', 'ordered_score_result_hash', 'error']) {
-        return false;
-    }
-    if (($execution['outcome'] ?? null) === 'results') {
-        $results = is_array($execution['ordered_score_results'] ?? null) ? $execution['ordered_score_results'] : [];
-        $hash = $execution['ordered_score_result_hash'] ?? null;
-        if ($results === []
-            || !array_is_list($results)
-            || !is_int($execution['result_count'] ?? null)
-            || $execution['result_count'] !== count($results)
-            || !is_string($hash)
-            || strlen($hash) !== 64
-            || !wp_fts_wc_is_ascii_hex($hash)
-            || !hash_equals($hash, wp_fts_wc_canonical_hash($results))
-            || ($execution['error'] ?? null) !== null
-        ) {
-            return false;
-        }
-        $seen = [];
-        foreach ($results as $row) {
-            if (!is_array($row)
-                || array_keys($row) !== ['doc_id', 'score']
-                || !is_int($row['doc_id'] ?? null)
-                || $row['doc_id'] <= 0
-                || isset($seen[$row['doc_id']])
-                || !is_string($row['score'] ?? null)
-            ) {
-                return false;
-            }
-            $scoreParts = explode('.', $row['score']);
-            if (count($scoreParts) !== 2
-                || !wp_fts_wc_is_ascii_digits($scoreParts[0])
-                || strlen($scoreParts[1]) !== 8
-                || !wp_fts_wc_is_ascii_digits($scoreParts[1])
-            ) {
-                return false;
-            }
-            $seen[$row['doc_id']] = true;
-        }
-        return true;
-    }
-
-    return ($execution['outcome'] ?? null) === 'candidate_rows_budget_rejection'
-        && ($execution['result_count'] ?? null) === 0
-        && ($execution['ordered_score_results'] ?? null) === []
-        && ($execution['ordered_score_result_hash'] ?? null) === null
-        && ($execution['error'] ?? null) === [
-            'class' => 'WP_FTS_Search_Budget_Exceeded',
-            'budget' => 'candidate rows',
-            'message' => 'Search request exceeded its candidate rows budget.',
-        ];
-}
-
-/**
- * @param array<string,mixed> $baseline
- * @param array<string,mixed> $manifest
- */
-function wp_fts_wc_migration_baseline_is_valid(array $baseline, array $manifest): bool
-{
-    $caseIds = wp_fts_wc_migration_case_ids();
-    $snapshotCases = is_array($baseline['snapshot_cases'] ?? null) ? $baseline['snapshot_cases'] : [];
-    if (array_keys($baseline) !== ['schema', 'source_sha', 'zip_sha256', 'manifest_sha256', 'indexer_signatures', 'snapshot_cases', 'tables']
-        || ($baseline['schema'] ?? null) !== 'relational-fts-migration-baseline-v5'
-        || ($baseline['source_sha'] ?? null) !== WP_FTS_WC_IMMUTABLE_BASELINE_SHA
-        || ($baseline['source_sha'] ?? null) !== ($manifest['source_sha'] ?? null)
-        || ($baseline['zip_sha256'] ?? null) !== ($manifest['zip_sha256'] ?? null)
-        || ($baseline['manifest_sha256'] ?? null) !== ($manifest['sha256'] ?? null)
-        || !is_array($baseline['indexer_signatures'] ?? null)
-        || !is_array($baseline['tables'] ?? null)
-        || (int) ($baseline['tables']['total_bytes'] ?? 0) <= 0
-        || array_keys($snapshotCases) !== $caseIds
-    ) {
-        return false;
-    }
-
-    $processIdentities = [];
-    $memoryLimitFailures = [];
-    foreach ($caseIds as $caseId) {
-        $snapshotCase = $snapshotCases[$caseId] ?? null;
-        $artifact = is_array($snapshotCase['evidence'] ?? null) ? $snapshotCase['evidence'] : [];
-        if (!is_array($snapshotCase)
-            || array_keys($snapshotCase) !== ['artifact_sha256', 'evidence']
-            || !wp_fts_wc_is_lowercase_sha256($snapshotCase['artifact_sha256'] ?? null)
-            || !wp_fts_wc_migration_snapshot_case_is_valid($artifact, $manifest, $caseId)
-            || !hash_equals(
-                (string) $snapshotCase['artifact_sha256'],
-                hash('sha256', json_encode($artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n")
-            )
-        ) {
-            return false;
-        }
-        if (($artifact['status'] ?? null) === 'PASS') {
-            $processIdentities[] = (string) $artifact['process_identity']['sha256'];
-        } else {
-            $memoryLimitFailures[] = $caseId;
-        }
-    }
-    if (count(array_unique($processIdentities)) !== count($processIdentities)
-        || ($memoryLimitFailures !== [] && $memoryLimitFailures !== ['rare_anchor_and'])
-        || count($processIdentities) + count($memoryLimitFailures) !== count($caseIds)
-    ) {
-        return false;
-    }
-
-    return true;
-}
-
-/**
- * @param array<string,mixed> $oracle
- * @param array<string,mixed> $baseline
- */
-function wp_fts_wc_migration_oracle_is_valid(array $oracle, array $baseline): bool
-{
-    $caseIds = ['common_or', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and'];
-    $cases = is_array($oracle['cases'] ?? null) ? $oracle['cases'] : [];
-    if (array_keys($oracle) !== ['schema', 'baseline_schema', 'baseline_sha256', 'source', 'scoring_cutover', 'target_doc_freq_basis', 'v3_doc_freq_mismatches', 'v3_queue_rows', 'cases']
-        || ($oracle['schema'] ?? null) !== 'relational-fts-v4-migration-oracle-v5'
-        || ($oracle['baseline_schema'] ?? null) !== 'relational-fts-migration-baseline-v5'
-        || !wp_fts_wc_is_lowercase_sha256($oracle['baseline_sha256'] ?? null)
-        || !hash_equals(wp_fts_wc_canonical_hash($baseline), (string) $oracle['baseline_sha256'])
-        || ($oracle['source'] ?? null) !== 'v3 logical terms/postings plus canonical wp_posts'
-        || ($oracle['scoring_cutover'] ?? null) !== [
-            'from' => 'legacy_bm25_float',
-            'to' => 'v4_quantized_impact_times_integer_rarity',
-            'legacy_numeric_score_parity_expected' => false,
-        ]
-        || ($oracle['target_doc_freq_basis'] ?? null) !== [
-            'legacy_docs' => 'is_deleted=0',
-            'post_password' => '',
-            'post_types' => WP_FTS_WC_INDEX_POST_TYPES,
-            'post_statuses' => WP_FTS_WC_INDEX_POST_STATUSES,
-            'per_query_filters' => false,
-        ]
-        || ($oracle['v3_doc_freq_mismatches'] ?? null) !== 0
-        || ($oracle['v3_queue_rows'] ?? null) !== 0
-        || array_keys($cases) !== $caseIds
-    ) {
-        return false;
-    }
-
-    foreach ($caseIds as $caseId) {
-        $case = $cases[$caseId] ?? null;
-        $baselineCase = $baseline['snapshot_cases'][$caseId]['evidence'] ?? null;
-        $definition = wp_fts_wc_case_definitions([])[$caseId] ?? null;
-        $expectedOptions = is_array($definition['options'] ?? null) ? $definition['options'] : [];
-        unset($expectedOptions['explain']);
-        $expectedOptions['include_snippets'] = false;
-        if (!is_array($case)
-            || !is_array($baselineCase)
-            || !is_array($definition)
-            || array_keys($case) !== ['query', 'options', 'logical_groups', 'prefix', 'results', 'result_hash', 'legacy_execution']
-            || !is_string($case['query'] ?? null)
-            || $case['query'] === ''
-            || !is_array($case['options'] ?? null)
-            || ($case['query'] ?? null) !== ($definition['query'] ?? null)
-            || ($case['options'] ?? null) !== $expectedOptions
-            || ($case['legacy_execution'] ?? null) !== ($baselineCase['legacy_execution'] ?? null)
-        ) {
-            return false;
-        }
-        $plan = wp_fts_wc_v4_oracle_query_plan($case['query'], $case['options']);
-        if (($case['logical_groups'] ?? null) !== ($plan['groups'] ?? null)
-            || ($case['prefix'] ?? null) !== ($plan['prefix'] ?? null)
-        ) {
-            return false;
-        }
-        $results = is_array($case['results'] ?? null) ? $case['results'] : [];
-        $resultHash = $case['result_hash'] ?? null;
-        if ($results === []
-            || !array_is_list($results)
-            || count($results) > (int) ($case['options']['limit'] ?? 20)
-            || !is_string($resultHash)
-            || strlen($resultHash) !== 64
-            || !wp_fts_wc_is_ascii_hex($resultHash)
-            || !hash_equals($resultHash, wp_fts_wc_canonical_hash($results))
-        ) {
-            return false;
-        }
-        $seen = [];
-        foreach ($results as $row) {
-            if (!is_array($row)
-                || array_keys($row) !== ['doc_id', 'score']
-                || !is_int($row['doc_id'] ?? null)
-                || $row['doc_id'] <= 0
-                || isset($seen[$row['doc_id']])
-                || !is_string($row['score'] ?? null)
-                || !wp_fts_wc_is_ascii_digits($row['score'])
-                || (strlen($row['score']) > 1 && $row['score'][0] === '0')
-            ) {
-                return false;
-            }
-            $seen[$row['doc_id']] = true;
-        }
-    }
-
-    return true;
-}
-
-/**
- * Rebind the unchanged corpus manifest to the pull-request ZIP after the
- * populated migration proof. This does not alter corpus content or profile.
- */
-function wp_fts_wc_migration_rebind(): array
-{
-    wp_fts_wc_assert_disposable_guard();
-    wp_fts_wc_require_plugin();
-    $manifest = wp_fts_wc_unbound_manifest();
-    $baseline = ['source_sha' => $manifest['source_sha'] ?? null, 'zip_sha256' => $manifest['zip_sha256'] ?? null, 'sha256' => $manifest['sha256'] ?? null];
-    $manifest['migration_baseline'] = $baseline;
-    $manifest['source_sha'] = wp_fts_wc_required_env('WP_FTS_SOURCE_SHA');
-    $manifest['zip_sha256'] = wp_fts_wc_required_env('WP_FTS_ZIP_SHA256');
-    unset($manifest['sha256']);
-    $manifest['sha256'] = wp_fts_wc_canonical_hash($manifest);
-    update_option(WP_FTS_WC_MANIFEST_OPTION, $manifest, false);
-    wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/corpus-manifest.json', $manifest);
-    return ['status' => 'PASS', 'phase' => 'migration-rebind', 'baseline' => $baseline, 'current' => ['source_sha' => $manifest['source_sha'], 'zip_sha256' => $manifest['zip_sha256']]];
-}
-
-/**
- * Stop at one production migration action. The wrapper SIGKILLs this process
- * after the action has durably written its phase evidence, then starts the next
- * phase in a fresh WordPress process.
- *
- * @return never
- */
-function wp_fts_wc_migration_failpoint(): never
-{
-    wp_fts_wc_assert_disposable_guard();
-    wp_fts_wc_require_plugin();
-    $target = wp_fts_wc_required_env('WP_FTS_WC_MIGRATION_TARGET');
-    if (!in_array($target, WP_FTS_WC_MIGRATION_FAILPOINTS, true)) {
-        throw new RuntimeException("Unsupported migration failpoint: {$target}");
-    }
-    wp_fts_wc_initialize_migration_worker_journal($target);
-    $hit = false;
-    $callback = static function (mixed $phase, mixed ...$unused) use ($target, &$hit): void {
-        if (!is_scalar($phase) || (string) $phase !== $target || $hit) {
-            return;
-        }
-        $hit = true;
-        $state = wp_fts_wc_migration_phase_state($target);
-        $gates = is_array($state['gates'] ?? null) ? $state['gates'] : [];
-        if (!wp_fts_wc_gates_pass($gates)) {
-            throw new RuntimeException("Migration phase {$target} has impossible durable state: " . implode(', ', wp_fts_wc_gate_failures($gates)));
-        }
-        wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . "/migration-phase-{$target}.json", [
-            'schema' => 'relational-fts-migration-phase-v3',
-            'status' => 'PASS',
-            'phase' => $target,
-            'pid' => getmypid(),
-            'state' => $state,
-            'storage' => wp_fts_wc_all_fts_table_bytes(),
-            'captured_at' => time(),
-            'gates' => $gates,
-        ]);
-        while (true) {
-            sleep(60);
-        }
-    };
-    add_action('wp_fts_schema_migration_phase', $callback, PHP_INT_MAX, 2);
-
-    $deadlineSeconds = wp_fts_wc_required_positive_int_env('WP_FTS_WC_MIGRATION_DEADLINE_SECONDS');
-    $batchBudgetSeconds = wp_fts_wc_required_positive_int_env('WP_FTS_WC_MIGRATION_BATCH_BUDGET_SECONDS');
-    $deadline = microtime(true) + (float) $deadlineSeconds;
-    $consecutiveNoProgress = 0;
-    while (!$hit && microtime(true) < $deadline) {
-        // Reconciliation and readiness are owned by the production maintenance
-        // entry point, not bare DDL repair or the worker. Re-enter the scheduled
-        // lifecycle after every worker batch so the ready/cleanup boundaries are
-        // reachable after the durable reconciliation scope completes.
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
-        $batchStarted = hrtime(true);
-        $summary = WP_FTS_Plugin::process_manual_index_batch([
-            'source' => 'worst-case-migration-' . $target,
-            'batch_size' => 100,
-            'time_budget' => (float) $batchBudgetSeconds,
-        ]);
-        wp_fts_wc_append_migration_worker_batch($target, $summary, wp_fts_wc_elapsed_ms($batchStarted));
-        wp_fts_wc_wait_after_worker_no_progress($summary, $deadline, "Migration failpoint {$target}", $consecutiveNoProgress);
-        WP_FTS_Plugin::reset_request_caches();
-    }
-    throw new RuntimeException("Migration failpoint was never reached: {$target}");
-}
-
-/**
- * In a fresh PHP process after each SIGKILL, prove ordinary WordPress reads and
- * saves remain available while the enabled public search replacement returns
- * an explicit empty/unavailable response without touching either FTS schema.
- *
- * @return array<string,mixed>
- */
-function wp_fts_wc_migration_post_kill_probe(): array
-{
-    global $wpdb, $wp_query, $wp_the_query;
-
-    wp_fts_wc_assert_disposable_guard();
-    wp_fts_wc_require_plugin();
-    $target = wp_fts_wc_required_env('WP_FTS_WC_MIGRATION_TARGET');
-    if (!in_array($target, WP_FTS_WC_MIGRATION_FAILPOINTS, true)) {
-        throw new RuntimeException("Unsupported post-kill migration probe: {$target}");
-    }
-    $manifest = wp_fts_wc_unbound_manifest();
-    $postId = (int) ($manifest['last_post_id'] ?? 0);
-    wp_fts_wc_assert($postId > 0, 'Post-kill migration probe requires an ordinary corpus post.');
-    $phaseState = wp_fts_wc_migration_phase_state($target);
-    $sourceBefore = wp_fts_wc_multisite_source_signature([$postId]);
-    $workBefore = wp_fts_wc_migration_work_counts();
-    $readinessBefore = (string) get_option(WP_FTS_Plugin::READINESS_INCARNATION_OPTION, '');
-
-    $ordinaryStarted = hrtime(true);
-    $ordinary = wp_fts_wc_record_queries(static function () use ($postId): array {
-        $option = get_option('blogname');
-        $post = get_post($postId);
-        if (!is_object($post) || (int) ($post->ID ?? 0) !== $postId) {
-            return ['option' => $option, 'post_found' => false, 'save_result' => null, 'save_error' => 'post_missing'];
-        }
-        $saved = wp_update_post([
-            'ID' => $postId,
-            // Keep the searchable source byte-for-byte stable while still
-            // invoking the real canonical save and its production hooks.
-            'post_excerpt' => (string) ($post->post_excerpt ?? ''),
-        ], true);
-        return [
-            'option' => $option,
-            'post_found' => true,
-            'save_result' => is_wp_error($saved) ? null : (int) $saved,
-            'save_error' => is_wp_error($saved) ? $saved->get_error_message() : null,
-        ];
-    });
-    $ordinaryDuration = wp_fts_wc_elapsed_ms($ordinaryStarted);
-    $sourceAfter = wp_fts_wc_multisite_source_signature([$postId]);
-    $optionAfter = get_option('blogname');
-    $workAfter = wp_fts_wc_migration_work_counts();
-    $healthAfter = get_option(WP_FTS_Plugin::INDEX_HEALTH_OPTION, []);
-    $healthAfter = is_array($healthAfter) ? $healthAfter : [];
-    $readinessAfter = (string) get_option(WP_FTS_Plugin::READINESS_INCARNATION_OPTION, '');
-
-    WP_FTS_Plugin::reset_request_caches();
-    $takeover = WP_FTS_Plugin::search_takeover_status();
-    $previousQuery = $wp_query ?? null;
-    $previousMainQuery = $wp_the_query ?? null;
-    $query = new WP_Query();
-    $searchStarted = hrtime(true);
-    try {
-        $search = wp_fts_wc_record_queries(static function () use ($query, $manifest, &$wp_query, &$wp_the_query): array {
-            $wp_query = $query;
-            $wp_the_query = $query;
-            return $query->query([
-                's' => (string) ($manifest['token'] ?? ''),
-                'post_type' => 'post',
-                'post_status' => 'publish',
-                'posts_per_page' => 20,
-                'paged' => 1,
-                'ignore_sticky_posts' => true,
-            ]);
-        });
-    } finally {
-        $wp_query = $previousQuery;
-        $wp_the_query = $previousMainQuery;
-    }
-    $searchDuration = wp_fts_wc_elapsed_ms($searchStarted);
-
-    $ordinaryQueries = array_values(array_map('strval', $ordinary['queries'] ?? []));
-    $searchQueries = array_values(array_map('strval', $search['queries'] ?? []));
-    $searchMaxSqlBytes = max(array_map('strlen', $searchQueries) ?: [0]);
-    $allProbeQueries = [...$ordinaryQueries, ...$searchQueries];
-    $ordinaryFtsQueries = array_values(array_filter($ordinaryQueries, 'wp_fts_wc_sql_touches_owned_fts_table'));
-    $ordinaryFtsDmlQueries = array_values(array_filter($ordinaryFtsQueries, 'wp_fts_wc_is_fts_data_mutation_statement'));
-    $ordinaryFtsMaxSqlBytes = max(array_map('strlen', $ordinaryFtsQueries) ?: [0]);
-    $ftsSearchQueries = array_values(array_filter(
-        $searchQueries,
-        static fn(string $sql): bool => wp_fts_wc_sql_touches_owned_fts_table($sql)
-            || str_contains(strtolower($sql), 'wp_fts:')
-    ));
-    $schemaQueries = array_values(array_filter($allProbeQueries, 'wp_fts_wc_is_physical_schema_statement'));
-    $ftsSchemaQueries = array_values(array_filter($schemaQueries, 'wp_fts_wc_is_fts_physical_schema_statement'));
-    $wordpressCoreSchemaQueries = array_values(array_filter(
-        $schemaQueries,
-        static fn(string $sql): bool => !wp_fts_wc_is_fts_physical_schema_statement($sql)
-    ));
-    $coreLikeQueries = array_values(array_filter($searchQueries, static function (string $sql) use ($wpdb): bool {
-        $lower = strtolower($sql);
-        return str_contains($lower, strtolower((string) $wpdb->posts)) && str_contains($lower, ' like ');
-    }));
-    $ordinaryResult = is_array($ordinary['result'] ?? null) ? $ordinary['result'] : [];
-    $searchResult = is_array($search['result'] ?? null) ? $search['result'] : null;
-    $currentSchemaPhase = in_array($target, ['ready_verified', 'legacy_cleaned'], true);
-    $recoveryScopePhase = in_array($target, ['v4_created', 'reconciliation_enqueued'], true);
-    $expectedPostWorkDelta = $currentSchemaPhase ? 1 : 0;
-    $expectedScopeWorkDelta = $target === 'v4_created' ? 1 : 0;
-    $expectedMetaWorkDelta = $target === 'v4_created' ? 1 : 0;
-    $expectedTotalWorkDelta = $expectedPostWorkDelta + $expectedScopeWorkDelta;
-    $expectedCorpusGenerationDelta = $recoveryScopePhase ? 1 : 0;
-    $expectedSearchEpochGenerationDelta = $currentSchemaPhase ? 2 : ($recoveryScopePhase ? 1 : 0);
-    $expectedFtsDmlCount = $currentSchemaPhase ? 2 : 1;
-    $actualPostWorkDelta = (int) ($workAfter['post_rows'] ?? 0) - (int) ($workBefore['post_rows'] ?? 0);
-    $actualScopeWorkDelta = (int) ($workAfter['scope_rows'] ?? 0) - (int) ($workBefore['scope_rows'] ?? 0);
-    $actualMetaWorkDelta = (int) ($workAfter['meta_rows'] ?? 0) - (int) ($workBefore['meta_rows'] ?? 0);
-    $actualTotalWorkDelta = (int) ($workAfter['work_rows'] ?? 0) - (int) ($workBefore['work_rows'] ?? 0);
-    $actualCorpusGenerationDelta = (int) ($workAfter['corpus_scope_generation'] ?? 0) - (int) ($workBefore['corpus_scope_generation'] ?? 0);
-    $actualSearchEpochGenerationDelta = (int) ($workAfter['search_epoch_generation'] ?? 0) - (int) ($workBefore['search_epoch_generation'] ?? 0);
-    $healthEffectAccounted = $currentSchemaPhase
-        ? $healthAfter === ($phaseState['initial_index_health'] ?? null) && hash_equals($readinessBefore, $readinessAfter)
-        : ($healthAfter['initial_index_status'] ?? null) === 'pending'
-            && ($healthAfter['status'] ?? null) === 'unhealthy'
-            && !empty($healthAfter['global_visibility_fence_active'])
-            && trim((string) ($healthAfter['last_error'] ?? '')) !== ''
-            && strlen((string) ($healthAfter['last_error'] ?? '')) <= 240
-            && strlen($readinessAfter) === 32
-            && wp_fts_wc_is_ascii_hex($readinessAfter)
-            && strtolower($readinessAfter) === $readinessAfter
-            && !hash_equals($readinessBefore, $readinessAfter);
-    $recoveryAuthorityAccounted = $recoveryScopePhase
-        ? $actualCorpusGenerationDelta === 1
-            && (string) ($workAfter['corpus_scope_incarnation'] ?? '') === $readinessAfter
-            && (string) ($workAfter['corpus_scope_reason'] ?? '') === 'foreground_queue_failure'
-        : $actualCorpusGenerationDelta === 0
-            && (int) ($workAfter['corpus_scope_generation'] ?? 0) === 0
-            && (string) ($workAfter['corpus_scope_incarnation'] ?? '') === ''
-            && (string) ($workAfter['corpus_scope_reason'] ?? '') === '';
-    $ftsDmlAccounted = count($ordinaryFtsQueries) === $expectedFtsDmlCount
-        && count($ordinaryFtsDmlQueries) === $expectedFtsDmlCount;
-    $gates = [
-        wp_fts_wc_gate('migration_post_kill_phase_state', true, wp_fts_wc_gates_pass($phaseState['gates'] ?? []), wp_fts_wc_gates_pass($phaseState['gates'] ?? [])),
-        wp_fts_wc_gate('migration_post_kill_ordinary_option_available', true, is_string($ordinaryResult['option'] ?? null) && ($ordinaryResult['option'] ?? '') !== '', is_string($ordinaryResult['option'] ?? null) && ($ordinaryResult['option'] ?? '') !== ''),
-        wp_fts_wc_gate('migration_post_kill_ordinary_option_stable', $ordinaryResult['option'] ?? null, $optionAfter, is_string($optionAfter) && $optionAfter === ($ordinaryResult['option'] ?? null)),
-        wp_fts_wc_gate('migration_post_kill_ordinary_post_available', true, !empty($ordinaryResult['post_found']), !empty($ordinaryResult['post_found'])),
-        wp_fts_wc_gate('migration_post_kill_ordinary_save_available', $postId, $ordinaryResult['save_result'] ?? null, ($ordinaryResult['save_result'] ?? null) === $postId && ($ordinaryResult['save_error'] ?? null) === null),
-        wp_fts_wc_gate('migration_post_kill_ordinary_duration_ms', '<= 5000', $ordinaryDuration, $ordinaryDuration <= 5000.0),
-        wp_fts_wc_gate('migration_post_kill_source_stable', $sourceBefore, $sourceAfter, $sourceBefore !== [] && $sourceBefore === $sourceAfter),
-        wp_fts_wc_gate('migration_post_kill_accounted_post_work_delta', $expectedPostWorkDelta, $actualPostWorkDelta, $actualPostWorkDelta === $expectedPostWorkDelta),
-        wp_fts_wc_gate('migration_post_kill_accounted_scope_work_delta', $expectedScopeWorkDelta, $actualScopeWorkDelta, $actualScopeWorkDelta === $expectedScopeWorkDelta),
-        wp_fts_wc_gate('migration_post_kill_accounted_meta_work_delta', $expectedMetaWorkDelta, $actualMetaWorkDelta, $actualMetaWorkDelta === $expectedMetaWorkDelta),
-        wp_fts_wc_gate('migration_post_kill_accounted_total_work_delta', $expectedTotalWorkDelta, $actualTotalWorkDelta, $actualTotalWorkDelta === $expectedTotalWorkDelta),
-        wp_fts_wc_gate('migration_post_kill_accounted_corpus_generation', $expectedCorpusGenerationDelta, $actualCorpusGenerationDelta, $actualCorpusGenerationDelta === $expectedCorpusGenerationDelta),
-        wp_fts_wc_gate('migration_post_kill_accounted_search_epoch_generation', $expectedSearchEpochGenerationDelta, $actualSearchEpochGenerationDelta, $actualSearchEpochGenerationDelta === $expectedSearchEpochGenerationDelta),
-        wp_fts_wc_gate('migration_post_kill_accounted_recovery_authority', true, $recoveryAuthorityAccounted, $recoveryAuthorityAccounted),
-        wp_fts_wc_gate('migration_post_kill_accounted_health_effect', true, $healthEffectAccounted, $healthEffectAccounted),
-        wp_fts_wc_gate('migration_post_kill_exact_fts_dml_count', $expectedFtsDmlCount, ['statements' => count($ordinaryFtsQueries), 'dml' => count($ordinaryFtsDmlQueries)], $ftsDmlAccounted),
-        wp_fts_wc_gate('migration_post_kill_fts_dml_max_sql_bytes', '<= 32768', $ordinaryFtsMaxSqlBytes, $ordinaryFtsMaxSqlBytes <= 32768),
-        wp_fts_wc_gate('migration_post_kill_takeover_not_ready', false, (bool) ($takeover['ready'] ?? false), empty($takeover['ready'])),
-        wp_fts_wc_gate('migration_post_kill_public_search_empty', [], $searchResult, $searchResult === []),
-        wp_fts_wc_gate('migration_post_kill_public_search_unavailable', true, (string) $query->get('wp_fts_search_unavailable') !== '', (string) $query->get('wp_fts_search_unavailable') !== ''),
-        wp_fts_wc_gate('migration_post_kill_public_search_duration_ms', '<= 5000', $searchDuration, $searchDuration <= 5000.0),
-        wp_fts_wc_gate('migration_post_kill_public_search_query_count', '<= 2', count($searchQueries), count($searchQueries) <= 2),
-        wp_fts_wc_gate('migration_post_kill_public_search_max_sql_bytes', '<= 32768', $searchMaxSqlBytes, $searchMaxSqlBytes <= 32768),
-        wp_fts_wc_gate('migration_post_kill_no_fts_sql', 0, count($ftsSearchQueries), $ftsSearchQueries === []),
-        wp_fts_wc_gate('migration_post_kill_no_core_like_sql', 0, count($coreLikeQueries), $coreLikeQueries === []),
-        wp_fts_wc_gate('migration_post_kill_no_fts_schema_sql', 0, count($ftsSchemaQueries), $ftsSchemaQueries === []),
-    ];
-    $result = [
-        'schema' => 'relational-fts-migration-post-kill-probe-v3',
-        'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
-        'target' => $target,
-        'pid' => getmypid(),
-        'post_id' => $postId,
-        'phase_state' => $phaseState,
-        'source_before' => $sourceBefore,
-        'source_after' => $sourceAfter,
-        'work_before' => $workBefore,
-        'work_after' => $workAfter,
-        'health_after' => $healthAfter,
-        'readiness_before' => $readinessBefore,
-        'readiness_after' => $readinessAfter,
-        'expected_post_work_delta' => $expectedPostWorkDelta,
-        'expected_scope_work_delta' => $expectedScopeWorkDelta,
-        'expected_meta_work_delta' => $expectedMetaWorkDelta,
-        'expected_total_work_delta' => $expectedTotalWorkDelta,
-        'expected_corpus_generation_delta' => $expectedCorpusGenerationDelta,
-        'expected_search_epoch_generation_delta' => $expectedSearchEpochGenerationDelta,
-        'expected_fts_dml_count' => $expectedFtsDmlCount,
-        'ordinary' => $ordinaryResult,
-        'ordinary_option_after' => $optionAfter,
-        'ordinary_duration_ms' => $ordinaryDuration,
-        'ordinary_queries' => $ordinaryQueries,
-        'ordinary_fts_queries' => $ordinaryFtsQueries,
-        'ordinary_fts_dml_queries' => $ordinaryFtsDmlQueries,
-        'ordinary_fts_max_sql_bytes' => $ordinaryFtsMaxSqlBytes,
-        'public_search' => [
-            'results' => $searchResult,
-            'unavailable' => $query->get('wp_fts_search_unavailable'),
-            'duration_ms' => $searchDuration,
-            'queries' => $searchQueries,
-            'max_sql_bytes' => $searchMaxSqlBytes,
-            'fts_queries' => $ftsSearchQueries,
-            'core_like_queries' => $coreLikeQueries,
-        ],
-        'schema_queries' => $schemaQueries,
-        'fts_schema_queries' => $ftsSchemaQueries,
-        'wordpress_core_schema_queries' => $wordpressCoreSchemaQueries,
-        'search_takeover_status' => $takeover,
-        'gates' => $gates,
-    ];
-    wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . "/migration-post-kill-{$target}.json", $result);
-    if ($result['status'] !== 'PASS') {
-        throw new RuntimeException("Post-kill migration probe failed for {$target}: " . implode(', ', wp_fts_wc_gate_failures($gates)));
-    }
-    return ['status' => 'PASS', 'phase' => 'migration-post-kill-probe', 'target' => $target, 'gates' => count($gates)];
-}
-
-/** @return array<string,string> */
-function wp_fts_wc_migration_table_mapping(): array
-{
-    return [
-        'fts_terms' => 'fts_legacy_terms',
-        'fts_postings' => 'fts_legacy_postings',
-        'fts_docs' => 'fts_legacy_docs',
-        'fts_doc_lengths' => 'fts_legacy_doc_lengths',
-        'fts_docmeta' => 'fts_legacy_docmeta',
-        'fts_meta' => 'fts_legacy_meta',
-        'fts_queue' => 'fts_legacy_queue',
-    ];
-}
-
-/** @return string[] */
-function wp_fts_wc_migration_phase_gate_ids(): array
-{
-    return [
-        'migration_phase_exact_tables',
-        'migration_phase_schema_version',
-        'migration_phase_initial_index_pending',
-        'migration_phase_search_takeover_not_ready',
-        'migration_phase_exact_work_rows',
-        'migration_phase_exact_scope_rows',
-        'migration_phase_exact_post_rows',
-        'migration_phase_exact_meta_rows',
-    ];
-}
-
-/** @return string[] */
-function wp_fts_wc_migration_post_kill_gate_ids(): array
-{
-    return [
-        'migration_post_kill_phase_state',
-        'migration_post_kill_ordinary_option_available',
-        'migration_post_kill_ordinary_option_stable',
-        'migration_post_kill_ordinary_post_available',
-        'migration_post_kill_ordinary_save_available',
-        'migration_post_kill_ordinary_duration_ms',
-        'migration_post_kill_source_stable',
-        'migration_post_kill_accounted_post_work_delta',
-        'migration_post_kill_accounted_scope_work_delta',
-        'migration_post_kill_accounted_meta_work_delta',
-        'migration_post_kill_accounted_total_work_delta',
-        'migration_post_kill_accounted_corpus_generation',
-        'migration_post_kill_accounted_search_epoch_generation',
-        'migration_post_kill_accounted_recovery_authority',
-        'migration_post_kill_accounted_health_effect',
-        'migration_post_kill_exact_fts_dml_count',
-        'migration_post_kill_fts_dml_max_sql_bytes',
-        'migration_post_kill_takeover_not_ready',
-        'migration_post_kill_public_search_empty',
-        'migration_post_kill_public_search_unavailable',
-        'migration_post_kill_public_search_duration_ms',
-        'migration_post_kill_public_search_query_count',
-        'migration_post_kill_public_search_max_sql_bytes',
-        'migration_post_kill_no_fts_sql',
-        'migration_post_kill_no_core_like_sql',
-        'migration_post_kill_no_fts_schema_sql',
-    ];
-}
-
-/** @return array<string,mixed> */
-function wp_fts_wc_migration_phase_state(string $target): array
-{
-    global $wpdb;
-
-    $mapping = wp_fts_wc_migration_table_mapping();
-    $renamePhases = array_map(static fn(string $source): string => 'legacy_renamed_' . $source, array_keys($mapping));
-    $renameIndex = array_search($target, $renamePhases, true);
-    $expectedSuffixes = [];
-    if ($renameIndex !== false) {
-        foreach ($mapping as $source => $legacy) {
-            $sourceIndex = array_search($source, array_keys($mapping), true);
-            $expectedSuffixes[] = is_int($sourceIndex) && $sourceIndex <= $renameIndex ? $legacy : $source;
-        }
-    } elseif (in_array($target, ['v4_created', 'reconciliation_enqueued', 'ready_verified'], true)) {
-        $expectedSuffixes = [...array_values($mapping), 'fts_terms', 'fts_postings', 'fts_documents', 'fts_work'];
-    } elseif ($target === 'legacy_cleaned') {
-        $expectedSuffixes = ['fts_terms', 'fts_postings', 'fts_documents', 'fts_work'];
-    } else {
-        throw new RuntimeException("Could not derive expected migration state for {$target}.");
-    }
-    $expectedTables = array_map(static fn(string $suffix): string => $wpdb->prefix . $suffix, $expectedSuffixes);
-    sort($expectedTables, SORT_STRING);
-    $actualTables = $wpdb->get_col($wpdb->prepare(
-        'SHOW TABLES LIKE %s',
-        $wpdb->esc_like($wpdb->prefix . 'fts_') . '%'
-    ));
-    if (!is_array($actualTables) || trim((string) $wpdb->last_error) !== '') {
-        throw new RuntimeException('Could not inspect exact migration tables: ' . trim((string) $wpdb->last_error));
-    }
-    $actualTables = array_map('strval', $actualTables);
-    sort($actualTables, SORT_STRING);
-
-    $schemaVersion = (int) get_option(WP_FTS_Plugin::SCHEMA_VERSION_OPTION, 0);
-    $expectedSchemaVersion = $renameIndex !== false
-        || in_array($target, ['v4_created', 'reconciliation_enqueued'], true)
-        ? 3
-        : WP_FTS_Plugin::SCHEMA_VERSION;
-    $health = get_option(WP_FTS_Plugin::INDEX_HEALTH_OPTION, []);
-    $health = is_array($health) ? $health : [];
-    WP_FTS_Plugin::reset_request_caches();
-    $takeover = WP_FTS_Plugin::search_takeover_status();
-    $work = wp_fts_wc_migration_work_counts();
-    $expectedWork = match ($target) {
-        'reconciliation_enqueued' => ['work_rows' => 1, 'scope_rows' => 1, 'post_rows' => 0, 'meta_rows' => 1],
-        'ready_verified', 'legacy_cleaned' => ['work_rows' => 0, 'scope_rows' => 0, 'post_rows' => 0, 'meta_rows' => 1],
-        'v4_created' => ['work_rows' => 0, 'scope_rows' => 0, 'post_rows' => 0, 'meta_rows' => 0],
-        default => ['work_rows' => null, 'scope_rows' => null, 'post_rows' => null, 'meta_rows' => null],
-    };
-    $gates = [
-        wp_fts_wc_gate('migration_phase_exact_tables', $expectedTables, $actualTables, $actualTables === $expectedTables),
-        wp_fts_wc_gate('migration_phase_schema_version', $expectedSchemaVersion, $schemaVersion, $schemaVersion === $expectedSchemaVersion),
-        wp_fts_wc_gate('migration_phase_initial_index_pending', 'pending', $health['initial_index_status'] ?? null, ($health['initial_index_status'] ?? null) === 'pending'),
-        wp_fts_wc_gate('migration_phase_search_takeover_not_ready', false, (bool) ($takeover['ready'] ?? false), empty($takeover['ready'])),
-        wp_fts_wc_gate('migration_phase_exact_work_rows', $expectedWork['work_rows'], $work['work_rows'], $work['work_rows'] === $expectedWork['work_rows']),
-        wp_fts_wc_gate('migration_phase_exact_scope_rows', $expectedWork['scope_rows'], $work['scope_rows'], $work['scope_rows'] === $expectedWork['scope_rows']),
-        wp_fts_wc_gate('migration_phase_exact_post_rows', $expectedWork['post_rows'], $work['post_rows'], $work['post_rows'] === $expectedWork['post_rows']),
-        wp_fts_wc_gate('migration_phase_exact_meta_rows', $expectedWork['meta_rows'], $work['meta_rows'], $work['meta_rows'] === $expectedWork['meta_rows']),
-    ];
-    return [
-        'target' => $target,
-        'expected_tables' => $expectedTables,
-        'tables' => $actualTables,
-        'schema_version' => $schemaVersion,
-        'expected_schema_version' => $expectedSchemaVersion,
-        'initial_index_health' => $health,
-        'search_takeover_status' => $takeover,
-        'work' => $work,
-        'expected_work' => $expectedWork,
-        'gates' => $gates,
-    ];
-}
-
-/**
- * @return array{
- *   work_rows:?int,
- *   scope_rows:?int,
- *   post_rows:?int,
- *   meta_rows:?int,
- *   corpus_scope_generation:?int,
- *   corpus_scope_incarnation:?string,
- *   corpus_scope_reason:?string,
- *   search_epoch_generation:?int
- * }
- */
-function wp_fts_wc_migration_work_counts(): array
-{
-    global $wpdb;
-
-    $work = $wpdb->prefix . 'fts_work';
-    $exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($work)));
-    if (trim((string) $wpdb->last_error) !== '') {
-        throw new RuntimeException('Could not inspect the migration work table: ' . trim((string) $wpdb->last_error));
-    }
-    if (!is_scalar($exists) || (string) $exists !== $work) {
-        return [
-            'work_rows' => null,
-            'scope_rows' => null,
-            'post_rows' => null,
-            'meta_rows' => null,
-            'corpus_scope_generation' => null,
-            'corpus_scope_incarnation' => null,
-            'corpus_scope_reason' => null,
-            'search_epoch_generation' => null,
-        ];
-    }
-    $identifier = wp_fts_wc_identifier($work);
-    $corpusScopeJobKey = 'scope:' . hash('sha256', WP_FTS_Index_Queue::GLOBAL_CORPUS_SCOPE_KEY);
-    $row = $wpdb->get_row($wpdb->prepare(
-        "SELECT
-    COALESCE(SUM(CASE WHEN kind IN ('post','scope') THEN 1 ELSE 0 END),0) work_rows,
-    COALESCE(SUM(CASE WHEN kind='scope' THEN 1 ELSE 0 END),0) scope_rows,
-    COALESCE(SUM(CASE WHEN kind='post' THEN 1 ELSE 0 END),0) post_rows,
-    COALESCE(SUM(CASE WHEN kind='meta' THEN 1 ELSE 0 END),0) meta_rows,
-    COALESCE(MAX(CASE WHEN job_key=%s AND kind='scope' THEN generation END),0) corpus_scope_generation,
-    COALESCE(MAX(CASE WHEN job_key=%s AND kind='scope' THEN scope_incarnation END),'') corpus_scope_incarnation,
-    COALESCE(MAX(CASE WHEN job_key=%s AND kind='scope' THEN payload END),'') corpus_scope_payload,
-    COALESCE(MAX(CASE WHEN job_key=%s AND kind='meta' THEN generation END),0) search_epoch_generation
-FROM `{$identifier}`
-WHERE kind IN ('post','scope','meta')",
-        $corpusScopeJobKey,
-        $corpusScopeJobKey,
-        $corpusScopeJobKey,
-        WP_FTS_Index_Queue::SEARCH_EPOCH_JOB_KEY
-    ), ARRAY_A);
-    if (!is_array($row) || trim((string) $wpdb->last_error) !== '') {
-        throw new RuntimeException('Could not inspect durable migration work: ' . trim((string) $wpdb->last_error));
-    }
-    $payload = trim((string) ($row['corpus_scope_payload'] ?? ''));
-    $reason = '';
-    if ($payload !== '') {
-        $decoded = json_decode($payload, true, 64, JSON_THROW_ON_ERROR);
-        if (!is_array($decoded)) {
-            throw new RuntimeException('The durable corpus recovery payload is not an object.');
-        }
-        $reason = is_scalar($decoded['reason'] ?? null) ? (string) $decoded['reason'] : '';
-    }
-    return [
-        'work_rows' => (int) ($row['work_rows'] ?? 0),
-        'scope_rows' => (int) ($row['scope_rows'] ?? 0),
-        'post_rows' => (int) ($row['post_rows'] ?? 0),
-        'meta_rows' => (int) ($row['meta_rows'] ?? 0),
-        'corpus_scope_generation' => (int) ($row['corpus_scope_generation'] ?? 0),
-        'corpus_scope_incarnation' => (string) ($row['corpus_scope_incarnation'] ?? ''),
-        'corpus_scope_reason' => $reason,
-        'search_epoch_generation' => (int) ($row['search_epoch_generation'] ?? 0),
-    ];
-}
-
-/** Publish the worker journal header atomically before any forked batch writes. */
-function wp_fts_wc_initialize_migration_worker_journal(string $target): void
-{
-    $header = [
-        'type' => 'header',
-        'schema' => 'relational-fts-migration-worker-journal-v2',
-        'target' => $target,
-        'pid' => getmypid(),
-        'started_at' => time(),
-    ];
-    $line = json_encode($header, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n";
-    $path = wp_fts_wc_evidence_dir() . "/migration-worker-{$target}.ndjson";
-    if (file_put_contents($path, $line, LOCK_EX) !== strlen($line)) {
-        throw new RuntimeException("Could not initialize migration worker journal: {$path}");
-    }
-}
-
-/** @param array<string,mixed> $summary */
-function wp_fts_wc_append_migration_worker_batch(string $target, array $summary, float $durationMs): void
-{
-    static $ordinals = [];
-    $ordinal = ($ordinals[$target] ?? 0) + 1;
-    $ordinals[$target] = $ordinal;
-    $record = [
-        'type' => 'batch',
-        'target' => $target,
-        'ordinal' => $ordinal,
-        'duration_ms' => $durationMs,
-        'attempted' => max(0, (int) ($summary['attempted'] ?? 0)),
-        'processed' => max(0, (int) ($summary['processed'] ?? 0)),
-        'committed' => max(0, (int) ($summary['committed'] ?? 0)),
-        'queue_processed' => max(0, (int) ($summary['queue_processed'] ?? 0)),
-        'indexed' => max(0, (int) ($summary['indexed'] ?? 0)),
-        'unchanged' => max(0, (int) ($summary['unchanged'] ?? 0)),
-        'backfill_scanned' => max(0, (int) ($summary['backfill_scanned'] ?? 0)),
-        'backfill_queued' => max(0, (int) ($summary['backfill_queued'] ?? 0)),
-        'scope_page_committed' => !empty($summary['scope_page_committed']),
-        'scope_completed' => !empty($summary['scope_completed']),
-        'empty_terms_cleaned' => max(0, (int) ($summary['empty_terms_cleaned'] ?? 0)),
-        'wait_for_next_available' => !empty($summary['wait_for_next_available']),
-        'next_available_at' => is_numeric($summary['next_available_at'] ?? null) ? (int) $summary['next_available_at'] : null,
-        'has_more' => !empty($summary['has_more']),
-        'stop_reason' => is_scalar($summary['stop_reason'] ?? null) ? (string) $summary['stop_reason'] : '',
-        'failures' => max(0, (int) ($summary['last_batch_failures'] ?? 0)),
-        'skipped_locked' => !empty($summary['skipped_locked']),
-    ];
-    $line = json_encode($record, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n";
-    $path = wp_fts_wc_evidence_dir() . "/migration-worker-{$target}.ndjson";
-    if (file_put_contents($path, $line, FILE_APPEND | LOCK_EX) !== strlen($line)) {
-        throw new RuntimeException("Could not append migration worker journal: {$path}");
-    }
-}
-
-/** @return array{header:array<string,mixed>,batches:array<int,array<string,mixed>>} */
-function wp_fts_wc_read_migration_worker_journal(string $target): array
-{
-    $path = wp_fts_wc_evidence_dir() . "/migration-worker-{$target}.ndjson";
-    $handle = @fopen($path, 'rb');
-    if ($handle === false) {
-        throw new RuntimeException("Could not read migration worker journal: {$path}");
-    }
-    $header = null;
-    $batches = [];
-    $lineNumber = 0;
-    try {
-        while (($line = fgets($handle)) !== false) {
-            $lineNumber++;
-            $line = trim($line);
-            if ($line === '') {
-                continue;
-            }
-            $record = json_decode($line, true, 64, JSON_THROW_ON_ERROR);
-            if (!is_array($record)) {
-                throw new RuntimeException("Migration worker journal line {$lineNumber} is not an object: {$path}");
-            }
-            if (($record['type'] ?? null) === 'header' && $header === null && $batches === []) {
-                $header = $record;
-                continue;
-            }
-            if (($record['type'] ?? null) !== 'batch' || $header === null) {
-                throw new RuntimeException("Migration worker journal line {$lineNumber} is out of order: {$path}");
-            }
-            $batches[] = $record;
-        }
-        if (!feof($handle)) {
-            throw new RuntimeException("Could not finish reading migration worker journal: {$path}");
-        }
-    } finally {
-        fclose($handle);
-    }
-    if (!is_array($header)
-        || ($header['schema'] ?? null) !== 'relational-fts-migration-worker-journal-v2'
-        || ($header['target'] ?? null) !== $target
-        || (int) ($header['pid'] ?? 0) <= 0
-    ) {
-        throw new RuntimeException("Migration worker journal header is malformed: {$target}");
-    }
-    foreach ($batches as $ordinal => $batch) {
-        if (array_keys($batch) !== [
-            'type',
-            'target',
-            'ordinal',
-            'duration_ms',
-            'attempted',
-            'processed',
-            'committed',
-            'queue_processed',
-            'indexed',
-            'unchanged',
-            'backfill_scanned',
-            'backfill_queued',
-            'scope_page_committed',
-            'scope_completed',
-            'empty_terms_cleaned',
-            'wait_for_next_available',
-            'next_available_at',
-            'has_more',
-            'stop_reason',
-            'failures',
-            'skipped_locked',
-        ]
-            || ($batch['type'] ?? null) !== 'batch'
-            || ($batch['target'] ?? null) !== $target
-            || (int) ($batch['ordinal'] ?? 0) !== $ordinal + 1
-            || !is_numeric($batch['duration_ms'] ?? null)
-            || (float) $batch['duration_ms'] < 0.0
-            || !is_bool($batch['scope_page_committed'] ?? null)
-            || !is_bool($batch['scope_completed'] ?? null)
-            || !is_bool($batch['wait_for_next_available'] ?? null)
-            || (!is_null($batch['next_available_at'] ?? null) && !is_int($batch['next_available_at'] ?? null))
-            || !is_bool($batch['has_more'] ?? null)
-            || !is_string($batch['stop_reason'] ?? null)
-            || !is_bool($batch['skipped_locked'] ?? null)
-        ) {
-            throw new RuntimeException("Migration worker journal batch sequence is malformed: {$target}");
-        }
-    }
-    return ['header' => $header, 'batches' => $batches];
-}
-
-/**
- * Resume the killed migration through worker drain, assert parity and cleanup,
- * and calculate the measured peak-disk ratio.
- */
-function wp_fts_wc_migration_finalize(): array
-{
-    global $wpdb;
-
-    wp_fts_wc_assert_disposable_guard();
-    wp_fts_wc_require_plugin();
-    $manifest = wp_fts_wc_unbound_manifest();
-    $baseline = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration-baseline.json');
-    wp_fts_wc_assert(wp_fts_wc_migration_baseline_is_valid($baseline, $manifest), 'Migration finalization requires the exact six-process v4 legacy execution baseline.');
-    $started = hrtime(true);
-    $batches = [];
-    $queueClaimPlans = [];
-    $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
-    $deadline = microtime(true) + 7200.0;
-    $consecutiveNoProgress = 0;
-    // The final destructive failpoint runs after legacy cleanup but before the
-    // ready marker. Resuming the maintenance lifecycle must reconstruct that
-    // durable readiness transition without manual database surgery.
-    WP_FTS_Plugin::run_scheduled_schema_upgrade();
-    while (true) {
-        $remaining = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')", 'migration finalizer work');
-        $legacy = wp_fts_wc_legacy_tables();
-        WP_FTS_Plugin::reset_request_caches();
-        $ready = !empty(WP_FTS_Plugin::search_takeover_status()['ready']);
-        if ($remaining === 0 && ($legacy !== [] || !$ready)) {
-            WP_FTS_Plugin::run_scheduled_schema_upgrade();
-            WP_FTS_Plugin::reset_request_caches();
-            $remaining = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')", 'migration finalizer resumed work');
-            $legacy = wp_fts_wc_legacy_tables();
-            $ready = !empty(WP_FTS_Plugin::search_takeover_status()['ready']);
-        }
-        if ($remaining === 0 && $legacy === [] && $ready) {
-            break;
-        }
-        if (microtime(true) >= $deadline) {
-            throw new RuntimeException('Populated migration did not drain and clean legacy tables within two hours.');
-        }
-        $batchStarted = hrtime(true);
-        $summary = WP_FTS_Plugin::process_manual_index_batch([
-            'source' => 'worst-case-migration-finalize',
-            'batch_size' => 100,
-            'time_budget' => 300.0,
-        ]);
-        $batches[] = [
-            'duration_ms' => wp_fts_wc_elapsed_ms($batchStarted),
-            'attempted' => (int) ($summary['attempted'] ?? 0),
-            'processed' => (int) ($summary['processed'] ?? 0),
-            'committed' => (int) ($summary['committed'] ?? 0),
-            'queue_processed' => (int) ($summary['queue_processed'] ?? 0),
-            'indexed' => (int) ($summary['indexed'] ?? 0),
-            'unchanged' => (int) ($summary['unchanged'] ?? 0),
-            'backfill_scanned' => (int) ($summary['backfill_scanned'] ?? 0),
-            'backfill_queued' => (int) ($summary['backfill_queued'] ?? 0),
-            'scope_page_committed' => !empty($summary['scope_page_committed']),
-            'scope_completed' => !empty($summary['scope_completed']),
-            'empty_terms_cleaned' => (int) ($summary['empty_terms_cleaned'] ?? 0),
-            'wait_for_next_available' => !empty($summary['wait_for_next_available']),
-            'next_available_at' => is_numeric($summary['next_available_at'] ?? null) ? (int) $summary['next_available_at'] : null,
-            'has_more' => !empty($summary['has_more']),
-            'stop_reason' => is_scalar($summary['stop_reason'] ?? null) ? (string) $summary['stop_reason'] : '',
-            'skipped_locked' => !empty($summary['skipped_locked']),
-            'failures' => (int) ($summary['last_batch_failures'] ?? 0),
-        ];
-        wp_fts_wc_wait_after_worker_no_progress($summary, $deadline, 'Populated migration finalizer', $consecutiveNoProgress);
-        WP_FTS_Plugin::reset_request_caches();
-    }
-
-    $oracle = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration-oracle.json');
-    wp_fts_wc_assert(wp_fts_wc_migration_oracle_is_valid($oracle, $baseline), 'Migration evidence does not contain the exact independent v4 score oracle.');
-    $oracleCaseIds = ['common_or', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and'];
-    $oracleCases = is_array($oracle['cases'] ?? null) ? $oracle['cases'] : [];
-    $currentCases = [];
-    $parityGates = [];
-    foreach ($oracleCaseIds as $caseId) {
-        $case = $oracleCases[$caseId] ?? null;
-        wp_fts_wc_assert(is_array($case), "Migration oracle is missing case {$caseId}.");
-        $query = (string) ($case['query'] ?? '');
-        $options = is_array($case['options'] ?? null) ? $case['options'] : [];
-        $expectedResults = is_array($case['results'] ?? null) ? $case['results'] : [];
-        $results = wp_fts_wc_v4_ordered_score_signature(WP_FTS_Plugin::search($query, $options));
-        WP_FTS_Plugin::reset_request_caches();
-        $rerunResults = wp_fts_wc_v4_ordered_score_signature(WP_FTS_Plugin::search($query, $options));
-        $currentCases[$caseId] = [
-            'query' => $query,
-            'options' => $options,
-            'results' => $results,
-            'result_hash' => wp_fts_wc_canonical_hash($results),
-            'rerun_results' => $rerunResults,
-            'rerun_result_hash' => wp_fts_wc_canonical_hash($rerunResults),
-        ];
-        $parityGates[] = wp_fts_wc_gate(
-            'migration_' . $caseId . '_v4_oracle_ordered_score_parity',
-            $expectedResults,
-            $results,
-            $expectedResults === $results
-        );
-        $parityGates[] = wp_fts_wc_gate(
-            'migration_' . $caseId . '_post_migration_rerun_stable',
-            $results,
-            $rerunResults,
-            $results === $rerunResults
-        );
-    }
-    $dfMismatches = wp_fts_wc_checked_count(
-        'SELECT COUNT(*) FROM `' . wp_fts_wc_identifier($wpdb->prefix . 'fts_terms') . '` t '
-        . 'LEFT JOIN (SELECT term_id,COUNT(DISTINCT post_id) actual FROM `' . wp_fts_wc_identifier($wpdb->prefix . 'fts_postings') . '` GROUP BY term_id) p ON p.term_id=t.term_id '
-        . 'WHERE t.doc_freq <> COALESCE(p.actual,0)',
-        'migration document-frequency mismatches'
-    );
-    $phaseEvidence = [];
-    $postKillProbes = [];
-    $workerJournals = [];
-    $journalBatches = [];
-    $snapshotProcessHashes = [];
-    $snapshotMemoryLimitFailures = [];
-    $snapshotRecordKey = 'evid' . 'ence';
-    foreach (is_array($baseline['snapshot_cases'] ?? null) ? $baseline['snapshot_cases'] : [] as $caseId => $snapshotCase) {
-        if (is_array($snapshotCase) && is_string($snapshotCase['evidence']['process_identity']['sha256'] ?? null)) {
-            $snapshotProcessHashes[] = $snapshotCase['evidence']['process_identity']['sha256'];
-        } elseif (($snapshotCase[$snapshotRecordKey]['status'] ?? null) === 'FAIL'
-            && ($snapshotCase[$snapshotRecordKey]['error']['class'] ?? null) === 'MemoryLimitFatal'
-        ) {
-            $snapshotMemoryLimitFailures[] = $caseId;
-        }
-    }
-    $peakBytes = 0;
-    foreach (WP_FTS_WC_MIGRATION_FAILPOINTS as $phase) {
-        $evidence = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . "/migration-phase-{$phase}.json");
-        $storageEvidence = is_array($evidence['storage'] ?? null) ? $evidence['storage'] : [];
-        $phaseGates = is_array($evidence['gates'] ?? null) ? $evidence['gates'] : [];
-        $phaseGateIds = array_values(array_map('strval', array_column($phaseGates, 'id')));
-        wp_fts_wc_assert(
-            ($evidence['schema'] ?? null) === 'relational-fts-migration-phase-v3'
-                && ($evidence['status'] ?? null) === 'PASS'
-                && ($evidence['phase'] ?? null) === $phase
-                && (int) ($evidence['pid'] ?? 0) > 0
-                && ($evidence['state']['target'] ?? null) === $phase
-                && ($evidence['state']['gates'] ?? null) === $phaseGates
-                && is_array($storageEvidence['tables'] ?? null)
-                && (int) ($storageEvidence['total_bytes'] ?? -1) >= 0
-                && $phaseGateIds === wp_fts_wc_migration_phase_gate_ids()
-                && wp_fts_wc_gates_pass($phaseGates),
-            "Migration failpoint evidence is malformed or stale: {$phase}."
-        );
-        $phaseEvidence[$phase] = $evidence;
-        $peakBytes = max($peakBytes, (int) $storageEvidence['total_bytes']);
-
-        $probe = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . "/migration-post-kill-{$phase}.json");
-        $probeGates = is_array($probe['gates'] ?? null) ? $probe['gates'] : [];
-        $probeGateIds = array_values(array_map('strval', array_column($probeGates, 'id')));
-        wp_fts_wc_assert(
-            ($probe['schema'] ?? null) === 'relational-fts-migration-post-kill-probe-v3'
-                && ($probe['status'] ?? null) === 'PASS'
-                && ($probe['target'] ?? null) === $phase
-                && ($probe['phase_state']['target'] ?? null) === $phase
-                && (int) ($probe['pid'] ?? 0) > 0
-                && array_key_exists('ordinary_option_after', $probe)
-                && is_string($probe['ordinary_option_after'])
-                && $probe['ordinary_option_after'] === ($probe['ordinary']['option'] ?? null)
-                && $probeGateIds === wp_fts_wc_migration_post_kill_gate_ids()
-                && wp_fts_wc_gates_pass($probeGates),
-            "Post-kill migration evidence is malformed or stale: {$phase}."
-        );
-        $postKillProbes[$phase] = $probe;
-
-        $journal = wp_fts_wc_read_migration_worker_journal($phase);
-        wp_fts_wc_assert(
-            (int) ($journal['header']['pid'] ?? 0) === (int) ($evidence['pid'] ?? 0),
-            "Migration worker journal PID does not match its killed process: {$phase}."
-        );
-        foreach ($journal['batches'] as $batch) {
-            wp_fts_wc_assert(
-                is_numeric($batch['duration_ms'] ?? null)
-                    && (float) $batch['duration_ms'] >= 0.0
-                    && (int) ($batch['attempted'] ?? -1) >= 0
-                    && (int) ($batch['processed'] ?? -1) >= 0
-                    && (int) ($batch['committed'] ?? -1) >= 0
-                    && (int) ($batch['queue_processed'] ?? -1) >= 0
-                    && (int) ($batch['backfill_scanned'] ?? -1) >= 0
-                    && (int) ($batch['backfill_queued'] ?? -1) >= 0
-                    && (int) ($batch['failures'] ?? -1) >= 0
-                    && is_bool($batch['skipped_locked'] ?? null),
-                "Migration worker journal contains a malformed batch: {$phase}."
-            );
-            $journalBatches[] = ['origin' => $phase, ...$batch];
-        }
-        $workerJournals[$phase] = $journal;
-    }
-    $finalizerBatches = array_map(static fn(array $batch): array => ['origin' => 'migration-finalize', 'type' => 'batch', ...$batch], $batches);
-    $combinedBatches = [...$journalBatches, ...$finalizerBatches];
-    $workerFailures = array_sum(array_map(static fn(array $batch): int => max(0, (int) ($batch['failures'] ?? 0)), $combinedBatches));
-    $workerProcessed = array_sum(array_map(static fn(array $batch): int => max(0, (int) ($batch['processed'] ?? 0)), $combinedBatches));
-    $workerNoProgressBatches = count(array_filter(
-        $combinedBatches,
-        static fn(array $batch): bool => !wp_fts_wc_worker_made_progress($batch)
-    ));
-    $finalStorage = wp_fts_wc_all_fts_table_bytes();
-    $oldBytes = (int) ($baseline['tables']['total_bytes'] ?? 0);
-    $newBytes = (int) ($finalStorage['total_bytes'] ?? 0);
-    $denominator = max(1, $oldBytes, $newBytes);
-    $ratio = $peakBytes / $denominator;
-    $multisiteBaseline = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration-multisite-baseline.json');
-    $sentinelDocumentCount = 0;
-    foreach (($multisiteBaseline['sites'] ?? []) as $site) {
-        if (is_array($site) && ($site['prefix'] ?? null) === $wpdb->prefix) {
-            $sentinelDocumentCount = (int) ($site['baseline']['document_count'] ?? 0);
-            break;
-        }
-    }
-    wp_fts_wc_assert($sentinelDocumentCount > 0, 'Current-site multisite sentinel baseline is missing.');
-    $expectedDocumentCount = (int) $manifest['profile']['documents'] - (int) $manifest['profile']['password'] + $sentinelDocumentCount;
-    $workerBatchCeiling = 3 * (int) ceil($expectedDocumentCount / 100) + 100;
-    $workerNoProgressBatchCeiling = count(WP_FTS_WC_MIGRATION_FAILPOINTS) * 3 + 3;
-    $actualDocumentCount = wp_fts_wc_checked_count(
-        'SELECT COUNT(*) FROM `' . wp_fts_wc_identifier($wpdb->prefix . 'fts_documents') . '`',
-        'migration final document cardinality'
-    );
-    $finalWorkRows = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')", 'migration final work');
-    $baselineIndexerSignatures = is_array($baseline['indexer_signatures'] ?? null)
-        ? $baseline['indexer_signatures']
-        : [];
-    $currentIndexerSignatures = wp_fts_wc_indexer_signature_evidence();
-    $migrationPostingKinds = wp_fts_wc_posting_kind_counts();
-    WP_FTS_Plugin::reset_request_caches();
-    $takeoverStatus = WP_FTS_Plugin::search_takeover_status();
-    $gates = [
-        wp_fts_wc_gate(
-            'migration_immutable_baseline_source',
-            WP_FTS_WC_IMMUTABLE_BASELINE_SHA,
-            $baseline['source_sha'] ?? null,
-            ($baseline['source_sha'] ?? null) === WP_FTS_WC_IMMUTABLE_BASELINE_SHA
-        ),
-        wp_fts_wc_gate(
-            'migration_snapshot_case_artifacts_complete',
-            ['case_ids' => wp_fts_wc_migration_case_ids(), 'allowed_memory_limit_failures' => [[], ['rare_anchor_and']]],
-            ['case_ids' => array_keys(is_array($baseline['snapshot_cases'] ?? null) ? $baseline['snapshot_cases'] : []), 'distinct_processes' => count(array_unique($snapshotProcessHashes)), 'memory_limit_failures' => $snapshotMemoryLimitFailures],
-            array_keys(is_array($baseline['snapshot_cases'] ?? null) ? $baseline['snapshot_cases'] : []) === wp_fts_wc_migration_case_ids()
-                && ($snapshotMemoryLimitFailures === [] || $snapshotMemoryLimitFailures === ['rare_anchor_and'])
-                && count($snapshotProcessHashes) + count($snapshotMemoryLimitFailures) === 6
-                && count(array_unique($snapshotProcessHashes)) === count($snapshotProcessHashes)
-        ),
-        wp_fts_wc_gate('migration_all_failpoints_resumed', count(WP_FTS_WC_MIGRATION_FAILPOINTS), count($phaseEvidence), count($phaseEvidence) === count(WP_FTS_WC_MIGRATION_FAILPOINTS)),
-        wp_fts_wc_gate('migration_all_phase_state_contracts', count(WP_FTS_WC_MIGRATION_FAILPOINTS), count($phaseEvidence), count($phaseEvidence) === count(WP_FTS_WC_MIGRATION_FAILPOINTS)),
-        wp_fts_wc_gate('migration_all_post_kill_probes', count(WP_FTS_WC_MIGRATION_FAILPOINTS), count($postKillProbes), count($postKillProbes) === count(WP_FTS_WC_MIGRATION_FAILPOINTS)),
-        wp_fts_wc_gate('migration_all_worker_journals', count(WP_FTS_WC_MIGRATION_FAILPOINTS), count($workerJournals), count($workerJournals) === count(WP_FTS_WC_MIGRATION_FAILPOINTS)),
-        wp_fts_wc_gate('migration_legacy_tables_removed', 0, count(wp_fts_wc_legacy_tables()), wp_fts_wc_legacy_tables() === []),
-        wp_fts_wc_gate('migration_work_drained', 0, $finalWorkRows, $finalWorkRows === 0),
-        wp_fts_wc_gate('migration_search_takeover_ready', true, (bool) ($takeoverStatus['ready'] ?? false), !empty($takeoverStatus['ready'])),
-        wp_fts_wc_gate('migration_document_count', $expectedDocumentCount, $actualDocumentCount, $actualDocumentCount === $expectedDocumentCount),
-        wp_fts_wc_gate('migration_doc_freq_consistency', 0, $dfMismatches, $dfMismatches === 0),
-        wp_fts_wc_gate('migration_peak_disk_ratio', '<= 2.2', $ratio, $ratio <= 2.2),
-        wp_fts_wc_gate('migration_worker_failures', 0, $workerFailures, $workerFailures === 0),
-        wp_fts_wc_gate('migration_worker_batch_count', "<= {$workerBatchCeiling}", count($combinedBatches), count($combinedBatches) <= $workerBatchCeiling),
-        wp_fts_wc_gate('migration_worker_no_progress_batches', "<= {$workerNoProgressBatchCeiling}", $workerNoProgressBatches, $workerNoProgressBatches <= $workerNoProgressBatchCeiling),
-        wp_fts_wc_gate('migration_worker_recorded_progress', '> 0', $workerProcessed, $workerProcessed > 0),
-        wp_fts_wc_gate(
-            'migration_index_profile_v6_forced_rebuild',
-            ['baseline_not_v6' => true, 'current' => ['indexer' => 'wp-fts-indexer-v6', 'plugin_profile' => 'wp-fts-indexer-v6'], 'processed' => ">= {$expectedDocumentCount}"],
-            ['baseline' => $baselineIndexerSignatures, 'current' => $currentIndexerSignatures, 'processed' => $workerProcessed],
-            ($baselineIndexerSignatures['indexer'] ?? '') !== 'wp-fts-indexer-v6'
-                && ($baselineIndexerSignatures['plugin_profile'] ?? '') !== 'wp-fts-indexer-v6'
-                && $currentIndexerSignatures === ['indexer' => 'wp-fts-indexer-v6', 'plugin_profile' => 'wp-fts-indexer-v6']
-                && $workerProcessed >= $expectedDocumentCount
-        ),
-        wp_fts_wc_gate('migration_surface_rows_published', '> 0 with df parity', $migrationPostingKinds, (int) ($migrationPostingKinds['surface']['posting_rows'] ?? 0) > 0 && ($migrationPostingKinds['physical_by_kind'] ?? null) === ($migrationPostingKinds['doc_freq_by_kind'] ?? null)),
-        ...$parityGates,
-    ];
-    $expectedGateIds = [
-        'migration_immutable_baseline_source',
-        'migration_snapshot_case_artifacts_complete',
-        'migration_all_failpoints_resumed',
-        'migration_all_phase_state_contracts',
-        'migration_all_post_kill_probes',
-        'migration_all_worker_journals',
-        'migration_legacy_tables_removed',
-        'migration_work_drained',
-        'migration_search_takeover_ready',
-        'migration_document_count',
-        'migration_doc_freq_consistency',
-        'migration_peak_disk_ratio',
-        'migration_worker_failures',
-        'migration_worker_batch_count',
-        'migration_worker_no_progress_batches',
-        'migration_worker_recorded_progress',
-        'migration_index_profile_v6_forced_rebuild',
-        'migration_surface_rows_published',
-    ];
-    foreach ($oracleCaseIds as $caseId) {
-        $expectedGateIds[] = 'migration_' . $caseId . '_v4_oracle_ordered_score_parity';
-        $expectedGateIds[] = 'migration_' . $caseId . '_post_migration_rerun_stable';
-    }
-    wp_fts_wc_assert(
-        array_values(array_map('strval', array_column($gates, 'id'))) === $expectedGateIds,
-        'Migration final evidence gate set drifted.'
-    );
-    $result = [
-        'schema' => 'relational-fts-migration-report-v6',
-        'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
-        'baseline' => $baseline,
-        'oracle' => $oracle,
-        'scoring_cutover' => $oracle['scoring_cutover'] ?? null,
-        'phases' => $phaseEvidence,
-        'post_kill_probes' => $postKillProbes,
-        'elapsed_ms' => wp_fts_wc_elapsed_ms($started),
-        'worker_journals' => $workerJournals,
-        'worker_batches' => $combinedBatches,
-        'worker_processed' => $workerProcessed,
-        'worker_failures' => $workerFailures,
-        'worker_batch_count' => count($combinedBatches),
-        'worker_batch_ceiling' => $workerBatchCeiling,
-        'worker_no_progress_batches' => $workerNoProgressBatches,
-        'worker_no_progress_batch_ceiling' => $workerNoProgressBatchCeiling,
-        'indexer_signatures' => ['baseline' => $baselineIndexerSignatures, 'current' => $currentIndexerSignatures],
-        'posting_kinds' => $migrationPostingKinds,
-        'search_takeover_status' => $takeoverStatus,
-        'current_cases' => $currentCases,
-        'final_storage' => $finalStorage,
-        'peak_storage_bytes' => $peakBytes,
-        'peak_disk_ratio' => $ratio,
-        'doc_freq_mismatches' => $dfMismatches,
-        'gate_ids' => $expectedGateIds,
-        'gates' => $gates,
-    ];
-    wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/migration.json', $result);
-    if ($result['status'] !== 'PASS') {
-        throw new RuntimeException('Populated migration failed gates: ' . implode(', ', wp_fts_wc_gate_failures($gates)));
-    }
-    return ['status' => 'PASS', 'phase' => 'migration-finalize', 'elapsed_ms' => $result['elapsed_ms']];
-}
-
-/** Prove the migrated v4 result is stable in a second, fresh PHP process. */
-function wp_fts_wc_migration_rerun(): array
-{
-    wp_fts_wc_assert_disposable_guard();
-    wp_fts_wc_require_plugin();
-    $manifest = wp_fts_wc_unbound_manifest();
-    $baseline = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration-baseline.json');
-    wp_fts_wc_assert(wp_fts_wc_migration_baseline_is_valid($baseline, $manifest), 'Migration rerun requires the exact six-process v4 legacy execution baseline.');
-    $oracle = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration-oracle.json');
-    wp_fts_wc_assert(wp_fts_wc_migration_oracle_is_valid($oracle, $baseline), 'Migration rerun requires the exact independent v4 score oracle.');
-    $oracleCaseIds = ['common_or', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and'];
-    $oracleCases = $oracle['cases'];
-    $cases = [];
-    $gates = [];
-    foreach ($oracleCaseIds as $caseId) {
-        $case = $oracleCases[$caseId];
-        $query = (string) ($case['query'] ?? '');
-        $options = is_array($case['options'] ?? null) ? $case['options'] : [];
-        $expected = is_array($case['results'] ?? null) ? $case['results'] : [];
-        $actual = wp_fts_wc_v4_ordered_score_signature(WP_FTS_Plugin::search($query, $options));
-        $cases[$caseId] = ['results' => $actual, 'result_hash' => wp_fts_wc_canonical_hash($actual)];
-        $gates[] = wp_fts_wc_gate('migration_' . $caseId . '_fresh_process_stable', $expected, $actual, $expected === $actual);
-    }
-    wp_fts_wc_assert(count($cases) === 5, 'Migration rerun did not exercise every oracle case.');
-    $expectedGateIds = array_map(
-        static fn(string $caseId): string => 'migration_' . $caseId . '_fresh_process_stable',
-        $oracleCaseIds
-    );
-    wp_fts_wc_assert(
-        array_values(array_map('strval', array_column($gates, 'id'))) === $expectedGateIds,
-        'Fresh-process migration gate set drifted.'
-    );
-    $result = ['schema' => 'relational-fts-migration-rerun-v1', 'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL', 'cases' => $cases, 'gates' => $gates];
-    wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/migration-rerun.json', $result);
-    if (!wp_fts_wc_gates_pass($gates)) {
-        throw new RuntimeException('Fresh-process migration stability failed: ' . implode(', ', wp_fts_wc_gate_failures($gates)));
-    }
-    return ['status' => 'PASS', 'phase' => 'migration-rerun', 'cases' => count($cases)];
-}
-
-/**
- * Migrate all three real site prefixes, inject a v4-created failure on site two,
- * resume it, and prove site three is neither skipped nor contaminated.
- */
-function wp_fts_wc_multisite_migration(): array
-{
-    global $wpdb;
-
-    wp_fts_wc_assert_disposable_guard();
-    wp_fts_wc_require_plugin();
-    $baseline = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration-multisite-baseline.json');
-    $siteIds = array_values(array_map('intval', $baseline['site_ids'] ?? []));
-    wp_fts_wc_assert(count($siteIds) === 3, 'Multisite migration baseline evidence does not contain three sites.');
-    $baselineSites = is_array($baseline['sites'] ?? null) ? $baseline['sites'] : [];
-    wp_fts_wc_assert(count($baselineSites) === 3, 'Multisite migration baseline does not contain three populated sentinel indexes.');
-    $uniqueTokens = [];
-    foreach ($siteIds as $siteId) {
-        $siteBaseline = $baselineSites[$siteId] ?? null;
-        wp_fts_wc_assert(is_array($siteBaseline), "Multisite sentinel baseline is missing for site {$siteId}.");
-        $uniqueTokens[$siteId] = (string) ($siteBaseline['unique_token'] ?? '');
-    }
-    $secondSite = $siteIds[1];
-    $faultHit = false;
-    $fault = static function (mixed $phase, mixed ...$unused) use ($secondSite, &$faultHit): void {
-        if (!$faultHit && get_current_blog_id() === $secondSite && is_scalar($phase) && (string) $phase === 'v4_created') {
-            $faultHit = true;
-            throw new RuntimeException('intentional-multisite-site-two-migration-failure');
-        }
-    };
-    add_action('wp_fts_schema_migration_phase', $fault, PHP_INT_MAX, 2);
-    $caught = false;
-    foreach ($siteIds as $siteId) {
-        if (!switch_to_blog($siteId)) {
-            throw new RuntimeException("Could not switch to migration site {$siteId}.");
-        }
-        try {
-            WP_FTS_Plugin::reset_request_caches();
-            WP_FTS_Plugin::upgrade_schema();
-        } catch (Throwable $error) {
-            if ($siteId === $secondSite && str_contains($error->getMessage(), 'intentional-multisite-site-two')) {
-                $caught = true;
-            } else {
-                throw $error;
-            }
-        } finally {
-            restore_current_blog();
-        }
-        if ($caught) {
-            break;
-        }
-    }
-    remove_action('wp_fts_schema_migration_phase', $fault, PHP_INT_MAX);
-    wp_fts_wc_assert($faultHit && $caught, 'The multisite site-two migration failure was not observed.');
-
-    // Prove the thrown site-two migration did not mutate site one and never
-    // reached site three before any resume work is allowed to run.
-    $firstSiteAfterFailure = [];
-    if (!switch_to_blog($siteIds[0])) {
-        throw new RuntimeException('Could not inspect site one after the site-two migration failure.');
-    }
-    try {
-        WP_FTS_Plugin::reset_request_caches();
-        $firstDefinition = $baselineSites[$siteIds[0]];
-        $foreignTokens = array_values(array_diff(array_values($uniqueTokens), [$uniqueTokens[$siteIds[0]]]));
-        $firstSiteAfterFailure = wp_fts_wc_multisite_sentinel_state($firstDefinition, $foreignTokens);
-        $firstSiteAfterFailure['v4_search'] = wp_fts_wc_multisite_v4_search($firstDefinition);
-        $firstSiteAfterFailure['requeue'] = wp_fts_wc_multisite_requeue_and_drain($siteIds[0], $firstDefinition['post_ids']);
-        $firstSiteAfterFailure['index_document_rerun_signature'] = wp_fts_wc_multisite_index_document_signature($firstDefinition['post_ids']);
-    } finally {
-        restore_current_blog();
-    }
-    $firstBaselineState = $baselineSites[$siteIds[0]]['baseline'];
-    $firstSearchMembership = wp_fts_wc_multisite_search_membership_matches($firstBaselineState, $firstSiteAfterFailure);
-    $firstDfUnchanged = ($firstBaselineState['doc_freq'] ?? null) === ($firstSiteAfterFailure['doc_freq'] ?? null);
-    $firstDocumentSemanticsPreserved = wp_fts_wc_multisite_document_state_matches($firstBaselineState, $firstSiteAfterFailure);
-    $firstIndexHashesRewritten = wp_fts_wc_multisite_index_hashes_rewritten($firstBaselineState, $firstSiteAfterFailure);
-    $firstIsolated = wp_fts_wc_multisite_foreign_searches_empty($firstSiteAfterFailure);
-    $firstForeignDfsEmpty = wp_fts_wc_multisite_foreign_doc_freqs_empty($firstSiteAfterFailure);
-    $firstV4ScoreParity = ($baselineSites[$siteIds[0]]['v4_oracle'] ?? null) === ($firstSiteAfterFailure['v4_search'] ?? null);
-    $firstIndexHashStable = ($firstSiteAfterFailure['index_document_signature'] ?? null) === ($firstSiteAfterFailure['index_document_rerun_signature'] ?? null);
-
-    if (!switch_to_blog($siteIds[2])) {
-        throw new RuntimeException('Could not inspect site three after the site-two migration failure.');
-    }
-    try {
-        $siteThreeTablesAfterFailure = wp_fts_wc_checked_fts_table_names('site three tables after site two failure');
-        $siteThreeExpectedLegacy = array_values(array_map('strval', $baselineSites[$siteIds[2]]['legacy_tables'] ?? []));
-        $siteThreePhysicalAfterFailure = wp_fts_wc_multisite_legacy_physical_sentinel_snapshot($baselineSites[$siteIds[2]]);
-    } finally {
-        restore_current_blog();
-    }
-    $siteThreeTableFingerprintAfterFailure = wp_fts_wc_canonical_hash($siteThreeTablesAfterFailure);
-    $siteThreeExpectedFingerprint = (string) ($baselineSites[$siteIds[2]]['legacy_table_fingerprint'] ?? '');
-    $siteThreeUntouched = $siteThreeTablesAfterFailure === $siteThreeExpectedLegacy
-        && hash_equals($siteThreeExpectedFingerprint, $siteThreeTableFingerprintAfterFailure);
-    $siteThreePhysicalFingerprintAfterFailure = wp_fts_wc_canonical_hash($siteThreePhysicalAfterFailure);
-    $siteThreeExpectedPhysicalFingerprint = (string) ($baselineSites[$siteIds[2]]['legacy_physical_sentinel_hash'] ?? '');
-    $siteThreePhysicalUntouched = hash_equals($siteThreeExpectedPhysicalFingerprint, $siteThreePhysicalFingerprintAfterFailure);
-
-    $sites = [];
-    foreach ($siteIds as $siteId) {
-        if (!switch_to_blog($siteId)) {
-            throw new RuntimeException("Could not resume migration site {$siteId}.");
-        }
-        try {
-            WP_FTS_Plugin::reset_request_caches();
-            WP_FTS_Plugin::run_scheduled_schema_upgrade();
-            $deadline = microtime(true) + 1800.0;
-            $consecutiveNoProgress = 0;
-            while (true) {
-                $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
-                $remaining = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')", "multisite site {$siteId} migration work");
-                $legacy = wp_fts_wc_legacy_tables();
-                WP_FTS_Plugin::reset_request_caches();
-                $ready = !empty(WP_FTS_Plugin::search_takeover_status()['ready']);
-                if ($remaining === 0 && ($legacy !== [] || !$ready)) {
-                    WP_FTS_Plugin::run_scheduled_schema_upgrade();
-                    WP_FTS_Plugin::reset_request_caches();
-                    $remaining = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')", "multisite site {$siteId} resumed migration work");
-                    $legacy = wp_fts_wc_legacy_tables();
-                    $ready = !empty(WP_FTS_Plugin::search_takeover_status()['ready']);
-                }
-                if ($remaining === 0 && $legacy === [] && $ready) {
-                    break;
-                }
-                if (microtime(true) >= $deadline) {
-                    throw new RuntimeException("Multisite migration site {$siteId} did not drain.");
-                }
-                $summary = WP_FTS_Plugin::process_manual_index_batch([
-                    'source' => 'worst-case-multisite-migration',
-                    'batch_size' => 100,
-                    'time_budget' => 300.0,
-                ]);
-                wp_fts_wc_wait_after_worker_no_progress($summary, $deadline, "Multisite migration site {$siteId}", $consecutiveNoProgress);
-                WP_FTS_Plugin::reset_request_caches();
-            }
-            $actual = wp_fts_wc_checked_fts_table_names("site {$siteId} final current tables");
-            $expected = array_map(static fn(string $suffix): string => $wpdb->prefix . $suffix, ['fts_documents', 'fts_postings', 'fts_terms', 'fts_work']);
-            sort($expected, SORT_STRING);
-            $definition = $baselineSites[$siteId];
-            $foreignTokens = array_values(array_diff(array_values($uniqueTokens), [$uniqueTokens[$siteId]]));
-            $currentState = wp_fts_wc_multisite_sentinel_state($definition, $foreignTokens);
-            $currentState['v4_search'] = wp_fts_wc_multisite_v4_search($definition);
-            $currentState['requeue'] = wp_fts_wc_multisite_requeue_and_drain($siteId, $definition['post_ids']);
-            $currentState['index_document_rerun_signature'] = wp_fts_wc_multisite_index_document_signature($definition['post_ids']);
-            $baselineState = is_array($definition['baseline'] ?? null) ? $definition['baseline'] : [];
-            $searchMembership = wp_fts_wc_multisite_search_membership_matches($baselineState, $currentState);
-            $dfParity = ($baselineState['doc_freq'] ?? null) === ($currentState['doc_freq'] ?? null);
-            $documentSemanticsParity = wp_fts_wc_multisite_document_state_matches($baselineState, $currentState);
-            $indexHashesRewritten = wp_fts_wc_multisite_index_hashes_rewritten($baselineState, $currentState);
-            $crossSiteIsolation = wp_fts_wc_multisite_foreign_searches_empty($currentState);
-            $foreignDfIsolation = wp_fts_wc_multisite_foreign_doc_freqs_empty($currentState);
-            $v4ScoreParity = ($definition['v4_oracle'] ?? null) === ($currentState['v4_search'] ?? null);
-            $indexHashStable = ($currentState['index_document_signature'] ?? null) === ($currentState['index_document_rerun_signature'] ?? null);
-            $recordedPrefixParity = (string) ($definition['prefix'] ?? '') === (string) $wpdb->prefix;
-            $workRows = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')", "multisite site {$siteId} final work");
-            $sites[$siteId] = [
-                'prefix' => $wpdb->prefix,
-                'tables' => $actual,
-                'expected_tables' => $expected,
-                'work_rows' => $workRows,
-                'ordinary_option_available' => is_string(get_option('blogname')) && get_option('blogname') !== '',
-                'baseline' => $baselineState,
-                'current' => $currentState,
-                'search_membership_parity' => $searchMembership,
-                'doc_freq_parity' => $dfParity,
-                'document_semantics_parity' => $documentSemanticsParity,
-                'cross_site_isolation' => $crossSiteIsolation,
-                'foreign_doc_freq_isolation' => $foreignDfIsolation,
-                'v4_oracle_score_parity' => $v4ScoreParity,
-                'index_content_hash_stable' => $indexHashStable,
-                'index_content_hash_rewritten' => $indexHashesRewritten,
-                'recorded_prefix_parity' => $recordedPrefixParity,
-                'search_takeover_ready' => $ready,
-                'passed' => $actual === $expected && $workRows === 0 && $ready && $searchMembership && $dfParity && $documentSemanticsParity && $crossSiteIsolation && $foreignDfIsolation && $v4ScoreParity && $indexHashStable && $indexHashesRewritten && $recordedPrefixParity,
-            ];
-        } finally {
-            restore_current_blog();
-        }
-    }
-    $passedSites = count(array_filter($sites, static fn(array $site): bool => !empty($site['passed']) && !empty($site['ordinary_option_available'])));
-    $searchMembershipSites = count(array_filter($sites, static fn(array $site): bool => !empty($site['search_membership_parity'])));
-    $dfParitySites = count(array_filter($sites, static fn(array $site): bool => !empty($site['doc_freq_parity'])));
-    $documentSemanticsParitySites = count(array_filter($sites, static fn(array $site): bool => !empty($site['document_semantics_parity'])));
-    $isolatedSites = count(array_filter($sites, static fn(array $site): bool => !empty($site['cross_site_isolation'])));
-    $foreignDfIsolatedSites = count(array_filter($sites, static fn(array $site): bool => !empty($site['foreign_doc_freq_isolation'])));
-    $v4ScoreParitySites = count(array_filter($sites, static fn(array $site): bool => !empty($site['v4_oracle_score_parity'])));
-    $stableIndexHashSites = count(array_filter($sites, static fn(array $site): bool => !empty($site['index_content_hash_stable'])));
-    $rewrittenIndexHashSites = count(array_filter($sites, static fn(array $site): bool => !empty($site['index_content_hash_rewritten'])));
-    $acknowledgedSites = count(array_filter($sites, static function (array $site): bool {
-        $requeue = is_array($site['current']['requeue'] ?? null) ? $site['current']['requeue'] : [];
-        $expected = count($requeue['post_ids'] ?? []);
-        return (int) ($requeue['acknowledged'] ?? -1) === $expected
-            && (int) ($requeue['committed'] ?? -1) === $expected
-            && (int) ($requeue['unchanged'] ?? -1) === $expected
-            && (int) ($requeue['indexed'] ?? -1) === 0
-            && (int) ($requeue['analyzed'] ?? -1) === 0;
-    }));
-    $acknowledgedGenerations = array_sum(array_map(static fn(array $site): int => (int) ($site['current']['requeue']['acknowledged'] ?? 0), $sites));
-    $unchangedGenerations = array_sum(array_map(static fn(array $site): int => (int) ($site['current']['requeue']['unchanged'] ?? 0), $sites));
-    $indexedGenerations = array_sum(array_map(static fn(array $site): int => (int) ($site['current']['requeue']['indexed'] ?? 0), $sites));
-    $expectedAcknowledgedGenerations = array_sum(array_map(static fn(array $site): int => (int) ($site['sentinel_count'] ?? 0), $baselineSites));
-    $firstStabilityOutcome = [
-        'acknowledged' => (int) ($firstSiteAfterFailure['requeue']['acknowledged'] ?? -1),
-        'committed' => (int) ($firstSiteAfterFailure['requeue']['committed'] ?? -1),
-        'unchanged' => (int) ($firstSiteAfterFailure['requeue']['unchanged'] ?? -1),
-        'indexed' => (int) ($firstSiteAfterFailure['requeue']['indexed'] ?? -1),
-        'analyzed' => (int) ($firstSiteAfterFailure['requeue']['analyzed'] ?? -1),
-    ];
-    $expectedFirstAcknowledgedGenerations = (int) ($baselineSites[$siteIds[0]]['sentinel_count'] ?? 0);
-    $expectedFirstStabilityOutcome = [
-        'acknowledged' => $expectedFirstAcknowledgedGenerations,
-        'committed' => $expectedFirstAcknowledgedGenerations,
-        'unchanged' => $expectedFirstAcknowledgedGenerations,
-        'indexed' => 0,
-        'analyzed' => 0,
-    ];
-    $recordedPrefixSites = count(array_filter($sites, static fn(array $site): bool => !empty($site['recorded_prefix_parity'])));
-    $readySites = count(array_filter($sites, static fn(array $site): bool => !empty($site['search_takeover_ready'])));
-    $foreignProbeCount = array_sum(array_map(static fn(array $site): int => count($site['current']['foreign_search'] ?? []), $sites));
-    $emptyForeignProbes = array_sum(array_map(static function (array $site): int {
-        return count(array_filter(
-            $site['current']['foreign_search'] ?? [],
-            static fn(array $probe): bool => ($probe['results'] ?? null) === []
-        ));
-    }, $sites));
-    $emptyForeignDfProbes = array_sum(array_map(static function (array $site): int {
-        return count(array_filter(
-            $site['current']['foreign_doc_freq'] ?? [],
-            static fn(int $docFreq): bool => $docFreq === 0
-        ));
-    }, $sites));
-    $tokenMatrix = [];
-    $diagonalMatches = 0;
-    $offDiagonalEmpty = 0;
-    foreach ($siteIds as $siteId) {
-        foreach ($uniqueTokens as $ownerSiteId => $token) {
-            $probe = $ownerSiteId === $siteId
-                ? ($sites[$siteId]['current']['search']['unique'] ?? [])
-                : ($sites[$siteId]['current']['foreign_search'][$token] ?? []);
-            $results = is_array($probe['results'] ?? null) ? $probe['results'] : [];
-            $tokenMatrix[$siteId][$ownerSiteId] = $results;
-            if ($ownerSiteId === $siteId) {
-                $baselineResults = $sites[$siteId]['baseline']['search']['unique']['results'] ?? [];
-                $actualIds = array_map('intval', array_column($results, 'doc_id'));
-                $baselineIds = array_map('intval', array_column(is_array($baselineResults) ? $baselineResults : [], 'doc_id'));
-                sort($actualIds, SORT_NUMERIC);
-                sort($baselineIds, SORT_NUMERIC);
-                $diagonalMatch = $actualIds !== []
-                    && count(array_unique($actualIds)) === count($actualIds)
-                    && count(array_unique($baselineIds)) === count($baselineIds)
-                    && $actualIds === $baselineIds;
-                $diagonalMatches += $diagonalMatch ? 1 : 0;
-            } elseif ($results === []) {
-                $offDiagonalEmpty++;
-            }
-        }
-    }
-    $gates = [
-        wp_fts_wc_gate('multisite_site_two_failure_observed', true, $caught, $caught),
-        wp_fts_wc_gate('multisite_site_one_search_membership_after_site_two_failure', true, $firstSearchMembership, $firstSearchMembership),
-        wp_fts_wc_gate('multisite_site_one_df_unchanged_after_site_two_failure', true, $firstDfUnchanged, $firstDfUnchanged),
-        wp_fts_wc_gate('multisite_site_one_document_semantics_preserved_after_site_two_failure', true, $firstDocumentSemanticsPreserved, $firstDocumentSemanticsPreserved),
-        wp_fts_wc_gate('multisite_site_one_isolated_after_site_two_failure', true, $firstIsolated, $firstIsolated),
-        wp_fts_wc_gate('multisite_site_one_foreign_dfs_empty_after_site_two_failure', true, $firstForeignDfsEmpty, $firstForeignDfsEmpty),
-        wp_fts_wc_gate('multisite_site_one_v4_score_parity_after_site_two_failure', true, $firstV4ScoreParity, $firstV4ScoreParity),
-        wp_fts_wc_gate('multisite_site_one_stability_generations_acknowledged_after_site_two_failure', $expectedFirstStabilityOutcome, $firstStabilityOutcome, $firstStabilityOutcome === $expectedFirstStabilityOutcome),
-        wp_fts_wc_gate('multisite_site_one_index_content_hash_stable_after_site_two_failure', true, $firstIndexHashStable, $firstIndexHashStable),
-        wp_fts_wc_gate('multisite_site_one_index_content_hash_rewritten_after_site_two_failure', true, $firstIndexHashesRewritten, $firstIndexHashesRewritten),
-        wp_fts_wc_gate('multisite_site_three_untouched_after_site_two_failure', $siteThreeExpectedFingerprint, $siteThreeTableFingerprintAfterFailure, $siteThreeUntouched),
-        wp_fts_wc_gate('multisite_site_three_physical_sentinel_untouched_after_site_two_failure', $siteThreeExpectedPhysicalFingerprint, $siteThreePhysicalFingerprintAfterFailure, $siteThreePhysicalUntouched),
-        wp_fts_wc_gate('multisite_three_prefixes_migrated', 3, $passedSites, $passedSites === 3),
-        wp_fts_wc_gate('multisite_prefixes_distinct', 3, count(array_unique(array_column($sites, 'prefix'))), count(array_unique(array_column($sites, 'prefix'))) === 3),
-        wp_fts_wc_gate('multisite_recorded_prefix_parity', 3, $recordedPrefixSites, $recordedPrefixSites === 3),
-        wp_fts_wc_gate('multisite_search_takeover_ready', 3, $readySites, $readySites === 3),
-        wp_fts_wc_gate('multisite_search_membership_parity', 3, $searchMembershipSites, $searchMembershipSites === 3),
-        wp_fts_wc_gate('multisite_doc_freq_parity', 3, $dfParitySites, $dfParitySites === 3),
-        wp_fts_wc_gate('multisite_document_semantics_parity', 3, $documentSemanticsParitySites, $documentSemanticsParitySites === 3),
-        wp_fts_wc_gate('multisite_cross_site_isolation', 3, $isolatedSites, $isolatedSites === 3),
-        wp_fts_wc_gate('multisite_foreign_doc_freq_isolation', 3, $foreignDfIsolatedSites, $foreignDfIsolatedSites === 3),
-        wp_fts_wc_gate('multisite_v4_oracle_score_parity', 3, $v4ScoreParitySites, $v4ScoreParitySites === 3),
-        wp_fts_wc_gate('multisite_stability_acknowledged_sentinel_sites', 3, $acknowledgedSites, $acknowledgedSites === 3),
-        wp_fts_wc_gate('multisite_stability_generation_outcomes', ['acknowledged' => $expectedAcknowledgedGenerations, 'unchanged' => $expectedAcknowledgedGenerations, 'indexed' => 0], ['acknowledged' => $acknowledgedGenerations, 'unchanged' => $unchangedGenerations, 'indexed' => $indexedGenerations], $acknowledgedGenerations === $expectedAcknowledgedGenerations && $unchangedGenerations === $expectedAcknowledgedGenerations && $indexedGenerations === 0),
-        wp_fts_wc_gate('multisite_index_content_hash_stable', 3, $stableIndexHashSites, $stableIndexHashSites === 3),
-        wp_fts_wc_gate('multisite_index_content_hash_rewritten', 3, $rewrittenIndexHashSites, $rewrittenIndexHashSites === 3),
-        wp_fts_wc_gate('multisite_foreign_query_probes', 6, $foreignProbeCount, $foreignProbeCount === 6),
-        wp_fts_wc_gate('multisite_empty_foreign_query_probes', 6, $emptyForeignProbes, $emptyForeignProbes === 6),
-        wp_fts_wc_gate('multisite_empty_foreign_doc_freq_probes', 6, $emptyForeignDfProbes, $emptyForeignDfProbes === 6),
-        wp_fts_wc_gate('multisite_diagonal_token_membership', 3, $diagonalMatches, $diagonalMatches === 3),
-        wp_fts_wc_gate('multisite_off_diagonal_token_isolation', 6, $offDiagonalEmpty, $offDiagonalEmpty === 6),
-    ];
-    $expectedGateIds = [
-        'multisite_site_two_failure_observed',
-        'multisite_site_one_search_membership_after_site_two_failure',
-        'multisite_site_one_df_unchanged_after_site_two_failure',
-        'multisite_site_one_document_semantics_preserved_after_site_two_failure',
-        'multisite_site_one_isolated_after_site_two_failure',
-        'multisite_site_one_foreign_dfs_empty_after_site_two_failure',
-        'multisite_site_one_v4_score_parity_after_site_two_failure',
-        'multisite_site_one_stability_generations_acknowledged_after_site_two_failure',
-        'multisite_site_one_index_content_hash_stable_after_site_two_failure',
-        'multisite_site_one_index_content_hash_rewritten_after_site_two_failure',
-        'multisite_site_three_untouched_after_site_two_failure',
-        'multisite_site_three_physical_sentinel_untouched_after_site_two_failure',
-        'multisite_three_prefixes_migrated',
-        'multisite_prefixes_distinct',
-        'multisite_recorded_prefix_parity',
-        'multisite_search_takeover_ready',
-        'multisite_search_membership_parity',
-        'multisite_doc_freq_parity',
-        'multisite_document_semantics_parity',
-        'multisite_cross_site_isolation',
-        'multisite_foreign_doc_freq_isolation',
-        'multisite_v4_oracle_score_parity',
-        'multisite_stability_acknowledged_sentinel_sites',
-        'multisite_stability_generation_outcomes',
-        'multisite_index_content_hash_stable',
-        'multisite_index_content_hash_rewritten',
-        'multisite_foreign_query_probes',
-        'multisite_empty_foreign_query_probes',
-        'multisite_empty_foreign_doc_freq_probes',
-        'multisite_diagonal_token_membership',
-        'multisite_off_diagonal_token_isolation',
-    ];
-    wp_fts_wc_assert(
-        array_values(array_map('strval', array_column($gates, 'id'))) === $expectedGateIds,
-        'Multisite migration evidence gate set drifted.'
-    );
-    $result = [
-        'schema' => 'relational-fts-multisite-migration-v5',
-        'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
-        'site_ids' => $siteIds,
-        'failed_site_id' => $secondSite,
-        'failure_observed' => $caught,
-        'site_one_after_failure' => $firstSiteAfterFailure,
-        'site_three_tables_after_failure' => $siteThreeTablesAfterFailure,
-        'site_three_table_fingerprint_after_failure' => $siteThreeTableFingerprintAfterFailure,
-        'site_three_physical_sentinel_after_failure' => $siteThreePhysicalAfterFailure,
-        'site_three_physical_sentinel_fingerprint_after_failure' => $siteThreePhysicalFingerprintAfterFailure,
-        'token_matrix' => $tokenMatrix,
-        'sites' => $sites,
-        'gate_ids' => $expectedGateIds,
-        'gates' => $gates,
-    ];
-    wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/multisite-migration.json', $result);
-    if (!wp_fts_wc_gates_pass($gates)) {
-        throw new RuntimeException('Multisite migration proof failed: ' . implode(', ', wp_fts_wc_gate_failures($gates)));
-    }
-    return ['status' => 'PASS', 'phase' => 'multisite-migration', 'sites' => count($sites)];
-}
-
-/**
- * Force the exact sentinel documents through a new durable generation and the
- * real bounded worker before comparing content hashes. A second SELECT without
- * this boundary would only prove that two reads of the same rows agree.
- *
- * @param int[] $postIds
- * @return array<string,mixed>
- */
-function wp_fts_wc_multisite_requeue_and_drain(int $siteId, array $postIds): array
-{
-    global $wpdb;
-
-    $postIds = array_values(array_unique(array_map('intval', $postIds)));
-    sort($postIds, SORT_NUMERIC);
-    wp_fts_wc_assert($postIds !== [], "Multisite requeue requires sentinel documents on site {$siteId}.");
-    $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
-    $before = [
-        'post' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='post'", "site {$siteId} pre-requeue post work"),
-        'scope' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='scope'", "site {$siteId} pre-requeue scope work"),
-    ];
-    wp_fts_wc_assert($before === ['post' => 0, 'scope' => 0], "Multisite site {$siteId} has unrelated work before the stability requeue.");
-    $enqueued = WP_FTS_Plugin::enqueue_posts_for_reindex($postIds, ['lang' => 'en']);
-    wp_fts_wc_assert($enqueued === count($postIds), "Multisite site {$siteId} did not enqueue every sentinel generation.");
-    $queued = [
-        'post' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='post'", "site {$siteId} queued stability post work"),
-        'scope' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='scope'", "site {$siteId} queued stability scope work"),
-    ];
-    wp_fts_wc_assert($queued === ['post' => count($postIds), 'scope' => 0], "Multisite site {$siteId} stability requeue has unexpected durable cardinality.");
-
-    $started = hrtime(true);
-    $summary = WP_FTS_Plugin::process_manual_index_batch([
-        'source' => 'worst-case-multisite-requeue-' . $siteId,
-        'batch_size' => 100,
-        'time_budget' => 300.0,
-    ]);
-    $after = [
-        'post' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='post'", "site {$siteId} post-stability post work"),
-        'scope' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='scope'", "site {$siteId} post-stability scope work"),
-    ];
-    $batch = [
-        'duration_ms' => wp_fts_wc_elapsed_ms($started),
-        'attempted' => max(0, (int) ($summary['attempted'] ?? 0)),
-        'processed' => max(0, (int) ($summary['processed'] ?? 0)),
-        'committed' => max(0, (int) ($summary['committed'] ?? 0)),
-        'queue_processed' => max(0, (int) ($summary['queue_processed'] ?? 0)),
-        'indexed' => max(0, (int) ($summary['indexed'] ?? 0)),
-        'analyzed' => max(0, (int) ($summary['analyzed'] ?? 0)),
-        'unchanged' => max(0, (int) ($summary['unchanged'] ?? 0)),
-        'deleted' => max(0, (int) ($summary['deleted'] ?? 0)),
-        'permanently_rejected' => max(0, (int) ($summary['permanently_rejected'] ?? 0)),
-        'superseded' => max(0, (int) ($summary['superseded'] ?? 0)),
-        'retryable_failures' => max(0, (int) ($summary['retryable_failures'] ?? 0)),
-        'deferred' => max(0, (int) ($summary['deferred'] ?? 0)),
-        'failures' => max(0, (int) ($summary['last_batch_failures'] ?? 0)),
-        'skipped_locked' => !empty($summary['skipped_locked']),
-        'work_rows_before' => $queued,
-        'work_rows_after' => $after,
-    ];
-    $expected = count($postIds);
-    wp_fts_wc_assert(!$batch['skipped_locked'], "Multisite site {$siteId} stability requeue unexpectedly skipped its isolated worker lease.");
-    wp_fts_wc_assert(
-        $batch['attempted'] === $expected
-            && $batch['processed'] === 0
-            && $batch['committed'] === $expected
-            && $batch['queue_processed'] === $expected
-            && $batch['indexed'] === 0
-            && $batch['analyzed'] === 0
-            && $batch['unchanged'] === $expected
-            && $batch['deleted'] === 0
-            && $batch['permanently_rejected'] === 0
-            && $batch['superseded'] === 0
-            && $batch['retryable_failures'] === 0
-            && $batch['deferred'] === 0
-            && $batch['failures'] === 0,
-        "Multisite site {$siteId} stability requeue did not classify every acknowledged generation as unchanged."
-    );
-    wp_fts_wc_assert(
-        $after === ['post' => $queued['post'] - $batch['queue_processed'], 'scope' => 0],
-        "Multisite site {$siteId} stability requeue did not acknowledge its exact durable generation set."
-    );
-    WP_FTS_Plugin::reset_request_caches();
-
-    return [
-        'site_id' => $siteId,
-        'post_ids' => $postIds,
-        'work_rows_before' => $before,
-        'enqueued' => $enqueued,
-        'work_rows_after_enqueue' => $queued,
-        'acknowledged' => $batch['queue_processed'],
-        'committed' => $batch['committed'],
-        'unchanged' => $batch['unchanged'],
-        'indexed' => $batch['indexed'],
-        'analyzed' => $batch['analyzed'],
-        'work_rows_after' => $after,
-        'batches' => [$batch],
-    ];
-}
-
-/** @return array<string,mixed> */
-function wp_fts_wc_multisite_search_options(): array
-{
-    return [
-        'lang' => 'en',
-        'mode' => 'OR',
-        'limit' => 20,
-        'prefix_matching' => false,
-        'post_type' => 'post',
-        'post_status' => 'publish',
-        'include_snippets' => false,
-    ];
-}
-
-/** Drain the origin/main queue so every baseline sentinel is physically indexed. */
-function wp_fts_wc_drain_legacy_site_queue(int $siteId): void
-{
-    global $wpdb;
-
-    $queue = wp_fts_wc_identifier($wpdb->prefix . 'fts_queue');
-    $deadline = microtime(true) + 300.0;
-    while (wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$queue}`", "multisite site {$siteId} legacy queue") > 0) {
-        if (microtime(true) >= $deadline) {
-            throw new RuntimeException("Baseline queue did not drain for multisite site {$siteId}.");
-        }
-        $processed = WP_FTS_Plugin::process_queue(100);
-        WP_FTS_Plugin::reset_request_caches();
-        if ($processed === 0) {
-            usleep(100000);
-        }
-    }
-}
-
-/**
- * @param array<string,mixed> $definition
- * @param string[] $foreignTokens
- * @return array<string,mixed>
- */
-function wp_fts_wc_multisite_sentinel_state(array $definition, array $foreignTokens = []): array
-{
-    $search = [];
-    foreach (($definition['queries'] ?? []) as $kind => $queryDefinition) {
-        wp_fts_wc_assert(is_string($kind) && is_array($queryDefinition), 'Multisite sentinel query definition is malformed.');
-        $query = (string) ($queryDefinition['query'] ?? '');
-        $options = is_array($queryDefinition['options'] ?? null) ? $queryDefinition['options'] : [];
-        $results = wp_fts_wc_ordered_score_signature(WP_FTS_Plugin::search($query, $options));
-        $search[$kind] = ['results' => $results, 'result_hash' => wp_fts_wc_canonical_hash($results)];
-    }
-
-    $storage = WP_FTS_Plugin::storage(false);
-    $termDictionaryLayout = wp_fts_wc_multisite_term_dictionary_layout();
-    $docFreq = [];
-    $termKeys = [];
-    foreach (['shared' => $definition['shared_token'] ?? '', 'unique' => $definition['unique_token'] ?? ''] as $kind => $token) {
-        $termKey = wp_fts_wc_multisite_primary_term_key((string) $token);
-        $termKeys[$kind] = $termKey;
-        $docFreq[$kind] = wp_fts_wc_multisite_term_doc_freq($termKey, $termDictionaryLayout);
-    }
-    $postIds = array_values(array_map('intval', is_array($definition['post_ids'] ?? null) ? $definition['post_ids'] : []));
-    $metadata = $storage->get_doc_metadata($postIds);
-    $documentIds = array_values(array_map('intval', array_keys($metadata)));
-    sort($documentIds, SORT_NUMERIC);
-    $metadataSignature = [];
-    foreach ($metadata as $postId => $row) {
-        if (!is_array($row)) {
-            continue;
-        }
-        $metadataSignature[(int) $postId] = [
-            'post_type' => (string) ($row['post_type'] ?? ''),
-            'post_status' => (string) ($row['post_status'] ?? ''),
-            'post_date_gmt' => (string) ($row['post_date_gmt'] ?? ''),
-            'title' => (string) ($row['title'] ?? ''),
-            'excerpt' => (string) ($row['excerpt'] ?? ''),
-            'search_text_sha256' => hash('sha256', (string) ($row['search_text'] ?? '')),
-        ];
-    }
-    ksort($metadataSignature, SORT_NUMERIC);
-    $foreign = [];
-    $foreignDocFreq = [];
-    foreach ($foreignTokens as $token) {
-        $results = wp_fts_wc_ordered_score_signature(WP_FTS_Plugin::search((string) $token, wp_fts_wc_multisite_search_options()));
-        $foreign[(string) $token] = ['results' => $results, 'result_hash' => wp_fts_wc_canonical_hash($results)];
-        $termKey = wp_fts_wc_multisite_primary_term_key((string) $token);
-        $foreignDocFreq[(string) $token] = wp_fts_wc_multisite_term_doc_freq($termKey, $termDictionaryLayout);
-    }
-
-    return [
-        'search' => $search,
-        'term_keys' => $termKeys,
-        'doc_freq' => $docFreq,
-        'document_count' => count($metadata),
-        'document_ids' => $documentIds,
-        'metadata_signature' => $metadataSignature,
-        'index_document_signature' => wp_fts_wc_multisite_index_document_signature($postIds),
-        'source_signature' => wp_fts_wc_multisite_source_signature($postIds),
-        'foreign_search' => $foreign,
-        'foreign_doc_freq' => $foreignDocFreq,
-    ];
-}
-
-/** Derive the site's expected primary analyzed term without hardcoding a stem. */
-function wp_fts_wc_multisite_primary_term_key(string $token): string
-{
-    $occurrences = WP_FTS_Plugin::runtime_analyzer()->analyze_query_occurrences($token, [
-        'query_lang' => 'en',
-        'lang' => 'en',
-        'language' => 'en',
-        '_force_query_lang' => true,
-        'return' => 'occurrences',
-        'format' => 'occurrences',
-    ]);
-    foreach ($occurrences as $occurrence) {
-        if (!is_array($occurrence) || (int) ($occurrence['rank'] ?? 0) !== 0 || trim((string) ($occurrence['term'] ?? '')) === '') {
-            continue;
-        }
-        return WP_FTS_TermNamespace::namespace_term('en', (string) $occurrence['term']);
-    }
-    throw new RuntimeException("Multisite sentinel token produced no primary analyzed term: {$token}");
-}
-
-/** Positively identify the immutable baseline or current dictionary shape. */
-function wp_fts_wc_multisite_term_dictionary_layout(): string
-{
-    global $wpdb;
-
-    $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
-    $columns = array_map(
-        static fn(array $row): string => (string) ($row['Field'] ?? ''),
-        wp_fts_wc_checked_rows("SHOW COLUMNS FROM `{$terms}`", 'multisite sentinel dictionary columns')
-    );
-    if ($columns === ['term', 'doc_freq']) {
-        return 'legacy';
-    }
-    if ($columns === ['term_id', 'lang', 'kind', 'term', 'doc_freq']) {
-        return 'v4';
-    }
-
-    throw new RuntimeException('Unsupported multisite sentinel dictionary schema: ' . implode(',', $columns));
-}
-
-/** Read one exact frequency from the positively identified dictionary shape. */
-function wp_fts_wc_multisite_term_doc_freq(string $termKey, string $layout): int
-{
-    global $wpdb;
-
-    $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
-    if ($layout === 'legacy') {
-        $value = $wpdb->get_var($wpdb->prepare(
-            "SELECT doc_freq FROM `{$terms}` WHERE term=%s LIMIT 1",
-            $termKey
-        ));
-    } elseif ($layout === 'v4') {
-        $identity = WP_FTS_TermNamespace::split_term($termKey);
-        $value = $wpdb->get_var($wpdb->prepare(
-            "SELECT doc_freq FROM `{$terms}` WHERE lang=%s AND kind=0 AND term=%s LIMIT 1",
-            (string) $identity['lang'],
-            (string) $identity['term']
-        ));
-    } else {
-        throw new RuntimeException("Unsupported multisite sentinel dictionary layout: {$layout}");
-    }
-    if (trim((string) $wpdb->last_error) !== '') {
-        throw new RuntimeException('Could not inspect the multisite sentinel dictionary row: ' . trim((string) $wpdb->last_error));
-    }
-
-    return is_numeric($value) ? (int) $value : 0;
-}
-
-/** @param int[] $postIds @return array<int,array<string,mixed>> */
-function wp_fts_wc_multisite_index_document_signature(array $postIds): array
-{
-    global $wpdb;
-
-    if ($postIds === []) {
-        return [];
-    }
-    $args = array_values(array_unique(array_map('intval', $postIds)));
-    sort($args, SORT_NUMERIC);
-    $placeholders = implode(',', array_fill(0, count($args), '%d'));
-    $v4Table = wp_fts_wc_identifier($wpdb->prefix . 'fts_documents');
-    $v4Exists = (string) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($v4Table))) === $v4Table;
-    if (trim((string) $wpdb->last_error) !== '') {
-        throw new RuntimeException('Could not inspect the multisite index document table: ' . trim((string) $wpdb->last_error));
-    }
-    if ($v4Exists) {
-        $columns = array_map(
-            static fn(array $row): string => (string) ($row['Field'] ?? ''),
-            wp_fts_wc_checked_rows("SHOW COLUMNS FROM `{$v4Table}`", 'multisite v4 document columns')
-        );
-        wp_fts_wc_assert(
-            $columns === ['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at'],
-            'The v4 document relation must not retain the removed scalar doc_len column.'
-        );
-        $rows = wp_fts_wc_checked_rows($wpdb->prepare(
-            "SELECT post_id AS doc_id,primary_lang AS lang,HEX(content_hash) content_hash_hex FROM `{$v4Table}` WHERE post_id IN ({$placeholders}) ORDER BY post_id",
-            ...$args
-        ), 'multisite v4 index document signature');
-    } else {
-        $legacyTable = wp_fts_wc_identifier($wpdb->prefix . 'fts_docs');
-        $rows = wp_fts_wc_checked_rows($wpdb->prepare(
-            "SELECT doc_id,lang,HEX(content_hash) content_hash_hex FROM `{$legacyTable}` WHERE is_deleted=0 AND doc_id IN ({$placeholders}) ORDER BY doc_id",
-            ...$args
-        ), 'multisite legacy index document signature');
-    }
-    $signature = array_map(static fn(array $row): array => [
-        'doc_id' => (int) ($row['doc_id'] ?? 0),
-        'lang' => (string) ($row['lang'] ?? ''),
-        'content_hash_hex' => strtolower((string) ($row['content_hash_hex'] ?? '')),
-    ], $rows);
-    wp_fts_wc_assert(count($signature) === count($args), 'Multisite index document signature returned incomplete cardinality.');
-    wp_fts_wc_assert(array_column($signature, 'doc_id') === $args, 'Multisite index document signature returned the wrong document IDs.');
-    return $signature;
-}
-
-/** @param int[] $postIds @return array<int,array<string,mixed>> */
-function wp_fts_wc_multisite_source_signature(array $postIds): array
-{
-    global $wpdb;
-
-    if ($postIds === []) {
-        return [];
-    }
-    $args = array_values(array_unique(array_map('intval', $postIds)));
-    sort($args, SORT_NUMERIC);
-    $placeholders = implode(',', array_fill(0, count($args), '%d'));
-    $rows = wp_fts_wc_checked_rows($wpdb->prepare(
-        "SELECT ID,post_type,post_status,post_date_gmt,post_title,post_excerpt,post_content,post_password FROM {$wpdb->posts} WHERE ID IN ({$placeholders}) ORDER BY ID",
-        ...$args
-    ), 'multisite canonical source signature');
-    $signature = array_map(static fn(array $row): array => [
-        'post_id' => (int) ($row['ID'] ?? 0),
-        'post_type' => (string) ($row['post_type'] ?? ''),
-        'post_status' => (string) ($row['post_status'] ?? ''),
-        'post_date_gmt' => (string) ($row['post_date_gmt'] ?? ''),
-        'title_sha256' => hash('sha256', (string) ($row['post_title'] ?? '')),
-        'excerpt_sha256' => hash('sha256', (string) ($row['post_excerpt'] ?? '')),
-        'content_sha256' => hash('sha256', (string) ($row['post_content'] ?? '')),
-        'password_sha256' => hash('sha256', (string) ($row['post_password'] ?? '')),
-    ], $rows);
-    wp_fts_wc_assert(count($signature) === count($args), 'Multisite source signature returned incomplete cardinality.');
-    wp_fts_wc_assert(array_column($signature, 'post_id') === $args, 'Multisite source signature returned the wrong post IDs.');
-    return $signature;
-}
-
-/** @param array<string,mixed> $definition @return array<string,mixed> */
-function wp_fts_wc_multisite_legacy_physical_sentinel_snapshot(array $definition): array
-{
-    global $wpdb;
-
-    $postIds = array_values(array_map('intval', $definition['post_ids'] ?? []));
-    $termKeys = array_values(array_map('strval', $definition['term_keys'] ?? []));
-    $foreignTermKeys = array_values(array_map('strval', $definition['foreign_term_keys'] ?? []));
-    sort($postIds, SORT_NUMERIC);
-    wp_fts_wc_assert($postIds !== [] && count($termKeys) === 2 && count($foreignTermKeys) === 2, 'Legacy physical sentinel snapshot requires post IDs, two own term keys, and two foreign term keys.');
-    wp_fts_wc_assert(count(array_unique($termKeys)) === 2 && count(array_unique($foreignTermKeys)) === 2, 'Legacy physical sentinel term probes must be distinct.');
-    wp_fts_wc_assert(array_intersect($termKeys, $foreignTermKeys) === [], 'Legacy physical foreign probes overlap the current site terms.');
-    $postPlaceholders = implode(',', array_fill(0, count($postIds), '%d'));
-    $termPlaceholders = implode(',', array_fill(0, count($termKeys), '%s'));
-    $foreignTermPlaceholders = implode(',', array_fill(0, count($foreignTermKeys), '%s'));
-    $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
-    $postings = wp_fts_wc_identifier($wpdb->prefix . 'fts_postings');
-    $docs = wp_fts_wc_identifier($wpdb->prefix . 'fts_docs');
-    $lengths = wp_fts_wc_identifier($wpdb->prefix . 'fts_doc_lengths');
-    $docmeta = wp_fts_wc_identifier($wpdb->prefix . 'fts_docmeta');
-    $meta = wp_fts_wc_identifier($wpdb->prefix . 'fts_meta');
-    $queue = wp_fts_wc_identifier($wpdb->prefix . 'fts_queue');
-    $termRows = wp_fts_wc_checked_rows($wpdb->prepare(
-        "SELECT HEX(term) term_hex,doc_freq FROM `{$terms}` WHERE term IN ({$termPlaceholders}) ORDER BY term",
-        ...$termKeys
-    ), 'legacy physical own terms');
-    $postingRows = wp_fts_wc_checked_rows($wpdb->prepare(
-        "SELECT HEX(term) term_hex,doc_id,tf FROM `{$postings}` WHERE term IN ({$termPlaceholders}) AND doc_id IN ({$postPlaceholders}) ORDER BY term,doc_id",
-        ...[...$termKeys, ...$postIds]
-    ), 'legacy physical own postings');
-    $documentRows = wp_fts_wc_checked_rows($wpdb->prepare(
-        "SELECT doc_id,lang,doc_len,HEX(content_hash) content_hash_hex,is_deleted FROM `{$docs}` WHERE doc_id IN ({$postPlaceholders}) ORDER BY doc_id",
-        ...$postIds
-    ), 'legacy physical sentinel documents');
-    $lengthRows = wp_fts_wc_checked_rows($wpdb->prepare(
-        "SELECT doc_id,lang,doc_len FROM `{$lengths}` WHERE doc_id IN ({$postPlaceholders}) ORDER BY doc_id,lang",
-        ...$postIds
-    ), 'legacy physical sentinel document lengths');
-    $metadataRows = wp_fts_wc_checked_rows($wpdb->prepare(
-        "SELECT doc_id,post_id,post_type,post_status,post_date_gmt,title,excerpt,search_text,data FROM `{$docmeta}` WHERE doc_id IN ({$postPlaceholders}) ORDER BY doc_id",
-        ...$postIds
-    ), 'legacy physical sentinel document metadata');
-    $collectionMetadata = wp_fts_wc_checked_rows(
-        "SELECT lang,k,v FROM `{$meta}` ORDER BY lang,k",
-        'legacy physical collection metadata'
-    );
-    $foreignTermRows = wp_fts_wc_checked_rows($wpdb->prepare(
-        "SELECT HEX(term) term_hex,doc_freq FROM `{$terms}` WHERE term IN ({$foreignTermPlaceholders}) ORDER BY term",
-        ...$foreignTermKeys
-    ), 'legacy physical foreign terms');
-    // Do not restrict foreign postings to local sentinel IDs: any row under the
-    // wrong prefix is contamination, regardless of which document ID it names.
-    $foreignPostingRows = wp_fts_wc_checked_rows($wpdb->prepare(
-        "SELECT HEX(term) term_hex,doc_id,tf FROM `{$postings}` WHERE term IN ({$foreignTermPlaceholders}) ORDER BY term,doc_id",
-        ...$foreignTermKeys
-    ), 'legacy physical foreign postings');
-    foreach ($metadataRows as &$row) {
-        foreach (['title', 'excerpt', 'search_text', 'data'] as $field) {
-            $row[$field . '_sha256'] = hash('sha256', (string) ($row[$field] ?? ''));
-            unset($row[$field]);
-        }
-    }
-    unset($row);
-    $expectedCount = (int) ($definition['sentinel_count'] ?? 0);
-    $expectedTermHex = array_map(static fn(string $term): string => strtoupper(bin2hex($term)), $termKeys);
-    sort($expectedTermHex, SORT_STRING);
-    wp_fts_wc_assert(count($termRows) === 2, 'Legacy physical sentinel term cardinality is incomplete.');
-    wp_fts_wc_assert(array_column($termRows, 'term_hex') === $expectedTermHex, 'Legacy physical sentinel term keys are wrong.');
-    wp_fts_wc_assert(
-        array_map('intval', array_column($termRows, 'doc_freq')) === [$expectedCount, $expectedCount],
-        'Legacy physical sentinel document frequencies are wrong.'
-    );
-    wp_fts_wc_assert(count($postingRows) === 2 * $expectedCount, 'Legacy physical sentinel posting cardinality is incomplete.');
-    $postingCounts = array_fill_keys($postIds, 0);
-    foreach ($postingRows as $row) {
-        $docId = (int) ($row['doc_id'] ?? 0);
-        wp_fts_wc_assert(isset($postingCounts[$docId]), 'Legacy physical sentinel posting references an unexpected document.');
-        wp_fts_wc_assert(in_array((string) ($row['term_hex'] ?? ''), $expectedTermHex, true), 'Legacy physical sentinel posting references an unexpected term.');
-        wp_fts_wc_assert((int) ($row['tf'] ?? 0) > 0, 'Legacy physical sentinel posting has a non-positive term frequency.');
-        $postingCounts[$docId]++;
-    }
-    wp_fts_wc_assert(count(array_filter($postingCounts, static fn(int $count): bool => $count === 2)) === count($postIds), 'Legacy physical sentinel postings do not contain both terms for every document.');
-    wp_fts_wc_assert(count($documentRows) === $expectedCount, 'Legacy physical sentinel document cardinality is incomplete.');
-    wp_fts_wc_assert(array_map('intval', array_column($documentRows, 'doc_id')) === $postIds, 'Legacy physical sentinel document IDs are wrong.');
-    wp_fts_wc_assert(count(array_filter($documentRows, static fn(array $row): bool => (int) ($row['is_deleted'] ?? 1) === 0)) === $expectedCount, 'Legacy physical sentinel includes deleted documents.');
-    wp_fts_wc_assert(count($lengthRows) === $expectedCount, 'Legacy physical sentinel language-length cardinality is incomplete.');
-    wp_fts_wc_assert(array_map('intval', array_column($lengthRows, 'doc_id')) === $postIds, 'Legacy physical sentinel language-length IDs are wrong.');
-    wp_fts_wc_assert(count(array_filter($lengthRows, static fn(array $row): bool => ($row['lang'] ?? null) === 'en')) === $expectedCount, 'Legacy physical sentinel language lengths are not exactly English.');
-    wp_fts_wc_assert(count($metadataRows) === $expectedCount, 'Legacy physical sentinel metadata cardinality is incomplete.');
-    wp_fts_wc_assert(array_map('intval', array_column($metadataRows, 'doc_id')) === $postIds, 'Legacy physical sentinel metadata document IDs are wrong.');
-    wp_fts_wc_assert(array_map('intval', array_column($metadataRows, 'post_id')) === $postIds, 'Legacy physical sentinel metadata post IDs are wrong.');
-    wp_fts_wc_assert($collectionMetadata !== [], 'Legacy physical collection metadata is missing.');
-    wp_fts_wc_assert($foreignTermRows === [], 'Legacy physical sentinel contains a foreign site term.');
-    wp_fts_wc_assert($foreignPostingRows === [], 'Legacy physical sentinel contains a foreign site posting.');
-    $queueRows = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$queue}`", 'legacy physical queue');
-    wp_fts_wc_assert($queueRows === 0, 'Legacy physical sentinel queue is not empty.');
-    return [
-        'terms' => $termRows,
-        'postings' => $postingRows,
-        'documents' => $documentRows,
-        'document_lengths' => $lengthRows,
-        'metadata' => $metadataRows,
-        'collection_metadata' => $collectionMetadata,
-        'foreign_terms' => $foreignTermRows,
-        'foreign_postings' => $foreignPostingRows,
-        'queue_rows' => $queueRows,
-    ];
-}
-
-/** @return array<int,array<string,mixed>> */
-function wp_fts_wc_checked_rows(string $statement, string $context): array
-{
-    global $wpdb;
-
-    $rows = $wpdb->get_results($statement, ARRAY_A);
-    if (!is_array($rows) || trim((string) $wpdb->last_error) !== '') {
-        throw new RuntimeException("Could not query {$context}: " . trim((string) $wpdb->last_error));
-    }
-    return $rows;
-}
-
 /** Reject failed or nonnumeric database counts instead of coercing them to zero. */
 function wp_fts_wc_checked_count(string $statement, string $context): int
 {
@@ -13660,631 +10890,6 @@ function wp_fts_wc_checked_count(string $statement, string $context): int
     return (int) $value;
 }
 
-/** @return string[] */
-function wp_fts_wc_checked_fts_table_names(string $context): array
-{
-    global $wpdb;
-
-    $tables = $wpdb->get_col($wpdb->prepare(
-        'SHOW TABLES LIKE %s',
-        $wpdb->esc_like($wpdb->prefix . 'fts_') . '%'
-    ));
-    if (!is_array($tables) || trim((string) $wpdb->last_error) !== '') {
-        throw new RuntimeException("Could not inspect {$context}: " . trim((string) $wpdb->last_error));
-    }
-    $tables = array_map('strval', $tables);
-    sort($tables, SORT_STRING);
-    return $tables;
-}
-
-/** @param array<string,mixed> $definition @return array<string,array<int,array{doc_id:int,score:string}>> */
-function wp_fts_wc_multisite_v4_oracle(array $definition): array
-{
-    global $wpdb;
-
-    $oracle = [];
-    $expectedIds = array_values(array_map('intval', $definition['post_ids'] ?? []));
-    rsort($expectedIds, SORT_NUMERIC);
-    $expectedCount = (int) ($definition['sentinel_count'] ?? 0);
-    wp_fts_wc_assert($expectedCount > 0 && count($expectedIds) === $expectedCount, 'Multisite v4 oracle requires an exact sentinel document set.');
-    foreach (($definition['term_keys'] ?? []) as $kind => $termKey) {
-        $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
-        $postings = wp_fts_wc_identifier($wpdb->prefix . 'fts_postings');
-        $docs = wp_fts_wc_identifier($wpdb->prefix . 'fts_docs');
-        $rows = wp_fts_wc_checked_rows($wpdb->prepare(
-            "SELECT p.doc_id,p.tf,t.doc_freq,wp_f.post_date_gmt
-FROM `{$terms}` t
-JOIN `{$postings}` p ON p.term=t.term
-JOIN `{$docs}` legacy_d ON legacy_d.doc_id=p.doc_id AND legacy_d.is_deleted=0
-JOIN {$wpdb->posts} wp_f ON wp_f.ID=p.doc_id
-WHERE t.term=%s AND wp_f.post_password='' AND wp_f.post_type='post' AND wp_f.post_status='publish'",
-            (string) $termKey
-        ), "multisite {$kind} v4 oracle source");
-        wp_fts_wc_assert(count($rows) === $expectedCount, "Multisite {$kind} v4 oracle source cardinality is incomplete.");
-        $sourceIds = array_map('intval', array_column($rows, 'doc_id'));
-        sort($sourceIds, SORT_NUMERIC);
-        $sortedExpectedIds = $expectedIds;
-        sort($sortedExpectedIds, SORT_NUMERIC);
-        wp_fts_wc_assert($sourceIds === $sortedExpectedIds, "Multisite {$kind} v4 oracle source membership is wrong.");
-        foreach ($rows as &$row) {
-            $tf = max(1, (int) ($row['tf'] ?? 0));
-            $df = max(1, (int) ($row['doc_freq'] ?? 0));
-            $impact = max(1, min(65535, intdiv(180234 * $tf + 12, 20 * $tf + 24)));
-            $row['score'] = $impact * max(1, intdiv(1000000, $df));
-        }
-        unset($row);
-        usort($rows, static function (array $left, array $right): int {
-            return ((int) $right['score'] <=> (int) $left['score'])
-                ?: strcmp((string) $right['post_date_gmt'], (string) $left['post_date_gmt'])
-                ?: ((int) $right['doc_id'] <=> (int) $left['doc_id']);
-        });
-        $oracle[(string) $kind] = wp_fts_wc_v4_ordered_score_signature(array_slice($rows, 0, 20));
-        wp_fts_wc_assert(
-            count($oracle[(string) $kind]) === $expectedCount
-                && array_map('intval', array_column($oracle[(string) $kind], 'doc_id')) === $expectedIds,
-            "Multisite {$kind} v4 oracle output cardinality or order is wrong."
-        );
-    }
-    return $oracle;
-}
-
-/** @param array<string,mixed> $expected @param array<string,mixed> $actual */
-function wp_fts_wc_multisite_search_membership_matches(array $expected, array $actual): bool
-{
-    foreach (['shared', 'unique'] as $kind) {
-        $expectedRows = $expected['search'][$kind]['results'] ?? null;
-        $actualRows = $actual['search'][$kind]['results'] ?? null;
-        if (!is_array($expectedRows) || !is_array($actualRows)) {
-            return false;
-        }
-        if ($expectedRows === [] || $actualRows === []) {
-            return false;
-        }
-        foreach ([...$expectedRows, ...$actualRows] as $row) {
-            if (!is_array($row) || !is_int($row['doc_id'] ?? null) || $row['doc_id'] <= 0) {
-                return false;
-            }
-        }
-        $expectedIds = array_map('intval', array_column($expectedRows, 'doc_id'));
-        $actualIds = array_map('intval', array_column($actualRows, 'doc_id'));
-        if (count(array_unique($expectedIds)) !== count($expectedIds)
-            || count(array_unique($actualIds)) !== count($actualIds)
-        ) {
-            return false;
-        }
-        sort($expectedIds, SORT_NUMERIC);
-        sort($actualIds, SORT_NUMERIC);
-        if ($expectedIds !== $actualIds) {
-            return false;
-        }
-    }
-    return true;
-}
-
-/** @param array<string,mixed> $state */
-function wp_fts_wc_multisite_foreign_searches_empty(array $state): bool
-{
-    $foreign = $state['foreign_search'] ?? null;
-    if (!is_array($foreign) || count($foreign) !== 2) {
-        return false;
-    }
-    foreach ($foreign as $probe) {
-        if (!is_array($probe) || ($probe['results'] ?? null) !== []) {
-            return false;
-        }
-    }
-    return true;
-}
-
-/** @param array<string,mixed> $state */
-function wp_fts_wc_multisite_foreign_doc_freqs_empty(array $state): bool
-{
-    $docFreqs = $state['foreign_doc_freq'] ?? null;
-    return is_array($docFreqs)
-        && count($docFreqs) === 2
-        && count(array_filter($docFreqs, static fn(mixed $docFreq): bool => (int) $docFreq === 0)) === 2;
-}
-
-/** @param array<string,mixed> $expected @param array<string,mixed> $actual */
-function wp_fts_wc_multisite_document_state_matches(array $expected, array $actual): bool
-{
-    foreach (['document_count', 'document_ids', 'source_signature'] as $key) {
-        if (($expected[$key] ?? null) !== ($actual[$key] ?? null)) {
-            return false;
-        }
-    }
-    $expectedMetadata = is_array($expected['metadata_signature'] ?? null) ? $expected['metadata_signature'] : [];
-    $actualMetadata = is_array($actual['metadata_signature'] ?? null) ? $actual['metadata_signature'] : [];
-    if ($expectedMetadata === [] || array_keys($expectedMetadata) !== array_keys($actualMetadata)) {
-        return false;
-    }
-    // Legacy v3 stored one combined searchable-text field. V4 derives title and
-    // excerpt from wp_posts and, for these plain-text sentinels, its search_text
-    // sidecar equals canonical post_content. Compare the shared metadata fields
-    // and authenticate the new representation against the unchanged source
-    // signature rather than equating two physical layouts.
-    $sourceByPostId = [];
-    foreach (is_array($actual['source_signature'] ?? null) ? $actual['source_signature'] : [] as $source) {
-        if (!is_array($source)
-            || array_keys($source) !== ['post_id', 'post_type', 'post_status', 'post_date_gmt', 'title_sha256', 'excerpt_sha256', 'content_sha256', 'password_sha256']
-            || !is_int($source['post_id'] ?? null)
-            || $source['post_id'] <= 0
-            || isset($sourceByPostId[$source['post_id']])
-        ) {
-            return false;
-        }
-        foreach (['post_type', 'post_status', 'post_date_gmt'] as $field) {
-            if (!is_string($source[$field] ?? null)) {
-                return false;
-            }
-        }
-        foreach (['title_sha256', 'excerpt_sha256', 'content_sha256', 'password_sha256'] as $hashKey) {
-            $hash = $source[$hashKey] ?? null;
-            if (!is_string($hash) || strlen($hash) !== 64 || strspn($hash, '0123456789abcdef') !== 64) {
-                return false;
-            }
-        }
-        $sourceByPostId[$source['post_id']] = $source;
-    }
-    if (count($sourceByPostId) !== count($actualMetadata)) {
-        return false;
-    }
-    foreach ($expectedMetadata as $postId => $legacyMetadata) {
-        $currentMetadata = $actualMetadata[$postId] ?? null;
-        $source = $sourceByPostId[(int) $postId] ?? null;
-        if (!is_array($legacyMetadata)
-            || !is_array($currentMetadata)
-            || !is_array($source)
-            || array_keys($legacyMetadata) !== ['post_type', 'post_status', 'post_date_gmt', 'title', 'excerpt', 'search_text_sha256']
-            || array_keys($currentMetadata) !== ['post_type', 'post_status', 'post_date_gmt', 'title', 'excerpt', 'search_text_sha256']
-        ) {
-            return false;
-        }
-        $legacySearchTextHash = $legacyMetadata['search_text_sha256'] ?? null;
-        $currentSearchTextHash = $currentMetadata['search_text_sha256'] ?? null;
-        unset($legacyMetadata['search_text_sha256'], $currentMetadata['search_text_sha256']);
-        if ($legacyMetadata !== $currentMetadata
-            || !is_string($legacySearchTextHash)
-            || strlen($legacySearchTextHash) !== 64
-            || strspn($legacySearchTextHash, '0123456789abcdef') !== 64
-            || !is_string($currentSearchTextHash)
-            || strlen($currentSearchTextHash) !== 64
-            || strspn($currentSearchTextHash, '0123456789abcdef') !== 64
-            || ($currentMetadata['post_type'] ?? null) !== ($source['post_type'] ?? null)
-            || ($currentMetadata['post_status'] ?? null) !== ($source['post_status'] ?? null)
-            || ($currentMetadata['post_date_gmt'] ?? null) !== ($source['post_date_gmt'] ?? null)
-            || hash('sha256', (string) ($currentMetadata['title'] ?? '')) !== ($source['title_sha256'] ?? null)
-            || hash('sha256', (string) ($currentMetadata['excerpt'] ?? '')) !== ($source['excerpt_sha256'] ?? null)
-            || ($source['content_sha256'] ?? null) !== $currentSearchTextHash
-        ) {
-            return false;
-        }
-    }
-    $expectedIndex = is_array($expected['index_document_signature'] ?? null) ? $expected['index_document_signature'] : [];
-    $actualIndex = is_array($actual['index_document_signature'] ?? null) ? $actual['index_document_signature'] : [];
-    $withoutHash = static function (array $rows): array {
-        foreach ($rows as &$row) {
-            if (!is_array($row)
-                || array_keys($row) !== ['doc_id', 'lang', 'content_hash_hex']
-                || !is_int($row['doc_id'])
-                || $row['doc_id'] <= 0
-                || !is_string($row['lang'])
-                || $row['lang'] === ''
-                || !is_string($row['content_hash_hex'])
-                || strlen($row['content_hash_hex']) !== 80
-                || strspn($row['content_hash_hex'], '0123456789abcdef') !== 80
-            ) {
-                return [];
-            }
-            unset($row['content_hash_hex']);
-        }
-        unset($row);
-        return $rows;
-    };
-    $expectedIndexIdentity = $withoutHash($expectedIndex);
-    $actualIndexIdentity = $withoutHash($actualIndex);
-    if ($expectedIndexIdentity === [] || $expectedIndexIdentity !== $actualIndexIdentity) {
-        return false;
-    }
-    // The profile signature intentionally changes across the legacy-v3 to
-    // profile-v6 cutover. The separate rewrite predicate below proves that the
-    // value changed; document-semantic parity only checks complete SHA-1 payloads here.
-    return true;
-}
-
-/** @param array<string,mixed> $expected @param array<string,mixed> $actual */
-function wp_fts_wc_multisite_index_hashes_rewritten(array $expected, array $actual): bool
-{
-    $expectedIndex = is_array($expected['index_document_signature'] ?? null)
-        ? array_values($expected['index_document_signature'])
-        : [];
-    $actualIndex = is_array($actual['index_document_signature'] ?? null)
-        ? array_values($actual['index_document_signature'])
-        : [];
-    if ($expectedIndex === [] || count($expectedIndex) !== count($actualIndex)) {
-        return false;
-    }
-    foreach ($expectedIndex as $offset => $legacy) {
-        $current = $actualIndex[$offset] ?? null;
-        if (
-            !is_array($legacy)
-            || !is_array($current)
-            || ($legacy['doc_id'] ?? null) !== ($current['doc_id'] ?? null)
-            || ($legacy['lang'] ?? null) !== ($current['lang'] ?? null)
-            || strlen((string) ($legacy['content_hash_hex'] ?? '')) !== 80
-            || strlen((string) ($current['content_hash_hex'] ?? '')) !== 80
-            || hash_equals((string) $legacy['content_hash_hex'], (string) $current['content_hash_hex'])
-        ) {
-            return false;
-        }
-    }
-    return true;
-}
-
-/** @param array<string,mixed> $definition @return array<string,array<int,array{doc_id:int,score:string}>> */
-function wp_fts_wc_multisite_v4_search(array $definition): array
-{
-    $state = [];
-    foreach (($definition['queries'] ?? []) as $kind => $queryDefinition) {
-        wp_fts_wc_assert(is_string($kind) && is_array($queryDefinition), 'Multisite v4 query definition is malformed.');
-        $query = (string) ($queryDefinition['query'] ?? '');
-        $options = is_array($queryDefinition['options'] ?? null) ? $queryDefinition['options'] : [];
-        $state[$kind] = wp_fts_wc_v4_ordered_score_signature(WP_FTS_Plugin::search($query, $options));
-    }
-    return $state;
-}
-
-/**
- * Reproduce the bounded v4 logical query plan without invoking the searcher or
- * v4 storage. All migration parity fixtures carry one explicit language, so the
- * analyzer's occurrence position and rank are the complete grouping contract.
- *
- * @param array<string,mixed> $options
- * @return array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>,prefix:?array{group_id:int,key:string,legacy_completion_lower:string,legacy_completion_upper:?string}}
- */
-function wp_fts_wc_v4_oracle_query_plan(string $query, array $options): array
-{
-    $explicitLang = null;
-    foreach (['query_lang', 'lang', 'language'] as $key) {
-        if (isset($options[$key]) && is_scalar($options[$key]) && trim((string) $options[$key]) !== '') {
-            $explicitLang = WP_FTS_TermNamespace::canonicalize_lang((string) $options[$key]);
-            break;
-        }
-    }
-    wp_fts_wc_assert(is_string($explicitLang) && $explicitLang !== '', 'Migration oracle cases require one explicit query language.');
-    $analysisOptions = $options;
-    $analysisOptions['query_lang'] = $explicitLang;
-    $analysisOptions['lang'] = $explicitLang;
-    $analysisOptions['language'] = $explicitLang;
-    $analysisOptions['return'] = 'occurrences';
-    $analysisOptions['format'] = 'occurrences';
-    $analysisOptions['_include_query_surface'] = true;
-    $occurrences = WP_FTS_Plugin::runtime_analyzer()->analyze_query_occurrences($query, $analysisOptions);
-
-    $groups = [];
-    $currentPosition = null;
-    $currentGroup = null;
-    foreach ($occurrences as $occurrence) {
-        $candidate = wp_fts_wc_v4_oracle_candidate($occurrence, $explicitLang);
-        if ($candidate === null) {
-            continue;
-        }
-        $position = is_array($occurrence) && isset($occurrence['position']) && is_scalar($occurrence['position'])
-            ? (string) $occurrence['position']
-            : null;
-        if ($position !== null && $currentGroup !== null && $position === $currentPosition) {
-            $groups[$currentGroup][] = $candidate;
-            continue;
-        }
-        $groups[] = [$candidate];
-        if ($position === null) {
-            $currentPosition = null;
-            $currentGroup = null;
-        } else {
-            $currentPosition = $position;
-            $currentGroup = count($groups) - 1;
-        }
-    }
-    foreach ($groups as $groupId => $group) {
-        $byKey = [];
-        foreach ($group as $candidate) {
-            $key = $candidate['key'];
-            if (!isset($byKey[$key]) || $candidate['rank'] < $byKey[$key]['rank']) {
-                $byKey[$key] = $candidate;
-            }
-        }
-        ksort($byKey, SORT_STRING);
-        $groups[$groupId] = array_values($byKey);
-    }
-    wp_fts_wc_assert($groups !== [], 'Migration oracle query analysis produced no logical groups.');
-
-    $prefix = null;
-    if (!empty($options['prefix_matching'])) {
-        $finalGroupId = array_key_last($groups);
-        $finalKeys = array_fill_keys(array_column($groups[$finalGroupId], 'key'), true);
-        for ($index = count($occurrences) - 1; $index >= 0; $index--) {
-            $occurrence = $occurrences[$index];
-            $candidate = wp_fts_wc_v4_oracle_candidate($occurrence, $explicitLang);
-            if ($candidate === null || !isset($finalKeys[$candidate['key']]) || !is_array($occurrence)) {
-                continue;
-            }
-            $surface = isset($occurrence['normalized_surface']) && is_scalar($occurrence['normalized_surface'])
-                ? trim((string) $occurrence['normalized_surface'])
-                : '';
-            if ($surface === '' && isset($occurrence['surface']) && is_scalar($occurrence['surface']) && trim((string) $occurrence['surface']) === $candidate['term']) {
-                $surface = $candidate['term'];
-            }
-            wp_fts_wc_assert($surface !== '', 'Migration prefix oracle has no normalized typed surface.');
-            if (WP_FTS_Utf8::length($surface) >= max(0, (int) ($options['prefix_min_length'] ?? 4))) {
-                $upperTerm = wp_fts_wc_binary_successor($surface);
-                $prefix = [
-                    'group_id' => $finalGroupId,
-                    'key' => WP_FTS_TermNamespace::namespace_term($explicitLang, $surface),
-                    // The populated v3 source has no kind=1 rows. The
-                    // independent migration oracle derives the future
-                    // normalized-surface postings from strictly longer legacy
-                    // terms inside this indexed interval.
-                    'legacy_completion_lower' => WP_FTS_TermNamespace::namespace_term($explicitLang, $surface),
-                    'legacy_completion_upper' => $upperTerm === null ? null : WP_FTS_TermNamespace::namespace_term($explicitLang, $upperTerm),
-                ];
-            }
-            break;
-        }
-    }
-
-    return ['groups' => $groups, 'prefix' => $prefix];
-}
-
-/** @return array{key:string,lang:string,term:string,rank:int}|null */
-function wp_fts_wc_v4_oracle_candidate(mixed $occurrence, string $explicitLang): ?array
-{
-    $term = is_array($occurrence) ? trim((string) ($occurrence['term'] ?? '')) : trim((string) $occurrence);
-    if ($term === '') {
-        return null;
-    }
-    $split = WP_FTS_TermNamespace::split_term($term);
-    if (is_array($split)) {
-        $term = (string) ($split['term'] ?? '');
-    }
-    if ($term === '' || !WP_FTS_TermNamespace::term_key_fits($term, $explicitLang)) {
-        return null;
-    }
-    $rank = is_array($occurrence) && isset($occurrence['rank']) && is_numeric($occurrence['rank'])
-        ? max(0, (int) $occurrence['rank'])
-        : 0;
-    return [
-        'key' => WP_FTS_TermNamespace::namespace_term($explicitLang, $term),
-        'lang' => $explicitLang,
-        'term' => $term,
-        'rank' => $rank,
-    ];
-}
-
-/**
- * Validate only dictionary rows the five oracle plans can touch. The broadest
- * legacy completion interval is the intentional 20k-term prefix fixture;
- * unrelated corpus postings are never grouped merely to establish oracle
- * trust. Production search never executes this legacy range.
- *
- * @param array<int,array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>,prefix:?array{group_id:int,key:string,legacy_completion_lower:string,legacy_completion_upper:?string}}> $plans
- */
-function wp_fts_wc_v4_oracle_relevant_df_mismatches(array $plans): int
-{
-    global $wpdb;
-
-    $keys = [];
-    $prefixes = [];
-    foreach ($plans as $plan) {
-        foreach ($plan['groups'] ?? [] as $group) {
-            foreach ($group as $alternative) {
-                $keys[(string) ($alternative['key'] ?? '')] = true;
-            }
-        }
-        if (is_array($plan['prefix'] ?? null)) {
-            $prefixes[wp_fts_wc_canonical_hash($plan['prefix'])] = $plan['prefix'];
-        }
-    }
-    unset($keys['']);
-    $conditions = [];
-    $args = [];
-    if ($keys !== []) {
-        $conditions[] = 't.term IN (' . implode(',', array_fill(0, count($keys), '%s')) . ')';
-        array_push($args, ...array_keys($keys));
-    }
-    foreach ($prefixes as $prefix) {
-        $condition = '(t.term > %s';
-        $args[] = $prefix['legacy_completion_lower'];
-        if ($prefix['legacy_completion_upper'] !== null) {
-            $condition .= ' AND t.term < %s';
-            $args[] = $prefix['legacy_completion_upper'];
-        }
-        $conditions[] = $condition . ')';
-    }
-    wp_fts_wc_assert($conditions !== [], 'Migration oracle has no relevant dictionary rows to validate.');
-    $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
-    $postings = wp_fts_wc_identifier($wpdb->prefix . 'fts_postings');
-    $docs = wp_fts_wc_identifier($wpdb->prefix . 'fts_docs');
-    $sql = "SELECT COUNT(*) FROM (
-    SELECT t.term,t.doc_freq,COUNT(DISTINCT CASE WHEN legacy_d.is_deleted=0 THEN p.doc_id END) AS actual
-    FROM `{$terms}` t
-    LEFT JOIN `{$postings}` p ON p.term=t.term
-    LEFT JOIN `{$docs}` legacy_d ON legacy_d.doc_id=p.doc_id
-    WHERE " . implode(' OR ', $conditions) . "
-    GROUP BY t.term,t.doc_freq
-    HAVING t.doc_freq<>actual
-) inconsistent";
-    $value = $wpdb->get_var($wpdb->prepare($sql, ...$args));
-    if (!is_numeric($value) || trim((string) $wpdb->last_error) !== '') {
-        throw new RuntimeException('Could not validate relevant v3 oracle document frequencies: ' . trim((string) $wpdb->last_error));
-    }
-    return (int) $value;
-}
-
-/**
- * Score one v4 plan directly over v3 logical rows. This intentionally mirrors
- * the public scoring contract with separate expressions rather than reading any
- * v4 table or calling its rank query.
- *
- * @param array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>,prefix:?array{group_id:int,key:string,legacy_completion_lower:string,legacy_completion_upper:?string}} $plan
- * @param array<string,mixed> $options
- * @param array{legacy_docs:string,post_password:string,post_types:array<int,string>,post_statuses:array<int,string>,per_query_filters:bool} $targetDocFreqBasis
- * @return array<int,array{doc_id:int,score:string}>
- */
-function wp_fts_wc_v4_oracle_from_legacy(array $plan, array $options, array $targetDocFreqBasis): array
-{
-    global $wpdb;
-
-    $qRows = [];
-    $args = [];
-    $exactTermKeys = [];
-    foreach ($plan['groups'] as $groupId => $alternatives) {
-        foreach ($alternatives as $alternative) {
-            $qRows[] = 'SELECT %s AS term_key, %d AS group_id, %d AS tier';
-            array_push($args, $alternative['key'], $groupId, $alternative['rank'] === 0 ? 1000 : 800);
-            $exactTermKeys[(string) $alternative['key']] = true;
-        }
-    }
-    wp_fts_wc_assert($qRows !== [], 'Migration v4 oracle has no exact alternatives.');
-    $terms = wp_fts_wc_identifier($wpdb->prefix . 'fts_terms');
-    $postings = wp_fts_wc_identifier($wpdb->prefix . 'fts_postings');
-    $docs = wp_fts_wc_identifier($wpdb->prefix . 'fts_docs');
-    $exactTargetDf = wp_fts_wc_v4_oracle_target_df_relation(
-        $postings,
-        $docs,
-        $targetDocFreqBasis,
-        array_keys($exactTermKeys),
-        null
-    );
-    array_push($args, ...$exactTargetDf['args']);
-    // Positive integer forms of the v4 rounding rules avoid engine-specific
-    // floating-point or CAST behavior in the independent oracle.
-    $impact = 'GREATEST(1,LEAST(65535,(180234*p.tf+12) DIV (20*p.tf+24)))';
-    $weight = 'GREATEST(1,((GREATEST(1,1000000 DIV GREATEST(1,target_df.target_doc_freq))*q.tier) DIV 1000))';
-    $rawParts = [
-        "SELECT p.doc_id,q.group_id,MAX({$impact}*{$weight}) AS group_score
-FROM (" . implode("\nUNION ALL\n", $qRows) . ") q
-JOIN `{$terms}` t ON t.term=q.term_key
-JOIN ({$exactTargetDf['sql']}) target_df ON target_df.term=t.term
-JOIN `{$postings}` p ON p.term=t.term
-GROUP BY p.doc_id,q.group_id",
-    ];
-    $prefix = $plan['prefix'];
-    if (is_array($prefix)) {
-        $prefixTargetDf = wp_fts_wc_v4_oracle_target_df_relation(
-            $postings,
-            $docs,
-            $targetDocFreqBasis,
-            [],
-            ['lower' => $prefix['legacy_completion_lower'], 'upper' => $prefix['legacy_completion_upper']]
-        );
-        array_push($args, ...$prefixTargetDf['args']);
-        $prefixImpact = 'GREATEST(1,LEAST(65535,(180234*pp.tf+12) DIV (20*pp.tf+24)))';
-        $prefixRarity = 'CAST(1000000 / CASE WHEN prefix_target_df.target_doc_freq<1 THEN 1 ELSE prefix_target_df.target_doc_freq END AS SIGNED)';
-        $prefixScore = "CAST({$prefixImpact}*{$prefixRarity}*600/1000 AS SIGNED)";
-        $rawParts[] = "SELECT pp.doc_id," . (int) $prefix['group_id'] . " AS group_id,{$prefixScore} AS group_score
-FROM ({$prefixTargetDf['sql']}) prefix_target_df
-JOIN `{$terms}` pt ON pt.term=prefix_target_df.term
-JOIN `{$postings}` pp ON pp.term=pt.term
-JOIN `{$docs}` legacy_prefix_d ON legacy_prefix_d.doc_id=pp.doc_id AND legacy_prefix_d.is_deleted=0";
-    }
-    $mode = strtoupper((string) ($options['mode'] ?? 'OR'));
-    wp_fts_wc_assert(in_array($mode, ['OR', 'AND'], true), 'Migration v4 oracle mode must be OR or AND.');
-    $having = $mode === 'AND' ? 'HAVING COUNT(*)=' . count($plan['groups']) : '';
-    $postTypes = is_array($options['post_type'] ?? null) ? $options['post_type'] : [$options['post_type'] ?? 'post'];
-    $postStatuses = is_array($options['post_status'] ?? null) ? $options['post_status'] : [$options['post_status'] ?? 'publish'];
-    $postTypes = array_values(array_filter(array_map('strval', $postTypes), static fn(string $value): bool => $value !== ''));
-    $postStatuses = array_values(array_filter(array_map('strval', $postStatuses), static fn(string $value): bool => $value !== ''));
-    wp_fts_wc_assert($postTypes !== [] && $postStatuses !== [], 'Migration v4 oracle requires bounded post type and status filters.');
-    $typePlaceholders = implode(',', array_fill(0, count($postTypes), '%s'));
-    $statusPlaceholders = implode(',', array_fill(0, count($postStatuses), '%s'));
-    array_push($args, ...$postTypes, ...$postStatuses);
-    $limit = max(1, min(50, (int) ($options['limit'] ?? 20)));
-    $args[] = $limit;
-    $rawSql = implode("\nUNION ALL\n", $rawParts);
-    $sql = "SELECT ranked.doc_id,ranked.score
-FROM (
-    SELECT grouped.doc_id,SUM(grouped.group_score) AS score
-    FROM (
-        SELECT raw.doc_id,raw.group_id,MAX(raw.group_score) AS group_score
-        FROM ({$rawSql}) raw
-        GROUP BY raw.doc_id,raw.group_id
-    ) grouped
-    GROUP BY grouped.doc_id
-    {$having}
-) ranked
-JOIN `{$docs}` legacy_d ON legacy_d.doc_id=ranked.doc_id AND legacy_d.is_deleted=0
-JOIN {$wpdb->posts} wp_f ON wp_f.ID=ranked.doc_id
-WHERE wp_f.post_password='' AND wp_f.post_type IN ({$typePlaceholders}) AND wp_f.post_status IN ({$statusPlaceholders})
-ORDER BY ranked.score DESC,wp_f.post_date_gmt DESC,ranked.doc_id DESC
-LIMIT %d";
-    $statement = $wpdb->prepare($sql, ...$args);
-    $rows = $wpdb->get_results($statement, ARRAY_A);
-    if (!is_array($rows) || trim((string) $wpdb->last_error) !== '') {
-        throw new RuntimeException('Independent v4 migration oracle query failed: ' . trim((string) $wpdb->last_error));
-    }
-    return wp_fts_wc_v4_ordered_score_signature($rows);
-}
-
-/**
- * Build one target-v4 document-frequency relation over only the exact keys or
- * binary completion interval used by a migration oracle query. Target rarity
- * is global index state: per-query visibility filters must not change it.
- *
- * @param array{legacy_docs:string,post_password:string,post_types:array<int,string>,post_statuses:array<int,string>,per_query_filters:bool} $targetDocFreqBasis
- * @param array<int,string> $exactTermKeys
- * @param array{lower:string,upper:?string}|null $prefixRange
- * @return array{sql:string,args:array<int,string>}
- */
-function wp_fts_wc_v4_oracle_target_df_relation(
-    string $postings,
-    string $docs,
-    array $targetDocFreqBasis,
-    array $exactTermKeys,
-    ?array $prefixRange
-): array {
-    global $wpdb;
-
-    wp_fts_wc_assert($targetDocFreqBasis === [
-        'legacy_docs' => 'is_deleted=0',
-        'post_password' => '',
-        'post_types' => WP_FTS_WC_INDEX_POST_TYPES,
-        'post_statuses' => WP_FTS_WC_INDEX_POST_STATUSES,
-        'per_query_filters' => false,
-    ], 'Migration v4 oracle target document-frequency basis drifted.');
-    wp_fts_wc_assert(($exactTermKeys !== []) !== ($prefixRange !== null), 'Migration v4 oracle target DF requires exactly one bounded term scope.');
-    $postTypes = $targetDocFreqBasis['post_types'];
-    $postStatuses = $targetDocFreqBasis['post_statuses'];
-    $typePlaceholders = implode(',', array_fill(0, count($postTypes), '%s'));
-    $statusPlaceholders = implode(',', array_fill(0, count($postStatuses), '%s'));
-    $args = [...$postTypes, ...$postStatuses];
-    if ($exactTermKeys !== []) {
-        wp_fts_wc_assert(!in_array('', $exactTermKeys, true), 'Migration v4 oracle target DF received an empty exact term key.');
-        $termPredicate = 'target_p.term IN (' . implode(',', array_fill(0, count($exactTermKeys), '%s')) . ')';
-        array_push($args, ...$exactTermKeys);
-    } else {
-        $lower = is_string($prefixRange['lower'] ?? null) ? $prefixRange['lower'] : '';
-        $upper = $prefixRange['upper'] ?? null;
-        wp_fts_wc_assert($lower !== '' && ($upper === null || (is_string($upper) && strcmp($upper, $lower) > 0)), 'Migration v4 oracle target DF received an invalid binary prefix interval.');
-        $termPredicate = 'target_p.term > %s';
-        $args[] = $lower;
-        if ($upper !== null) {
-            $termPredicate .= ' AND target_p.term < %s';
-            $args[] = $upper;
-        }
-    }
-    $posts = wp_fts_wc_identifier((string) $wpdb->posts);
-    $sql = "SELECT target_p.term,COUNT(DISTINCT target_p.doc_id) AS target_doc_freq
-FROM `{$postings}` target_p
-JOIN `{$docs}` target_d ON target_d.doc_id=target_p.doc_id AND target_d.is_deleted=0
-JOIN `{$posts}` target_wp ON target_wp.ID=target_p.doc_id
-    AND target_wp.post_password=''
-    AND target_wp.post_type IN ({$typePlaceholders})
-    AND target_wp.post_status IN ({$statusPlaceholders})
-WHERE {$termPredicate}
-GROUP BY target_p.term";
-    return ['sql' => $sql, 'args' => $args];
-}
-
 /** Compute the exclusive binary prefix bound without enumerating completions. */
 function wp_fts_wc_binary_successor(string $value): ?string
 {
@@ -14295,57 +10900,6 @@ function wp_fts_wc_binary_successor(string $value): ?string
         }
     }
     return null;
-}
-
-/** @return array<string,mixed> */
-function wp_fts_wc_all_fts_table_bytes(): array
-{
-    global $wpdb;
-
-    $rows = $wpdb->get_results($wpdb->prepare(
-        "SELECT TABLE_NAME,DATA_LENGTH,INDEX_LENGTH FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s ORDER BY TABLE_NAME",
-        $wpdb->esc_like($wpdb->prefix . 'fts_') . '%'
-    ), ARRAY_A);
-    if (!is_array($rows) || trim((string) $wpdb->last_error) !== '') {
-        throw new RuntimeException('Could not measure physical FTS tables: ' . trim((string) $wpdb->last_error));
-    }
-    $tables = [];
-    $total = 0;
-    foreach ($rows as $row) {
-        $bytes = (int) $row['DATA_LENGTH'] + (int) $row['INDEX_LENGTH'];
-        $tables[(string) $row['TABLE_NAME']] = $bytes;
-        $total += $bytes;
-    }
-    return ['tables' => $tables, 'total_bytes' => $total];
-}
-
-/** @return string[] */
-function wp_fts_wc_legacy_tables(): array
-{
-    global $wpdb;
-
-    $tables = $wpdb->get_col($wpdb->prepare(
-        'SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s ORDER BY TABLE_NAME',
-        $wpdb->esc_like($wpdb->prefix . 'fts_legacy_') . '%'
-    ));
-    if (!is_array($tables) || trim((string) $wpdb->last_error) !== '') {
-        throw new RuntimeException('Could not inspect legacy migration tables: ' . trim((string) $wpdb->last_error));
-    }
-    return array_map('strval', $tables);
-}
-
-/** @return array<string,mixed> */
-function wp_fts_wc_unbound_manifest(): array
-{
-    $manifest = get_option(WP_FTS_WC_MANIFEST_OPTION, null);
-    if (!is_array($manifest) || ($manifest['schema'] ?? null) !== 'relational-worst-case-corpus-v1') {
-        throw new RuntimeException('The populated migration corpus manifest is missing.');
-    }
-    $expectedHash = $manifest['sha256'] ?? null;
-    $hashInput = $manifest;
-    unset($hashInput['sha256']);
-    wp_fts_wc_assert(is_string($expectedHash) && hash_equals($expectedHash, wp_fts_wc_canonical_hash($hashInput)), 'The unbound migration corpus manifest hash is invalid.');
-    return $manifest;
 }
 
 /**
@@ -14513,7 +11067,6 @@ ORDER BY OCTET_LENGTH(post_content) DESC,ID ASC LIMIT 100",
         'max_transaction_control_statement_count' => max(array_column($batches, 'worker_transaction_control_statement_count') ?: [0]),
         'max_scheduling_control_statement_count' => max(array_column($batches, 'scheduling_control_statement_count') ?: [0]),
         'max_physical_schema_statement_count' => max(array_column($batches, 'physical_schema_statement_count') ?: [0]),
-        'max_legacy_fts_statement_count' => max(array_column($batches, 'legacy_fts_statement_count') ?: [0]),
         'max_statement_bytes' => max(array_column($batches, 'max_statement_bytes') ?: [0]),
         'max_batch_ms' => max(array_column($batches, 'duration_ms') ?: [0]),
         'failures' => $failures,
@@ -15485,7 +12038,6 @@ function wp_fts_wc_instrumented_worker_batch(
     $roles = wp_fts_wc_worker_statement_roles($queries);
     $ftsQueries = array_values(array_filter($recorded['queries'], 'wp_fts_wc_is_search_statement'));
     $schemaQueries = array_values(array_filter($queries, 'wp_fts_wc_is_physical_schema_statement'));
-    $legacyQueries = array_values(array_filter($queries, 'wp_fts_wc_is_legacy_fts_statement'));
     foreach ($queries as $sql) {
         $claimKinds = wp_fts_wc_queue_claim_statement_kinds($sql);
         if ($claimKinds !== [] && array_diff($claimKinds, array_keys($queueClaimPlans)) !== []) {
@@ -15555,7 +12107,6 @@ function wp_fts_wc_instrumented_worker_batch(
         'statement_roles' => $roles['roles'],
         'unclassified_statements' => $roles['unknown'],
         'physical_schema_statement_count' => count($schemaQueries),
-        'legacy_fts_statement_count' => count($legacyQueries),
         'transaction_control_statement_count' => count($roles['transaction_roles']),
         'statement_started_ms' => $queryStartedMs,
         'performance_schema_statement_count' => count($statementEvents),
@@ -16129,7 +12680,6 @@ function wp_fts_wc_finalize(): array
         wp_fts_wc_gate('worker_batch_transaction_control_statement_count', '<= 2', (int) ($drain['max_transaction_control_statement_count'] ?? PHP_INT_MAX), (int) ($drain['max_transaction_control_statement_count'] ?? PHP_INT_MAX) <= 2),
         wp_fts_wc_gate('worker_batch_scheduling_control_statement_count', '<= 1', (int) ($drain['max_scheduling_control_statement_count'] ?? PHP_INT_MAX), (int) ($drain['max_scheduling_control_statement_count'] ?? PHP_INT_MAX) <= 1),
         wp_fts_wc_gate('worker_batch_physical_schema_statement_count', 0, (int) ($drain['max_physical_schema_statement_count'] ?? PHP_INT_MAX), (int) ($drain['max_physical_schema_statement_count'] ?? PHP_INT_MAX) === 0),
-        wp_fts_wc_gate('worker_batch_legacy_fts_statement_count', 0, (int) ($drain['max_legacy_fts_statement_count'] ?? PHP_INT_MAX), (int) ($drain['max_legacy_fts_statement_count'] ?? PHP_INT_MAX) === 0),
         wp_fts_wc_gate('worker_batch_statement_bytes', '<= 4194304', (int) ($drain['max_statement_bytes'] ?? PHP_INT_MAX), (int) ($drain['max_statement_bytes'] ?? PHP_INT_MAX) <= 4194304),
         wp_fts_wc_gate('worker_batch_duration_ms', '<= 5000', (float) ($drain['max_batch_ms'] ?? INF), (float) ($drain['max_batch_ms'] ?? INF) <= 5000.0),
         wp_fts_wc_gate('worker_drain_failures', 0, (int) ($drain['failures'] ?? 1), (int) ($drain['failures'] ?? 1) === 0),
@@ -16240,26 +12790,25 @@ function wp_fts_wc_finalize(): array
             'scope_expansion_sparse_gap_rows',
             'scope_expansion_unrelated_relationships',
             'scope_expansion_same_target_backlog',
-            'scope_index_upgrade_innodb_core_clones',
-            'scope_index_upgrade_v7_fixture_cardinality',
-            'scope_index_upgrade_v7_missing_indexes',
-            'scope_index_upgrade_exact_ddl',
-            'scope_index_upgrade_ownership_before_ddl',
-            'scope_index_upgrade_schema_publication_last',
-            'scope_index_upgrade_performance_schema_attribution',
-            'scope_index_upgrade_wall_duration_ms',
-            'scope_index_upgrade_server_duration_ms',
-            'scope_index_upgrade_concurrent_writes',
-            'scope_index_upgrade_write_overlap',
-            'scope_index_upgrade_write_duration_ms',
-            'scope_index_upgrade_storage_delta',
-            'scope_index_upgrade_memory',
-            'scope_index_upgrade_query_count',
-            'scope_index_upgrade_exact_definitions',
-            'scope_index_upgrade_version_published',
-            'scope_index_upgrade_readiness_preserved',
-            'scope_index_upgrade_work_preserved',
-            'scope_index_upgrade_ownership_nonautoloaded',
+            'scope_index_repair_innodb_core_clones',
+            'scope_index_repair_fixture_cardinality',
+            'scope_index_repair_missing_indexes',
+            'scope_index_repair_exact_ddl',
+            'scope_index_repair_ownership_before_ddl',
+            'scope_index_repair_schema_version_stable',
+            'scope_index_repair_performance_schema_attribution',
+            'scope_index_repair_wall_duration_ms',
+            'scope_index_repair_server_duration_ms',
+            'scope_index_repair_concurrent_writes',
+            'scope_index_repair_write_overlap',
+            'scope_index_repair_write_duration_ms',
+            'scope_index_repair_storage_delta',
+            'scope_index_repair_memory',
+            'scope_index_repair_query_count',
+            'scope_index_repair_exact_definitions',
+            'scope_index_repair_readiness_preserved',
+            'scope_index_repair_work_preserved',
+            'scope_index_repair_ownership_nonautoloaded',
             'targeted_scope_expansion_result_progression',
             'targeted_scope_expansion_one_statement_per_page',
             'targeted_scope_expansion_sql_shape',
@@ -21426,7 +17975,7 @@ WHERE p.ID IN ({$placeholders})",
         // the former expansion cap. Its normalized-surface posting must rank it
         // first without expanding completions into query text.
         $expectedNewestEnglish = (int) $manifest['last_post_id'] - 1;
-        wp_fts_wc_assert(($ids[0] ?? 0) === $expectedNewestEnglish, 'Surface range omitted the construction-known completion beyond the legacy expansion cap.');
+        wp_fts_wc_assert(($ids[0] ?? 0) === $expectedNewestEnglish, 'Surface range omitted the construction-known completion beyond the fixed comparison sample.');
     }
     if ($caseId === 'hidden_dirty_head') {
         $firstClean = (int) $manifest['first_post_id'] + (int) $manifest['profile']['hidden'] + (int) $manifest['profile']['dirty'];
@@ -23346,7 +19895,7 @@ add_action('init', static function (): void {
     $case = isset($_SERVER['HTTP_X_WP_FTS_WC_COLD_CASE']) && is_string($_SERVER['HTTP_X_WP_FTS_WC_COLD_CASE'])
         ? strtolower(trim($_SERVER['HTTP_X_WP_FTS_WC_COLD_CASE']))
         : '';
-    if (!in_array($case, ['upgrade', 'ready', 'impossible', 'nonhydrate', 'hydrated'], true)) {
+    if (!in_array($case, ['ready', 'impossible', 'nonhydrate', 'hydrated'], true)) {
         return;
     }
     $requestId = isset($_SERVER['HTTP_X_WP_FTS_WC_REQUEST_ID']) && is_string($_SERVER['HTTP_X_WP_FTS_WC_REQUEST_ID'])
@@ -23369,7 +19918,7 @@ add_action('init', static function (): void {
     try {
         $readiness = WP_FTS_Plugin::search_takeover_status(false);
         $payload['ready'] = ($readiness['ready'] ?? null) === true;
-        if (!in_array($case, ['upgrade', 'ready'], true)) {
+        if (!in_array($case, ['ready'], true)) {
             $query = $case === 'impossible'
                 ? 'wpftscoldmissingzzqvbxn commonalpha'
                 : 'commonalpha';
@@ -24413,19 +20962,6 @@ function wp_fts_wc_sql_touches_owned_fts_table(string $sql, bool $includeQuotedV
     return false;
 }
 
-/** Detect any access to the renamed legacy-v3 table family. */
-function wp_fts_wc_is_legacy_fts_statement(string $sql): bool
-{
-    $lower = strtolower($sql);
-    foreach (['fts_docs', 'fts_doc_lengths', 'fts_docmeta', 'fts_meta', 'fts_queue', 'fts_legacy_'] as $table) {
-        if (str_contains($lower, $table)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 /**
  * @param array<int,mixed> $rows
  */
@@ -24447,8 +20983,8 @@ function wp_fts_wc_result_hash(array $rows): string
 
 /**
  * Preserve database order while making numeric scores stable across JSON and
- * PHP/MySQL driver representations. V4 scores are integers; eight fractional
- * digits also retain deterministic legacy BM25 evidence without float noise.
+ * PHP/MySQL driver representations. Eight fractional digits retain the exact
+ * current ranking without float noise.
  *
  * @param array<int,mixed> $rows
  * @return array<int,array{doc_id:int,score:string}>
@@ -24458,57 +20994,16 @@ function wp_fts_wc_ordered_score_signature(array $rows): array
     $signature = [];
     foreach ($rows as $row) {
         if (!is_array($row) || !is_numeric($row['doc_id'] ?? null) || !is_numeric($row['score'] ?? null)) {
-            throw new RuntimeException('Migration parity received a malformed result row.');
+            throw new RuntimeException('Current ranking returned a malformed result row.');
         }
         $score = (float) $row['score'];
         if (!is_finite($score)) {
-            throw new RuntimeException('Migration parity received a non-finite score.');
+            throw new RuntimeException('Current ranking returned a non-finite score.');
         }
         $signature[] = [
             'doc_id' => (int) $row['doc_id'],
             'score' => number_format($score, 8, '.', ''),
         ];
-    }
-    return $signature;
-}
-
-/**
- * V4 ranking is an integer contract. Reject rather than round any fractional
- * score so migration evidence proves literal score equality.
- *
- * @param array<int,mixed> $rows
- * @return array<int,array{doc_id:int,score:string}>
- */
-function wp_fts_wc_v4_ordered_score_signature(array $rows): array
-{
-    $signature = [];
-    foreach ($rows as $row) {
-        if (!is_array($row) || !is_numeric($row['doc_id'] ?? null)) {
-            throw new RuntimeException('V4 migration parity received a malformed result row.');
-        }
-        $value = $row['score'] ?? null;
-        if (is_string($value)) {
-            $score = trim($value);
-            if ($score === '' || !wp_fts_wc_is_ascii_digits($score)) {
-                throw new RuntimeException('V4 migration parity requires a decimal integer score string.');
-            }
-            $score = ltrim($score, '0');
-            $score = $score === '' ? '0' : $score;
-            $maximum = (string) PHP_INT_MAX;
-            if (strlen($score) > strlen($maximum) || (strlen($score) === strlen($maximum) && strcmp($score, $maximum) > 0)) {
-                throw new RuntimeException('V4 migration parity score exceeds the exact integer range.');
-            }
-        } elseif (is_int($value)) {
-            if ($value < 0) {
-                throw new RuntimeException('V4 migration parity requires a non-negative integer score.');
-            }
-            $score = (string) $value;
-        } elseif (is_float($value) && is_finite($value) && $value >= 0 && floor($value) === $value && $value <= 9007199254740991.0) {
-            $score = (string) (int) $value;
-        } else {
-            throw new RuntimeException('V4 migration parity requires an exact non-negative integer score.');
-        }
-        $signature[] = ['doc_id' => (int) $row['doc_id'], 'score' => $score];
     }
     return $signature;
 }
@@ -24640,10 +21135,6 @@ function wp_fts_wc_validation_section_ids(): array
         'adapter_oracle',
         'explosive_input',
         'dependency_lob',
-        'migration',
-        'migration_physical_disk',
-        'migration_rerun',
-        'multisite_migration',
     ];
 }
 
@@ -24690,8 +21181,8 @@ function wp_fts_wc_validation_inventory_matches(array $evidence): bool
         'mutation_fence_real_database_corpus_publication',
         'runtime_profile_full_parity',
         'actual_wpcli_query_count',
-        'cold_ready_upgrade_v6_seed_shape',
-        'cold_ready_upgrade_profile_hash_preserved',
+        'cold_ready_current_schema_option',
+        'cold_ready_current_schema_requests',
         'cold_ready_request_autoloaded_options',
         'cold_ready_request_no_option_or_sitemeta_sql',
         'cold_ready_request_no_network_token_select',
@@ -24738,13 +21229,6 @@ function wp_fts_wc_validation_inventory_matches(array $evidence): bool
         'runtime_analyzer_default_provider_io_absent',
         'claim_index_options_preload_contract',
         'dependency_lob_actual_accepted_fixture_rows',
-        'migration_snapshot_case_artifacts_complete',
-        'migration_all_failpoints_resumed',
-        'migration_worker_batch_count',
-        'migration_worker_no_progress_batches',
-        'migration_physical_monotonic_coverage',
-        'migration_physical_max_sample_duration',
-        'multisite_search_membership_parity',
         'schema_exact_physical_contract',
         'schema_no_term_hash_column_or_index',
         'surface_range_dictionary_terms',

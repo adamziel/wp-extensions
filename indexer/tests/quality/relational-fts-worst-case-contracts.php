@@ -220,8 +220,8 @@ test_case('relational worst-case preliminary inventory rejects self-rehashed evi
         'mutation_fence_real_database_corpus_publication',
         'runtime_profile_full_parity',
         'actual_wpcli_query_count',
-        'cold_ready_upgrade_v6_seed_shape',
-        'cold_ready_upgrade_profile_hash_preserved',
+        'cold_ready_current_schema_option',
+        'cold_ready_current_schema_requests',
         'cold_ready_request_autoloaded_options',
         'cold_ready_request_no_option_or_sitemeta_sql',
         'cold_ready_request_no_network_token_select',
@@ -268,13 +268,6 @@ test_case('relational worst-case preliminary inventory rejects self-rehashed evi
         'runtime_analyzer_default_provider_io_absent',
         'claim_index_options_preload_contract',
         'dependency_lob_actual_accepted_fixture_rows',
-        'migration_snapshot_case_artifacts_complete',
-        'migration_all_failpoints_resumed',
-        'migration_worker_batch_count',
-        'migration_worker_no_progress_batches',
-        'migration_physical_monotonic_coverage',
-        'migration_physical_max_sample_duration',
-        'multisite_search_membership_parity',
         'schema_exact_physical_contract',
         'schema_no_term_hash_column_or_index',
         'surface_range_dictionary_terms',
@@ -1283,14 +1276,14 @@ test_case('relational worst-case evidence publication does not dirty a clean sou
             $runner,
             '--output=' . $output,
         ], $repository);
-        assert_true($clean['exit'] !== 0, 'the isolated fixture should stop at its intentionally absent legacy commit');
+        assert_true($clean['exit'] !== 0, 'the isolated fixture should stop at its intentionally incomplete source tree');
         assert_true(
             !str_contains($clean['stdout'] . $clean['stderr'], 'source tree is dirty'),
             'the required in-tree RUNNING envelope must not invalidate the cleanliness snapshot that preceded it'
         );
         $failure = json_decode((string) file_get_contents($output), true, 512, JSON_THROW_ON_ERROR);
         assert_same('FAIL', $failure['status'] ?? null, 'the later fixture failure should still replace RUNNING with a terminal envelope');
-        assert_same('baseline-worktree-create', $failure['phase'] ?? null, 'a clean source should advance beyond cleanliness validation');
+        assert_same('source-worktree-create', $failure['phase'] ?? null, 'a clean source should advance beyond cleanliness validation');
 
         remove_directory_tree($repository . '/.context');
         mkdir($repository . '/.context');
@@ -1314,7 +1307,7 @@ test_case('relational worst-case evidence publication does not dirty a clean sou
             'the runner may exempt only its own post-snapshot publication, not arbitrary preexisting .context files'
         );
         $preexistingFailure = json_decode((string) file_get_contents($preexistingOutput), true, 512, JSON_THROW_ON_ERROR);
-        assert_same('source-ref-resolve', $preexistingFailure['phase'] ?? null, 'ignored preexisting .context state must be rejected before baseline-worktree-create');
+        assert_same('source-ref-resolve', $preexistingFailure['phase'] ?? null, 'ignored preexisting .context state must be rejected before source-worktree-create');
 
         remove_directory_tree($repository . '/.context');
         file_put_contents($runner, "\n# Deliberate tracked source change for the dirty-tree half of the contract.\n", FILE_APPEND);
@@ -1333,195 +1326,6 @@ test_case('relational worst-case evidence publication does not dirty a clean sou
             $dirty['stdout'] . $dirty['stderr'],
             'the pre-publication snapshot must preserve the clean acceptance gate for actual source changes'
         );
-    } finally {
-        remove_directory_tree($temporary);
-    }
-});
-
-test_case('relational worst-case snapshot wrapper replaces every dead or missing child artifact', function (): void {
-    if (!function_exists('proc_open')) {
-        mark_pending('proc_open() is required to exercise migration snapshot process failures.');
-    }
-
-    $root = dirname(__DIR__, 2);
-    $runner = (string) file_get_contents($root . '/tools/run-relational-fts-worst-case.sh');
-    $start = strpos($runner, "run_migration_snapshot_case() {");
-    $end = strpos($runner, "\n}\n\nset_run_stage \"baseline-corpus-and-index\"", $start === false ? 0 : $start);
-    assert_true(is_int($start) && is_int($end), 'snapshot wrapper function should remain independently executable');
-    $function = substr($runner, $start, $end - $start + 2);
-    $temporary = sys_get_temp_dir() . '/wp-fts-snapshot-death-' . bin2hex(random_bytes(6));
-    mkdir($temporary, 0777, true);
-    $script = $temporary . '/probe.sh';
-    $source = <<<'BASH'
-#!/usr/bin/env bash
-set -euo pipefail
-EVIDENCE_DIR="$1"
-SCENARIO="$2"
-ACTIVE_SOURCE_SHA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-ACTIVE_ZIP_SHA256="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-PROFILE=2k
-env_options() { printf '%s\n' -e WP_FTS_WC_PHASE=migration-snapshot-case; }
-timed_compose() {
-    case "${SCENARIO}" in
-        killed|timeout)
-            cat > "${EVIDENCE_DIR}/migration-snapshot-case-common_or.json" <<'JSON'
-{"schema":"relational-fts-migration-snapshot-case-v1","status":"PASS","sentinel":"written-before-death"}
-JSON
-            ;;
-        memory|noisy|noisy_memory)
-            if [ "${SCENARIO}" = memory ]; then
-                printf '%s\n' 'PHP Fatal error: Allowed memory size of 134217728 bytes exhausted' >&2
-            else
-                php -r 'fwrite(STDERR, str_repeat("x", 2097152));'
-                if [ "${SCENARIO}" = noisy_memory ]; then
-                    printf '%s\n' 'PHP Fatal error: Allowed memory size of 134217728 bytes exhausted' >&2
-                fi
-            fi
-            ;;
-    esac
-    case "${SCENARIO}" in
-        killed) return 137 ;;
-        timeout) return 124 ;;
-        memory) return 255 ;;
-        noisy) return 255 ;;
-        noisy_memory) return 255 ;;
-        missing) return 0 ;;
-    esac
-}
-BASH;
-    file_put_contents($script, $source . "\n" . $function . "\nrun_migration_snapshot_case common_or\n");
-    chmod($script, 0700);
-
-    try {
-        $expectedClasses = [
-            'killed' => 'KilledOrOOM',
-            'timeout' => 'Timeout',
-            'memory' => 'MemoryLimitFatal',
-            'noisy' => 'ProcessFailure',
-            'noisy_memory' => 'MemoryLimitFatal',
-            'missing' => 'ProcessFailure',
-        ];
-        $expectedExits = ['killed' => 137, 'timeout' => 124, 'memory' => 255, 'noisy' => 255, 'noisy_memory' => 255, 'missing' => 1];
-        foreach ($expectedClasses as $scenario => $expectedClass) {
-            $evidence = $temporary . '/' . $scenario;
-            mkdir($evidence, 0777, true);
-            $result = test_run_subprocess(['bash', $script, $evidence, $scenario], $root);
-            assert_same($expectedExits[$scenario], $result['exit'], "{$scenario} snapshot wrapper should publish terminal evidence and fail the lane immediately");
-            $path = $evidence . '/migration-snapshot-case-common_or.json';
-            $terminal = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
-            assert_same('FAIL', $terminal['status'] ?? null, "{$scenario} must never retain PASS after child termination or omission");
-            assert_same($expectedClass, $terminal['error']['class'] ?? null, "{$scenario} should retain its exact failure class");
-            assert_same([], glob($evidence . '/*.tmp.*') ?: [], "{$scenario} should leave no partial atomic-publication file");
-            assert_true(filesize($evidence . '/migration-snapshot-case-common_or.log') <= 1048576, "{$scenario} child output must remain bounded to 1 MiB");
-            if (in_array($scenario, ['noisy', 'noisy_memory'], true)) {
-                assert_contains('[output truncated; final 65536 bytes follow]', (string) file_get_contents($evidence . '/migration-snapshot-case-common_or.log'), 'noisy child output should retain an explicit truncation marker and bounded tail');
-            }
-            $discardedPath = $path . '.pre-failure.json';
-            if (in_array($scenario, ['killed', 'timeout'], true)) {
-                assert_true(is_file($discardedPath), "{$scenario} should retain the stale child PASS only as a diagnostic sidecar");
-                assert_same(hash_file('sha256', $discardedPath), $terminal['discarded_pre_failure_artifact']['sha256'] ?? null, "{$scenario} should hash-bind its discarded PASS");
-            } else {
-                assert_true(!is_file($discardedPath), "{$scenario} should not invent a discarded child artifact");
-            }
-        }
-    } finally {
-        remove_directory_tree($temporary);
-    }
-});
-
-test_case('relational worst-case runner continues only after the classified rare-anchor memory failure is quiescent', function (): void {
-    if (!function_exists('proc_open')) {
-        mark_pending('proc_open() is required to exercise the legacy snapshot continuation.');
-    }
-
-    $root = dirname(__DIR__, 2);
-    $runner = (string) file_get_contents($root . '/tools/run-relational-fts-worst-case.sh');
-    $start = strpos($runner, "run_migration_snapshot_case() {");
-    $end = strpos($runner, "\nset_run_stage \"baseline-corpus-and-index\"", $start === false ? 0 : $start);
-    assert_true(is_int($start) && is_int($end), 'snapshot wrapper and continuation helpers should remain independently executable');
-    $functions = substr($runner, $start, $end - $start);
-    $functions = str_replace('EVID' . 'ENCE_DIR', 'OUTPUT_DIR', $functions);
-    assert_contains('hash_equals($hash,(string)hash_file("sha256",$argv[2]))', $functions, 'continuation must bind the recorded log hash to the actual bounded log');
-    assert_contains('Allowed memory size of 134217728 bytes exhausted', $functions, 'continuation must rescan the exact 128 MiB fatal marker');
-    assert_contains('if (( sink_status != 0 )); then', $functions, 'continuation must reject a failed bounded-log sink even when the child hit its memory limit');
-    assert_contains('legacy-snapshot-database-quiescence 45', $functions, 'the database-idle check must retain its outer deadline');
-    assert_contains("USER='\\''wpfts'\\'' AND COMMAND<>'\\''Sleep'\\''", $functions, 'the database-idle check must reject active plugin statements');
-
-    $temporary = sys_get_temp_dir() . '/wp-fts-snapshot-memory-' . bin2hex(random_bytes(6));
-    mkdir($temporary, 0777, true);
-    $script = $temporary . '/probe.sh';
-    $source = <<<'BASH'
-#!/usr/bin/env bash
-set -euo pipefail
-OUTPUT_DIR="$1"
-SCENARIO="$2"
-CALLS="${OUTPUT_DIR}/calls.log"
-SYSTEM_PHP="$(command -v php)"
-ACTIVE_SOURCE_SHA="36a26f4ad1aaef9758922f24677069045c5291ab"
-ACTIVE_ZIP_SHA256="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-BASELINE_COMMIT="36a26f4ad1aaef9758922f24677069045c5291ab"
-PROFILE=50k
-DB_KIND=mariadb
-php() {
-    if [[ "$SCENARIO" == sink_failure && "$*" == *"Could not close bounded migration snapshot log."* ]]; then
-        "$SYSTEM_PHP" "$@"
-        return 1
-    fi
-    "$SYSTEM_PHP" "$@"
-}
-env_options() { printf '%s\n' -e WP_FTS_WC_PHASE=migration-snapshot-case; }
-timed_compose() {
-    local label="$1"
-    if [ "$label" = legacy-snapshot-database-quiescence ]; then
-        printf '%s\n' "$label" >> "$CALLS"
-        [ "$SCENARIO" != memory_busy ]
-        return
-    fi
-    case "$SCENARIO" in
-        memory_quiet|memory_busy|sink_failure)
-            printf '%s\n' 'PHP Fatal error: Allowed memory size of 134217728 bytes exhausted' >&2
-            return 255
-            ;;
-        wrong_exit)
-            printf '%s\n' 'PHP Fatal error: Allowed memory size of 134217728 bytes exhausted' >&2
-            return 1
-            ;;
-        generic)
-            printf '%s\n' 'PHP Fatal error: unrelated failure' >&2
-            return 255
-            ;;
-        timeout) return 124 ;;
-        killed) return 137 ;;
-    esac
-}
-BASH;
-    file_put_contents($script, $source . "\n" . $functions . "\nrun_migration_snapshot_case rare_anchor_and\n");
-    chmod($script, 0700);
-
-    try {
-        $expectations = [
-            'memory_quiet' => [0, 'MemoryLimitFatal', true],
-            'memory_busy' => [1, 'MemoryLimitFatal', true],
-            'sink_failure' => [1, 'ProcessFailure', false],
-            'wrong_exit' => [1, 'ProcessFailure', false],
-            'generic' => [255, 'ProcessFailure', false],
-            'timeout' => [124, 'Timeout', false],
-            'killed' => [137, 'KilledOrOOM', false],
-        ];
-        foreach ($expectations as $scenario => [$expectedExit, $expectedClass, $checkedDatabase]) {
-            $outputDir = $temporary . '/' . $scenario;
-            mkdir($outputDir, 0777, true);
-            $result = test_run_subprocess(['bash', $script, $outputDir, $scenario], $root);
-            assert_same($expectedExit, $result['exit'], "{$scenario} should retain its exact runner disposition");
-            $artifactPath = $outputDir . '/migration-snapshot-case-rare_anchor_and.json';
-            $artifact = json_decode((string) file_get_contents($artifactPath), true, 512, JSON_THROW_ON_ERROR);
-            assert_same('FAIL', $artifact['status'] ?? null, "{$scenario} must remain a recorded legacy failure");
-            assert_same($expectedClass, $artifact['error']['class'] ?? null, "{$scenario} should retain its exact failure class");
-            $logPath = $outputDir . '/migration-snapshot-case-rare_anchor_and.log';
-            assert_same(hash_file('sha256', $logPath), $artifact['error']['log_sha256'] ?? null, "{$scenario} should bind its bounded child log");
-            $calls = is_file($outputDir . '/calls.log') ? file($outputDir . '/calls.log', FILE_IGNORE_NEW_LINES) : [];
-            assert_same($checkedDatabase ? ['legacy-snapshot-database-quiescence'] : [], $calls ?: [], "{$scenario} should use the database-idle check only for the exact memory classification");
-        }
     } finally {
         remove_directory_tree($temporary);
     }
@@ -1753,9 +1557,7 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         'worktree add --detach "${SOURCE_ROOT}" "${SOURCE_COMMIT}"',
         'initialize_and_attest_jieba_source',
         'components/full-text-search/resources/sources/jieba',
-        'indexer/resources/sources/jieba',
         '${EVIDENCE_DIR}/jieba-source-current.json',
-        '${EVIDENCE_DIR}/jieba-source-baseline.json',
         'submodule update --init --depth 1',
         '7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8',
         '18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37',
@@ -2258,11 +2060,10 @@ AND work_row.generation = claim_driver.generation";
         'package_builds_use_fresh_composer_state',
         'host-provided-unthrottled',
         'php "${SOURCE_ROOT}/indexer/tools/build-release-zip.php"',
-        'immutable baseline package did not use the hardened source-bound Composer policy',
     ] as $required) {
         assert_contains($required, $runner, "runner should retain fail-closed resource evidence: {$required}");
     }
-    assert_true(!str_contains($runner, 'php "${BASELINE_ROOT}/indexer/tools/build-release-zip.php"'), 'the runner must not execute historical packaging code with obsolete Composer policy');
+    assert_true(!str_contains($runner, 'BASELINE_ROOT') && !str_contains($runner, 'BASELINE_COMMIT'), 'the runner must not build or execute a second runtime');
 
     foreach ([
         'relational-fts-resources-v2',
@@ -2952,7 +2753,6 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
         'worker_batch_transaction_control_statement_count',
         'worker_batch_scheduling_control_statement_count',
         'worker_batch_physical_schema_statement_count',
-        'worker_batch_legacy_fts_statement_count',
         'worker_queue_claim_explain_plans',
         'worker_queue_claim_full_scans',
         'worker_changed_batch_analyzed',
@@ -3176,16 +2976,11 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     }
     $cronSnapshot = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_raw_cron_snapshot_has_schema_repair');
     foreach (['WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK', "(\$event['schedule'] ?? null) === false", "(\$event['args'] ?? null) === []"] as $required) {
-        assert_contains($required, $cronSnapshot, "repair schedule evidence must retain exact single-event semantics: {$required}");
+        assert_contains($required, $cronSnapshot, "repair schedule proof must retain exact single-event semantics: {$required}");
     }
     assert_contains("interface_exists('WP_FTS_Set_Oriented_Search_Storage')", $integration, 'proof should fail explicitly when the real set-oriented backend is absent');
     assert_contains("method_exists(\$queue, 'enqueue_many')", $integration, 'proof should require set-oriented work enqueueing');
     foreach ([
-        'migration-snapshot-case',
-        'migration-snapshot-finalize',
-        'migration-failpoint',
-        'wp_fts_schema_migration_phase',
-        'multisite-migration',
         'transaction-crash',
         'cold-sample',
         'search-memory-sample',
@@ -3487,991 +3282,6 @@ test_case('relational worst-case proves actual huge postmeta containment on both
     record_check('relational actual dependency LOB contract', 40);
 });
 
-test_case('multisite migration probes the exact legacy and current dictionary identities', function (): void {
-    $root = dirname(__DIR__, 2);
-    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
-    $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
-    $state = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_multisite_sentinel_state');
-    $layout = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_multisite_term_dictionary_layout');
-    $frequency = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_multisite_term_doc_freq');
-
-    assert_same(1, substr_count($state, '$termDictionaryLayout = wp_fts_wc_multisite_term_dictionary_layout()'), 'one schema probe should classify the dictionary for the complete site snapshot');
-    assert_same(2, substr_count($state, 'wp_fts_wc_multisite_term_doc_freq($termKey, $termDictionaryLayout)'), 'own and foreign DF probes should share that positively identified layout');
-    assert_same(1, substr_count($layout, 'SHOW COLUMNS FROM'), 'dictionary classification should need one bounded metadata statement');
-    assert_contains("['term', 'doc_freq']", $layout, 'the immutable baseline dictionary must be recognized by its exact physical columns');
-    assert_contains("['term_id', 'lang', 'kind', 'term', 'doc_freq']", $layout, 'the current dictionary must be recognized by its exact physical columns');
-    assert_contains('Unsupported multisite sentinel dictionary schema:', $layout, 'unknown or partial migration schemas must fail closed');
-    assert_contains('WHERE term=%s LIMIT 1', $frequency, 'legacy DF probes must bind the complete namespaced binary term identity');
-    assert_contains('WHERE lang=%s AND kind=0 AND term=%s LIMIT 1', $frequency, 'current DF probes must bind the composite primary lexical identity');
-    assert_contains('Unsupported multisite sentinel dictionary layout:', $frequency, 'an unclassified layout must never fall through to either query shape');
-    foreach (['positively classifies', 'legacy single-column binary term identity', 'current composite identity'] as $required) {
-        assert_contains($required, $acceptance, "migration acceptance should retain the dual dictionary invariant: {$required}");
-    }
-    record_check('relational migration dictionary shape contract', 12);
-});
-
-test_case('migration post-kill proof accounts for every phase-specific FTS write', function (): void {
-    $root = dirname(__DIR__, 2);
-    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
-    $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
-    $probe = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_post_kill_probe');
-    $phase = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_phase_state');
-    $work = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_work_counts');
-    $physical = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_is_fts_physical_schema_statement');
-    $ownership = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_sql_touches_owned_fts_table');
-    $tokens = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_sql_token_stream');
-
-    assert_contains('wp_fts_wc_sql_token_stream($sql, $includeQuotedValues)', $ownership, 'FTS ownership must be derived from SQL tokens rather than substring or regexp parsing');
-    assert_contains("['word', 'identifier']", $ownership, 'only executable bare or quoted identifiers may establish FTS table ownership');
-    assert_contains("['word', 'identifier', 'string']", $ownership, 'physical-schema classification must also recognize table identities encoded as quoted values');
-    assert_contains("yield ['type' => 'string'", $tokens, 'the SQL stream must decode quoted schema values only on explicit request');
-    assert_contains(". 'fts_'", $ownership, 'the classifier must bind ownership to the active WordPress site prefix');
-    assert_true(!str_contains($physical . $ownership, 'preg_'), 'physical-schema ownership must not regress to regexp parsing');
-    assert_contains('wp_fts_wc_is_physical_schema_statement($sql)', $physical, 'FTS schema classification must first require an actual physical-schema statement');
-    assert_contains('wp_fts_wc_sql_touches_owned_fts_table($sql, true)', $physical, 'only the physical-schema classifier may treat quoted table values as ownership');
-    $physicalFirstStage = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_is_physical_schema_statement');
-    assert_contains('wp_fts_wc_sql_tokens($sql)', $physicalFirstStage, 'physical-schema classification must ignore leading comments through the shared SQL token stream');
-    assert_contains("=== 'information_schema'", $physicalFirstStage, 'physical-schema classification must recognize an exact information_schema relation identifier');
-    assert_true(!str_contains($physicalFirstStage, 'strtok(') && !str_contains($physicalFirstStage, 'ltrim('), 'physical-schema classification must not use whitespace-sensitive string prefixes');
-
-    assert_contains("kind IN ('post','scope')", $work, 'semantic work cardinality must exclude the persistent search-epoch metadata row');
-    assert_contains("kind IN ('post','scope','meta')", $work, 'the bounded snapshot must still account for every relevant work-table kind');
-    assert_contains('WP_FTS_Index_Queue::GLOBAL_CORPUS_SCOPE_KEY', $work, 'the exact canonical corpus authority must be inspected');
-    assert_contains('WP_FTS_Index_Queue::SEARCH_EPOCH_JOB_KEY', $work, 'the exact search-epoch generation must be inspected');
-    foreach (['meta_rows', 'corpus_scope_generation', 'corpus_scope_incarnation', 'corpus_scope_reason', 'search_epoch_generation'] as $field) {
-        assert_contains("'{$field}'", $work, "migration work evidence must retain {$field}");
-    }
-
-    assert_contains("['ready_verified', 'legacy_cleaned']", $probe, 'only the two post-reconciliation boundaries may use current-schema save expectations');
-    assert_contains("['v4_created', 'reconciliation_enqueued']", $probe, 'the two writable stale-schema boundaries must use recovery-scope expectations');
-    assert_contains('wp_fts_wc_sql_touches_owned_fts_table($sql)', $probe, 'failed public search must reject current, legacy, and renamed site-owned FTS tables');
-    foreach ([
-        'migration_post_kill_accounted_scope_work_delta',
-        'migration_post_kill_accounted_meta_work_delta',
-        'migration_post_kill_accounted_corpus_generation',
-        'migration_post_kill_accounted_search_epoch_generation',
-        'migration_post_kill_accounted_recovery_authority',
-        'migration_post_kill_exact_fts_dml_count',
-        'migration_post_kill_fts_dml_max_sql_bytes',
-        'migration_post_kill_no_fts_schema_sql',
-        'wordpress_core_schema_queries',
-    ] as $required) {
-        assert_contains($required, $probe, "post-kill evidence must retain {$required}");
-    }
-    assert_contains("=== 'foreground_queue_failure'", $probe, 'recovery work must be rebound to the explicit foreground-failure authority');
-    assert_contains('WP_FTS_Plugin::SCHEMA_VERSION', $phase, 'ready migration boundaries must follow the production logical schema version');
-    assert_contains("'meta_rows' => 1", $phase, 'post-enqueue migration phases must retain the persistent epoch row');
-
-    foreach (['semantic claimable debt', 'exactly one bounded recovery-scope DML', 'advances both generations once', 'exactly two', 'WordPress core may', 'cannot excuse any FTS physical-schema statement'] as $required) {
-        assert_contains($required, $acceptance, "migration acceptance must retain the phase-aware invariant: {$required}");
-    }
-    record_check('relational phase-aware post-kill migration contract', 45);
-});
-
-test_case('migration physical-schema classifier covers quoted identities without DML false positives', function (): void {
-    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
-    foreach ([
-        'wp_fts_wc_sql_token_stream',
-        'wp_fts_wc_sql_tokens',
-        'wp_fts_wc_is_physical_schema_statement',
-        'wp_fts_wc_sql_touches_owned_fts_table',
-        'wp_fts_wc_is_fts_physical_schema_statement',
-        'wp_fts_wc_is_fts_data_mutation_statement',
-    ] as $function) {
-        eval(wp_fts_wc_contract_function_source($integration, $function));
-    }
-
-    global $wpdb;
-    $previousWpdb = $wpdb ?? null;
-    $wpdb = (object) ['prefix' => 'wp_'];
-    try {
-        assert_true(
-            wp_fts_wc_is_fts_physical_schema_statement("/* diagnostic lead */ SHOW TABLES LIKE 'wp\\_fts\\_work'"),
-            'a comment-prefixed escaped SHOW TABLES LIKE value must identify the owned work table'
-        );
-        assert_true(
-            wp_fts_wc_is_fts_physical_schema_statement("SELECT TABLE_NAME FROM `information_schema` . `TABLES` WHERE TABLE_SCHEMA='wpfts' AND TABLE_NAME='wp_fts_terms'"),
-            'a spaced and backticked information_schema relation must identify its quoted owned table name'
-        );
-        assert_true(
-            !wp_fts_wc_is_fts_physical_schema_statement('SHOW FULL COLUMNS FROM `wp_posts`'),
-            'WordPress core column diagnostics must not be attributed to FTS'
-        );
-        $coreDml = "UPDATE wp_options SET option_value='wp_fts_work' WHERE option_name='example'";
-        assert_true(
-            !wp_fts_wc_is_fts_data_mutation_statement($coreDml),
-            'a quoted FTS-looking option value must not turn ordinary core DML into FTS DML'
-        );
-        assert_true(
-            !wp_fts_wc_is_fts_physical_schema_statement($coreDml),
-            'a non-schema statement must not become physical FTS work because of a quoted value'
-        );
-        assert_true(
-            wp_fts_wc_is_fts_data_mutation_statement("INSERT INTO `wp_fts_work` (job_key) VALUES ('wp_fts_terms')"),
-            'an executable owned identifier must still classify FTS DML while its quoted value is ignored'
-        );
-        assert_true(
-            wp_fts_wc_sql_touches_owned_fts_table('SELECT * FROM `wp_fts_docs`'),
-            'a search-side query against a legacy site-owned table must fail the no-FTS-SQL gate'
-        );
-    } finally {
-        $wpdb = $previousWpdb;
-    }
-    record_check('relational quoted physical-schema classifier contract', 7);
-});
-
-test_case('multisite migration compares semantic membership across the scoring and storage cutover', function (): void {
-    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
-    foreach ([
-        'wp_fts_wc_multisite_search_membership_matches',
-        'wp_fts_wc_multisite_document_state_matches',
-    ] as $function) {
-        eval(wp_fts_wc_contract_function_source($integration, $function));
-    }
-    $migrationSource = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_multisite_migration');
-    assert_contains(
-        '$firstV4ScoreParity = ($baselineSites[$siteIds[0]][\'v4_oracle\'] ?? null) === ($firstSiteAfterFailure[\'v4_search\'] ?? null);',
-        $migrationSource,
-        'site-one failure isolation must retain exact current v4 oracle order and score parity'
-    );
-    assert_contains(
-        '$v4ScoreParity = ($definition[\'v4_oracle\'] ?? null) === ($currentState[\'v4_search\'] ?? null);',
-        $migrationSource,
-        'each resumed site must retain exact current v4 oracle order and score parity'
-    );
-    assert_contains(
-        '&& $foreignDfIsolation && $v4ScoreParity && $indexHashStable',
-        $migrationSource,
-        'exact v4 order and score parity must remain coupled to each site result'
-    );
-
-    $source = [
-        ['post_id' => 3, 'post_type' => 'post', 'post_status' => 'publish', 'post_date_gmt' => '2020-01-02 12:01:00', 'title_sha256' => hash('sha256', 'Sentinel 1'), 'excerpt_sha256' => hash('sha256', ''), 'content_sha256' => str_repeat('3', 64), 'password_sha256' => str_repeat('4', 64)],
-        ['post_id' => 4, 'post_type' => 'post', 'post_status' => 'publish', 'post_date_gmt' => '2020-01-02 12:02:00', 'title_sha256' => hash('sha256', 'Sentinel 2'), 'excerpt_sha256' => hash('sha256', ''), 'content_sha256' => str_repeat('7', 64), 'password_sha256' => str_repeat('8', 64)],
-    ];
-    $legacy = [
-        'search' => [
-            'shared' => ['results' => [['doc_id' => 3, 'score' => '0.18'], ['doc_id' => 4, 'score' => '0.18']]],
-            'unique' => ['results' => [['doc_id' => 3, 'score' => '0.18'], ['doc_id' => 4, 'score' => '0.18']]],
-        ],
-        'document_count' => 2,
-        'document_ids' => [3, 4],
-        'metadata_signature' => [
-            3 => ['post_type' => 'post', 'post_status' => 'publish', 'post_date_gmt' => '2020-01-02 12:01:00', 'title' => 'Sentinel 1', 'excerpt' => '', 'search_text_sha256' => str_repeat('9', 64)],
-            4 => ['post_type' => 'post', 'post_status' => 'publish', 'post_date_gmt' => '2020-01-02 12:02:00', 'title' => 'Sentinel 2', 'excerpt' => '', 'search_text_sha256' => str_repeat('a', 64)],
-        ],
-        'index_document_signature' => [
-            ['doc_id' => 3, 'lang' => 'en', 'content_hash_hex' => str_repeat('b', 80)],
-            ['doc_id' => 4, 'lang' => 'en', 'content_hash_hex' => str_repeat('c', 80)],
-        ],
-        'source_signature' => $source,
-    ];
-    $current = $legacy;
-    $current['search']['shared']['results'] = [['doc_id' => 4, 'score' => '2048000000'], ['doc_id' => 3, 'score' => '2048000000']];
-    $current['search']['unique']['results'] = $current['search']['shared']['results'];
-    $current['metadata_signature'][3]['search_text_sha256'] = $source[0]['content_sha256'];
-    $current['metadata_signature'][4]['search_text_sha256'] = $source[1]['content_sha256'];
-    $current['index_document_signature'][0]['content_hash_hex'] = str_repeat('d', 80);
-    $current['index_document_signature'][1]['content_hash_hex'] = str_repeat('e', 80);
-
-    assert_true(
-        wp_fts_wc_multisite_search_membership_matches($legacy, $current),
-        'legacy tie order may change when the authenticated v4 scoring model takes over'
-    );
-    $duplicateResult = $current;
-    $duplicateResult['search']['shared']['results'][1]['doc_id'] = 4;
-    assert_true(
-        !wp_fts_wc_multisite_search_membership_matches($legacy, $duplicateResult),
-        'membership parity must reject duplicate or missing documents'
-    );
-    $emptyResult = $legacy;
-    $emptyResult['search']['shared']['results'] = [];
-    $emptyResult['search']['unique']['results'] = [];
-    assert_true(
-        !wp_fts_wc_multisite_search_membership_matches($emptyResult, $emptyResult),
-        'membership parity must not authenticate two empty result sets'
-    );
-    assert_true(
-        wp_fts_wc_multisite_document_state_matches($legacy, $current),
-        'v4 content-only search_text and rewritten profile hash should preserve semantic source/document identity'
-    );
-    $changedMetadata = $current;
-    $changedMetadata['metadata_signature'][3]['title'] = 'Mutated';
-    assert_true(!wp_fts_wc_multisite_document_state_matches($legacy, $changedMetadata), 'shared metadata changes must fail cutover parity');
-    $misboundSourceLegacy = $legacy;
-    $misboundSourceCurrent = $current;
-    $misboundSourceLegacy['source_signature'][0]['title_sha256'] = str_repeat('f', 64);
-    $misboundSourceCurrent['source_signature'][0]['title_sha256'] = str_repeat('f', 64);
-    assert_true(
-        !wp_fts_wc_multisite_document_state_matches($misboundSourceLegacy, $misboundSourceCurrent),
-        'shared metadata must authenticate against the canonical source signature'
-    );
-    $unboundSearchText = $current;
-    $unboundSearchText['metadata_signature'][3]['search_text_sha256'] = str_repeat('f', 64);
-    assert_true(!wp_fts_wc_multisite_document_state_matches($legacy, $unboundSearchText), 'v4 search_text must bind to canonical source content');
-    $sourceMutations = [
-        'post_id' => 99,
-        'post_type' => 'page',
-        'post_status' => 'draft',
-        'post_date_gmt' => '2020-01-03 00:00:00',
-        'title_sha256' => str_repeat('0', 64),
-        'excerpt_sha256' => str_repeat('1', 64),
-        'content_sha256' => str_repeat('2', 64),
-        'password_sha256' => str_repeat('3', 64),
-    ];
-    foreach ($sourceMutations as $field => $value) {
-        $changedSource = $current;
-        $changedSource['source_signature'][0][$field] = $value;
-        assert_true(
-            !wp_fts_wc_multisite_document_state_matches($legacy, $changedSource),
-            "canonical source field {$field} must participate in document-semantic continuity"
-        );
-    }
-    $missingSourceLegacy = $legacy;
-    $missingSourceCurrent = $current;
-    array_pop($missingSourceLegacy['source_signature']);
-    array_pop($missingSourceCurrent['source_signature']);
-    assert_true(
-        !wp_fts_wc_multisite_document_state_matches($missingSourceLegacy, $missingSourceCurrent),
-        'matching but incomplete source signatures must fail document-semantic continuity'
-    );
-    $changedIndexIdentity = $current;
-    $changedIndexIdentity['index_document_signature'][0]['doc_id'] = 99;
-    assert_true(!wp_fts_wc_multisite_document_state_matches($legacy, $changedIndexIdentity), 'index document identity changes must fail parity');
-    record_check('multisite scoring and storage cutover parity contract', 20);
-});
-
-test_case('relational worst-case migration kills every table boundary and validates populated parity', function (): void {
-    $root = dirname(__DIR__, 2);
-    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
-    $runner = (string) file_get_contents($root . '/tools/run-relational-fts-worst-case.sh');
-    $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
-    $perTablePhases = [
-        'legacy_renamed_fts_terms',
-        'legacy_renamed_fts_postings',
-        'legacy_renamed_fts_docs',
-        'legacy_renamed_fts_doc_lengths',
-        'legacy_renamed_fts_docmeta',
-        'legacy_renamed_fts_meta',
-        'legacy_renamed_fts_queue',
-    ];
-    assert_true(class_exists('WP_FTS_Plugin'), 'production plugin class should be available for migration coupling');
-    $suffixMethod = new ReflectionMethod('WP_FTS_Plugin', 'legacy_relational_table_suffixes');
-    $suffixMethod->setAccessible(true);
-    $productionSuffixes = $suffixMethod->invoke(null);
-    assert_same(
-        ['fts_terms', 'fts_postings', 'fts_docs', 'fts_doc_lengths', 'fts_docmeta', 'fts_meta', 'fts_queue'],
-        is_array($productionSuffixes) ? array_keys($productionSuffixes) : [],
-        'every production legacy table must have an explicit destructive failpoint contract'
-    );
-    foreach ([...$perTablePhases, 'v4_created', 'reconciliation_enqueued', 'ready_verified', 'legacy_cleaned'] as $phase) {
-        assert_contains("'{$phase}'", $integration, "integration proof should install the {$phase} failpoint");
-        assert_contains($phase, $runner, "real runner should SIGKILL the {$phase} boundary");
-    }
-    assert_contains('BASELINE_COMMIT="36a26f4ad1aaef9758922f24677069045c5291ab"', $runner, 'future migration runs must use the immutable populated v3 fixture');
-    assert_contains('BASELINE_REF="${BASELINE_COMMIT}"', $runner, 'the baseline worktree must resolve only from the immutable commit constant');
-    assert_contains('if [[ "${BASELINE_SHA}" != "${BASELINE_COMMIT}" ]]', $runner, 'the runner must reject any baseline ref that does not resolve to the immutable fixture');
-    assert_true(!str_contains($runner, 'BASELINE_REF="origin/main"'), 'migration evidence must not silently change its source schema after this PR merges');
-    assert_true(!str_contains($runner, 'for migration_phase in legacy_renamed v4_created'), 'runner must not collapse seven table renames into one coarse failpoint');
-
-    $runnerAssignments = [];
-    foreach (file($root . '/tools/run-relational-fts-worst-case.sh', FILE_IGNORE_NEW_LINES) ?: [] as $line) {
-        $separator = strpos($line, '=');
-        if ($separator === false) {
-            continue;
-        }
-        $name = substr($line, 0, $separator);
-        if (in_array($name, [
-            'MIGRATION_FAILPOINT_DEADLINE_SECONDS',
-            'MIGRATION_FAILPOINT_BATCH_BUDGET_SECONDS',
-            'MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS',
-            'MIGRATION_FAILPOINT_OUTER_TIMEOUT_SECONDS',
-        ], true)) {
-            $runnerAssignments[$name] = substr($line, $separator + 1);
-        }
-    }
-    assert_same('7200', $runnerAssignments['MIGRATION_FAILPOINT_DEADLINE_SECONDS'] ?? null, 'the migration failpoint work deadline must cover the 100k corpus at the accepted minimum throughput');
-    assert_same('300', $runnerAssignments['MIGRATION_FAILPOINT_BATCH_BUDGET_SECONDS'] ?? null, 'the migration failpoint wrapper must retain one complete production batch budget');
-    assert_same(
-        '$((MIGRATION_FAILPOINT_DEADLINE_SECONDS + MIGRATION_FAILPOINT_BATCH_BUDGET_SECONDS + 60))',
-        $runnerAssignments['MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS'] ?? null,
-        'the in-container watcher must cover initialization, the complete work deadline, and a final batch'
-    );
-    assert_same(
-        '$((MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS + 60))',
-        $runnerAssignments['MIGRATION_FAILPOINT_OUTER_TIMEOUT_SECONDS'] ?? null,
-        'the host timeout must leave cleanup headroom beyond the in-container watcher'
-    );
-    assert_contains('"${MIGRATION_FAILPOINT_OUTER_TIMEOUT_SECONDS}" exec', $runner, 'the migration failpoint must use the derived outer timeout instead of a short literal cap');
-    assert_contains('"${MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS}"', $runner, 'the in-container watcher must receive its derived timeout');
-    $migrationFailpoint = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_failpoint');
-    assert_contains("wp_fts_wc_required_positive_int_env('WP_FTS_WC_MIGRATION_DEADLINE_SECONDS')", $migrationFailpoint, 'the PHP migration deadline must come from the runner source of truth');
-    assert_contains("wp_fts_wc_required_positive_int_env('WP_FTS_WC_MIGRATION_BATCH_BUDGET_SECONDS')", $migrationFailpoint, 'the PHP batch budget must come from the runner source of truth');
-
-    $snapshotCase = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_snapshot_case');
-    $snapshotFinalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_snapshot_finalize');
-    $finalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_finalize');
-    assert_true($snapshotCase !== '' && $snapshotFinalize !== '' && $finalize !== '', 'migration parity functions should remain independently inspectable');
-    assert_true(!str_contains($snapshotCase, 'sort('), 'each legacy migration snapshot case must preserve result order');
-    assert_true(!str_contains($snapshotFinalize, 'WP_FTS_Plugin::search') && !str_contains($snapshotFinalize, 'wp_fts_wc_legacy_execution'), 'the lightweight snapshot assembler must never rerun a legacy search');
-    assert_true(!str_contains($finalize, 'sort('), 'post-migration parity must preserve result order');
-    foreach ([
-        'relational-fts-v4-migration-oracle-v5',
-        'legacy_bm25_float',
-        'v4_quantized_impact_times_integer_rarity',
-        'legacy_numeric_score_parity_expected',
-        '(180234*p.tf+12) DIV (20*p.tf+24)',
-        '1000000 DIV GREATEST(1,target_df.target_doc_freq)',
-        'wp_fts_wc_v4_ordered_score_signature',
-        'migration-rerun',
-        '_fresh_process_stable',
-        'WP_FTS_WC_MULTISITE_POST_TITLE_PREFIX',
-        'multisite_search_membership_parity',
-        'multisite_doc_freq_parity',
-        'multisite_document_semantics_parity',
-        'multisite_cross_site_isolation',
-        'multisite_recorded_prefix_parity',
-        'migration_search_takeover_ready',
-        'multisite_search_takeover_ready',
-        'multisite_diagonal_token_membership',
-        'multisite_off_diagonal_token_isolation',
-        'multisite_empty_foreign_doc_freq_probes',
-        'multisite_v4_oracle_score_parity',
-        'multisite_index_content_hash_stable',
-        'multisite_site_three_physical_sentinel_untouched_after_site_two_failure',
-        'multisite_empty_foreign_query_probes',
-        'multisite_site_three_untouched_after_site_two_failure',
-        'migration-post-kill-probe',
-        'relational-fts-migration-post-kill-probe-v3',
-        "'ordinary_option_after' => \$optionAfter",
-        "\$probe['ordinary_option_after'] === (\$probe['ordinary']['option'] ?? null)",
-        'relational-fts-migration-phase-v3',
-        'migration_phase_exact_tables',
-        'migration_phase_exact_scope_rows',
-        'migration_post_kill_public_search_unavailable',
-        'migration_post_kill_public_search_duration_ms',
-        'migration_post_kill_public_search_query_count',
-        'migration_post_kill_public_search_max_sql_bytes',
-        'migration_post_kill_accounted_health_effect',
-        'migration_post_kill_exact_fts_dml_count',
-        'migration_post_kill_no_core_like_sql',
-        'migration_post_kill_no_fts_schema_sql',
-        'relational-fts-migration-worker-journal-v2',
-        'scope_page_committed',
-        'migration_worker_batch_count',
-        'migration_worker_no_progress_batches',
-        'migration_worker_recorded_progress',
-        'relational-fts-migration-snapshot-case-v1',
-        'migration_snapshot_case_artifacts_complete',
-        'relational-fts-migration-baseline-v5',
-        'legacy_execution',
-        'collection_metadata',
-        'foreign_terms',
-        'foreign_postings',
-        'wp_fts_wc_multisite_requeue_and_drain',
-        'relational-fts-multisite-migration-v5',
-        'multisite_site_one_stability_generations_acknowledged_after_site_two_failure',
-        'multisite_stability_acknowledged_sentinel_sites',
-        'multisite_stability_generation_outcomes',
-        'relational-fts-dependency-lob-v2',
-        'dependency_lob_rejection_phase_outcomes',
-        'dependency_lob_rejection_phase_isolation',
-        'dependency_lob_accepted_successor_outcomes',
-        'dependency_lob_accepted_successor_ms',
-        '9007199254740991.0',
-        "['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at']",
-    ] as $required) {
-        assert_contains($required, $integration, "migration proof should retain hard contract: {$required}");
-    }
-    assert_contains('run_php_phase migration-oracle', $runner, 'runner should capture the v4 oracle while v3 logical tables are intact');
-    assert_contains('run_php_phase migration-rerun', $runner, 'runner should repeat migration parity in a fresh PHP process');
-    assert_contains(
-        'for migration_case in common_or max_valid_or_prefix rare_anchor_and prefix_fanout ambiguous_morphology_or ambiguous_morphology_and; do',
-        $runner,
-        'runner should launch the exact ordered six-case snapshot inventory'
-    );
-    $snapshotLoop = strpos($runner, 'for migration_case in common_or max_valid_or_prefix rare_anchor_and prefix_fanout ambiguous_morphology_or ambiguous_morphology_and; do');
-    $snapshotAssembly = strpos($runner, 'timed_compose migration-snapshot-finalize 150', $snapshotLoop === false ? 0 : $snapshotLoop);
-    $currentInstall = strpos($runner, 'timed_compose current-plugin-install', $snapshotAssembly === false ? 0 : $snapshotAssembly);
-    assert_true(
-        is_int($snapshotLoop) && is_int($snapshotAssembly) && is_int($currentInstall)
-            && $snapshotLoop < $snapshotAssembly
-            && $snapshotAssembly < $currentInstall,
-        'six snapshot children must assemble and fail closed before current-plugin installation'
-    );
-    assert_true(substr_count($runner, 'timeout -s KILL 120 php -d memory_limit=128M /proof/relational-fts-worst-case.php') >= 2, 'snapshot cases and assembler need explicit 128 MiB inner hard limits');
-    assert_contains('Legacy snapshot case exceeded the 120-second process limit', $runner, 'a legacy timeout should retain an explicit reason instead of a null or zero measurement');
-    assert_contains('"duration_ms"=>$elapsed', $runner, 'a killed legacy snapshot should retain measured host wall time');
-    $migrationLoopStart = strpos($runner, 'for migration_phase in');
-    $migrationLoopEnd = strpos($runner, "done\nrun_php_phase migration-finalize", $migrationLoopStart === false ? 0 : $migrationLoopStart);
-    assert_true(is_int($migrationLoopStart) && is_int($migrationLoopEnd), 'runner should retain one inspectable destructive migration loop');
-    $migrationLoop = substr($runner, $migrationLoopStart, $migrationLoopEnd - $migrationLoopStart);
-    assert_true(
-        strpos($migrationLoop, 'kill_migration_phase "${migration_phase}"') < strpos($migrationLoop, 'run_migration_post_kill_probe "${migration_phase}"'),
-        'a fresh availability/fail-closed probe must run immediately after every SIGKILL and before the next phase'
-    );
-    assert_contains('timeout -s KILL 120 php /proof/relational-fts-worst-case.php', $runner, 'every fresh post-kill availability probe needs a hard wall-clock bound');
-    assert_true(
-        strpos($runner, 'run_php_phase multisite-baseline-setup') > strpos($runner, 'BASELINE_INDEX_EXIT'),
-        'multisite sentinels should be created after the main baseline corpus so setup cannot delete site-one evidence'
-    );
-    foreach (['seven physical table renames', 'six exact case outcomes', '138,564 candidate postings', 'distinct process identities for every PASS child', '3×3 site-specific token matrix', 'six empty off-diagonal cells', 'append-only NDJSON', 'Immediately after every SIGKILL', 'collection-metadata', 'generation for every sentinel'] as $required) {
-        assert_contains($required, $acceptance, "acceptance writeup should retain populated migration requirement: {$required}");
-    }
-    record_check('relational populated migration contract', 69);
-});
-
-test_case('migration oracle target-v4 DF scope is bounded and independent from v3 dictionary DF', function (): void {
-    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
-    $oracle = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_oracle');
-    $score = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_v4_oracle_from_legacy');
-    $targetDf = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_v4_oracle_target_df_relation');
-    $v3Consistency = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_v4_oracle_relevant_df_mismatches');
-
-    assert_contains('relational-fts-v4-migration-oracle-v5', $oracle, 'the bounded legacy-memory outcome requires a new oracle schema');
-    assert_true(!str_contains($integration, 'relational-fts-v4-migration-oracle-v' . '2'), 'the stale v2 oracle schema must not remain accepted or emitted');
-    assert_contains("'target_doc_freq_basis' => \$targetDocFreqBasis", $oracle, 'oracle evidence should publish the exact global target-DF basis');
-    assert_contains("'post_types' => WP_FTS_WC_INDEX_POST_TYPES", $oracle, 'target DF must share the configured acceptance post-type scope');
-    assert_contains("'post_statuses' => WP_FTS_WC_INDEX_POST_STATUSES", $oracle, 'target DF must bind the fixed production-indexable status scope');
-    assert_contains("const WP_FTS_WC_INDEX_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];", $integration, 'the acceptance target-DF status constant must remain explicit');
-    assert_same(
-        ['publish', 'draft', 'pending', 'future', 'private'],
-        (new ReflectionClass(WP_FTS_Plugin::class))->getConstant('ADMIN_POST_SEARCH_POST_STATUSES'),
-        'the acceptance target-DF status list must stay aligned with production global indexability'
-    );
-    assert_contains('1000000 DIV GREATEST(1,target_df.target_doc_freq)', $score, 'exact rarity must use the target-v4 DF relation');
-    assert_contains('CASE WHEN prefix_target_df.target_doc_freq<1 THEN 1 ELSE prefix_target_df.target_doc_freq END AS SIGNED', $score, 'prefix rarity must use target-v4 DF while preserving production CAST rounding');
-    assert_true(!str_contains($score, 't.doc_freq') && !str_contains($score, 'pt.doc_freq'), 'v3 dictionary DF must never score target-v4 exact or prefix results');
-    assert_contains('target_p.term IN (', $targetDf, 'exact target DF must be constrained to the planned term keys');
-    assert_contains('target_p.term > %s', $targetDf, 'prefix target DF must have the exclusive binary lower bound');
-    assert_contains('target_p.term < %s', $targetDf, 'bounded prefixes must retain their exclusive binary upper bound');
-    assert_contains('target_d.is_deleted=0', $targetDf, 'target DF must count only active legacy documents');
-    assert_contains("target_wp.post_password=''", $targetDf, 'target DF must exclude password-protected canonical posts');
-    assert_contains('target_wp.post_type IN (', $targetDf, 'target DF must use the configured global post-type scope');
-    assert_contains('target_wp.post_status IN (', $targetDf, 'target DF must use the production indexable status scope');
-    assert_contains("'per_query_filters' => false", $targetDf, 'query visibility filters must not become global target-DF filters');
-    assert_contains('GROUP BY t.term,t.doc_freq', $v3Consistency, 'the independent v3 dictionary-consistency proof must remain intact');
-    assert_contains('HAVING t.doc_freq<>actual', $v3Consistency, 'the independent proof must still reject stale v3 dictionary rows');
-});
-
-test_case_with_pdo_sqlite_fixture('migration oracle password-protected posting changes target-v4 DF and rank', function (): void {
-    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
-    $targetDf = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_v4_oracle_target_df_relation');
-
-    if (!defined('WP_FTS_WC_INDEX_POST_TYPES')) {
-        define('WP_FTS_WC_INDEX_POST_TYPES', ['post', 'page', 'attachment']);
-    }
-    if (!defined('WP_FTS_WC_INDEX_POST_STATUSES')) {
-        define('WP_FTS_WC_INDEX_POST_STATUSES', ['publish', 'draft', 'pending', 'future', 'private']);
-    }
-    eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_identifier'));
-    if (!function_exists('wp_fts_wc_assert')) {
-        eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_assert'));
-    }
-    eval($targetDf);
-
-    $database = new PDO('sqlite::memory:');
-    $database->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    $database->exec('CREATE TABLE wp_fts_postings (term TEXT NOT NULL, doc_id INTEGER NOT NULL, tf INTEGER NOT NULL, PRIMARY KEY (term,doc_id))');
-    $database->exec('CREATE TABLE wp_fts_docs (doc_id INTEGER PRIMARY KEY, is_deleted INTEGER NOT NULL)');
-    $database->exec('CREATE TABLE wp_posts (ID INTEGER PRIMARY KEY, post_password TEXT NOT NULL, post_type TEXT NOT NULL, post_status TEXT NOT NULL)');
-    $database->exec('CREATE TABLE wp_fts_terms (term TEXT PRIMARY KEY, doc_freq INTEGER NOT NULL)');
-    $database->exec("INSERT INTO wp_fts_postings VALUES ('alpha',1,1),('alpha',2,1),('beta',3,2),('beta',4,1)");
-    $database->exec('INSERT INTO wp_fts_docs VALUES (1,0),(2,0),(3,0),(4,0)');
-    $database->exec("INSERT INTO wp_posts VALUES (1,'','post','publish'),(2,'secret','post','publish'),(3,'','post','publish'),(4,'','post','publish')");
-    $database->exec("INSERT INTO wp_fts_terms VALUES ('alpha',2),('beta',2)");
-
-    global $wpdb;
-    $previousWpdb = $wpdb ?? null;
-    $wpdb = (object) ['posts' => 'wp_posts'];
-    try {
-        $basis = [
-            'legacy_docs' => 'is_deleted=0',
-            'post_password' => '',
-            'post_types' => WP_FTS_WC_INDEX_POST_TYPES,
-            'post_statuses' => WP_FTS_WC_INDEX_POST_STATUSES,
-            'per_query_filters' => false,
-        ];
-        $relation = wp_fts_wc_v4_oracle_target_df_relation('wp_fts_postings', 'wp_fts_docs', $basis, ['alpha', 'beta'], null);
-        $statement = $relation['sql'];
-        foreach ($relation['args'] as $argument) {
-            $placeholder = strpos($statement, '%s');
-            assert_true(is_int($placeholder), 'every target-DF argument must bind one placeholder');
-            $quoted = $database->quote($argument);
-            assert_true(is_string($quoted), 'SQLite must quote each target-DF fixture argument');
-            $statement = substr($statement, 0, $placeholder) . $quoted . substr($statement, $placeholder + 2);
-        }
-        assert_true(!str_contains($statement, '%s'), 'the target-DF fixture query must have no unbound placeholder');
-        $rows = $database->query($statement)->fetchAll(PDO::FETCH_ASSOC);
-    } finally {
-        $wpdb = $previousWpdb;
-    }
-    $derivedDf = [];
-    foreach ($rows as $row) {
-        $derivedDf[(string) $row['term']] = (int) $row['target_doc_freq'];
-    }
-    assert_same(['alpha' => 1, 'beta' => 2], $derivedDf, 'one protected alpha posting must be absent from target-v4 DF while both public beta postings remain');
-    $legacyAlphaDf = (int) $database->query("SELECT doc_freq FROM wp_fts_terms WHERE term='alpha'")->fetchColumn();
-    assert_same(2, $legacyAlphaDf, 'the regression fixture must retain the stale-for-v4 but internally valid v3 dictionary DF');
-    $alphaImpact = max(1, min(65535, intdiv(180234 + 12, 20 + 24)));
-    $betaImpact = max(1, min(65535, intdiv(180234 * 2 + 12, 20 * 2 + 24)));
-    $alphaTargetScore = $alphaImpact * intdiv(1000000, $derivedDf['alpha']);
-    $alphaDictionaryScore = $alphaImpact * intdiv(1000000, $legacyAlphaDf);
-    $betaTargetScore = $betaImpact * intdiv(1000000, $derivedDf['beta']);
-    assert_true(
-        $alphaTargetScore > $betaTargetScore && $betaTargetScore > $alphaDictionaryScore,
-        'excluding the password-protected posting must reverse alpha/beta rank, so t.doc_freq cannot satisfy the regression'
-    );
-});
-
-test_case('relational migration captures and authenticates the exact legacy result-or-typed-rejection union', function (): void {
-    if (!function_exists('proc_open')) {
-        mark_pending('proc_open() is required to execute the extracted legacy outcome contract.');
-    }
-
-    $root = dirname(__DIR__, 2);
-    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
-    $runner = (string) file_get_contents($root . '/tools/run-relational-fts-worst-case.sh');
-    $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
-    $snapshotCase = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_snapshot_case');
-    $snapshotFinalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_snapshot_finalize');
-    $snapshotValidator = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_snapshot_case_is_valid');
-    $migrationCaseIds = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_case_ids');
-    $oracle = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_oracle');
-    $execution = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_legacy_execution');
-    $executionValidator = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_legacy_execution_is_valid');
-    $baselineValidator = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_baseline_is_valid');
-    $oracleValidator = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_oracle_is_valid');
-    $finalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_migration_finalize');
-
-    $sixCases = "['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and']";
-    $fiveOracleCases = "['common_or', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and']";
-    assert_contains($sixCases, $migrationCaseIds, 'the frozen baseline should retain the exact ordered six-case inventory, including formerly-unbound max_valid_or_prefix');
-    assert_contains('wp_fts_wc_record_queries', $snapshotCase, 'each isolated snapshot child should count the complete legacy execution');
-    assert_contains("\$memoryLimitBytes === 134217728", $snapshotCase, 'each isolated snapshot child should enforce the exact 128 MiB PHP limit');
-    assert_contains("\$memoryLimitFailures === [] || \$memoryLimitFailures === ['rare_anchor_and']", $snapshotFinalize, 'the assembler should allow only the one classified legacy memory failure');
-    assert_contains('count($processIdentities) + count($memoryLimitFailures) === 6', $snapshotFinalize, 'the assembler should require one exact outcome for every snapshot case');
-    assert_contains("glob(wp_fts_wc_evidence_dir() . '/migration-snapshot-case-*.json')", $snapshotFinalize, 'the assembler should reject extra or stale snapshot case files');
-    assert_true(!str_contains($snapshotFinalize, 'WP_FTS_Plugin::search') && !str_contains($snapshotFinalize, 'wp_fts_wc_legacy_execution'), 'the assembler must not recreate the monolithic search process');
-    assert_contains('wp_fts_wc_migration_snapshot_case_is_valid', $baselineValidator, 'the reread baseline validator should independently revalidate every nested snapshot artifact');
-    assert_contains('array_keys($snapshotCases) !== $caseIds', $baselineValidator, 'the baseline validator should enforce the exact six-case inventory rather than a count alone');
-    assert_contains("hash('sha256', json_encode(\$artifact", $baselineValidator, 'the baseline validator should recompute each raw artifact hash from deterministic bytes');
-    assert_contains("count(array_unique(\$processIdentities)) !== count(\$processIdentities)", $baselineValidator, 'the baseline validator should independently reject duplicate successful child identities');
-    assert_contains("'relational-fts-migration-snapshot-case-v1'", $snapshotValidator, 'snapshot artifacts should use one exact process-bound schema');
-    assert_contains($fiveOracleCases, $oracle, 'the independent SQL oracle should select its exact five migration parity cases');
-    assert_true(!str_contains($oracle, 'max_valid_or_prefix'), 'max_valid_or_prefix should be measured against its legacy snapshot without becoming a sixth v4 migration oracle case');
-    assert_contains($fiveOracleCases, $oracleValidator, 'every oracle reread should require the exact ordered five-case inventory');
-    assert_contains("wp_fts_wc_v4_oracle_query_plan(\$case['query'], \$case['options'])", $oracleValidator, 'every oracle reread should recompute and bind its logical plan');
-    assert_contains("(\$case['legacy_execution'] ?? null) !== (\$baselineCase['legacy_execution'] ?? null)", $oracleValidator, 'every oracle case should bind its legacy execution to the authenticated baseline');
-    assert_contains('WP_FTS_Search_Budget_Exceeded $caught', $execution, 'legacy execution should catch only the typed search-budget exception');
-    assert_contains("\$caught->budget() !== 'candidate rows'", $execution, 'legacy execution should reject every non-candidate budget');
-    assert_contains("\$caught->getMessage() !== 'Search request exceeded its candidate rows budget.'", $execution, 'legacy execution should reject message or stage drift');
-    assert_contains("'outcome' => 'candidate_rows_budget_rejection'", $execution, 'legacy execution should retain a distinct typed rejection outcome');
-    assert_contains("'class' => 'WP_FTS_Search_Budget_Exceeded'", $executionValidator, 'legacy execution validation should require the exact exception class');
-    assert_contains("'budget' => 'candidate rows'", $executionValidator, 'legacy execution validation should require the exact budget name');
-    assert_contains("'message' => 'Search request exceeded its candidate rows budget.'", $executionValidator, 'legacy execution validation should require the exact exception message');
-    assert_true(!str_contains($snapshotCase . $snapshotFinalize . $execution, 'max_candidate_rows'), 'migration evidence must never raise or override the immutable legacy candidate-row budget');
-    assert_contains("(\$artifact['status'] ?? null) === 'FAIL'", $snapshotValidator, 'the snapshot validator should inspect a failed legacy child without relabeling it');
-    assert_contains("\$caseId === 'rare_anchor_and'", $snapshotValidator, 'only the known rare-anchor legacy case may retain the memory failure');
-    assert_contains("(\$error['class'] ?? null) === 'MemoryLimitFatal'", $snapshotValidator, 'the retained legacy failure should require its exact class');
-    assert_contains('wp_fts_wc_migration_oracle_is_valid($oracle, $baseline)', $finalize, 'finalization should authenticate the exact v4 oracle before consuming results or keys');
-    assert_contains('"status"=>"FAIL"', $runner, 'the wrapper should replace timeout, OOM, and process-death evidence with terminal FAIL');
-    assert_same(2, substr_count($integration, 'relational-fts-migration-report-v6'), 'the v6 populated-migration envelope should be required by its only consumer and emitted by its only producer');
-    assert_true(!str_contains($integration, 'relational-fts-migration-' . 'evid' . 'ence-v5'), 'the stale v5 populated-migration envelope must not remain accepted or emitted');
-    assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '4'), 'the stale v4 populated-migration envelope must not remain accepted or emitted');
-    assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '3'), 'the stale v3 populated-migration envelope must not remain accepted or emitted');
-    assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '2'), 'the stale v2 populated-migration envelope must not remain accepted or emitted');
-    assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '1'), 'the incompatible v1 populated-migration envelope must not remain accepted or emitted');
-    assert_contains('138,564 candidate postings', $acceptance, 'the acceptance contract should retain the construction-known 50k common-OR fanout without guessing execution order');
-    assert_contains('populated-migration envelope is v6', $acceptance, 'the acceptance contract should name the envelope version carrying the bounded legacy-memory exception');
-    assert_contains('Only those two exact six-case outcome sets', $acceptance, 'the acceptance contract should distinguish the one classified memory failure from arbitrary legacy failure');
-
-    $extracted = '';
-    foreach ([
-        'wp_fts_wc_legacy_execution',
-        'wp_fts_wc_legacy_execution_is_valid',
-        'wp_fts_wc_migration_case_ids',
-        'wp_fts_wc_migration_snapshot_case_is_valid',
-        'wp_fts_wc_migration_baseline_is_valid',
-        'wp_fts_wc_migration_oracle_is_valid',
-        'wp_fts_wc_process_identity_valid',
-        'wp_fts_wc_case_definitions',
-        'wp_fts_wc_ordered_score_signature',
-        'wp_fts_wc_canonical_hash',
-        'wp_fts_wc_canonicalize',
-        'wp_fts_wc_is_ascii_digits',
-        'wp_fts_wc_is_ascii_hex',
-        'wp_fts_wc_is_lowercase_sha256',
-        'wp_fts_wc_assert',
-    ] as $functionName) {
-        $extracted .= wp_fts_wc_contract_function_source($integration, $functionName) . "\n";
-    }
-    $temporary = sys_get_temp_dir() . '/wp-fts-legacy-execution-' . bin2hex(random_bytes(6));
-    mkdir($temporary, 0777, true);
-    $script = $temporary . '/probe.php';
-    $source = <<<'PHP'
-<?php
-declare(strict_types=1);
-
-const WP_FTS_WC_IMMUTABLE_BASELINE_SHA = '36a26f4ad1aaef9758922f24677069045c5291ab';
-const WP_FTS_WC_INDEX_POST_TYPES = ['post', 'page', 'attachment'];
-const WP_FTS_WC_INDEX_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];
-
-final class WP_FTS_Search_Budget_Exceeded extends RuntimeException
-{
-    public function __construct(private string $budget)
-    {
-        parent::__construct("Search request exceeded its {$budget} budget.");
-    }
-
-    public function budget(): string
-    {
-        return $this->budget;
-    }
-}
-
-final class WP_FTS_Plugin
-{
-    public static mixed $next = [];
-    public static array $lastOptions = [];
-
-    public static function search(string $query, array $options): array
-    {
-        self::$lastOptions = $options;
-        if (self::$next instanceof Throwable) {
-            throw self::$next;
-        }
-        return is_array(self::$next) ? self::$next : [];
-    }
-}
-
-function wp_fts_wc_v4_oracle_query_plan(string $query, array $options): array
-{
-    return [
-        'groups' => [[['key' => $query, 'rank' => 0]]],
-        'prefix' => !empty($options['prefix_matching']) ? ['group_id' => 0, 'key' => $query] : null,
-    ];
-}
-PHP;
-    $probe = <<<'PHP'
-function probe_assert(bool $condition, string $message): void
-{
-    if (!$condition) {
-        throw new RuntimeException($message);
-    }
-}
-
-$options = ['limit' => 20, 'prefix_matching' => false];
-WP_FTS_Plugin::$next = [['doc_id' => 9, 'score' => 1.25], ['doc_id' => 3, 'score' => 0.5]];
-$results = wp_fts_wc_legacy_execution('probe', $options);
-probe_assert(WP_FTS_Plugin::$lastOptions === $options, 'legacy execution changed caller options or injected a budget override');
-probe_assert(($results['outcome'] ?? null) === 'results' && wp_fts_wc_legacy_execution_is_valid($results), 'nonempty legacy results did not validate');
-
-WP_FTS_Plugin::$next = new WP_FTS_Search_Budget_Exceeded('candidate rows');
-$rejection = wp_fts_wc_legacy_execution('probe', $options);
-probe_assert(($rejection['outcome'] ?? null) === 'candidate_rows_budget_rejection', 'exact candidate-row rejection was not frozen');
-probe_assert(wp_fts_wc_legacy_execution_is_valid($rejection), 'exact candidate-row rejection did not validate');
-$mutated = $rejection;
-$mutated['error']['message'] .= ' drift';
-probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'message drift should invalidate a frozen rejection');
-$mutated = $rejection;
-$mutated['result_count'] = '0';
-probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'string result cardinality should not validate');
-$mutated = $results;
-$mutated['extra'] = true;
-probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'extra execution fields should not validate');
-$mutated = $results;
-$mutated['ordered_score_results'][0]['doc_id'] = '9';
-$mutated['ordered_score_result_hash'] = wp_fts_wc_canonical_hash($mutated['ordered_score_results']);
-probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'string document IDs should not validate after a matching rehash');
-$mutated = $results;
-$mutated['ordered_score_results'][0]['extra'] = true;
-$mutated['ordered_score_result_hash'] = wp_fts_wc_canonical_hash($mutated['ordered_score_results']);
-probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'extra score-row fields should not validate after a matching rehash');
-$mutated = $results;
-$mutated['ordered_score_results'][0]['score'] = '1.2';
-$mutated['ordered_score_result_hash'] = wp_fts_wc_canonical_hash($mutated['ordered_score_results']);
-probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'noncanonical score strings should not validate after a matching rehash');
-$mutated = $results;
-$mutated['ordered_score_results'][1]['doc_id'] = $mutated['ordered_score_results'][0]['doc_id'];
-$mutated['ordered_score_result_hash'] = wp_fts_wc_canonical_hash($mutated['ordered_score_results']);
-probe_assert(!wp_fts_wc_legacy_execution_is_valid($mutated), 'duplicate result document IDs should not validate after a matching rehash');
-
-$legacyZip = str_repeat('a', 64);
-$legacyManifestHash = str_repeat('b', 64);
-$manifest = [
-    'source_sha' => WP_FTS_WC_IMMUTABLE_BASELINE_SHA,
-    'zip_sha256' => $legacyZip,
-    'sha256' => $legacyManifestHash,
-    'profile' => ['name' => '2k'],
-];
-$caseIds = wp_fts_wc_migration_case_ids();
-$definitions = wp_fts_wc_case_definitions($manifest);
-$cases = [];
-foreach ($caseIds as $caseId) {
-    $definition = $definitions[$caseId];
-    $caseOptions = $definition['options'];
-    unset($caseOptions['explain']);
-    $caseOptions['include_snippets'] = false;
-    $cases[$caseId] = [
-        'query' => $definition['query'],
-        'options' => $caseOptions,
-        'legacy_execution' => $results,
-    ];
-}
-
-function probe_baseline(array $manifest, array $cases): array
-{
-    $snapshotCases = [];
-    foreach (array_values(wp_fts_wc_migration_case_ids()) as $index => $caseId) {
-        $identity = [
-            'pid' => 1000 + $index,
-            'start_ticks' => 2000 + $index,
-            'boot_id' => 'probe-boot-id',
-        ];
-        $identity['sha256'] = hash('sha256', implode('|', [$identity['boot_id'], (string) $identity['pid'], (string) $identity['start_ticks']]));
-        $case = $cases[$caseId];
-        $artifact = [
-            'schema' => 'relational-fts-migration-snapshot-case-v1',
-            'status' => 'PASS',
-            'phase' => 'migration-snapshot-case',
-            'case' => $caseId,
-            'source_sha' => WP_FTS_WC_IMMUTABLE_BASELINE_SHA,
-            'zip_sha256' => $manifest['zip_sha256'],
-            'manifest_sha256' => $manifest['sha256'],
-            'profile' => $manifest['profile']['name'],
-            'process_timeout_seconds' => 120,
-            'memory_limit_bytes' => 134217728,
-            'process_identity' => $identity,
-            'duration_ms' => 1.0,
-            'query_count' => 1,
-            'max_sql_bytes' => 100,
-            'php_memory_delta_bytes' => 1000,
-            'rss_delta_bytes' => 2000,
-            'php_lifetime_peak_before_reset_bytes' => 1000000,
-            'php_phase_peak_bytes' => 2000000,
-            'php_peak_bytes' => 2000000,
-            'rss_peak_bytes' => 3000000,
-            'query' => $case['query'],
-            'options' => $case['options'],
-            'legacy_execution' => $case['legacy_execution'],
-            'error' => null,
-            'discarded_pre_failure_artifact' => null,
-        ];
-        $snapshotCases[$caseId] = [
-            'artifact_sha256' => hash('sha256', json_encode($artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n"),
-            'evidence' => $artifact,
-        ];
-    }
-    return [
-        'schema' => 'relational-fts-migration-baseline-v5',
-        'source_sha' => WP_FTS_WC_IMMUTABLE_BASELINE_SHA,
-        'zip_sha256' => $manifest['zip_sha256'],
-        'manifest_sha256' => $manifest['sha256'],
-        'indexer_signatures' => ['indexer' => 'legacy'],
-        'snapshot_cases' => $snapshotCases,
-        'tables' => ['total_bytes' => 1],
-    ];
-}
-
-function probe_with_rare_anchor_memory_failure(array $baseline): array
-{
-    $recordKey = 'evid' . 'ence';
-    $artifact = $baseline['snapshot_cases']['rare_anchor_and'][$recordKey];
-    $artifact['status'] = 'FAIL';
-    $artifact['manifest_sha256'] = null;
-    $artifact['process_identity'] = null;
-    $artifact['duration_ms'] = 25.0;
-    foreach (['query_count', 'max_sql_bytes', 'php_memory_delta_bytes', 'rss_delta_bytes', 'php_lifetime_peak_before_reset_bytes', 'php_phase_peak_bytes', 'php_peak_bytes', 'rss_peak_bytes', 'query', 'options', 'legacy_execution'] as $field) {
-        $artifact[$field] = null;
-    }
-    $artifact['error'] = [
-        'class' => 'MemoryLimitFatal',
-        'message' => 'Legacy snapshot case exhausted its 128 MiB PHP memory limit',
-        'exit' => 255,
-        'log_sha256' => str_repeat('c', 64),
-    ];
-    $artifact['discarded_pre_failure_artifact'] = null;
-    $baseline['snapshot_cases']['rare_anchor_and'][$recordKey] = $artifact;
-    $baseline['snapshot_cases']['rare_anchor_and']['artifact_sha256'] = hash('sha256', json_encode($artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n");
-    return $baseline;
-}
-
-$baseline = probe_baseline($manifest, $cases);
-$cases50k = $cases;
-$cases50k['common_or']['legacy_execution'] = $rejection;
-$cases50k['max_valid_or_prefix']['legacy_execution'] = $rejection;
-$manifest50k = $manifest;
-$manifest50k['profile']['name'] = '50k';
-$baseline50k = probe_baseline($manifest50k, $cases50k);
-$cases100k = $cases50k;
-$cases100k['rare_anchor_and']['legacy_execution'] = $rejection;
-$manifest100k = $manifest;
-$manifest100k['profile']['name'] = '100k';
-$baseline100k = probe_baseline($manifest100k, $cases100k);
-$profiles = [
-    '2k' => ['manifest' => $manifest, 'cases' => $cases, 'baseline' => $baseline],
-    '50k' => ['manifest' => $manifest50k, 'cases' => $cases50k, 'baseline' => $baseline50k],
-    '100k' => ['manifest' => $manifest100k, 'cases' => $cases100k, 'baseline' => $baseline100k],
-];
-foreach ($profiles as $profileName => $fixture) {
-    probe_assert(wp_fts_wc_migration_baseline_is_valid($fixture['baseline'], $fixture['manifest']), "{$profileName} exact six-case snapshot should validate either complete results or the exact typed rejection");
-    foreach ($caseIds as $caseId) {
-        $mutatedCases = $fixture['cases'];
-        $mutatedCases[$caseId]['legacy_execution']['outcome'] = 'invalid';
-        $mutatedBaseline = probe_baseline($fixture['manifest'], $mutatedCases);
-        probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedBaseline, $fixture['manifest']), "{$profileName}/{$caseId} should reject a legacy execution outside the exact result-or-typed-rejection contract");
-    }
-}
-$memoryFailureBaseline = probe_with_rare_anchor_memory_failure($baseline50k);
-probe_assert(wp_fts_wc_migration_baseline_is_valid($memoryFailureBaseline, $manifest50k), 'the exact rare-anchor 128 MiB memory failure should retain a valid six-case baseline');
-$recordKey = 'evid' . 'ence';
-$mutatedMemoryBaseline = $memoryFailureBaseline;
-$mutatedMemoryBaseline['snapshot_cases']['rare_anchor_and'][$recordKey]['error']['class'] = 'ProcessFailure';
-$artifact = $mutatedMemoryBaseline['snapshot_cases']['rare_anchor_and'][$recordKey];
-$mutatedMemoryBaseline['snapshot_cases']['rare_anchor_and']['artifact_sha256'] = hash('sha256', json_encode($artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n");
-probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedMemoryBaseline, $manifest50k), 'a generic rare-anchor child failure should remain terminal');
-$mutatedMemoryBaseline = $memoryFailureBaseline;
-$mutatedMemoryBaseline['snapshot_cases']['rare_anchor_and'][$recordKey]['error']['exit'] = 1;
-$artifact = $mutatedMemoryBaseline['snapshot_cases']['rare_anchor_and'][$recordKey];
-$mutatedMemoryBaseline['snapshot_cases']['rare_anchor_and']['artifact_sha256'] = hash('sha256', json_encode($artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n");
-probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedMemoryBaseline, $manifest50k), 'a memory marker with the wrong PHP exit should remain terminal');
-$unsupportedFailureBaseline = $baseline50k;
-$unsupportedArtifact = $memoryFailureBaseline['snapshot_cases']['rare_anchor_and'][$recordKey];
-$unsupportedArtifact['case'] = 'common_or';
-$unsupportedFailureBaseline['snapshot_cases']['common_or'][$recordKey] = $unsupportedArtifact;
-$unsupportedFailureBaseline['snapshot_cases']['common_or']['artifact_sha256'] = hash('sha256', json_encode($unsupportedArtifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n");
-probe_assert(!wp_fts_wc_migration_baseline_is_valid($unsupportedFailureBaseline, $manifest50k), 'the same memory failure in another case should remain terminal');
-$mutatedBaseline = $baseline;
-$mutatedBaseline['snapshot_cases']['common_or']['artifact_sha256'] = str_repeat('f', 64);
-probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedBaseline, $manifest), 'an opaque or stale raw snapshot hash should fail');
-$mutatedBaseline = $baseline;
-$mutatedBaseline['snapshot_cases']['common_or']['evidence']['memory_limit_bytes'] = 134217727;
-$artifact = $mutatedBaseline['snapshot_cases']['common_or']['evidence'];
-$mutatedBaseline['snapshot_cases']['common_or']['artifact_sha256'] = hash('sha256', json_encode($artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n");
-probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedBaseline, $manifest), 'a rehashed snapshot with the wrong PHP limit should fail');
-$mutatedBaseline = $baseline;
-$mutatedBaseline['snapshot_cases']['max_valid_or_prefix']['evidence']['process_identity'] = $mutatedBaseline['snapshot_cases']['common_or']['evidence']['process_identity'];
-$artifact = $mutatedBaseline['snapshot_cases']['max_valid_or_prefix']['evidence'];
-$mutatedBaseline['snapshot_cases']['max_valid_or_prefix']['artifact_sha256'] = hash('sha256', json_encode($artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n");
-probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedBaseline, $manifest), 'six artifacts sharing fewer than six process identities should fail');
-$mutatedBaseline = $baseline;
-unset($mutatedBaseline['snapshot_cases']['prefix_fanout']);
-probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedBaseline, $manifest), 'a missing snapshot case should fail');
-$mutatedBaseline = $baseline;
-$mutatedBaseline['snapshot_cases']['extra'] = $mutatedBaseline['snapshot_cases']['common_or'];
-probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedBaseline, $manifest), 'an extra snapshot case should fail');
-$mutatedBaseline = $baseline;
-$mutatedBaseline['snapshot_cases']['common_or']['evidence']['query'] .= ' drift';
-$artifact = $mutatedBaseline['snapshot_cases']['common_or']['evidence'];
-$mutatedBaseline['snapshot_cases']['common_or']['artifact_sha256'] = hash('sha256', json_encode($artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n");
-probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedBaseline, $manifest), 'a rehashed snapshot with a changed query should fail');
-$wrongLifecycleManifest = $manifest;
-$wrongLifecycleManifest['source_sha'] = str_repeat('c', 40);
-probe_assert(!wp_fts_wc_migration_baseline_is_valid($baseline, $wrongLifecycleManifest), 'a rebound or wrong-lifecycle manifest should not validate');
-
-$oracleCaseIds = ['common_or', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and'];
-$oracleResults = [['doc_id' => 9, 'score' => '123']];
-$oracleCases = [];
-foreach ($oracleCaseIds as $caseId) {
-    $baselineCase = $baseline['snapshot_cases'][$caseId]['evidence'];
-    $plan = wp_fts_wc_v4_oracle_query_plan($baselineCase['query'], $baselineCase['options']);
-    $oracleCases[$caseId] = [
-        'query' => $baselineCase['query'],
-        'options' => $baselineCase['options'],
-        'logical_groups' => $plan['groups'],
-        'prefix' => $plan['prefix'],
-        'results' => $oracleResults,
-        'result_hash' => wp_fts_wc_canonical_hash($oracleResults),
-        'legacy_execution' => $baselineCase['legacy_execution'],
-    ];
-}
-$migrationOracle = [
-    'schema' => 'relational-fts-v4-migration-oracle-v5',
-    'baseline_schema' => 'relational-fts-migration-baseline-v5',
-    'baseline_sha256' => wp_fts_wc_canonical_hash($baseline),
-    'source' => 'v3 logical terms/postings plus canonical wp_posts',
-    'scoring_cutover' => [
-        'from' => 'legacy_bm25_float',
-        'to' => 'v4_quantized_impact_times_integer_rarity',
-        'legacy_numeric_score_parity_expected' => false,
-    ],
-    'target_doc_freq_basis' => [
-        'legacy_docs' => 'is_deleted=0',
-        'post_password' => '',
-        'post_types' => WP_FTS_WC_INDEX_POST_TYPES,
-        'post_statuses' => WP_FTS_WC_INDEX_POST_STATUSES,
-        'per_query_filters' => false,
-    ],
-    'v3_doc_freq_mismatches' => 0,
-    'v3_queue_rows' => 0,
-    'cases' => $oracleCases,
-];
-probe_assert(wp_fts_wc_migration_oracle_is_valid($migrationOracle, $baseline), 'exact five-case v4 oracle should validate');
-$memoryFailureOracle = $migrationOracle;
-$memoryFailureOracle['baseline_sha256'] = wp_fts_wc_canonical_hash($memoryFailureBaseline);
-foreach ($memoryFailureOracle['cases'] as $caseId => &$case) {
-    $case['legacy_execution'] = $memoryFailureBaseline['snapshot_cases'][$caseId][$recordKey]['legacy_execution'];
-}
-unset($case);
-probe_assert(wp_fts_wc_migration_oracle_is_valid($memoryFailureOracle, $memoryFailureBaseline), 'the current-score oracle must remain complete when the rare legacy child exhausts 128 MiB');
-$mutatedOracle = $migrationOracle;
-$mutatedOracle['baseline_sha256'] = str_repeat('f', 64);
-probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'oracle should reject a different baseline digest');
-$mutatedOracle = $migrationOracle;
-$mutatedOracle['target_doc_freq_basis']['per_query_filters'] = true;
-probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'per-query visibility must not authenticate as the global target-v4 rarity basis');
-$mutatedOracle = $migrationOracle;
-unset($mutatedOracle['cases']['ambiguous_morphology_and']);
-probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'missing oracle case should fail');
-$mutatedOracle = $migrationOracle;
-$mutatedOracle['cases']['common_or']['logical_groups'] = [];
-probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'oracle logical groups should stay bound to the recomputed plan');
-$mutatedOracle = $migrationOracle;
-$mutatedOracle['cases']['common_or']['legacy_execution'] = $rejection;
-probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'oracle legacy execution should stay bound to the baseline');
-$mutatedOracle = $migrationOracle;
-$mutatedOracle['cases']['common_or']['results'][0]['score'] = '0123';
-$mutatedOracle['cases']['common_or']['result_hash'] = wp_fts_wc_canonical_hash($mutatedOracle['cases']['common_or']['results']);
-probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'rehashed noncanonical oracle score should fail');
-
-$otherBudget = new WP_FTS_Search_Budget_Exceeded('query terms');
-WP_FTS_Plugin::$next = $otherBudget;
-try {
-    wp_fts_wc_legacy_execution('probe', $options);
-    throw new RuntimeException('non-candidate budget was accepted');
-} catch (WP_FTS_Search_Budget_Exceeded $caught) {
-    probe_assert($caught === $otherBudget, 'non-candidate budget was not rethrown unchanged');
-}
-
-$arbitrary = new LogicException('arbitrary failure');
-WP_FTS_Plugin::$next = $arbitrary;
-try {
-    wp_fts_wc_legacy_execution('probe', $options);
-    throw new RuntimeException('arbitrary failure was accepted');
-} catch (LogicException $caught) {
-    probe_assert($caught === $arbitrary, 'arbitrary failure was not rethrown unchanged');
-}
-
-fwrite(STDOUT, "PASS\n");
-PHP;
-    file_put_contents($script, $source . "\n" . $extracted . "\n" . $probe);
-
-    try {
-        $command = [PHP_BINARY];
-        if (php_ini_loaded_file() === false) {
-            $command[] = '-n';
-        }
-        array_push($command, '-d', 'memory_limit=128M', $script);
-        $result = test_run_subprocess($command, $root);
-        assert_same(0, $result['exit'], 'the extracted exact legacy-execution contract should pass in an isolated process: ' . $result['stdout'] . $result['stderr']);
-        assert_same("PASS\n", $result['stdout'], 'the isolated legacy-execution contract should reach its terminal assertion');
-    } finally {
-        @unlink($script);
-        @rmdir($temporary);
-    }
-});
-
 test_case('relational worst-case composes maximum document work with fair scope alternation', function (): void {
     $root = dirname(__DIR__, 2);
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
@@ -4712,9 +3522,6 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         'column definitions do not exactly match the production schema contract',
         'indexes do not exactly match the production schema contract',
         'oracle_complete_slice_membership_and_order',
-        'migration_physical_disk_sample_count',
-        'migration_physical_fts_peak_ratio',
-        'migration_physical_disk_raw_samples_hash',
         'max_valid_setup_artifact',
         'max_valid_setup_artifact_self_hash',
         'relational-fts-max-valid-setup-v2',
@@ -4758,16 +3565,6 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     assert_contains('relational-fts-indexing-prepare-v2', $runner, 'the runner should consume the exact preparation schema emitted by the integration phase');
     assert_true(!str_contains($runner, "--post_status=publish,draft,pending,future,private \\\n    --batch_size"), 'the asynchronous reindex runner must not pass the rejected legacy batch-size option');
 
-    $migrationOracle = strpos($runner, 'run_php_phase migration-oracle');
-    $diskStart = strpos($runner, "\nstart_migration_disk_monitor\n", $migrationOracle === false ? 0 : $migrationOracle);
-    $migrationFinalize = strpos($runner, 'run_php_phase migration-finalize', $diskStart === false ? 0 : $diskStart);
-    $diskStop = strpos($runner, "\nstop_migration_disk_monitor\n", $migrationFinalize === false ? 0 : $migrationFinalize);
-    assert_true(is_int($migrationOracle) && is_int($diskStart) && is_int($migrationFinalize) && is_int($diskStop), 'runner should retain the physical migration disk monitor lifecycle');
-    assert_true($migrationOracle < $diskStart && $diskStart < $migrationFinalize && $migrationFinalize < $diskStop, 'physical disk monitoring must surround every destructive migration failpoint and finalization');
-    foreach (['migration-disk-samples.tsv', 'sleep 0.25', 'peak_fts_bytes', 'migration_physical_fts_peak_ratio'] as $required) {
-        assert_contains($required, $runner, "physical migration disk evidence should retain {$required}");
-    }
-
     $prepare = strpos($runner, 'run_php_phase cold-prepare');
     $sample = strpos($runner, 'run_php_phase cold-sample');
     $cleanup = strpos($runner, 'run_php_phase cold-cleanup');
@@ -4779,12 +3576,12 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     $documentsSchemaEnd = strpos($mysqlStorage, '"CREATE TABLE {$this->workTable} (', $documentsSchemaStart === false ? 0 : $documentsSchemaStart);
     assert_true(is_int($documentsSchemaStart) && is_int($documentsSchemaEnd), 'production documents schema should remain inspectable');
     $documentsSchema = substr($mysqlStorage, $documentsSchemaStart, $documentsSchemaEnd - $documentsSchemaStart);
-    assert_true(!str_contains($documentsSchema, 'doc_len'), 'production v4 documents schema must not persist a scalar document length');
+    assert_true(!str_contains($documentsSchema, 'doc_len'), 'production documents schema must not persist a scalar document length');
     assert_contains("'columns' => ['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at']", $mysqlStorage, 'schema verification must retain the exact production document columns');
     assert_contains('foreach (array_diff($physical[\'columns\'], $contract[\'columns\']) as $column)', $mysqlStorage, 'schema verification must reject every unexpected production column, including a leftover document length');
     assert_contains("INSERT IGNORE INTO {\$table} (option_name,option_value,autoload)", $plugin, 'the uncontended worker lease must remain one atomic option-table statement');
-    assert_contains('WP_FTS_PostContentExtractor::CUSTOM_FIELDS_OPTION => []', $plugin, 'the bounded custom-field configuration should be initialized by the request-option migration');
-    assert_contains("UPDATE `{\$table}` SET autoload = 'yes' WHERE option_name IN", $plugin, 'the request-option migration should autoload every bounded search input before worker and visitor requests');
+    assert_contains('WP_FTS_PostContentExtractor::CUSTOM_FIELDS_OPTION => []', $plugin, 'current setup should initialize the bounded custom-field configuration');
+    assert_contains("UPDATE `{\$table}` SET autoload = 'yes' WHERE option_name IN", $plugin, 'current setup should autoload every bounded search input before worker and visitor requests');
     assert_contains('PRELOADED_POST_LANGUAGE_OPTION', $plugin, 'the dependency snapshot must carry authoritative language absence through analyzer callbacks');
 
     $contentBytes = 1900000;
@@ -4851,21 +3648,21 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         '$denseTargetCount = 100000',
         'ENGINE=MyISAM',
         'KEY term_taxonomy_id (term_taxonomy_id)',
-        'function wp_fts_wc_populated_scope_index_upgrade(',
+        'function wp_fts_wc_populated_scope_index_repair(',
         'function wp_fts_wc_scope_ddl_writer()',
-        "'scope_index_upgrade_innodb_core_clones'",
-        "'scope_index_upgrade_v7_fixture_cardinality'",
-        "'scope_index_upgrade_exact_ddl'",
-        "'scope_index_upgrade_ownership_before_ddl'",
-        "'scope_index_upgrade_schema_publication_last'",
-        "'scope_index_upgrade_performance_schema_attribution'",
-        "'scope_index_upgrade_concurrent_writes'",
-        "'scope_index_upgrade_write_overlap'",
-        "'scope_index_upgrade_write_duration_ms'",
-        "'scope_index_upgrade_storage_delta'",
-        "'scope_index_upgrade_readiness_preserved'",
-        "'scope_index_upgrade_work_preserved'",
-        "'relational-fts-populated-scope-index-upgrade-v2'",
+        "'scope_index_repair_innodb_core_clones'",
+        "'scope_index_repair_fixture_cardinality'",
+        "'scope_index_repair_exact_ddl'",
+        "'scope_index_repair_ownership_before_ddl'",
+        "'scope_index_repair_schema_version_stable'",
+        "'scope_index_repair_performance_schema_attribution'",
+        "'scope_index_repair_concurrent_writes'",
+        "'scope_index_repair_write_overlap'",
+        "'scope_index_repair_write_duration_ms'",
+        "'scope_index_repair_storage_delta'",
+        "'scope_index_repair_readiness_preserved'",
+        "'scope_index_repair_work_preserved'",
+        "'relational-fts-populated-scope-index-repair-v1'",
         "'posts' => 100001, 'relationships' => 300001",
         'Could not seed the target relationship cursor sentinel.',
         'VmHWM',
@@ -4937,20 +3734,18 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         'public maximum of 50',
         'hydrating a full 50-row page',
         'complete physical relation allowlist is',
-        'introduced in schema v8 and required by schema v9',
+        'The current schema requires two',
         '`wp_fts_term_object(term_taxonomy_id, object_id)`',
         '`wp_fts_type_status_id(post_type, post_status, ID)`',
-        "WordPress's canonical posts and relationships tables",
+        'tables with their real InnoDB definitions',
         '100,001 posts and 300,001 relationships',
-        'v7-to-v9 plugin upgrade',
+        'populated repair proof',
         'regions plus one explicit cursor sentinel',
-        'exactly the two canonical `CREATE INDEX`',
+        'canonical `CREATE INDEX` statements',
         'Four separate WordPress processes synchronize',
         'server-timer interval that overlaps',
         '180,000 ms total client ceiling',
         'positive index-byte delta',
-        'Unit failpoints separately reject a same-name collision',
-        'steal the writer lease after the',
         'genuinely non-covering',
         '1,000 full member pages plus one exhaustion page',
         'proportional to affected membership',
@@ -4979,10 +3774,10 @@ test_case('cold ready requests prove the complete plugin SQL set from connection
 
     foreach ([
         "'cold-ready-request' => wp_fts_wc_cold_ready_request()",
-        'relational-fts-cold-ready-request-v1',
+        'relational-fts-cold-ready-request-v2',
         "run_php_phase cold-ready-request",
-        "'cold_ready_upgrade_v6_seed_shape'",
-        "'cold_ready_upgrade_profile_hash_preserved'",
+        "'cold_ready_current_schema_option'",
+        "'cold_ready_current_schema_requests'",
         "'cold_ready_request_autoloaded_options'",
         "'cold_ready_request_no_option_or_sitemeta_sql'",
         "'cold_ready_request_no_network_token_select'",
@@ -5002,8 +3797,8 @@ test_case('cold ready requests prove the complete plugin SQL set from connection
         assert_contains($required, $haystack, "cold request proof should retain hard evidence: {$required}");
     }
     foreach ([
-        'schema-v6 state',
-        'exactly these seven bounded request inputs',
+        'exact current schema',
+        'seven bounded request inputs',
         '0 plugin-attributed statements',
         'plan+rank (**2**)',
         'plan+rank+hydrate',
@@ -5709,7 +4504,7 @@ test_case('relational worst-case CI is a required real database lane with failur
         assert_contains($requiredLane, $cleanCommands, "testing guide should retain clean lane: {$requiredLane}");
     }
     assert_contains('100,000', $acceptance, 'acceptance contract should retain the supported boundary corpus');
-    foreach (['`100k/mysql-8.0`', '`mysql80-100k`', 'one two-engine matrix', 'identical structural, performance, memory, concurrency,', 'migration, report validation, finalization, and failure-artifact requirements', 'all four pull-request database lanes', '--engine=mysql-8.0 --profile=100k'] as $required) {
+    foreach (['`100k/mysql-8.0`', '`mysql80-100k`', 'one two-engine matrix', 'identical structural, performance, memory, concurrency,', 'report validation, finalization, and failure-artifact requirements', 'all four pull-request database lanes', '--engine=mysql-8.0 --profile=100k'] as $required) {
         assert_contains($required, $acceptance, "acceptance contract should retain the MySQL 8.0 boundary requirement: {$required}");
     }
     assert_contains('A missing dependency, `SKIP`, `PENDING`, timeout, OOM', $acceptance, 'acceptance contract should reject clean skips and incomplete evidence');
