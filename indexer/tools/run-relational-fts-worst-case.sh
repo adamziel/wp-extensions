@@ -453,8 +453,7 @@ foreach($lines as $line){
     if(!$valid){$malformed=true;}
     $checkpoints[]=$checkpoint;
 }
-$expectedLabels=["pre-corpus"];
-$expectedLabels[]="post-reindex";
+$expectedLabels=["pre-corpus","post-frontier","post-reindex"];
 foreach(["common_or","max_valid_or_prefix","rare_anchor_and","prefix_fanout"] as $case){
     for($sample=0;$sample<10;$sample++){$expectedLabels[]="pre-cold-restart-{$case}-{$sample}";}
 }
@@ -479,7 +478,7 @@ foreach(["database","wordpress","wpcli"] as $role){
     $expectedMemory=$role==="database"?1073741824:536870912;
     if(!$effectiveCgroupMatches($cgroup,$expectedMemory)){$failures[]="{$role} effective cgroup raw probe does not match its structured evidence";}
 }
-if($malformed||$actualLabels!==$expectedLabels||($memory["expected_checkpoint_labels"]??null)!==$expectedLabels){$failures[]="database cgroup memory checkpoints do not match the exact ordered 43-checkpoint inventory";}
+if($malformed||$actualLabels!==$expectedLabels||($memory["expected_checkpoint_labels"]??null)!==$expectedLabels){$failures[]="database cgroup memory checkpoints do not match the exact ordered 44-checkpoint inventory";}
 if(count($versions)!==1||($versions[0]??null)!==($effectiveCgroup["version"]??null)){$failures[]="database cgroup memory checkpoint versions do not match the effective cgroup";}
 if($first!==$pre){$failures[]="database pre-corpus cgroup memory checkpoint changed before finalization";}
 if(!is_int($wholePeak)||$wholePeak<1||$limit!==1073741824||$wholePeak>$limit){$failures[]="database whole-run cgroup peak is outside the hard 1 GiB limit";}
@@ -1178,8 +1177,10 @@ YAML
 
 phase_timeout_seconds() {
     case "$1" in
-        setup|indexing-prepare|initial-index-drain|reindex-drain|drain) printf '7200\n' ;;
-        cold-prepare|dependency-lob|max-valid-setup|max-valid-search|search-memory-sample|validate|writer-aggregate|old-posting-frontier|scope-ddl-writer|scope-proof) printf '1800\n' ;;
+        # Full validation traverses the complete corpus and exceeds thirty
+        # minutes on the constrained 50k and 100k hosted lanes.
+        setup|indexing-prepare|initial-index-drain|reindex-drain|validate|drain) printf '7200\n' ;;
+        cold-prepare|dependency-lob|max-valid-setup|max-valid-search|search-memory-sample|writer-aggregate|old-posting-frontier|scope-ddl-writer|scope-proof) printf '1800\n' ;;
         concurrent-reader|concurrent-writer) printf '%s\n' "$((CONCURRENCY_SECONDS + 180))" ;;
         *) printf '600\n' ;;
     esac
@@ -1570,8 +1571,7 @@ $wordpressPreCorpusValid = $wordpressPreCorpusMemory["cgroup_version"] === ($wor
 if (!$wordpressPreCorpusValid) {
     $gates[] = "WordPress pre-corpus cgroup memory must stay within 512 MiB without a limit or OOM event";
 }
-$databaseMemoryCheckpointLabels = ["pre-corpus"];
-$databaseMemoryCheckpointLabels[] = "post-reindex";
+$databaseMemoryCheckpointLabels = ["pre-corpus", "post-frontier", "post-reindex"];
 foreach (["common_or", "max_valid_or_prefix", "rare_anchor_and", "prefix_fanout"] as $case) {
     for ($sample = 0; $sample < 10; $sample++) {
         $databaseMemoryCheckpointLabels[] = "pre-cold-restart-{$case}-{$sample}";
@@ -1968,6 +1968,17 @@ if(file_put_contents($temporary,$json,LOCK_EX)!==strlen($json)||!rename($tempora
     '
 }
 
+# Exercise the maximum replacement frontier before the production corpus owns
+# the database cache, then retain that cgroup segment before the required cold
+# restart. This keeps the two independent maximum-width workloads from sharing
+# one server lifetime while preserving the hard 1 GiB limit for each.
+set_run_stage "storage-frontier"
+run_old_posting_frontier
+capture_database_memory_checkpoint post-frontier
+timed_compose post-frontier-database-restart 300 restart db >/dev/null
+wait_for_database
+configure_performance_schema_consumers post-frontier-performance-schema-enable
+
 set_run_stage "current-corpus-and-initial-index"
 record_installed_tree_binding post-install
 run_php_phase setup > "${EVIDENCE_DIR}/setup.log"
@@ -2114,7 +2125,6 @@ for case_id in "${SEARCH_MEMORY_CASES[@]}"; do
       > "${EVIDENCE_DIR}/search-memory-${case_id}.log"
 done
 run_php_phase writer-aggregate > "${EVIDENCE_DIR}/writer-aggregate.log"
-run_old_posting_frontier
 run_php_phase max-valid-setup > "${EVIDENCE_DIR}/max-valid-setup.log"
 # This must be a separate PHP process: its resettable PHP peak and Linux RSS
 # high-water evidence would be meaningless after indexing forty MiB of sources.

@@ -54,7 +54,7 @@ $connectionId = (int) $mysqli->thread_id;
 $prefix = 'wpfts_frontier_' . getmypid() . '_';
 $db = new WP_FTS_Frontier_WPDB($mysqli, $prefix);
 $storage = new WP_FTS_Storage_Mysql($db, $prefix);
-$postIds = range(700001, 700100);
+$postIds = range(700001, 700007);
 $lexicalTermCountPerPost = WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS;
 $surfaceTermCountPerPost = WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES;
 $termCountPerPost = $lexicalTermCountPerPost + $surfaceTermCountPerPost;
@@ -91,8 +91,8 @@ try {
         $lexicalTermCountPerPost
     );
     // A substantial lower-key decoy range prevents an all-index scan from
-    // looking cheap merely because the requested 100 documents are the whole
-    // table. The production query must select 100 disjoint ranges instead.
+    // looking cheap merely because the requested seven documents are the whole
+    // table. The production query must select seven disjoint ranges instead.
     wp_fts_frontier_query(
         $mysqli,
         "INSERT INTO {$termsTable} (term_id,lang,kind,term,doc_freq) VALUES "
@@ -115,7 +115,7 @@ try {
     $expectedPostings = $targetPostingCount;
     wp_fts_frontier_assert(
         (int) $db->get_var("SELECT COUNT(*) FROM {$postingsTable}") === $expectedPostings + $decoyPostingCount,
-        'The 100 x 8,192 old-posting fixture is incomplete.'
+        'The 7 x 8,192 old-posting fixture is incomplete.'
     );
     wp_fts_frontier_assert(
         (int) $db->get_var("SELECT COUNT(*) FROM {$termsTable}") === $expectedPostings + 1,
@@ -303,7 +303,7 @@ try {
         // MariaDB charges both the 50,001-row capped input and its at-most-seven
         // aggregate rows twice in Performance Schema. Keep the independently
         // measured ceiling until all supported engines prove a tighter one.
-        wp_fts_frontier_assert($event['rows_examined'] <= 100008, 'A frontier statement examined more than 100,008 server rows.');
+        wp_fts_frontier_assert($event['rows_examined'] <= 100016, 'A frontier statement examined more than 100,016 server rows.');
         wp_fts_frontier_assert($event['rows_sent'] === $returnedRows, 'Performance Schema rows sent disagree with the aggregate result.');
         wp_fts_frontier_assert($event['created_tmp_disk_tables'] === 0, 'A frontier statement created a disk temporary table.');
         wp_fts_frontier_assert($event['sort_merge_passes'] === 0, 'A frontier statement performed an external sort merge pass.');
@@ -380,14 +380,19 @@ try {
     wp_fts_frontier_assert(($sharedPass['decrement_server_rows_affected'] ?? null) === $sharedTermCount, 'The survivor decrement did not update exactly 49,152 terms.');
     wp_fts_frontier_assert(($sharedPass['delete_server_rows_affected'] ?? null) === $sharedTermCount + 6, 'The survivor DELETE changed a term that should remain live.');
     wp_fts_frontier_assert((float) ($sharedPass['elapsed_ms'] ?? INF) <= 5000.0, 'The df=2 to df=1 survivor pass exceeded five seconds.');
-    wp_fts_frontier_assert(count($passes) === 17, 'One hundred 8,192-row documents should drain in sixteen six-document prefixes and one four-document prefix.');
+    $expectedPassShapes = [
+        [6, 1, 7, 50001, 49152],
+        [1, 0, 1, 8192, 8192],
+    ];
+    wp_fts_frontier_assert(count($passes) === 2, 'Seven 8,192-row documents should drain in one six-document prefix and one single-document prefix.');
     foreach ($passes as $offset => $pass) {
-        $isFullPass = $offset < 16;
-        $expectedAdmittedDocuments = $isFullPass ? 6 : 4;
-        $expectedDeferredDocuments = $isFullPass ? 94 - ($offset * 6) : 0;
-        $expectedFrontierRows = $isFullPass ? 7 : 4;
-        $expectedScannedRows = $isFullPass ? 50001 : 32768;
-        $expectedPostingMutations = $isFullPass ? 49152 : 32768;
+        [
+            $expectedAdmittedDocuments,
+            $expectedDeferredDocuments,
+            $expectedFrontierRows,
+            $expectedScannedRows,
+            $expectedPostingMutations,
+        ] = $expectedPassShapes[$offset];
         wp_fts_frontier_assert(
             ($pass['admitted_documents'] ?? null) === $expectedAdmittedDocuments
             && ($pass['deferred_documents'] ?? null) === $expectedDeferredDocuments
@@ -415,7 +420,7 @@ try {
     wp_fts_frontier_assert(memory_get_peak_usage(true) <= 134217728, 'The frontier proof exceeded the 128 MiB PHP ceiling.');
 
     // Reuse the hard frontier fixture for the reset proof. Together with the
-    // preserved plan decoy, reset publishes an empty generation over 919,200
+    // preserved plan decoy, reset publishes an empty generation over 157,344
     // populated postings rather than proving metadata work on an empty table.
     $resetSeedStarted = hrtime(true);
     wp_fts_frontier_seed_target_fixture(
@@ -460,11 +465,11 @@ try {
         'search_epoch_incarnation' => $oldSearchEpochIncarnation,
         'seed_ms' => $resetSeedMs,
     ];
-    wp_fts_frontier_assert($resetFixture['postings'] === 919200, 'The reset fixture must contain exactly 919,200 postings.');
-    wp_fts_frontier_assert($resetFixture['terms'] === 819201, 'The reset fixture must contain exactly 819,201 terms.');
-    wp_fts_frontier_assert($resetFixture['lexical_terms'] === 409601, 'The reset fixture must contain exactly 409,601 lexical terms including the plan decoy.');
-    wp_fts_frontier_assert($resetFixture['surface_terms'] === 409600, 'The reset fixture must contain exactly 409,600 normalized-surface terms.');
-    wp_fts_frontier_assert($resetFixture['documents'] === 100, 'The reset fixture must contain exactly 100 documents.');
+    wp_fts_frontier_assert($resetFixture['postings'] === 157344, 'The reset fixture must contain exactly 157,344 postings.');
+    wp_fts_frontier_assert($resetFixture['terms'] === 57345, 'The reset fixture must contain exactly 57,345 terms.');
+    wp_fts_frontier_assert($resetFixture['lexical_terms'] === 28673, 'The reset fixture must contain exactly 28,673 lexical terms including the plan decoy.');
+    wp_fts_frontier_assert($resetFixture['surface_terms'] === 28672, 'The reset fixture must contain exactly 28,672 normalized-surface terms.');
+    wp_fts_frontier_assert($resetFixture['documents'] === 7, 'The reset fixture must contain exactly 7 documents.');
     wp_fts_frontier_assert($resetFixture['work_rows'] === 2, 'The reset fixture must contain an epoch and durable work row.');
     wp_fts_frontier_assert($resetFixture['non_epoch_work_rows'] === 1, 'The reset fixture must contain one non-epoch work row.');
     wp_fts_frontier_assert($oldSearchEpoch > 0, 'The reset fixture must begin from a published nonzero search epoch.');

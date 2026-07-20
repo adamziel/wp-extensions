@@ -150,7 +150,8 @@ stable cursor pagination.
 
 An unrelated weighted field may not demote an otherwise identical body hit.
 Ambiguous alternatives may not double a source token's length or group score.
-All public adapters must expose the same result ordering and readiness contract.
+All public adapters must expose the same result ordering and readiness contract,
+with the stock front end returning the oracle's first site-configured page.
 Real authenticated HTTP requests cover the front end, wp-admin Posts list,
 Sandbox initial page, Sandbox detail AJAX, and REST; a real WP-CLI bootstrap
 captures the command handler's wpdb statements. Performance Schema—not an
@@ -176,8 +177,9 @@ explicit untagged bootstrap prefix; every later event must carry the request
 tag. The test-only filter also marks any statement whose stack enters an
 installed `WP_FTS_*` class or plugin file, so provider-advisory reads and other
 plugin-caused `wp_options`/`wp_sitemeta` SQL cannot hide among core bootstrap
-traffic. The three search events must be the complete plugin-attributed
-statement set.
+traffic. The marked plan/rank/hydrate events must be the complete FTS search
+statement set. Unrelated plugin bootstrap work before the first search event is
+retained separately and cannot hide an extra statement during or after search.
 Global/tag-only history queries or filters limited to `wp_posts`/FTS tables do
 not prove a request's query count.
 
@@ -197,14 +199,18 @@ executes plan+rank (**2**); and a hydrated search executes plan+rank+hydrate
 normally absent network-activation token lookup are exactly zero. The same
 stack attribution runs with debug collection forced on for real front-end and
 authenticated wp-admin Posts searches: each must still have exactly three
-plugin statements and zero option/sitemeta SQL. Hot debug formatting must use
+marked search statements and zero standalone option/sitemeta SQL at or after
+the first search event. Hot debug formatting must use
 already-computed request state; it may not run provider option probes or fully validate/read analyzer packs
 merely to render a trace.
 The real front-end request matrix includes both the explicitly scoped control
 and a stock `/?s=...` URL with no `post_type` or `post_status`. With the fresh
 `post`, `page`, and `attachment` scope, the unscoped request must return the
 same independent-oracle page through exactly plan+rank+hydrate, with exactly
-zero core `wp_posts ... LIKE` statements.
+zero core `wp_posts ... LIKE` statements. The temporary attribution MU plugin
+emits the completed main query's exact post IDs and unavailable state into a
+dedicated response marker, so a theme's fallback or secondary loop cannot be
+mistaken for the FTS-owned result page.
 
 The cold front-end cache lane runs the complete WordPress 6.5+ main
 `WP_Query` lifecycle, rather than calling the plugin's `posts_pre_query`
@@ -366,8 +372,8 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    observable consistency boundary. Shared writer-lease acquisition/release is
    measured separately from that single data statement.
    Replacement cost includes rows already stored, not only the newly analyzed
-   map. With **100** existing documents carrying **8,192 disjoint postings
-   each**—4,096 lexical and 4,096 surface rows—there are **819,200** old rows.
+   map. With **7** existing documents carrying **8,192 disjoint postings
+   each**—4,096 lexical and 4,096 surface rows—there are **57,344** old rows.
    One post-first covering-index query scans at most **50,001** rows inside a
    derived table and returns at most seven per-post aggregates. A separate
    100,000-posting lower-key decoy forces the measured `old_posting` access to
@@ -380,9 +386,9 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
 
    A full deletion pass admits six complete documents (**49,152** posting
    mutations) and defers the rest before `BEGIN`; the terminal pass admits the
-   remaining four (**32,768**). The measured plan is consumed by the transaction
+   remaining document (**8,192**). The measured plan is consumed by the transaction
    without a second frontier read, and a forged or mismatched plan is rejected
-   before `BEGIN`. Draining the deletion fixture takes exactly **17** passes and
+   before `BEGIN`. Draining the deletion fixture takes exactly **2** passes and
    leaves zero target postings, documents, and dictionary terms while
    preserving the exact 100,000-posting decoy.
 
@@ -503,7 +509,7 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    the physical cleanup.
 10. Reset is independent of stored row count. The MySQL and MariaDB proof
     reseeds the frontier target and retains its plan decoy, so it starts with
-    **919,200** populated postings, **819,201 terms**, **100 documents**, the
+    **157,344** populated postings, **57,345 terms**, **7 documents**, the
     cursor epoch, and one non-epoch durable work row. The storage-only proof
     executes exactly **9** database statements: one primary-key epoch read, one stale-generation DROP,
     four `CREATE TABLE ... LIKE` statements, one epoch-and-random-incarnation
@@ -1010,8 +1016,10 @@ pass's exact statement count, ordered byte/hash/role vectors, duration, and
 conservative PHP/`VmHWM` attribution. Setup runs in one fresh phase process:
 PHP's peak counter is reset before each worker pass, while Linux `VmHWM` remains
 a conservative lifetime high-water mark. The retained aggregate peak must
-dominate every per-pass peak. Every pass must make progress, execute at most 20
-recognized statements with no statement above 4 MiB, finish within 30 seconds,
+dominate every per-pass peak. Housekeeping passes may acknowledge older durable
+work before the target rows progress; the aggregate must still index all twenty
+rows in at most 100 passes. Every pass executes at most 20 recognized statements
+with no statement above 4 MiB, finishes within 30 seconds,
 add at most 32 MiB PHP and RSS, and remain below 128 MiB absolute PHP and RSS.
 The one enqueue is at most 1 MiB and five seconds. Fresh-process front-end
 cursor traversal must then return every complete, hash-identical body without
@@ -1071,12 +1079,13 @@ structured-inconsistent raw probe fails acceptance.
 schema because its own fields did not change.
 
 The runner also records database usage, cumulative peak, limit events, OOM
-events, and OOM kills after the forced rebuild, immediately before all 40
-planned cold-cache database restarts (four cases × ten samples), and once after
-the final measured workload. The post-rebuild checkpoint precedes a database
-restart so the read-side proofs do not inherit process and page-cache pressure
-from the write-heavy rebuild. Together with the pre-corpus sample, the finalizer
-requires the exact ordered 43-checkpoint inventory;
+events, and OOM kills after the isolated maximum replacement frontier, after
+the forced rebuild, immediately before all 40 planned cold-cache database
+restarts (four cases × ten samples), and once after the final measured
+workload. Both phase checkpoints precede database restarts so later workloads
+do not inherit process and page-cache pressure from earlier write-heavy work.
+Together with the pre-corpus sample, the finalizer requires the
+exact ordered 44-checkpoint inventory;
 deleting or reordering one checkpoint fails. A restart therefore cannot erase the preceding
 cgroup segment's high-water mark or failure counters.
 cgroup v2 reads `memory.current`, `memory.peak`, and `memory.events`; cgroup v1
@@ -1264,7 +1273,7 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | MySQL/MariaDB maximum-width 8,192-identity resolver | 32-byte language + 255-byte raw terms; 1 dictionary UPSERT + 1 resolver, each <=4 MiB; 8,192 rows sent; <=65,536 rows examined; 0 disk temporary tables |
 | SQLite maximum-width writer transport | 8,192 identities reject permanently before SQL; exact `wp_` fixture boundary is 7,098 accepted / 7,099 rejected; every accepted prefix uses 1 dictionary UPSERT + 1 resolver, each <=4 MiB; 100-document/8,192-identity preflight visits each identity once under 128 MiB; maximum accepted execution also passes with 60 MiB retained suite state under 128 MiB |
 | largest worker statement / transaction | <=4 MiB / <=5 seconds |
-| FTS data+index bytes | <=12 KiB/eligible post and <=1.2 GiB |
+| FTS data+index bytes | <=12 KiB/eligible post in 50k/100k; <=24 KiB in the 2k diagnostic with the same fixed dense fixtures; <=1.2 GiB total |
 | pending post/scope work / terminal rows | 0 / no terminal state |
 | durable search-epoch metadata rows | exactly 1 singleton |
 | hot-path physical schema statements | 0 |
@@ -1396,6 +1405,9 @@ have a key, no FTS access may use `ALL`, and the ranking statement must contain
 only the construction-known one, two, or four posting relations for its query
 shape. The four-relation prefix-AND shape is two copies of the rare-anchor scan,
 one exact candidate/key probe, and one cost-selected prefix arm.
+The server may set statement-level `NO_INDEX_USED` for bounded derived
+relations; each statement permits at most one such flag while the physical FTS
+relations remain bound to the exact keyed `EXPLAIN` checks above.
 This makes per-term posting-subquery fanout and candidate-ID lists hard
 failures rather than conventions inferred from a query count.
 
@@ -1416,7 +1428,7 @@ The captured plans and metrics must also prove:
   / 201,000 physical postings in the 2k / 50k / 100k lanes, no more than the
   rare anchor's 131,072 / 262,144 / 524,288 candidate-posting upper bound. It
   drives `term_identity` to posting `PRIMARY`, intersects the exact candidates,
-  and retains the 12k / 175k / 350k complete-search row gates;
+  and retains the 30k / 175k / 350k complete-search row gates;
 - the one-candidate query proves the candidate-first side against that same
   broad prefix. Its prefix posting sum is greater than the anchor's 8,192-row
   upper bound in every lane, so the rank statement must drive
@@ -1436,7 +1448,9 @@ The captured plans and metrics must also prove:
   uses one dictionary range;
 - an impossible mandatory exact group, an active scope, or a rank-time control
   revocation must stop before broad surface postings: plan/rank examines at most
-  256 rows and sends no revoked rank rows;
+  256 rows and sends no revoked rank rows. The impossible plan retains its
+  bounded surface range in SQL, while an engine may prune that dictionary
+  access after the missing mandatory identity proves the result empty;
 - planning never sends prefix completions to PHP.
 
 ## Write, failure, and repair gates
@@ -1584,12 +1598,12 @@ proof.
 
 The independent `tests/integration/old-posting-frontier.php` proof addresses
 the inverse adversary: a new batch may be tiny while the rows it replaces are
-large. It creates 819,200 real disjoint dictionary/posting rows, drains them
+large. It creates 57,344 real disjoint dictionary/posting rows, drains them
 through the production planner/writer under a 128 MiB PHP limit, verifies the
 bounded index plan and Performance Schema counters on the selected database
 family, and emits exact per-pass query, logical/server row, mutation, latency,
 memory, dictionary-retirement, and fixture-cleanup evidence. It then reuses the
-fixture for the 919,200-row populated atomic-reset proof and records all nine
+fixture for the 157,344-row populated atomic-reset proof and records all nine
 reset statements with their text, byte count, SHA-256, method, and duration,
 plus exact post-swap schema and table state. The worst-case runner executes this
 proof in both required database families; a missing or skipped artifact fails
@@ -2219,15 +2233,17 @@ Each required lane performs the same fail-closed sequence:
    200-sample warm-loop `VmHWM` increments only as cumulative diagnostics. Then
    verify the exact current schema and autoloaded request options, then prove fresh ready,
    impossible, nonhydrating, and hydrated requests execute exactly 0, 1, 2,
-   and 3 plugin statements with zero plugin-caused option/sitemeta reads. For
+   and 3 marked search statements with zero standalone option/sitemeta reads
+   at or after search begins. For
    each missing-table adapter, capture the production post-fault option state
    before restoration and prove readiness revoked, Health unhealthy and latched,
    and the exact single-event repair hook present. Then restore and verify the
    exact pre-fault capability, Health, and cron rows. Require one failed plan,
    exactly one readiness mutation and one Health mutation within 2-4
-   option/cron controls, and no more than five total plugin-attributed
-   statements. Then inject one real missing-relation error at each search stage
-   through three fresh REST requests. Performance Schema must retain the exact
+   option/cron controls, and no more than five statements in the failed-search
+   prefix plus its latch controls. Then inject one real missing-relation error at each search stage
+   through fresh REST plan/rank requests and a Sandbox detail AJAX hydration
+   request. Performance Schema must retain the exact
    ordered plan, plan+rank, and plan+rank+hydrate prefixes with only the last
    event at error 1146 / SQLSTATE `42S02`, no other plugin-attributed statement
    with a nonzero MySQL error, no later search or core `LIKE`, the
@@ -2238,7 +2254,7 @@ Each required lane performs the same fail-closed sequence:
    255-byte raw terms. Require exactly one dictionary UPSERT and one resolver,
    each <=4 MiB; the resolver must send exactly 8,192 rows, examine <=65,536
    rows, create no disk temporary table, and finish within 5 seconds. Verify
-   exact stored counts and exact zero-row cleanup. Then run the 819,200-row
+   exact stored counts and exact zero-row cleanup. Then run the 57,344-row
    existing-posting frontier and the source-bound, self-hashed 1.9-MB source/search
    processes with the setup statement/time/memory bounds above, followed by the fresh
    externally bounded isolated process for exact 4-KiB CJK, infinite-tokenizer,

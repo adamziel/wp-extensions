@@ -4490,9 +4490,12 @@ ON DUPLICATE KEY UPDATE
         $epochSql = "COALESCE((SELECT search_epoch.generation
 FROM {$this->workTable} search_epoch
 WHERE search_epoch.job_key = {$epochKey['sql']} AND search_epoch.kind = 'meta'), 0)";
-        $epochIncarnationSql = "COALESCE((SELECT search_epoch.payload
+        // The work payload is LONGTEXT, but this row stores one 32-byte token.
+        // Keep the derived plan column bounded so MariaDB does not put the
+        // otherwise tiny dictionary plan in an on-disk temporary table.
+        $epochIncarnationSql = "CAST(COALESCE((SELECT search_epoch.payload
 FROM {$this->workTable} search_epoch
-WHERE search_epoch.job_key = {$epochKey['sql']} AND search_epoch.kind = 'meta'), '')";
+WHERE search_epoch.job_key = {$epochKey['sql']} AND search_epoch.kind = 'meta'), '') AS CHAR(32))";
         // Return scope state separately so search_page() can authenticate a
         // supplied cursor before its plan-only unavailable response. Rank and
         // hydration retain the full control and close a scope-enqueue race.

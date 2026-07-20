@@ -481,20 +481,20 @@ function wp_fts_ib_case_html_markup_limits(WP_FTS_Storage_Mysql $storage, array 
     $indexer = new WP_FTS_Indexer($storage, $analyzer);
 
     $nested_before = wp_fts_ib_resource_row(true);
-    $nested = wp_fts_ib_attempt(static fn(): bool => $indexer->index_document(
+    $nested = wp_fts_ib_attempt(static fn(): array => $indexer->prepare_document_fields(
         WP_FTS_IB_DOCUMENT_ID + 4,
-        $nested_source,
-        ['lang' => 'en', 'metadata' => ['search_text' => 'nested markup rejection fixture']]
+        [['name' => 'content', 'text' => '', 'html' => $nested_source]],
+        ['document_lang' => 'en']
     ));
     $nested_after = wp_fts_ib_resource_row(true);
     $nested_sql = wp_fts_ib_summarize_sql($nested['queries']);
     unset($nested['queries'], $nested['result']);
 
     $language_before = wp_fts_ib_resource_row(true);
-    $language = wp_fts_ib_attempt(static fn(): bool => $indexer->index_document(
+    $language = wp_fts_ib_attempt(static fn(): array => $indexer->prepare_document_fields(
         WP_FTS_IB_DOCUMENT_ID + 5,
-        $language_source,
-        ['lang' => 'en', 'metadata' => ['search_text' => 'language attribute rejection fixture']]
+        [['name' => 'content', 'text' => '', 'html' => $language_source]],
+        ['document_lang' => 'en']
     ));
     $language_after = wp_fts_ib_resource_row(true);
     $language_sql = wp_fts_ib_summarize_sql($language['queries']);
@@ -574,16 +574,13 @@ function wp_fts_ib_case_cjk_lexical_run(WP_FTS_Storage_Mysql $storage, array &$g
             'name' => 'content',
             'text' => $accepted_source,
             'boost' => 1.0,
-        ]], [
-            'lang' => 'zh',
-            'metadata' => ['search_text' => 'isolated CJK lexical boundary'],
-        ]);
+        ]], ['document_lang' => 'zh']);
         $write = $storage->replace_prepared_documents([$prepared]);
 
         return [
             'prepared_distinct_terms' => count($prepared['term_frequencies']),
             'prepared_distinct_surfaces' => count($prepared['surface_frequencies']),
-            'analyzed_length' => array_sum($prepared['lang_lengths']),
+            'analyzed_length' => array_sum($prepared['term_frequencies']),
             'write' => $write,
         ];
     });
@@ -596,7 +593,7 @@ function wp_fts_ib_case_cjk_lexical_run(WP_FTS_Storage_Mysql $storage, array &$g
             'name' => 'content',
             'text' => $rejected_source,
             'boost' => 1.0,
-        ]], ['lang' => 'zh']);
+        ]], ['document_lang' => 'zh']);
 
         // If the production analyzer stops enforcing the lexical bound, the
         // real writer remains inside this capture and the zero-SQL gate fails.
@@ -651,10 +648,10 @@ function wp_fts_ib_case_cjk_lexical_run(WP_FTS_Storage_Mysql $storage, array &$g
     wp_fts_ib_gate($gates, 'cjk_4095_distinct_terms_bounded', '= 4', $accepted_result['prepared_distinct_terms'] ?? null, ($accepted_result['prepared_distinct_terms'] ?? null) === 4);
     wp_fts_ib_gate($gates, 'cjk_4095_occurrences_bounded', '= 5454', $accepted_result['analyzed_length'] ?? null, ($accepted_result['analyzed_length'] ?? null) === 5454);
     wp_fts_ib_gate($gates, 'cjk_4095_writer_replaced_document', '= 1', $accepted_result['write']['replaced'] ?? null, ($accepted_result['write']['replaced'] ?? null) === 1);
-    wp_fts_ib_gate($gates, 'cjk_4095_writer_terms_and_postings', '= 4 lexical + 2 surface terms and 6 postings', $accepted_result, ($accepted_result['prepared_distinct_terms'] ?? null) === 4
-        && ($accepted_result['prepared_distinct_surfaces'] ?? null) === 2
-        && ($accepted_result['write']['terms'] ?? null) === 6
-        && ($accepted_result['write']['postings'] ?? null) === 6);
+    wp_fts_ib_gate($gates, 'cjk_4095_writer_terms_and_postings', '= 4 lexical + 4 surface terms and 8 postings', $accepted_result, ($accepted_result['prepared_distinct_terms'] ?? null) === 4
+        && ($accepted_result['prepared_distinct_surfaces'] ?? null) === 4
+        && ($accepted_result['write']['terms'] ?? null) === 8
+        && ($accepted_result['write']['postings'] ?? null) === 8);
     wp_fts_ib_gate($gates, 'cjk_4095_writer_statement_count', '1..10 including transaction control', $accepted_sql['statement_count'], $accepted_sql['statement_count'] >= 1 && $accepted_sql['statement_count'] <= 10);
     wp_fts_ib_gate($gates, 'cjk_4095_writer_sql_bytes', '<= 4194304 per statement', $accepted_sql['max_statement_bytes'], $accepted_sql['max_statement_bytes'] <= WP_FTS_IB_MAX_WRITE_SQL_BYTES);
     wp_fts_ib_gate($gates, 'cjk_rejected_input_is_above_4096_bytes', '> 4096', strlen($rejected_source), strlen($rejected_source) > 4096);
@@ -745,6 +742,17 @@ function wp_fts_ib_case_infinite_tokenizer(WP_FTS_Storage_Mysql $storage, array 
  */
 function wp_fts_ib_case_logical_plans(WP_FTS_Storage_Mysql $storage, array &$gates): array
 {
+    $ready = get_option(WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION, null);
+    $ready_incarnation = is_array($ready) ? ($ready['incarnation'] ?? null) : null;
+    $ready_profile_hash = is_array($ready) ? ($ready['profile_hash'] ?? null) : null;
+    wp_fts_ib_assert(
+        is_string($ready_incarnation) && preg_match('/^[a-f0-9]{32}$/D', $ready_incarnation) === 1,
+        'The isolated logical-plan fixture requires the current search-ready incarnation.'
+    );
+    wp_fts_ib_assert(
+        is_string($ready_profile_hash) && preg_match('/^[a-f0-9]{40}$/D', $ready_profile_hash) === 1,
+        'The isolated logical-plan fixture requires the current search-ready profile hash.'
+    );
     $analyzer = new WP_FTS_Analyzer([
         'auto_detect_language' => false,
         'default_lang' => 'en',
@@ -763,6 +771,8 @@ function wp_fts_ib_case_logical_plans(WP_FTS_Storage_Mysql $storage, array &$gat
         'query_lang' => 'en',
         'limit' => 1,
         'prefix_matching' => false,
+        '_search_ready_incarnation' => $ready_incarnation,
+        '_search_ready_profile_hash' => $ready_profile_hash,
     ]));
     $groups_12_sql = wp_fts_ib_summarize_sql($groups_12['queries']);
     $groups_12_page = wp_fts_ib_page_row($groups_12['result']);
@@ -772,6 +782,8 @@ function wp_fts_ib_case_logical_plans(WP_FTS_Storage_Mysql $storage, array &$gat
         'query_lang' => 'en',
         'limit' => 1,
         'prefix_matching' => false,
+        '_search_ready_incarnation' => $ready_incarnation,
+        '_search_ready_profile_hash' => $ready_profile_hash,
     ]));
     $groups_13_sql = wp_fts_ib_summarize_sql($groups_13['queries']);
     unset($groups_13['queries'], $groups_13['result']);
@@ -794,6 +806,8 @@ function wp_fts_ib_case_logical_plans(WP_FTS_Storage_Mysql $storage, array &$gat
         'prefix_matching' => false,
         'include_metadata' => false,
         'include_snippets' => false,
+        'search_ready_incarnation' => $ready_incarnation,
+        'search_ready_profile_hash' => $ready_profile_hash,
     ];
     $alternatives_12 = wp_fts_ib_attempt(static fn(): array => $storage->search_page([
         array_slice($alternative_candidates, 0, 12),

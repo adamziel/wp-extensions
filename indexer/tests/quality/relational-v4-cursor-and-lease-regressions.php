@@ -1013,6 +1013,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 overlap costing uses dictionary
     assert_same(1, count($planStatements), 'overlap costing should use exactly one dictionary planning statement');
     $planSql = (string) ($planStatements[0] ?? '');
     assert_contains('LEFT JOIN wp_fts_terms exact_term', $planSql, 'the estimate should come from stored dictionary document frequencies through the bounded identity relation');
+    assert_contains("AS CHAR(32)) AS search_epoch_incarnation", $planSql, 'the plan must narrow the LONGTEXT epoch payload before MariaDB materializes its bounded identity relation');
     assert_true(!str_contains($planSql, 'wp_fts_postings'), 'planning must not scan posting rows to deduplicate overlapping alternatives');
     assert_true(!str_contains($planSql, 'COUNT('), 'planning must not add an exact overlap-count aggregation');
     assert_same(2, count($wpdb->queries), 'the conservative estimate should retain one plan and one rank statement total');
