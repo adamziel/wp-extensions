@@ -82,36 +82,25 @@ final class WP_FTS_Analyzer
      *   max_term_bytes?:int,
      *   fold_diacritics?:bool,
      *   default_lang?:string,
-     *   language?:string,
      *   document_lang?:string,
      *   query_lang?:string,
      *   namespace_terms?:bool,
      *   enable_stemming?:bool,
      *   polish_stemming?:string,
-     *   polish_lemma_pack?:bool|string|array<string,mixed>|null,
-     *   polish_lemmatizer_pack?:bool|string|array<string,mixed>|null,
      *   lemma_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
-     *   lemmatizer_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
      *   language_pipeline?:WP_FTS_LanguagePipeline,
      *   stemmer?:WP_FTS_Stemmer|callable|null,
      *   stemmers_by_lang?:array<string,WP_FTS_Stemmer|callable|null>,
-     *   stemmers?:array<string,WP_FTS_Stemmer|callable|null>,
      *   cjk_tokenizer?:callable|null,
-     *   cjk_segmenter?:callable|null,
      *   segmenter_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
-     *   cjk_segmenter_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
-     *   cjk_tokenizer_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
-     *   tokenizer_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
      *   token_normalizer?:callable|null,
      *   chinese_script_map?:array<string,string>|array<string,array<string,string>>,
      *   stopwords_by_lang?:array<string,string[]>,
      *   document_language_resolver?:callable|null,
      *   query_language_resolver?:callable|null,
      *   query_term_language_resolver?:callable|null,
-     *   term_language_resolver?:callable|null,
      *   language_detector?:WP_FTS_LanguageDetector|null,
      *   auto_detect_language?:bool,
-     *   detect_language?:bool,
      *   html_processor_factory?:callable|null
      * } $options
      */
@@ -151,9 +140,9 @@ final class WP_FTS_Analyzer
         $this->htmlProcessorFactory = $options['html_processor_factory'] ?? null;
         $this->documentLanguageResolver = $options['document_language_resolver'] ?? null;
         $this->queryLanguageResolver = $options['query_language_resolver'] ?? null;
-        $termResolver = $options['query_term_language_resolver'] ?? $options['term_language_resolver'] ?? null;
+        $termResolver = $options['query_term_language_resolver'] ?? null;
         $this->queryTermLanguageResolver = is_callable($termResolver) ? $termResolver : null;
-        $this->autoDetectLanguage = (bool) ($options['auto_detect_language'] ?? $options['detect_language'] ?? true);
+        $this->autoDetectLanguage = (bool) ($options['auto_detect_language'] ?? true);
         $detector = $options['language_detector'] ?? null;
         $this->languageDetector = $this->autoDetectLanguage
             ? ($detector instanceof WP_FTS_LanguageDetector ? $detector : new WP_FTS_LanguageDetector())
@@ -165,21 +154,16 @@ final class WP_FTS_Analyzer
             'namespace_terms' => (bool) ($options['namespace_terms'] ?? false),
             'enable_stemming' => (bool) ($options['enable_stemming'] ?? true),
             'polish_stemming' => (string) ($options['polish_stemming'] ?? 'conservative'),
-            'polish_lemma_pack' => $options['polish_lemma_pack'] ?? $options['polish_lemmatizer_pack'] ?? false,
             'lemma_packs_by_lang' => $options['lemma_packs_by_lang'] ?? [],
-            'lemmatizer_packs_by_lang' => $options['lemmatizer_packs_by_lang'] ?? [],
             'stemmer' => $options['stemmer'] ?? null,
-            'stemmers_by_lang' => $options['stemmers_by_lang'] ?? $options['stemmers'] ?? [],
-            'cjk_tokenizer' => $options['cjk_tokenizer'] ?? $options['cjk_segmenter'] ?? null,
+            'stemmers_by_lang' => $options['stemmers_by_lang'] ?? [],
+            'cjk_tokenizer' => $options['cjk_tokenizer'] ?? null,
             'segmenter_packs_by_lang' => $options['segmenter_packs_by_lang'] ?? [],
-            'cjk_segmenter_packs_by_lang' => $options['cjk_segmenter_packs_by_lang'] ?? [],
-            'cjk_tokenizer_packs_by_lang' => $options['cjk_tokenizer_packs_by_lang'] ?? [],
-            'tokenizer_packs_by_lang' => $options['tokenizer_packs_by_lang'] ?? [],
             'token_normalizer' => $options['token_normalizer'] ?? null,
             'chinese_script_map' => $options['chinese_script_map'] ?? [],
         ]);
 
-        $this->defaultLanguage = $this->canonicalLanguage($options['default_lang'] ?? $options['language'] ?? null) ?? 'en';
+        $this->defaultLanguage = $this->canonicalLanguage($options['default_lang'] ?? null) ?? 'en';
         $this->documentLanguage = $this->canonicalLanguage($options['document_lang'] ?? null);
         $this->queryLanguage = $this->canonicalLanguage($options['query_lang'] ?? null);
 
@@ -231,15 +215,13 @@ final class WP_FTS_Analyzer
      * `lang`/`xml:lang` attributes override the document language for their text
      * scope.
      *
-     * @param array{lang?:string,language?:string,document_lang?:string,locale?:string,post_id?:int}|string|null $options
-     *        Either an options array or a legacy language string.
+     * @param array{document_lang?:string,post_id?:int,_default_document_lang?:string,_include_document_surface?:bool} $options
      * @return array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>
      *         Occurrences in document order. `weight` is the strongest boost
      *         inherited from ancestor tags, and `lang` is the term language.
      */
-    public function analyze_content(string $html, array|string|null $options = []): array
+    public function analyze_content(string $html, array $options = []): array
     {
-        $options = $this->normalizeLanguageOptions($options, 'document');
         WP_FTS_Analysis_Limits::assert_source_bytes($html);
         WP_FTS_Html_Text_Stream::assert_analysis_markup_limits($html);
         $maxOccurrences = $this->documentOccurrenceLimit($options);
@@ -278,21 +260,6 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Analyze HTML content using the legacy method name.
-     *
-     * Retained for callers from the stemmer lane. Pass the same arguments as
-     * `analyze_content()`; a string `$language` is treated as the document
-     * language.
-     *
-     * @param array<string,mixed>|string|null $language
-     * @return array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>
-     */
-    public function analyze_content_terms(string $html, array|string|null $language = null): array
-    {
-        return $this->analyze_content($html, $language);
-    }
-
-    /**
      * Analyze text that callers already extracted from document content.
      *
      * This preserves the document-language option semantics of
@@ -300,12 +267,11 @@ final class WP_FTS_Analyzer
      * are known to be plain text, such as titles, excerpts, taxonomy labels, and
      * custom-field values.
      *
-     * @param array{lang?:string,language?:string,document_lang?:string,locale?:string,post_id?:int}|string|null $options
+     * @param array{document_lang?:string,post_id?:int,_default_document_lang?:string,_include_document_surface?:bool} $options
      * @return array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>
      */
-    public function analyze_plain_content(string $text, array|string|null $options = []): array
+    public function analyze_plain_content(string $text, array $options = []): array
     {
-        $options = $this->normalizeLanguageOptions($options, 'document');
         WP_FTS_Analysis_Limits::assert_source_bytes($text);
         $maxOccurrences = $this->documentOccurrenceLimit($options);
         $includeSurface = $this->truthyOption($options['_include_document_surface'] ?? false);
@@ -350,10 +316,10 @@ final class WP_FTS_Analyzer
      * remain local to their original field.
      *
      * @param array<int,array{name:string,text:string,html?:string,boost:float}> $fields
-     * @param array<string,mixed>|string|null $options
+     * @param array<string,mixed> $options
      * @return array<int,array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>>
      */
-    public function analyze_document_fields(array $fields, array|string|null $options = []): array
+    public function analyze_document_fields(array $fields, array $options = []): array
     {
         if (count($fields) > 32) {
             throw new WP_FTS_Analysis_Limit_Exceeded(
@@ -362,7 +328,7 @@ final class WP_FTS_Analyzer
             );
         }
 
-        $baseOptions = $this->normalizeLanguageOptions($options, 'document');
+        $baseOptions = $options;
         $maxOccurrences = $this->documentOccurrenceLimit($baseOptions);
         $includeSurface = $this->truthyOption($baseOptions['_include_document_surface'] ?? false);
         $segments = [];
@@ -472,42 +438,19 @@ final class WP_FTS_Analyzer
     /**
      * Query analysis intentionally skips only the HTML extraction stage.
      *
-     * Use this for user search text. By default it returns plain term strings
-     * for legacy callers. Pass `return => occurrences`, `format => occurrences`,
-     * `return => tokens`, or `return => objects` to receive `term/lang` rows.
+     * Use this for callers that need normalized query terms without occurrence
+     * metadata. Use `analyze_query_occurrences()` when language and position
+     * rows are required.
      *
-     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,return?:string,format?:string,_force_query_lang?:bool,_include_query_surface?:bool,include_query_surface?:bool,include_surface?:bool}|string|null $options
-     *        Query language hints and optional output format. A legacy string is
-     *        treated as `query_lang`.
-     * @return string[]|array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string}>
-     *         Term strings or occurrence rows, depending on requested format.
+     * @param array{query_lang?:string,_default_query_lang?:string,_force_query_lang?:bool,_include_query_surface?:bool,_max_query_occurrences?:int} $options
+     * @return string[]
      */
-    public function analyze_query(string $query, array|string|null $options = []): array
+    public function analyze_query(string $query, array $options = []): array
     {
-        $options = $this->normalizeLanguageOptions($options, 'query');
-        $format = (string) ($options['return'] ?? $options['format'] ?? 'terms');
-        if (in_array($format, ['occurrences', 'tokens', 'objects'], true)) {
-            return $this->analyze_query_occurrences($query, $options);
-        }
-
         return array_map(
             static fn(array $occurrence): string => $occurrence['term'],
             $this->analyze_query_occurrences($query, $options)
         );
-    }
-
-    /**
-     * Analyze query text using the legacy structured method name.
-     *
-     * This always returns occurrence rows, unlike `analyze_query()` which
-     * defaults to strings.
-     *
-     * @param array<string,mixed>|string|null $language
-     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string,normalized_surface?:string}>
-     */
-    public function analyze_query_terms(string $query, array|string|null $language = null): array
-    {
-        return $this->analyze_query_occurrences($query, $language);
     }
 
     /**
@@ -516,19 +459,16 @@ final class WP_FTS_Analyzer
      * Searcher uses this to decide the language partition before namespacing
      * query terms.
      *
-     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,_force_query_lang?:bool,_include_query_surface?:bool,include_query_surface?:bool,include_surface?:bool}|string|null $options
+     * @param array{query_lang?:string,_default_query_lang?:string,_force_query_lang?:bool,_include_query_surface?:bool,_max_query_occurrences?:int} $options
      * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string,normalized_surface?:string}>
      */
-    public function analyze_query_occurrences(string $query, array|string|null $options = []): array
+    public function analyze_query_occurrences(string $query, array $options = []): array
     {
-        $options = $this->normalizeLanguageOptions($options, 'query');
         $maxOccurrences = isset($options['_max_query_occurrences']) && is_numeric($options['_max_query_occurrences'])
             ? max(0, min(WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES, (int) $options['_max_query_occurrences']))
             : null;
         $lang = $this->resolveQueryLanguage($options);
-        $includeSurface = $this->truthyOption($options['_include_query_surface'] ?? false)
-            || $this->truthyOption($options['include_query_surface'] ?? false)
-            || $this->truthyOption($options['include_surface'] ?? false);
+        $includeSurface = $this->truthyOption($options['_include_query_surface'] ?? false);
         $terms = [];
         $nextPosition = 0;
 
@@ -623,7 +563,7 @@ final class WP_FTS_Analyzer
         foreach ($occurrences as $occurrence) {
             $term = (string) $occurrence['term'];
             if ($namespaceTerms && isset($occurrence['lang'])) {
-                $term = self::namespaced_term($term, (string) $occurrence['lang']);
+                $term = WP_FTS_TermNamespace::namespace_term((string) $occurrence['lang'], $term);
             }
             $weights[$term] = ($weights[$term] ?? 0.0) + (float) ($occurrence['weight'] ?? 1.0);
         }
@@ -635,18 +575,6 @@ final class WP_FTS_Analyzer
         ksort($frequencies, SORT_STRING);
 
         return $frequencies;
-    }
-
-    /**
-     * Build a namespaced term in the analyzer's legacy argument order.
-     *
-     * @param string $term Normalized lexical term.
-     * @param string $lang Language partition.
-     * @return string Stored key in `lang . "\\x1e" . term` format.
-     */
-    public static function namespaced_term(string $term, string $lang): string
-    {
-        return self::canonicalLanguageStatic($lang) . "\x1e" . $term;
     }
 
     /**
@@ -1934,9 +1862,8 @@ final class WP_FTS_Analyzer
     /**
      * Resolve the primary document language for HTML extraction.
      *
-     * Precedence is explicit caller hints (`lang`, `language`, `document_lang`,
-     * `locale`), constructor `document_lang`, custom resolver, per-call
-     * `default_lang`, then analyzer default.
+     * Precedence is per-call `document_lang`, constructor `document_lang`,
+     * custom resolver, then analyzer default.
      *
      * @param array<string,mixed> $options
      * @return string Canonical document language.
@@ -1944,13 +1871,10 @@ final class WP_FTS_Analyzer
     private function resolveDocumentLanguage(array $options): string
     {
         return $this->firstLanguage([
-            $options['lang'] ?? null,
-            $options['language'] ?? null,
             $options['document_lang'] ?? null,
-            $options['locale'] ?? null,
             $this->documentLanguage,
             $this->callLanguageResolver($this->documentLanguageResolver, $options),
-            $options['default_lang'] ?? null,
+            $options['_default_document_lang'] ?? null,
             $this->defaultLanguage,
         ]) ?? 'en';
     }
@@ -1958,8 +1882,8 @@ final class WP_FTS_Analyzer
     /**
      * Resolve the language used for query analysis.
      *
-     * Precedence is explicit query hints, constructor `query_lang`, custom
-     * resolver, per-call `default_lang`, then analyzer default.
+     * Precedence is per-call `query_lang`, constructor `query_lang`, custom
+     * resolver, then analyzer default.
      *
      * @param array<string,mixed> $options
      * @return string Canonical query language.
@@ -1967,13 +1891,10 @@ final class WP_FTS_Analyzer
     private function resolveQueryLanguage(array $options): string
     {
         return $this->firstLanguage([
-            $options['lang'] ?? null,
-            $options['language'] ?? null,
             $options['query_lang'] ?? null,
-            $options['locale'] ?? null,
             $this->queryLanguage,
             $this->callLanguageResolver($this->queryLanguageResolver, $options),
-            $options['default_lang'] ?? null,
+            $options['_default_query_lang'] ?? null,
             $this->defaultLanguage,
         ]) ?? 'en';
     }
@@ -2152,10 +2073,8 @@ final class WP_FTS_Analyzer
             return false;
         }
 
-        foreach (['lang', 'language', 'document_lang', 'locale'] as $key) {
-            if (isset($options[$key]) && $this->canonicalLanguage($options[$key]) !== null) {
-                return false;
-            }
+        if (isset($options['document_lang']) && $this->canonicalLanguage($options['document_lang']) !== null) {
+            return false;
         }
 
         if ($this->documentLanguage !== null) {
@@ -2180,10 +2099,8 @@ final class WP_FTS_Analyzer
             return false;
         }
 
-        foreach (['lang', 'language', 'query_lang', 'locale'] as $key) {
-            if (isset($options[$key]) && $this->canonicalLanguage($options[$key]) !== null) {
-                return false;
-            }
+        if (isset($options['query_lang']) && $this->canonicalLanguage($options['query_lang']) !== null) {
+            return false;
         }
 
         if ($this->queryLanguage !== null) {
@@ -2750,33 +2667,4 @@ final class WP_FTS_Analyzer
         return false;
     }
 
-    /**
-     * Accept legacy language strings as option arrays.
-     *
-     * Public analyzer methods historically accepted either an options array or a
-     * single language string. This helper preserves that contract while ensuring
-     * document calls populate `document_lang` and query calls populate
-     * `query_lang`.
-     *
-     * @param array<string,mixed>|string|null $options Public method options.
-     * @param string $kind Either `document` or `query`.
-     * @return array<string,mixed>
-     */
-    private function normalizeLanguageOptions(array|string|null $options, string $kind): array
-    {
-        if (is_array($options)) {
-            return $options;
-        }
-
-        if (is_string($options) && trim($options) !== '') {
-            $key = $kind === 'query' ? 'query_lang' : 'document_lang';
-            return [
-                'lang' => $options,
-                'language' => $options,
-                $key => $options,
-            ];
-        }
-
-        return [];
-    }
 }

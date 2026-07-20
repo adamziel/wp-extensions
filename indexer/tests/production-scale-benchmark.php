@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 
 /**
  * Deterministic generated-corpus scale fixture for the legacy component path.
@@ -522,7 +522,7 @@ final class WP_FTS_Production_Scale_Benchmark
             }
             $started = microtime(true);
             $rows = $searcher->search((string) $check['query'], [
-                'lang' => 'en',
+                'query_lang' => 'en',
                 'mode' => (string) $check['mode'],
                 'limit' => 5,
             ]);
@@ -553,7 +553,7 @@ final class WP_FTS_Production_Scale_Benchmark
         foreach ([0, $windowLimit, $windowLimit * 2] as $offset) {
             $started = microtime(true);
             $response = $searcher->search('production benchmark generated', [
-                'lang' => 'en',
+                'query_lang' => 'en',
                 'mode' => 'AND',
                 'limit' => $windowLimit,
                 'offset' => $offset,

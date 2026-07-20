@@ -135,21 +135,6 @@ final class WP_FTS_TermNamespace
     }
 
     /**
-     * Backward-compatible alias for `namespace_term()`.
-     *
-     * Older callers pass term first and language second. New code should prefer
-     * `namespace_term()` because its argument order mirrors the stored key.
-     *
-     * @param string $term Normalized lexical term without namespace.
-     * @param string $lang Language partition.
-     * @return string Namespaced term key.
-     */
-    public static function term_key(string $term, string $lang): string
-    {
-        return self::namespace_term($lang, $term);
-    }
-
-    /**
      * Report whether a namespaced term fits the MySQL varbinary key.
      *
      * Use this before persisting custom analyzer output to MySQL. The check is
@@ -168,12 +153,11 @@ final class WP_FTS_TermNamespace
      * Split a stored term key into language and lexical term parts.
      *
      * The separator must appear after at least one language byte. Unnamespaced
-     * legacy terms return null so callers can decide which fallback language to
-     * use.
+     * or invalid terms return null so callers can decide how to reject them.
      *
      * @param string $term Stored key, usually `lang . "\\x1e" . term`.
      * @return array{lang:string,term:string}|null Parsed namespace, or null for
-     *         legacy/invalid keys.
+     *         invalid keys.
      */
     public static function split_term(string $term): ?array
     {

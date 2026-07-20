@@ -7,44 +7,14 @@ WordPress.
 The component owns HTML text extraction, normalization, language detection,
 stemming and lemmatizer-pack loading, term generation, document indexing,
 set-oriented search planning, snippets/highlighting helpers, storage
-interfaces, and legacy in-memory/file fixtures for tests and local demos.
+interfaces, and a test-only in-memory storage oracle.
 
 It does not own WordPress hooks, plugin activation, wp-admin UI, WP-CLI commands,
 post extraction, `$wpdb`/MySQL storage, REST integration, or Playground
 packaging. Those stay in the `indexer/` plugin adapter.
 
-## Legacy local fixture usage
-
-This example is deliberately not the WordPress production path. The
-in-memory/file backends materialize posting lists in PHP and exist only for
-component fixtures and tiny local demos. WordPress constructs search through
-`WP_FTS_Searcher::for_set_oriented_storage()`; that factory rejects either
-legacy backend.
-
-```php
-require_once __DIR__ . '/vendor/autoload.php';
-
-$analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
-$storage = new WP_FTS_Storage_InMemory();
-$indexer = new WP_FTS_Indexer($storage, $analyzer);
-
-$indexer->index_document(1, '<h1>Hello search</h1><p>Portable FTS.</p>', [
-    'lang' => 'en',
-]);
-
-$searcher = new WP_FTS_Searcher($storage, $analyzer);
-$results = $searcher->search('portable search', [
-    'lang' => 'en',
-    'include_snippets' => true,
-]);
-
-echo $results[0]['snippet'];
-```
-
-Everything below that discusses candidate caps, PHP BM25, full posting lists,
-exact totals, or callback-based visibility describes this legacy local fixture
-API only. The WordPress plugin uses the fail-closed set-oriented factory and
-does not expose those modes on any production surface.
+`tests/bootstrap.php` explicitly loads the in-memory oracle. The production
+bootstrap and release package do not expose it as an application backend.
 
 ## Retrieval Accuracy
 
@@ -66,49 +36,6 @@ extracts visible text, escapes every source byte, and inserts only its own
 `<mark>` elements when highlighting is enabled. Original tags, attributes, and
 entity-decoded markup are never copied into the result, so callers can render
 the returned snippet without maintaining a second source-markup allowlist.
-
-## File Storage Scope
-
-`WP_FTS_Storage_File` is for tests, demos, and small local indexes. It is not a
-production or sizable-index backend: it keeps the full index in memory and
-rewrites the full JSON document at every outer commit. Use a database-backed
-storage implementation when index size, write throughput, or service
-availability matters.
-
-File storage serializes cooperating writers with a persistent `<index>.lock`
-sidecar. An outer transaction acquires that lock, reloads the latest revision,
-and holds the lock through commit or rollback. Commits compare the loaded file
-fingerprint before replacement, increment the payload revision, fully write,
-flush, and `fsync()` a same-directory temporary file, and then use a checked
-atomic rename. The lock is advisory: other code must not edit or replace the
-JSON file directly or remove and recreate the lock sidecar. File data is
-synchronized before rename, but guarantees after sudden power loss still depend
-on the host filesystem and storage stack.
-
-Wrap bulk indexing in one outer transaction. `WP_FTS_Indexer` transactions
-become nested savepoints, so the whole batch performs one JSON rewrite instead
-of one rewrite per document:
-
-```php
-$storage = new WP_FTS_Storage_File(__DIR__ . '/search-index.json');
-$indexer = new WP_FTS_Indexer($storage, $analyzer);
-
-$storage->begin_transaction();
-try {
-    foreach ($documents as $id => $html) {
-        $indexer->index_document($id, $html, ['lang' => 'en']);
-    }
-    $storage->commit();
-} catch (Throwable $error) {
-    // A failed commit keeps its rollback snapshot and lock until rollback.
-    $storage->rollback();
-    throw $error;
-}
-```
-
-An instance exposes the snapshot it most recently loaded; read methods do not
-poll for commits made by other processes. Reopen the storage for a fresh read
-snapshot. A new write transaction always reloads under the lock.
 
 `index_document()` stores a bounded plain-text snippet source automatically.
 Callers may override it with `metadata.search_text`; field-oriented integrations
@@ -148,8 +75,8 @@ are interned once per request and segments retain one integer path ID. Valid
 source depth and token limits therefore consume linear rather than
 multiplicative time and storage. Provider output is measured
 before trim, uppercase, coalescing, or Unicode-normalization copies. Custom CJK tokenizers, token normalizers, and
-stemmers likewise may emit at most one 4-KiB lexical run. Legacy component
-analyzer arrays may return at most 20,000 occurrences (the relational production
+stemmers likewise may emit at most one 4-KiB lexical run. Custom analyzer
+arrays may return at most 20,000 occurrences (the relational production
 path retains its stricter 12-alternative limit), with scalar fields checked
 before the array is reindexed.
 
@@ -234,7 +161,7 @@ receive a bounded diagnostics payload:
 
 ```php
 $payload = $searcher->search('portable search', [
-    'lang' => 'en',
+    'query_lang' => 'en',
     'include_total' => true,
     'explain' => true,
 ]);
@@ -265,9 +192,7 @@ Storage-specific `search_extension` callbacks own candidate discovery, ranking,
 and pagination, so they cannot be combined with this option; extensions must
 apply their own authorization model instead.
 
-The initial split keeps the legacy `WP_FTS_*` global class names so existing
-plugin code and tests stay compatible. A future publishing pass can add
-namespaced wrappers without changing this first extraction.
+The component exposes `WP_FTS_*` global class names.
 
 Field boosts currently feed integer posting frequencies rather than a BM25F
 field model. Direct callers should use positive whole-number boosts: fractional

@@ -15,7 +15,7 @@ the small contract pack instead of the bundled full runtime pack:
 ```php
 $analyzer = new WP_FTS_Analyzer([
     'default_lang' => 'pl',
-    'polish_lemma_pack' => true,
+    'lemma_packs_by_lang' => ['pl' => true],
 ]);
 ```
 
@@ -60,8 +60,7 @@ The builder writes a full-pack manifest, notice, source-lock evidence, and
 indexed-gzip runtime shards with one digest-attested lookup sidecar per shard.
 The summary includes the generated manifest path, source-lock path, runtime
 row/file/byte counts, lookup file/block/byte counts, runtime digest, activation
-result, and configuration examples for `polish_lemma_pack` and
-`polish_lemmatizer_pack`.
+result, and a `lemma_packs_by_lang` configuration example.
 Externally generated full packs remain opt-in and `default_enabled: false` until
 an operator installs and configures them.
 
@@ -70,7 +69,9 @@ Configure an externally generated pack by path:
 ```php
 $analyzer = new WP_FTS_Analyzer([
     'default_lang' => 'pl',
-    'polish_lemma_pack' => '/tmp/pl-polimorf-20180722-full/manifest.json',
+    'lemma_packs_by_lang' => [
+        'pl' => '/tmp/pl-polimorf-20180722-full/manifest.json',
+    ],
 ]);
 ```
 

@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 $wp_fts_external_reference_direct = !function_exists('test_case');
 if ($wp_fts_external_reference_direct) {
-    require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+    require_once dirname(__DIR__) . '/bootstrap.php';
     require_once dirname(__DIR__) . '/snowball-fixture-stream.php';
 
     final class WP_FTS_TestFailure extends RuntimeException
@@ -783,7 +783,7 @@ test_case('quality external multilingual tokenization reference corpus stays sta
             'language' => $case['lang'],
             'min_term_len' => 1,
         ]);
-        $records = $analyzer->analyze_content($case['text'], ['lang' => $case['lang']]);
+        $records = $analyzer->analyze_content($case['text'], ['document_lang' => $case['lang']]);
         wp_fts_external_reference_assert_terms($case['terms'], wp_fts_external_reference_terms($records), $label);
 
         foreach ($records as $index => $record) {
@@ -795,12 +795,11 @@ test_case('quality external multilingual tokenization reference corpus stays sta
 test_case('quality external multilingual HTML lang corpus routes snippets by segment', function (): void {
     $analyzer = new WP_FTS_Analyzer([
         'default_lang' => 'pl',
-        'language' => 'pl',
         'min_term_len' => 1,
     ]);
     $records = $analyzer->analyze_content(
         '<article lang="pl"><p>Zażółć Łódź</p><section lang="de">Straße München</section><code lang="tr">İstanbul Isparta</code><p lang="zh-Hans">東京大学</p></article>',
-        ['lang' => 'pl']
+        ['document_lang' => 'pl']
     );
     $expected = [
         ['term' => 'zazolc', 'lang' => 'pl'],

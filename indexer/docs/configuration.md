@@ -170,7 +170,7 @@ count and PHP memory remain bounded.
 
 `wp fts search` accepts `--prefix_matching` to enable word-beginning expansion
 for that CLI search, plus `--prefix_min_length` / `--prefix-min-length` for the
-minimum-length override. Legacy non-relational component backends retain their
+minimum-length override. The test-only in-memory component oracle retains its
 own expansion options, but the WordPress plugin's relational backend does not
 use them.
 
@@ -203,12 +203,12 @@ the bounded database statements by throwing or returning `false`.
 
 `WP_FTS_Searcher::search()` retains `max_query_terms`,
 `max_prefix_expansions`, and `max_candidate_rows` only for direct callers using
-legacy non-relational storage adapters. They do not change relational result
+the test-only in-memory storage oracle. They do not change relational result
 membership or cause the WordPress plugin to fetch posting lists into PHP.
 
-The File/InMemory component fixtures retain the budgeted-postings compatibility
-contract for those tests and experiments. Production MySQL implements only the
-set-oriented search contract; legacy posting-list methods are not present. A
+The in-memory component oracle retains the budgeted-postings contract for tests.
+Production MySQL implements only the set-oriented search contract; posting-list
+methods are not present. A
 production request therefore cannot turn one of these component limits into a
 posting list scan followed by PHP slicing.
 
@@ -321,13 +321,13 @@ The next selectable/detectable set adds Russian (`ru`), German (`de`), Japanese
 
 | Language or partition | Routing support | Analyzer tier | Fallback and boundary |
 | --- | --- | --- | --- |
-| Polish (`pl`) | Explicit routing, detector evidence, multilingual metadata, and HTML scopes. | The WordPress runtime starts with the bundled Polish lemmatizer behavior: the compressed full Polish runtime pack when gzip support is available, otherwise the fixture pack. `polish_lemma_pack` and `polish_lemmatizer_pack` map to the generic pack runtime and can replace or disable that default; `polish_stemming => 'verified'` enables a fixture-backed stemmer slice when no valid pack is active. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
-| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Selectable/detectable language partitions. | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Enable bundled packs from Settings > Full-Text Search > Analyzer packs when PHP gzip support is available, or configure pack paths through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`; built-in Snowball, baseline, or no-op behavior remains the fallback when no pack is configured. |
+| Polish (`pl`) | Explicit routing, detector signals, multilingual metadata, and HTML scopes. | The WordPress runtime starts with the bundled Polish lemmatizer behavior: the compressed full Polish runtime pack when gzip support is available, otherwise the fixture pack. `lemma_packs_by_lang['pl']` can replace or disable that default; `polish_stemming => 'verified'` enables a fixture-backed stemmer slice when no valid pack is active. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
+| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Selectable/detectable language partitions. | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Enable bundled packs from Settings > Full-Text Search > Analyzer packs when PHP gzip support is available, or configure pack paths through `lemma_packs_by_lang`; built-in Snowball, baseline, or no-op behavior remains the fallback when no pack is configured. |
 | Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Explicit partitions and detector evidence where present. | Optional Wamania-backed Snowball paths when Composer dependencies are installed and compliance checks accept them. | Dutch now has a source-backed UniMorph pack when configured; the Wamania path is only the no-pack fallback. Other Wamania languages stay no-op until verified against the current Snowball fixtures. |
 | Chinese (`zh`) | Selectable/detectable CJK partition. | Deterministic fallback CJK tokenization plus optional Jieba dictionary segmentation from the curated pinned runtime (or initialized source checkout during development) through `segmenter_packs_by_lang`. | Jieba is MIT source data, default-disabled outside the sandbox, and is segmentation only. Source-only custom dictionaries are not a production path. Fallback n-grams remain enabled. |
 | Japanese (`ja`), Korean (`ko`) | Selectable/detectable CJK/Hangul partitions. | Deterministic fallback n-gram tokenization. | No Japanese or Korean runtime lemma pack is committed because the current PHP pipeline has no source-backed word segmenter for those languages. Pinned UniMorph source submodules are retained for future external-pack work. |
 | Urdu (`ur`) | Selectable/detectable partition. | Arabic-script combining mark/harakat and tatweel normalization plus deterministic light suffix baseline for common plural-oblique forms. | UniMorph Urdu is license-blocked, so no generated Urdu pack is bundled. Persian (`fa`) is a separate partition and is not merged into Urdu routing. |
-| Generic packs | Available through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. | Local manifest-backed packs whose manifest `language` matches the configured key. | Invalid, missing, disabled, or language-mismatched packs are ignored and the built-in fallback path remains available. |
+| Generic packs | Available through `lemma_packs_by_lang`. | Local manifest-backed packs whose manifest `language` matches the configured key. | Invalid, missing, disabled, or language-mismatched packs are ignored and the built-in fallback path remains available. |
 
 Morphology support must come from verified algorithms, analyzers, or
 manifest-backed lemmatizer packs. Do not model product behavior with hard-coded
@@ -474,7 +474,7 @@ dictionary lemmatizer contract without shipping a full third-party dictionary:
 ```php
 $analyzer = new WP_FTS_Analyzer([
     'default_lang' => 'pl',
-    'polish_lemma_pack' => true,
+    'lemma_packs_by_lang' => ['pl' => true],
 ]);
 ```
 
@@ -496,17 +496,9 @@ php tools/build-polish-polimorf-external-pack.php \
 ```php
 $analyzer = new WP_FTS_Analyzer([
     'default_lang' => 'pl',
-    'polish_lemma_pack' => '/tmp/pl-polimorf-20180722-full/manifest.json',
-]);
-```
-
-The alias `polish_lemmatizer_pack` accepts the same boolean, manifest path,
-pack directory, or option array shape:
-
-```php
-$analyzer = new WP_FTS_Analyzer([
-    'default_lang' => 'pl',
-    'polish_lemmatizer_pack' => '/tmp/pl-polimorf-20180722-full/manifest.json',
+    'lemma_packs_by_lang' => [
+        'pl' => '/tmp/pl-polimorf-20180722-full/manifest.json',
+    ],
 ]);
 ```
 
@@ -521,8 +513,7 @@ $analyzer = new WP_FTS_Analyzer([
 ]);
 ```
 
-The alias `lemmatizer_packs_by_lang` accepts the same map shape. Each enabled
-pack must validate locally and its manifest `language` must match the configured
+Each enabled pack must validate locally and its manifest `language` must match the configured
 language key. A valid pack takes precedence over the built-in baseline or
 Snowball path for that language. WordPress fully streams and verifies a pack
 before an enable action is stored. Normal runtime construction reads bounded
@@ -551,7 +542,7 @@ applies the `wp_fts_analyzer_options` filter:
 
 ```php
 update_option(WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION, [
-    'lemmatizer_packs_by_lang' => [
+    'lemma_packs_by_lang' => [
         'bn' => '/srv/wp-fts-packs/bn-approved-lemma-pack/manifest.json',
     ],
 ]);
@@ -602,9 +593,7 @@ analyzer options, create content, run indexing, or reindex existing content; use
 the analyzer-pack controls or the documented option/filter configuration, then
 reindex when analyzer behavior changes.
 
-`lemma_packs_by_lang` wins over `lemmatizer_packs_by_lang` for the same
-language. The legacy `polish_lemma_pack` / `polish_lemmatizer_pack` aliases map
-to `pl` when no explicit Polish entry is present. Explicit `false`, `null`,
+`lemma_packs_by_lang` is the only lemma-pack configuration map. Explicit `false`, `null`,
 `"0"`, `"false"`, `"no"`, or `"off"` disables that configured language entry.
 Invalid, missing, and language-mismatched manifests are reported as not active
 or corrupt in analyzer-pack status. Missing or structurally invalid packs fall
@@ -666,9 +655,7 @@ checkout during development. Source-only custom option arrays are supported only
 for explicit component fixtures and are omitted by the WordPress runtime, so an
 ordinary request never hashes or indexes a local custom dictionary. Production
 custom dictionaries are not currently supported; adding them requires a future
-offline-built, source-bound attested sidecar contract. The aliases `cjk_segmenter_packs_by_lang`,
-`cjk_tokenizer_packs_by_lang`, and `tokenizer_packs_by_lang` are accepted;
-`segmenter_packs_by_lang` wins for the same language. Reindex after enabling or
+offline-built, source-bound attested sidecar contract. Reindex after enabling or
 changing the pinned segmenter because its verified source hash participates in
 the analyzer/index signature.
 
@@ -896,8 +883,7 @@ after enabling a new pack so stored index terms use the new lemmatizer.
 Externally generated packs stay opt-in and default-disabled. The full CLARIN-PL
 source archive and extracted TSV are not bundled in this repository or plugin
 package. Users or build systems that need their own external pack must generate
-and install it before pointing `polish_lemma_pack` or
-`polish_lemmatizer_pack` at that external manifest.
+and install it before assigning that external manifest to `lemma_packs_by_lang['pl']`.
 
 Enable the verified Polish stemmer slice when fixture-backed stemming is more
 important than preserving the exact default suffix-only behavior:
@@ -934,8 +920,7 @@ $analyzer = new WP_FTS_Analyzer([
 ]);
 ```
 
-Callbacks with a required second parameter receive the canonical language.
-One-argument callbacks keep the legacy `($term)` form.
+Stemmer callbacks receive both the normalized term and canonical language.
 
 ## Stopwords
 
@@ -1035,8 +1020,8 @@ derived dynamic terms from unchanged documents.
 
 Sites that need a computed value should save bounded static text in
 `post_content` or in a selected custom field before enqueueing the post. The
-legacy in-memory/file component extractor keeps its explicit rendering options
-for tests and local tools, but that path has no production relational
+test-only component path keeps its explicit rendering options, but that path
+has no production relational
 query/load guarantee.
 
 Production relational search is deliberately limited to canonical WordPress
@@ -1069,15 +1054,14 @@ arbitrary candidate-callback options before SQL. They are not accepted by
 `WP_FTS_Plugin::search()`, REST, or WP-CLI, and none of their fields appear in a
 relational explain payload.
 
-The separately packaged File/InMemory component fixtures retain a compatibility
-API for component tests and non-WordPress experiments. A caller that directly
-constructs `WP_FTS_Searcher` with one of those backends can still opt into
+The test-only in-memory component oracle retains these options for component
+tests. A caller that directly constructs `WP_FTS_Searcher` with that oracle can opt into
 document-ID capping with `fast_top_k` or `approximate_top_k` plus
 `candidate_cap`/`max_candidates`. That compatibility path can omit a stronger
 document beyond the cap. Its payload therefore reports `retrieval_mode`,
 `total_is_exact`, `results_may_be_incomplete`, and `candidate_cap`, and its
 component-only explain includes `fast_mode.reason`. Those fields describe the
-legacy fixture path only; they are not WordPress production search options or
+test-only path; they are not WordPress production search options or
 diagnostics.
 
 The `wp_fts_search_results` filter receives only the already ranked, visible,
@@ -1129,8 +1113,8 @@ Values are clamped to a bounded positive millisecond range. Set either value to
 zero or a negative number to disable that specific budget without reporting a
 false over-budget status.
 
-The `k1`/`b` constructor arguments below belong only to the legacy
-File/InMemory component fixtures. WordPress production code must use
+The `k1`/`b` constructor arguments below belong only to the test-only in-memory
+component oracle. WordPress production code must use
 `WP_FTS_Searcher::for_set_oriented_storage()` and cannot select PHP BM25:
 
 ```php

@@ -851,7 +851,7 @@ final class WP_FTS_UnimorphLemmaPackImporter
             '- Runtime files: `' . $runtime['file_count'] . '`',
             '- Runtime digest SHA-256: `' . $runtime['digest_sha256'] . '`',
             '',
-            'The generated pack is default-disabled. Callers must opt in through `lemma_packs_by_lang` or `lemmatizer_packs_by_lang`.',
+            'The generated pack is default-disabled. Callers must opt in through `lemma_packs_by_lang`.',
             '',
         ];
 

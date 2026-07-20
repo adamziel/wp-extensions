@@ -9861,7 +9861,6 @@ final class WP_FTS_Plugin
         ) {
             $metadata_language = self::wordpress_post_language($post);
             if ($metadata_language !== null) {
-                $options['lang'] = $metadata_language;
                 $options['document_lang'] = $metadata_language;
             }
         }
@@ -9871,6 +9870,16 @@ final class WP_FTS_Plugin
             if (is_array($filtered)) {
                 $options = $filtered;
             }
+        }
+
+        $document_language = WP_FTS_TermNamespace::language_from_options(
+            $options,
+            null,
+            ['document_lang', 'primary_lang', 'lang', 'language', 'locale']
+        );
+        unset($options['primary_lang'], $options['lang'], $options['language'], $options['locale']);
+        if ($document_language !== null) {
+            $options['document_lang'] = $document_language;
         }
 
         // The batch dependency snapshot is authoritative for this generation,
@@ -10282,9 +10291,6 @@ final class WP_FTS_Plugin
      * Enable a local lemma-pack manifest in the stored runtime analyzer option.
      *
      * Existing analyzer option keys and other language entries are preserved.
-     * If the same language is already present in the higher-precedence
-     * `lemma_packs_by_lang` alias, that entry is updated too so the new manifest
-     * is the effective runtime pack.
      *
      * @return array<string,mixed> Stored analyzer option value after the merge.
      */
@@ -10305,24 +10311,14 @@ final class WP_FTS_Plugin
         $options = is_array($stored) ? $stored : [];
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'Stored WordPress analyzer options');
 
-        if (!isset($options['lemmatizer_packs_by_lang']) || !is_array($options['lemmatizer_packs_by_lang'])) {
-            $options['lemmatizer_packs_by_lang'] = [];
+        if (!isset($options['lemma_packs_by_lang']) || !is_array($options['lemma_packs_by_lang'])) {
+            $options['lemma_packs_by_lang'] = [];
         }
-        $options['lemmatizer_packs_by_lang'] = self::set_language_pack_map_entry(
-            $options['lemmatizer_packs_by_lang'],
+        $options['lemma_packs_by_lang'] = self::set_language_pack_map_entry(
+            $options['lemma_packs_by_lang'],
             $language,
-            $manifestPath,
-            true
+            $manifestPath
         );
-
-        if (isset($options['lemma_packs_by_lang']) && is_array($options['lemma_packs_by_lang'])) {
-            $options['lemma_packs_by_lang'] = self::set_language_pack_map_entry(
-                $options['lemma_packs_by_lang'],
-                $language,
-                $manifestPath,
-                false
-            );
-        }
 
         if ($options == (is_array($stored) ? $stored : [])) {
             return $options;
@@ -10392,14 +10388,13 @@ final class WP_FTS_Plugin
 
             if (isset($selected[$language])) {
                 self::assert_runtime_lemma_pack_can_enable($language, $manifestPath);
-                if (!isset($options['lemmatizer_packs_by_lang']) || !is_array($options['lemmatizer_packs_by_lang'])) {
-                    $options['lemmatizer_packs_by_lang'] = [];
+                if (!isset($options['lemma_packs_by_lang']) || !is_array($options['lemma_packs_by_lang'])) {
+                    $options['lemma_packs_by_lang'] = [];
                 }
-                $options['lemmatizer_packs_by_lang'] = self::set_language_pack_map_entry(
-                    $options['lemmatizer_packs_by_lang'],
+                $options['lemma_packs_by_lang'] = self::set_language_pack_map_entry(
+                    $options['lemma_packs_by_lang'],
                     $language,
-                    $manifestPath,
-                    true
+                    $manifestPath
                 );
                 continue;
             }
@@ -10789,7 +10784,7 @@ final class WP_FTS_Plugin
     ): array
     {
         $options = [
-            'lemmatizer_packs_by_lang' => $bundled_lemma_packs,
+            'lemma_packs_by_lang' => $bundled_lemma_packs,
             'segmenter_packs_by_lang' => $bundled_segmenter_packs,
         ];
 
@@ -10824,7 +10819,7 @@ final class WP_FTS_Plugin
 
         $sanitized = [];
         if ($lemmaPacks !== []) {
-            $sanitized['lemmatizer_packs_by_lang'] = $lemmaPacks;
+            $sanitized['lemma_packs_by_lang'] = $lemmaPacks;
         }
         if ($segmenterPacks !== []) {
             $sanitized['segmenter_packs_by_lang'] = $segmenterPacks;
@@ -10847,20 +10842,13 @@ final class WP_FTS_Plugin
         $override = self::normalize_runtime_analyzer_option_layer($override);
 
         foreach ($override as $key => $value) {
-            if (
-                in_array($key, ['lemma_packs_by_lang', 'lemmatizer_packs_by_lang', 'segmenter_packs_by_lang', 'cjk_segmenter_packs_by_lang', 'cjk_tokenizer_packs_by_lang', 'tokenizer_packs_by_lang'], true)
-                && is_array($value)
-            ) {
+            if (in_array($key, ['lemma_packs_by_lang', 'segmenter_packs_by_lang'], true) && is_array($value)) {
                 $current = isset($base[$key]) && is_array($base[$key]) ? $base[$key] : [];
                 $base[$key] = WP_FTS_Analyzer_Config_Limits::merge_language_maps(
                     [$current, $value],
                     "WordPress analyzer {$key}"
                 );
                 continue;
-            }
-
-            if (in_array($key, ['polish_lemma_pack', 'polish_lemmatizer_pack'], true)) {
-                $base[$key] = $value;
             }
         }
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($base, 'Merged WordPress analyzer options');
@@ -10881,7 +10869,7 @@ final class WP_FTS_Plugin
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($filtered, 'Filtered WordPress analyzer options');
         $override = [];
 
-        foreach (['lemma_packs_by_lang', 'lemmatizer_packs_by_lang', 'segmenter_packs_by_lang', 'cjk_segmenter_packs_by_lang', 'cjk_tokenizer_packs_by_lang', 'tokenizer_packs_by_lang'] as $key) {
+        foreach (['lemma_packs_by_lang', 'segmenter_packs_by_lang'] as $key) {
             if (!isset($filtered[$key]) || !is_array($filtered[$key])) {
                 continue;
             }
@@ -10891,12 +10879,6 @@ final class WP_FTS_Plugin
                 if (!array_key_exists($language, $baseMap) || $baseMap[$language] !== $option) {
                     $override[$key][$language] = $option;
                 }
-            }
-        }
-
-        foreach (['polish_lemma_pack', 'polish_lemmatizer_pack'] as $key) {
-            if (array_key_exists($key, $filtered) && (!array_key_exists($key, $base) || $base[$key] !== $filtered[$key])) {
-                $override[$key] = $filtered[$key];
             }
         }
 
@@ -10914,18 +10896,9 @@ final class WP_FTS_Plugin
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'WordPress analyzer option layer');
         $normalized = [];
 
-        foreach (['lemmatizer_packs_by_lang', 'lemma_packs_by_lang', 'tokenizer_packs_by_lang', 'cjk_tokenizer_packs_by_lang', 'cjk_segmenter_packs_by_lang', 'segmenter_packs_by_lang'] as $key) {
+        foreach (['lemma_packs_by_lang', 'segmenter_packs_by_lang'] as $key) {
             if (isset($options[$key]) && is_array($options[$key])) {
                 $normalized[$key] = self::normalize_runtime_analyzer_language_map($options[$key]);
-            }
-        }
-
-        if (!self::runtime_analyzer_layer_has_generic_polish_pack($normalized)) {
-            if (array_key_exists('polish_lemmatizer_pack', $options)) {
-                $normalized['lemmatizer_packs_by_lang']['pl'] = $options['polish_lemmatizer_pack'];
-            }
-            if (array_key_exists('polish_lemma_pack', $options)) {
-                $normalized['lemma_packs_by_lang']['pl'] = $options['polish_lemma_pack'];
             }
         }
         foreach ($normalized as $key => $map) {
@@ -10960,7 +10933,7 @@ final class WP_FTS_Plugin
      * @param array<string,mixed> $packs
      * @return array<string,mixed>
      */
-    private static function set_language_pack_map_entry(array $packs, string $language, string $manifestPath, bool $addCanonical): array
+    private static function set_language_pack_map_entry(array $packs, string $language, string $manifestPath): array
     {
         WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'Stored WordPress analyzer language map');
         WP_FTS_Analyzer_Config_Limits::assert_path($manifestPath, 'Runtime lemma-pack manifest path');
@@ -10977,7 +10950,7 @@ final class WP_FTS_Plugin
             $updated = true;
         }
 
-        if ($addCanonical && !$updated) {
+        if (!$updated) {
             $packs[$language] = $manifestPath;
         }
         WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'Stored WordPress analyzer language map');
@@ -10985,44 +10958,12 @@ final class WP_FTS_Plugin
         return $packs;
     }
 
-    /**
-     * @param array<string,mixed> $options
-     */
-    private static function runtime_analyzer_layer_has_generic_polish_pack(array $options): bool
-    {
-        foreach (['lemma_packs_by_lang', 'lemmatizer_packs_by_lang'] as $key) {
-            if (isset($options[$key]) && is_array($options[$key]) && array_key_exists('pl', $options[$key])) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Normalize generic and legacy pack option aliases to a canonical language map.
-     *
-     * @param array<string,mixed> $options
-     * @return array<string,mixed>
-     */
+    /** @return array<string,mixed> */
     private static function runtime_lemma_pack_options_by_language(array $options): array
     {
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'WordPress analyzer options');
-        $maps = [];
-        if (isset($options['lemmatizer_packs_by_lang']) && is_array($options['lemmatizer_packs_by_lang'])) {
-            $maps[] = $options['lemmatizer_packs_by_lang'];
-        }
-        if (isset($options['lemma_packs_by_lang']) && is_array($options['lemma_packs_by_lang'])) {
-            $maps[] = $options['lemma_packs_by_lang'];
-        }
-        $packs = WP_FTS_Analyzer_Config_Limits::merge_language_maps($maps, 'WordPress lemma packs');
-        if (
-            !array_key_exists('pl', $packs)
-            && (array_key_exists('polish_lemma_pack', $options) || array_key_exists('polish_lemmatizer_pack', $options))
-        ) {
-            $packs['pl'] = $options['polish_lemma_pack'] ?? $options['polish_lemmatizer_pack'] ?? false;
-            WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'WordPress lemma packs');
-        }
+        $packs = $options['lemma_packs_by_lang'] ?? [];
+        WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'WordPress lemma packs');
 
         $normalized = [];
         foreach ($packs as $language => $option) {
@@ -11042,22 +10983,12 @@ final class WP_FTS_Plugin
         return $normalized;
     }
 
-    /**
-     * Normalize segmenter pack option aliases to a canonical language map.
-     *
-     * @param array<string,mixed> $options
-     * @return array<string,mixed>
-     */
+    /** @return array<string,mixed> */
     private static function runtime_segmenter_pack_options_by_language(array $options): array
     {
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'WordPress analyzer options');
-        $maps = [];
-        foreach (['tokenizer_packs_by_lang', 'cjk_tokenizer_packs_by_lang', 'cjk_segmenter_packs_by_lang', 'segmenter_packs_by_lang'] as $key) {
-            if (isset($options[$key]) && is_array($options[$key])) {
-                $maps[] = $options[$key];
-            }
-        }
-        $packs = WP_FTS_Analyzer_Config_Limits::merge_language_maps($maps, 'WordPress segmenter packs');
+        $packs = $options['segmenter_packs_by_lang'] ?? [];
+        WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'WordPress segmenter packs');
 
         $normalized = [];
         foreach ($packs as $language => $option) {
@@ -11083,7 +11014,7 @@ final class WP_FTS_Plugin
     private static function bundled_runtime_lemma_packs_by_lang(): array
     {
         return [
-            'pl' => self::sandbox_polish_lemmatizer_pack(),
+            'pl' => self::sandbox_polish_pack(),
         ];
     }
 
@@ -11123,7 +11054,7 @@ final class WP_FTS_Plugin
         ];
     }
 
-    private static function sandbox_polish_lemmatizer_pack(): bool|string
+    private static function sandbox_polish_pack(): bool|string
     {
         $manifestPath = WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest();
         if (is_file($manifestPath) && WP_FTS_AnalyzerPackValidator::gzip_available()) {
@@ -11219,18 +11150,12 @@ final class WP_FTS_Plugin
     {
         $language = WP_FTS_TermNamespace::canonicalize_lang($language);
         $entries = [];
-        foreach (['lemmatizer_packs_by_lang', 'lemma_packs_by_lang'] as $key) {
-            if (!isset($storedOptions[$key]) || !is_array($storedOptions[$key])) {
+        foreach (($storedOptions['lemma_packs_by_lang'] ?? []) as $entryLanguage => $option) {
+            if (!is_scalar($entryLanguage) || trim((string) $entryLanguage) === '') {
                 continue;
             }
-
-            foreach ($storedOptions[$key] as $entryLanguage => $option) {
-                if (!is_scalar($entryLanguage) || trim((string) $entryLanguage) === '') {
-                    continue;
-                }
-                if (WP_FTS_TermNamespace::canonicalize_lang((string) $entryLanguage) === $language) {
-                    $entries[] = $option;
-                }
+            if (WP_FTS_TermNamespace::canonicalize_lang((string) $entryLanguage) === $language) {
+                $entries[] = $option;
             }
         }
 
@@ -11267,24 +11192,17 @@ final class WP_FTS_Plugin
     private static function remove_exact_bundled_runtime_lemma_pack_entry(array $options, string $language, string $manifestPath): array
     {
         $language = WP_FTS_TermNamespace::canonicalize_lang($language);
-        foreach (['lemmatizer_packs_by_lang', 'lemma_packs_by_lang'] as $key) {
-            if (!isset($options[$key]) || !is_array($options[$key])) {
+        foreach (($options['lemma_packs_by_lang'] ?? []) as $entryLanguage => $option) {
+            if (!is_scalar($entryLanguage) || WP_FTS_TermNamespace::canonicalize_lang((string) $entryLanguage) !== $language) {
                 continue;
             }
 
-            foreach ($options[$key] as $entryLanguage => $option) {
-                if (!is_scalar($entryLanguage) || WP_FTS_TermNamespace::canonicalize_lang((string) $entryLanguage) !== $language) {
-                    continue;
-                }
-
-                if (self::lemma_pack_option_points_to_manifest($option, $manifestPath)) {
-                    unset($options[$key][$entryLanguage]);
-                }
+            if (self::lemma_pack_option_points_to_manifest($option, $manifestPath)) {
+                unset($options['lemma_packs_by_lang'][$entryLanguage]);
             }
-
-            if ($options[$key] === []) {
-                unset($options[$key]);
-            }
+        }
+        if (($options['lemma_packs_by_lang'] ?? null) === []) {
+            unset($options['lemma_packs_by_lang']);
         }
 
         return $options;
@@ -12224,7 +12142,7 @@ LIMIT %d",
     {
         $post_type = is_scalar($metadata['post_type'] ?? null) ? (string) $metadata['post_type'] : '';
         $post_status = is_scalar($metadata['post_status'] ?? null) ? (string) $metadata['post_status'] : '';
-        $lengths = WP_FTS_StorageCompat::doc_lang_lengths($doc, self::sandbox_indexed_language($metadata, $doc, 'en'));
+        $lengths = WP_FTS_StorageCompat::doc_lang_lengths($doc);
         $preview = (string) ($metadata['search_text'] ?? $metadata['excerpt'] ?? '');
         $title = is_scalar($metadata['title'] ?? null) ? trim((string) $metadata['title']) : '';
 

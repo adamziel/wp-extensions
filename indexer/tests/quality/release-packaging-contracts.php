@@ -681,6 +681,9 @@ function wp_fts_release_packaging_contract_standalone_bootstrap_run(): void
         wp_fts_release_packaging_contract_true($zip->locateName('indexer/src/WPCLICommand.php') !== false, 'release ZIP should contain the runtime WP-CLI command');
         wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/autoload.php') !== false, 'release ZIP should contain the Composer autoloader');
         wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/wp-php-toolkit/full-text-search/src/bootstrap.php') !== false, 'release ZIP should contain the FTS component runtime');
+        wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/wp-php-toolkit/full-text-search/src/InMemoryStorage.php') === false, 'release ZIP should not contain an in-memory application backend');
+        wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/wp-php-toolkit/full-text-search/src/FileStorage.php') === false, 'release ZIP should not contain a file application backend');
+        wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/wp-php-toolkit/full-text-search/tests/fixtures/InMemoryStorage.php') === false, 'release ZIP should prune the test-only in-memory oracle');
         $jiebaRuntime = 'indexer/vendor/wp-php-toolkit/full-text-search/resources/runtime/jieba/';
         $expectedJiebaRuntime = [
             $jiebaRuntime . 'LICENSE' => ['bytes' => 1075, 'sha256' => '18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37'],
@@ -750,6 +753,8 @@ if (
     || ! class_exists('WP_FTS_Analyzer', false)
     || ! class_exists('WP_FTS_Plugin', false)
     || ! class_exists('WP_FTS_WPCLI_Command', false)
+    || class_exists('WP_FTS_Storage_InMemory', false)
+    || class_exists('WP_FTS_Storage_File', false)
     || (WP_CLI::$commands['fts'] ?? null) !== WP_FTS_WPCLI_Command::class
 ) {
     exit(1);

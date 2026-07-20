@@ -153,7 +153,7 @@ test_case('preloaded language absence remains authoritative through analyzer res
         'ID' => $postId,
         'fts_language_override' => 'fr',
     ]);
-    assert_true(!isset($missingIntegrationMarker['lang']), 'one preload marker must never be mistaken for an authoritative language snapshot');
+    assert_true(!isset($missingIntegrationMarker['document_lang']), 'one preload marker must never be mistaken for an authoritative language snapshot');
     assert_true(!isset($missingIntegrationMarker['wp_fts_preloaded_post_language']), 'the analyzer preload marker requires both attached language values');
 });
 
@@ -224,20 +224,20 @@ test_case('100-post preload never fans out through per-post multilingual APIs', 
             assert_true(count($prepared['args'] ?? []) <= 505, 'the combined statement may carry only five bounded copies of the claimed IDs and fixed discriminators');
         }
 
-        assert_same('pl-PL', WP_FTS_Plugin::prepare_post_index_options($posts[8703])['lang'] ?? null, 'the batch Polylang snapshot should preserve the assigned locale');
-        assert_same('de-DE', WP_FTS_Plugin::prepare_post_index_options($posts[8704])['lang'] ?? null, 'the batch WPML snapshot should preserve the assigned language');
+        assert_same('pl-PL', WP_FTS_Plugin::prepare_post_index_options($posts[8703])['document_lang'] ?? null, 'the batch Polylang snapshot should preserve the assigned locale');
+        assert_same('de-DE', WP_FTS_Plugin::prepare_post_index_options($posts[8704])['document_lang'] ?? null, 'the batch WPML snapshot should preserve the assigned language');
 
         $posts[8701]->fts_language_override = 'fr';
         $ownOverride = WP_FTS_Plugin::prepare_post_index_options($posts[8701]);
-        assert_same('fr', $ownOverride['lang'] ?? null, 'the set-oriented plugin-owned language override should remain authoritative');
+        assert_same('fr', $ownOverride['document_lang'] ?? null, 'the set-oriented plugin-owned language override should remain authoritative');
         $explicit = WP_FTS_Plugin::prepare_post_index_options($posts[8702], ['lang' => 'es']);
-        assert_same('es', $explicit['lang'] ?? null, 'an explicit batch language should remain authoritative');
+        assert_same('es', $explicit['document_lang'] ?? null, 'an explicit batch language should remain authoritative');
         assert_same($queriesAfterPreload, $fake->num_queries, 'own and explicit batch languages should require no third-party queries');
 
         $GLOBALS['wp_fts_ldgf_polylang_post_languages'][8801] = 'pl_PL';
         $directPolylang = WP_FTS_Plugin::prepare_post_index_options((object) ['ID' => 8801]);
         $directWpml = WP_FTS_Plugin::prepare_post_index_options((object) ['ID' => 8802]);
-        assert_true(!isset($directPolylang['lang']) && !isset($directWpml['lang']), 'posts without both preload markers must fall through to explicit language, detection, or site default');
+        assert_true(!isset($directPolylang['document_lang']) && !isset($directWpml['document_lang']), 'posts without both preload markers must fall through to explicit language, detection, or site default');
         assert_same(0, $GLOBALS['wp_fts_ldgf_polylang_post_language_calls'] ?? null, 'missing preload markers must not invoke the Polylang per-post API');
         assert_same(0, $wpmlCalls, 'missing preload markers must not invoke the WPML per-post filter');
         assert_same($queriesAfterPreload, $fake->num_queries, 'missing preload markers must not add multilingual database calls');

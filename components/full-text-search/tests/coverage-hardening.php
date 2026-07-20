@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 
 $wp_fts_component_hardening_checks = 0;
 
@@ -95,7 +95,7 @@ wp_fts_component_hardening_same(
 $chineseStorage = new WP_FTS_Storage_InMemory();
 $chineseIndexer = new WP_FTS_Indexer($chineseStorage, $analyzer);
 $chineseIndexer->index_document(9001, '<p>portable search</p>', ['lang' => 'zh-CN']);
-$chineseResults = (new WP_FTS_Searcher($chineseStorage, $analyzer))->search('portable', ['lang' => 'zh-CN']);
+$chineseResults = (new WP_FTS_Searcher($chineseStorage, $analyzer))->search('portable', ['query_lang' => 'zh-CN']);
 wp_fts_component_hardening_same(9001, $chineseResults[0]['doc_id'] ?? null, 'explicit Chinese region should query the partition used while indexing');
 
 foreach ($htmlCases as $index => [$html, $visibleText, $expectedTerms, $absentTerms]) {
@@ -104,7 +104,7 @@ foreach ($htmlCases as $index => [$html, $visibleText, $expectedTerms, $absentTe
         WP_FTS_Html_Text_Stream::visible_text($html),
         "HTML visible text case {$index}"
     );
-    $terms = wp_fts_component_hardening_terms($analyzer->analyze_content($html, ['lang' => 'en']));
+    $terms = wp_fts_component_hardening_terms($analyzer->analyze_content($html, ['document_lang' => 'en']));
     foreach ($expectedTerms as $term) {
         wp_fts_component_hardening_check(in_array($term, $terms, true), "HTML analyzer case {$index} should include {$term}");
     }
@@ -114,7 +114,7 @@ foreach ($htmlCases as $index => [$html, $visibleText, $expectedTerms, $absentTe
 }
 
 $literalAngleTerms = wp_fts_component_hardening_terms(
-    $analyzer->analyze_content('<p>before < 123 > after</p>', ['lang' => 'en'])
+    $analyzer->analyze_content('<p>before < 123 > after</p>', ['document_lang' => 'en'])
 );
 wp_fts_component_hardening_check(
     in_array('before', $literalAngleTerms, true) && in_array('after', $literalAngleTerms, true),
@@ -130,7 +130,7 @@ foreach ([
     '<article><style>.x{content:"</article>"} hiddenstyle</style><p>visiblebody</p>',
 ] as $hiddenRawTextHtml) {
     $hiddenRawTextTerms = wp_fts_component_hardening_terms(
-        $analyzer->analyze_content($hiddenRawTextHtml, ['lang' => 'en'])
+        $analyzer->analyze_content($hiddenRawTextHtml, ['document_lang' => 'en'])
     );
     wp_fts_component_hardening_check(
         in_array('visiblebody', $hiddenRawTextTerms, true),
@@ -172,16 +172,16 @@ foreach ($documents as $docId => $document) {
 }
 
 $searcher = new WP_FTS_Searcher($storage, $analyzer);
-$alpha = $searcher->search('alpha common', ['mode' => 'AND', 'lang' => 'en', 'limit' => 10]);
+$alpha = $searcher->search('alpha common', ['mode' => 'AND', 'query_lang' => 'en', 'limit' => 10]);
 wp_fts_component_hardening_same([1, 2], array_column($alpha, 'doc_id'), 'AND search should return both alpha documents');
 
-$pageOne = $searcher->search('common', ['lang' => 'en', 'limit' => 1, 'include_total' => true]);
-$pageTwo = $searcher->search('common', ['lang' => 'en', 'limit' => 1, 'offset' => 1, 'include_total' => true]);
+$pageOne = $searcher->search('common', ['query_lang' => 'en', 'limit' => 1, 'include_total' => true]);
+$pageTwo = $searcher->search('common', ['query_lang' => 'en', 'limit' => 1, 'offset' => 1, 'include_total' => true]);
 wp_fts_component_hardening_same(3, $pageOne['total'], 'include_total should count all matching common docs');
 wp_fts_component_hardening_check(($pageOne['results'][0]['doc_id'] ?? 0) !== ($pageTwo['results'][0]['doc_id'] ?? 0), 'pagination should advance between pages');
 
 $cachedPageOne = $searcher->search('common', [
-    'lang' => 'en',
+    'query_lang' => 'en',
     'limit' => 1,
     'include_total' => true,
     'exact' => true,
@@ -189,7 +189,7 @@ $cachedPageOne = $searcher->search('common', [
     'reuse_ranked_results' => true,
 ]);
 $cachedPageTwo = $searcher->search('common', [
-    'lang' => 'en',
+    'query_lang' => 'en',
     'limit' => 1,
     'offset' => 1,
     'include_total' => true,
@@ -205,7 +205,7 @@ wp_fts_component_hardening_check(
     'reused pagination should still advance the result window'
 );
 $differentCachedQuery = $searcher->search('alpha', [
-    'lang' => 'en',
+    'query_lang' => 'en',
     'limit' => 1,
     'include_total' => true,
     'exact' => true,
@@ -215,7 +215,7 @@ $differentCachedQuery = $searcher->search('alpha', [
 wp_fts_component_hardening_same(false, $differentCachedQuery['explain']['scoring']['ranked_results_reused'] ?? null, 'different query should invalidate the reusable ranking');
 
 $filtered = $searcher->search('common', [
-    'lang' => 'en',
+    'query_lang' => 'en',
     'limit' => 10,
     'include_metadata' => true,
     'post_type' => ['post'],
@@ -226,20 +226,20 @@ $filtered = $searcher->search('common', [
 wp_fts_component_hardening_same([1], array_column($filtered, 'doc_id'), 'metadata filters should keep only visible published posts in range');
 wp_fts_component_hardening_same('post', $filtered[0]['post_type'] ?? null, 'metadata enrichment should include post type');
 
-$exact = $searcher->search('common', ['lang' => 'en', 'limit' => 10, 'exact' => true]);
-$fast = $searcher->search('common', ['lang' => 'en', 'limit' => 10, 'fast_top_k' => true, 'candidate_cap' => 10]);
+$exact = $searcher->search('common', ['query_lang' => 'en', 'limit' => 10, 'exact' => true]);
+$fast = $searcher->search('common', ['query_lang' => 'en', 'limit' => 10, 'fast_top_k' => true, 'candidate_cap' => 10]);
 wp_fts_component_hardening_same(array_column($exact, 'doc_id'), array_column($fast['results'], 'doc_id'), 'candidate-capped retrieval with a safe cap should preserve ordering on compact corpus');
 wp_fts_component_hardening_same(false, $fast['total_is_exact'] ?? null, 'candidate-capped retrieval should mark its total as inexact');
 wp_fts_component_hardening_same(true, $fast['results_may_be_incomplete'] ?? null, 'candidate-capped retrieval should expose incomplete-result risk');
 
-$plainTotal = $searcher->search('common', ['lang' => 'en', 'limit' => 2, 'include_total' => true]);
+$plainTotal = $searcher->search('common', ['query_lang' => 'en', 'limit' => 2, 'include_total' => true]);
 wp_fts_component_hardening_check(!array_key_exists('explain', $plainTotal), 'search explain payload should be absent unless explicitly requested');
-$legacyExplainRequest = $searcher->search('common', ['lang' => 'en', 'limit' => 2, 'explain' => true]);
+$legacyExplainRequest = $searcher->search('common', ['query_lang' => 'en', 'limit' => 2, 'explain' => true]);
 wp_fts_component_hardening_check(!array_key_exists('explain', $legacyExplainRequest), 'explain should not change the legacy list return shape without include_total');
 
 $explainPayload = $searcher->search(
     'alpha beta gamma common rare facet red blue green marker one two three four five six seven eight nine ten',
-    ['lang' => 'en', 'limit' => 2, 'include_total' => true, 'explain' => true]
+    ['query_lang' => 'en', 'limit' => 2, 'include_total' => true, 'explain' => true]
 );
 wp_fts_component_hardening_check(is_array($explainPayload['explain'] ?? null), 'include_total explain request should include diagnostics payload');
 $plan = $explainPayload['explain']['query_plan'] ?? [];
@@ -288,10 +288,10 @@ wp_fts_component_hardening_check($fieldIndexer->index_document_fields(502, [
     ],
 ]), 'field explain swapped-field fixture should index');
 $fieldSearcher = new WP_FTS_Searcher($fieldStorage, $analyzer);
-$fieldDefault = $fieldSearcher->search('titlealpha contentbeta', ['lang' => 'en', 'limit' => 10]);
+$fieldDefault = $fieldSearcher->search('titlealpha contentbeta', ['query_lang' => 'en', 'limit' => 10]);
 wp_fts_component_hardening_check(!array_key_exists('field_matches', $fieldDefault[0] ?? []), 'default search rows should not expose explain field diagnostics');
 $fieldExplain = $fieldSearcher->search('titlealpha contentbeta excerptgamma rendereddelta customomega', [
-    'lang' => 'en',
+    'query_lang' => 'en',
     'limit' => 5,
     'include_total' => true,
     'explain' => true,
@@ -333,7 +333,7 @@ foreach (($fieldExplain['explain']['results'] ?? []) as $row) {
 wp_fts_component_hardening_check($swappedResult !== [], 'field explain should include the swapped-field document');
 $swappedFields = array_column($swappedResult['field_matches'] ?? [], 'field');
 wp_fts_component_hardening_check(in_array('title', $swappedFields, true) && in_array('content', $swappedFields, true), 'field explain should describe different matching fields on different documents');
-wp_fts_component_hardening_same([], $fieldSearcher->search('rendereddeltas', ['lang' => 'en', 'mode' => 'AND']), 'field explain support should not add hard-coded word-family matching');
+wp_fts_component_hardening_same([], $fieldSearcher->search('rendereddeltas', ['query_lang' => 'en', 'mode' => 'AND']), 'field explain support should not add hard-coded word-family matching');
 
 $manyFields = [];
 $manyTerms = [];
@@ -357,7 +357,7 @@ wp_fts_component_hardening_check($fieldIndexer->index_document_fields(503, $many
     ],
 ]), 'field explain bounded fixture should index');
 $boundedExplain = $fieldSearcher->search(implode(' ', $manyTerms), [
-    'lang' => 'en',
+    'query_lang' => 'en',
     'limit' => 1,
     'include_total' => true,
     'explain' => true,
@@ -378,7 +378,7 @@ wp_fts_component_hardening_check(
     'stemmed explain fixture should index'
 );
 $stemExplain = (new WP_FTS_Searcher($stemStorage, $stemAnalyzer))->search('running', [
-    'lang' => 'en',
+    'query_lang' => 'en',
     'limit' => 1,
     'include_total' => true,
     'explain' => true,
@@ -392,7 +392,7 @@ wp_fts_component_hardening_same('running', $stemMatch['surface'] ?? null, 'expla
 wp_fts_component_hardening_same('run', $stemMatch['term'] ?? null, 'explain result matches should expose the analyzed stored term');
 
 $prefixExplain = $searcher->search('mark', [
-    'lang' => 'en',
+    'query_lang' => 'en',
     'limit' => 2,
     'include_total' => true,
     'explain' => true,
@@ -405,7 +405,7 @@ wp_fts_component_hardening_same('enabled', $prefixPlan['prefix_matching'] ?? nul
 wp_fts_component_hardening_check((int) ($prefixPlan['prefix_added_terms'] ?? 0) > 0, 'explain query plan should count prefix-added terms');
 
 $fastExplain = $searcher->search('common', [
-    'lang' => 'en',
+    'query_lang' => 'en',
     'limit' => 1,
     'include_total' => true,
     'explain' => true,
@@ -424,7 +424,7 @@ wp_fts_component_hardening_same(true, $fastExplain['results_may_be_incomplete'] 
 $snippet = $searcher->snippet_for_text(
     '<p>Intro al<strong>pha</strong> target</p><script>alpha hidden</script>',
     'alpha',
-    ['lang' => 'en', 'highlight' => true, 'snippet_length' => 60]
+    ['query_lang' => 'en', 'highlight' => true, 'snippet_length' => 60]
 );
 wp_fts_component_hardening_check(str_contains($snippet, '<mark>'), 'HTML snippet should mark visible matches');
 wp_fts_component_hardening_check(!str_contains($snippet, 'hidden'), 'HTML snippet should not expose hidden script text');
@@ -432,7 +432,7 @@ wp_fts_component_hardening_check(!str_contains($snippet, 'hidden'), 'HTML snippe
 $hostileSnippet = $searcher->snippet_for_text(
     '<p><strong onclick="alert(1)">portable</strong> text <img src=x onerror=alert(1)></p>',
     'portable',
-    ['lang' => 'en', 'highlight' => true, 'snippet_length' => 80]
+    ['query_lang' => 'en', 'highlight' => true, 'snippet_length' => 80]
 );
 wp_fts_component_hardening_check(
     str_contains($hostileSnippet, '<mark>portable</mark>'),
@@ -449,7 +449,7 @@ wp_fts_component_hardening_check(
 $entitySnippet = $searcher->snippet_for_text(
     '<p>portable &lt;img src=x onerror=alert(1)&gt; tail</p>',
     'portable',
-    ['lang' => 'en', 'highlight' => true, 'snippet_length' => 100]
+    ['query_lang' => 'en', 'highlight' => true, 'snippet_length' => 100]
 );
 $entitySnippetWithoutMarks = str_replace(['<mark>', '</mark>'], '', $entitySnippet);
 wp_fts_component_hardening_check(
@@ -470,7 +470,7 @@ wp_fts_component_hardening_same(
     'minimal index_document flow should store a plain snippet source'
 );
 $minimalResults = (new WP_FTS_Searcher($minimalStorage, $analyzer))->search('portable', [
-    'lang' => 'en',
+    'query_lang' => 'en',
     'include_snippets' => true,
     'snippet_length' => 40,
 ]);
@@ -549,10 +549,10 @@ if (class_exists('Normalizer')) {
         ['lang' => 'fr']
     );
     $unicodeSearcher = new WP_FTS_Searcher($unicodeStorage, $unicodeAnalyzer);
-    wp_fts_component_hardening_same([702], array_column($unicodeSearcher->search("caf\u{00e9}", ['lang' => 'fr']), 'doc_id'), 'canonical query form should retrieve decomposed document text');
-    wp_fts_component_hardening_same([702], array_column($unicodeSearcher->search('office', ['lang' => 'fr']), 'doc_id'), 'ASCII query should retrieve compatibility-symbol document text');
+    wp_fts_component_hardening_same([702], array_column($unicodeSearcher->search("caf\u{00e9}", ['query_lang' => 'fr']), 'doc_id'), 'canonical query form should retrieve decomposed document text');
+    wp_fts_component_hardening_same([702], array_column($unicodeSearcher->search('office', ['query_lang' => 'fr']), 'doc_id'), 'ASCII query should retrieve compatibility-symbol document text');
     $canonicalSnippetResults = $unicodeSearcher->search("caf\u{00e9}", [
-        'lang' => 'fr',
+        'query_lang' => 'fr',
         'include_snippets' => true,
         'highlight' => true,
         'snippet_length' => 40,
@@ -593,7 +593,7 @@ if (class_exists('Normalizer')) {
 $unicodeSnippet = $searcher->snippet_for_text(
     str_repeat("\u{1f642}", 60) . ' needle ' . str_repeat("\u{754c}", 60),
     'needle',
-    ['lang' => 'en', 'snippet_length' => 40]
+    ['query_lang' => 'en', 'snippet_length' => 40]
 );
 wp_fts_component_hardening_same(1, preg_match('//u', $unicodeSnippet), 'plain snippet windows should never split a UTF-8 character');
 wp_fts_component_hardening_check(str_contains($unicodeSnippet, 'needle'), 'character-oriented snippet window should remain centered on the match');
@@ -614,6 +614,12 @@ $ambiguousAnalyzer = new class {
             ['term' => 'lemma-a', 'lang' => 'en', 'weight' => 1.0, 'position' => 0, 'rank' => 0, 'source' => 'lemma-pack'],
             ['term' => 'lemma-b', 'lang' => 'en', 'weight' => 1.0, 'position' => 0, 'rank' => 0, 'source' => 'lemma-pack'],
         ];
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function analyze_plain_content(string $text, array $options = []): array
+    {
+        return $this->analyze_content($text, $options);
     }
 
     /** @return array<int,array<string,mixed>> */
@@ -639,7 +645,7 @@ $ambiguousIndexer->index_document(803, '<p>only-b</p>', ['lang' => 'en']);
 wp_fts_component_hardening_same(1, $ambiguousStorage->get_doc(801)['lang_lengths']['en'] ?? null, 'one ambiguous source token should contribute one document-length unit');
 wp_fts_component_hardening_same(['doc_count' => 3, 'len_sum' => 3], $ambiguousStorage->get_meta('en'), 'ambiguous alternatives should not inflate collection length statistics');
 $ambiguousPayload = (new WP_FTS_Searcher($ambiguousStorage, $ambiguousAnalyzer))->search('ambiguous', [
-    'lang' => 'en',
+    'query_lang' => 'en',
     'include_total' => true,
     'limit' => 10,
 ]);
@@ -668,7 +674,7 @@ $splitAnalyzer = new class {
 
         return [[
             'term' => strtolower(str_replace(' ', '-', trim($text))),
-            'lang' => (string) ($options['lang'] ?? 'en'),
+            'lang' => (string) ($options['document_lang'] ?? 'en'),
             'position' => 0,
         ]];
     }

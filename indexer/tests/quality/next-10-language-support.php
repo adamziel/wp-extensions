@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 $wp_fts_n10_direct = !function_exists('test_case');
 if ($wp_fts_n10_direct) {
-    require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+    require_once dirname(__DIR__) . '/bootstrap.php';
 
     final class WP_FTS_N10_TestFailure extends RuntimeException
     {
@@ -93,7 +93,7 @@ function wp_fts_n10_analyzer(): WP_FTS_Analyzer
 {
     return new WP_FTS_Analyzer([
         'default_lang' => 'en',
-        'lemmatizer_packs_by_lang' => wp_fts_n10_pack_manifests(),
+        'lemma_packs_by_lang' => wp_fts_n10_pack_manifests(),
     ]);
 }
 
@@ -177,7 +177,7 @@ test_case('quality next 10 language support retrieves variants and isolates bait
         $indexer->index_document($baitId, '<article><p>' . $case['bait'] . '</p></article>', ['lang' => $case['bait_lang']]);
 
         $results = $searcher->search($case['query'], [
-            'lang' => $case['lang'],
+            'query_lang' => $case['lang'],
             'mode' => 'AND',
             'limit' => 5,
         ]);

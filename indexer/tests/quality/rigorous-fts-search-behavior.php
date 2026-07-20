@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 $wp_fts_rigorous_direct = !function_exists('test_case');
 if ($wp_fts_rigorous_direct) {
-    require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+    require_once dirname(__DIR__) . '/bootstrap.php';
 
     final class WP_FTS_Rigorous_TestFailure extends RuntimeException
     {
@@ -125,7 +125,7 @@ function qrs_analyzer_with_manifests(array $manifests, bool $autoDetectLanguage 
 {
     return new WP_FTS_Analyzer([
         'default_lang' => 'en',
-        'lemmatizer_packs_by_lang' => $manifests,
+        'lemma_packs_by_lang' => $manifests,
         'auto_detect_language' => $autoDetectLanguage,
     ]);
 }
@@ -202,7 +202,7 @@ function qrs_manifest_summary(string $manifestPath): array
 function qrs_analyzed_terms(WP_FTS_Analyzer $analyzer, string $text, string $lang): array
 {
     $terms = [];
-    foreach ($analyzer->analyze_query_occurrences($text, ['lang' => $lang]) as $occurrence) {
+    foreach ($analyzer->analyze_query_occurrences($text, ['query_lang' => $lang]) as $occurrence) {
         $term = (string) ($occurrence['term'] ?? '');
         if ($term !== '') {
             $terms[$term] = true;
@@ -535,7 +535,7 @@ if (is_string($wp_fts_full_polimorf_manifest) && trim($wp_fts_full_polimorf_mani
                 'metadata' => qrs_metadata($baitId, 'post', 'publish', '2026-06-11 00:00:00', 'Full PoliMorf bait', $baitHtml, ['language' => 'pl']),
             ]), "full PoliMorf bait {$baitId} should index");
 
-            assert_same([$targetId], qrs_ids($searcher->search($case['query'], ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10])), "full PoliMorf query {$case['query']} should retrieve only the valid morphology target");
+            assert_same([$targetId], qrs_ids($searcher->search($case['query'], ['query_lang' => 'pl', 'mode' => 'AND', 'limit' => 10])), "full PoliMorf query {$case['query']} should retrieve only the valid morphology target");
         }
     });
 }
@@ -571,14 +571,14 @@ test_case('quality rigorous FTS small corpus exercises pack-backed variants, par
             'metadata' => qrs_metadata($baitId, 'post', 'publish', '2026-03-02 00:00:00', "Bait {$lang}", $baitHtml, ['language' => $baitLang]),
         ]), "{$lang} wrong-language bait should index");
 
-        $results = $searcher->search($query, ['lang' => $lang, 'mode' => 'AND', 'limit' => 5]);
+        $results = $searcher->search($query, ['query_lang' => $lang, 'mode' => 'AND', 'limit' => 5]);
         $ids = qrs_ids($results);
         assert_true($ids !== [], "{$lang} {$support} query should retrieve a real indexed document");
         assert_same($targetId, $ids[0] ?? null, "{$lang} {$support} target should be the top result");
         assert_true(!in_array($baitId, $ids, true), "{$lang} wrong-language bait should not leak into exact partition search");
 
         $snippetRows = $searcher->search($query, [
-            'lang' => $lang,
+            'query_lang' => $lang,
             'limit' => 1,
             'include_metadata' => true,
             'include_snippets' => true,
@@ -600,14 +600,14 @@ test_case('quality rigorous FTS small corpus exercises pack-backed variants, par
     $indexer->index_document(3003, $orDocB, ['lang' => 'en', 'metadata' => qrs_metadata(3003, 'post', 'publish', '2026-04-03 00:00:00', 'OR post', $orDocB)]);
     $indexer->index_document(3004, $draftDoc, ['lang' => 'en', 'metadata' => qrs_metadata(3004, 'post', 'draft', '2026-04-04 00:00:00', 'Draft', $draftDoc)]);
 
-    assert_same([3001], qrs_ids($searcher->search('atlas beacon', ['lang' => 'en', 'mode' => 'AND', 'limit' => 10])), 'AND search should require every logical term');
-    $orIds = qrs_ids($searcher->search('atlas beacon', ['lang' => 'en', 'mode' => 'OR', 'limit' => 10]));
+    assert_same([3001], qrs_ids($searcher->search('atlas beacon', ['query_lang' => 'en', 'mode' => 'AND', 'limit' => 10])), 'AND search should require every logical term');
+    $orIds = qrs_ids($searcher->search('atlas beacon', ['query_lang' => 'en', 'mode' => 'OR', 'limit' => 10]));
     assert_true(in_array(3001, $orIds, true) && in_array(3002, $orIds, true) && in_array(3003, $orIds, true), 'OR search should include one-term and two-term matches');
-    assert_same([], $searcher->search('sharedtopic', ['lang' => 'sv', 'disable_language_fallback' => true]), 'unpopulated wrong language partition should return empty results');
-    assert_same([3001], qrs_ids($searcher->search('atlas beacon', ['lang' => 'sv', 'fallback_languages' => ['en'], 'mode' => 'AND', 'limit' => 1])), 'explicit language fallback should recover default-language results');
+    assert_same([], $searcher->search('sharedtopic', ['query_lang' => 'sv', 'disable_language_fallback' => true]), 'unpopulated wrong language partition should return empty results');
+    assert_same([3001], qrs_ids($searcher->search('atlas beacon', ['query_lang' => 'sv', 'fallback_languages' => ['en'], 'mode' => 'AND', 'limit' => 1])), 'explicit language fallback should recover default-language results');
 
     $payload = $searcher->search('sharedtopic', [
-        'lang' => 'en',
+        'query_lang' => 'en',
         'limit' => 2,
         'offset' => 1,
         'include_total' => true,
@@ -653,7 +653,7 @@ test_case('quality rigorous FTS Polish false positives reject short stems homogr
         $indexer->index_document($targetId, $targetHtml, ['lang' => 'pl', 'metadata' => qrs_metadata($targetId, 'post', 'publish', '2026-06-12 00:00:00', 'False positive target', $targetHtml, ['language' => 'pl'])]);
         $indexer->index_document($baitId, $baitHtml, ['lang' => 'pl', 'metadata' => qrs_metadata($baitId, 'post', 'publish', '2026-06-13 00:00:00', 'False positive bait', $baitHtml, ['language' => 'pl'])]);
 
-        $ids = qrs_ids($searcher->search($case['query'], ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10]));
+        $ids = qrs_ids($searcher->search($case['query'], ['query_lang' => 'pl', 'mode' => 'AND', 'limit' => 10]));
         assert_same([$targetId], $ids, "{$case['label']} query should match only the morphology-backed target");
     }
 });
@@ -677,16 +677,16 @@ test_case('quality rigorous FTS hostile HTML lexing and formatted snippets do no
         'metadata' => qrs_metadata(4100, 'post', 'publish', '2026-05-01 00:00:00', 'Hostile HTML', $html, ['language' => 'pl']),
     ]);
 
-    assert_same([4100], qrs_ids($searcher->search('wordpress', ['lang' => 'pl', 'limit' => 5])), 'split WordPress token should be searchable as one visible word');
-    assert_same([4100], qrs_ids($searcher->search('szklarnia', ['lang' => 'pl', 'limit' => 5])), 'nested split Polish word should be searchable literally');
-    assert_same([4100], qrs_ids($searcher->search('węgorz', ['lang' => 'pl', 'limit' => 5])), 'accented split Polish word should be searchable');
-    assert_same([4100], qrs_ids($searcher->search('chrząstki', ['lang' => 'pl', 'limit' => 5])), 'deeply formatted Polish word should be searchable');
-    assert_same([4100], qrs_ids($searcher->search($polishPair['lemma'], ['lang' => 'pl', 'limit' => 5])), 'Polish full pack should match a runtime-derived surface via its lemma');
-    assert_same([], $searcher->search('nawigacja', ['lang' => 'pl']), 'navigation text should not be indexed');
-    assert_same([], $searcher->search($italianPair['lemma'], ['lang' => 'pl']), 'script text should not be indexed even when it is a real lemma');
+    assert_same([4100], qrs_ids($searcher->search('wordpress', ['query_lang' => 'pl', 'limit' => 5])), 'split WordPress token should be searchable as one visible word');
+    assert_same([4100], qrs_ids($searcher->search('szklarnia', ['query_lang' => 'pl', 'limit' => 5])), 'nested split Polish word should be searchable literally');
+    assert_same([4100], qrs_ids($searcher->search('węgorz', ['query_lang' => 'pl', 'limit' => 5])), 'accented split Polish word should be searchable');
+    assert_same([4100], qrs_ids($searcher->search('chrząstki', ['query_lang' => 'pl', 'limit' => 5])), 'deeply formatted Polish word should be searchable');
+    assert_same([4100], qrs_ids($searcher->search($polishPair['lemma'], ['query_lang' => 'pl', 'limit' => 5])), 'Polish full pack should match a runtime-derived surface via its lemma');
+    assert_same([], $searcher->search('nawigacja', ['query_lang' => 'pl']), 'navigation text should not be indexed');
+    assert_same([], $searcher->search($italianPair['lemma'], ['query_lang' => 'pl']), 'script text should not be indexed even when it is a real lemma');
 
     $snippetRows = $searcher->search($polishPair['lemma'], [
-        'lang' => 'pl',
+        'query_lang' => 'pl',
         'limit' => 1,
         'include_metadata' => true,
         'include_snippets' => true,
@@ -700,7 +700,7 @@ test_case('quality rigorous FTS hostile HTML lexing and formatted snippets do no
 
     $italianHtml = '<article lang="it"><p>Prima ' . qrs_inline_split_word($italianPair['surface']) . ' dopo.</p><script>' . $italianPair['lemma'] . '</script></article>';
     $italianSnippet = $searcher->snippet_for_text($italianHtml, $italianPair['lemma'], [
-        'lang' => 'it',
+        'query_lang' => 'it',
         'highlight' => true,
         'snippet_length' => 80,
     ]);
@@ -720,7 +720,7 @@ test_case('quality rigorous FTS frontend rendering filters expose safe highlight
     $indexer->index_document(6400, $content, ['lang' => 'pl', 'metadata' => $metadata]);
 
     $stajniaRows = $searcher->search('stajnia', [
-        'lang' => 'pl',
+        'query_lang' => 'pl',
         'limit' => 1,
         'include_metadata' => true,
         'include_snippets' => true,
@@ -741,7 +741,7 @@ test_case('quality rigorous FTS frontend rendering filters expose safe highlight
     $titleSnippet = (string) $sanitize->invoke(null, $searcher->snippet_for_text(
         'Wynik chr<strong><em>ząs</em>tki</strong>',
         'chrząstka',
-        ['lang' => 'pl', 'highlight' => true, 'snippet_length' => 80]
+        ['query_lang' => 'pl', 'highlight' => true, 'snippet_length' => 80]
     ));
     assert_contains('<mark>', $titleSnippet, 'frontend title snippet should mark chrząstki when queried by lemma');
     assert_contains('chrząstki', WP_FTS_Html_Text_Stream::visible_text($titleSnippet), 'frontend title snippet should preserve visible chrząstki surface');
@@ -793,16 +793,16 @@ test_case('quality rigorous FTS lexical punctuation accents entities and script 
     $indexer->index_document(4202, '<article lang="ko"><p>검색합니다</p></article>', ['lang' => 'ko']);
     $indexer->index_document(4203, '<article lang="fa"><p>گزارش فارسی جستجو فهرست</p></article>', ['lang' => 'fa']);
 
-    assert_same([4200], qrs_ids($searcher->search('editors', ['lang' => 'en', 'mode' => 'AND'])), 'curly apostrophe possessive should remain searchable through English stemming');
-    assert_same([4200], qrs_ids($searcher->search('co operate', ['lang' => 'en', 'mode' => 'AND'])), 'hyphenated words should search through their visible component tokens');
-    assert_same([4200], qrs_ids($searcher->search('re entry', ['lang' => 'en', 'mode' => 'AND'])), 'hyphenated stemmed components should keep document and query parity');
-    assert_same([4200], qrs_ids($searcher->search('cafe', ['lang' => 'en', 'mode' => 'AND'])), 'entity-decoded accented visible text should match folded ASCII queries');
-    assert_same([], $searcher->search('amp', ['lang' => 'en', 'mode' => 'AND']), 'HTML entity syntax should not be indexed as visible text');
-    assert_same([], $searcher->search('cooperate', ['lang' => 'en', 'mode' => 'AND']), 'hyphenation should not invent an unobserved joined token');
-    assert_same([], $searcher->search('reentry', ['lang' => 'en', 'mode' => 'AND']), 'hyphenation should not invent an unobserved joined stem');
-    assert_same([4201], qrs_ids($searcher->search('検索', ['lang' => 'ja', 'mode' => 'AND'])), 'Japanese CJK n-grams should retrieve visible text');
-    assert_same([4202], qrs_ids($searcher->search('검색', ['lang' => 'ko', 'mode' => 'AND'])), 'Hangul n-grams should retrieve visible text');
-    assert_same([4203], qrs_ids($searcher->search('جستجو', ['lang' => 'fa', 'mode' => 'AND'])), 'Arabic-script Persian text should remain searchable without a pack');
+    assert_same([4200], qrs_ids($searcher->search('editors', ['query_lang' => 'en', 'mode' => 'AND'])), 'curly apostrophe possessive should remain searchable through English stemming');
+    assert_same([4200], qrs_ids($searcher->search('co operate', ['query_lang' => 'en', 'mode' => 'AND'])), 'hyphenated words should search through their visible component tokens');
+    assert_same([4200], qrs_ids($searcher->search('re entry', ['query_lang' => 'en', 'mode' => 'AND'])), 'hyphenated stemmed components should keep document and query parity');
+    assert_same([4200], qrs_ids($searcher->search('cafe', ['query_lang' => 'en', 'mode' => 'AND'])), 'entity-decoded accented visible text should match folded ASCII queries');
+    assert_same([], $searcher->search('amp', ['query_lang' => 'en', 'mode' => 'AND']), 'HTML entity syntax should not be indexed as visible text');
+    assert_same([], $searcher->search('cooperate', ['query_lang' => 'en', 'mode' => 'AND']), 'hyphenation should not invent an unobserved joined token');
+    assert_same([], $searcher->search('reentry', ['query_lang' => 'en', 'mode' => 'AND']), 'hyphenation should not invent an unobserved joined stem');
+    assert_same([4201], qrs_ids($searcher->search('検索', ['query_lang' => 'ja', 'mode' => 'AND'])), 'Japanese CJK n-grams should retrieve visible text');
+    assert_same([4202], qrs_ids($searcher->search('검색', ['query_lang' => 'ko', 'mode' => 'AND'])), 'Hangul n-grams should retrieve visible text');
+    assert_same([4203], qrs_ids($searcher->search('جستجو', ['query_lang' => 'fa', 'mode' => 'AND'])), 'Arabic-script Persian text should remain searchable without a pack');
 });
 
 test_case('quality rigorous FTS CJK non-space scripts handle mixed Latin punctuation numbers and short-ngram bait conservatively', function (): void {
@@ -825,14 +825,14 @@ test_case('quality rigorous FTS CJK non-space scripts handle mixed Latin punctua
         ]);
     }
 
-    assert_same([6501], qrs_ids($searcher->search('検索品質', ['lang' => 'ja', 'mode' => 'AND', 'limit' => 10])), 'Japanese no-space quality query should exclude repeated short-ngram bait');
-    assert_same([6501], qrs_ids($searcher->search('SKU42 東京', ['lang' => 'ja', 'mode' => 'AND', 'limit' => 10])), 'mixed Latin digits and Japanese query should find the same document');
-    $tokyoIds = qrs_ids($searcher->search('東京検索', ['lang' => 'ja', 'limit' => 10]));
+    assert_same([6501], qrs_ids($searcher->search('検索品質', ['query_lang' => 'ja', 'mode' => 'AND', 'limit' => 10])), 'Japanese no-space quality query should exclude repeated short-ngram bait');
+    assert_same([6501], qrs_ids($searcher->search('SKU42 東京', ['query_lang' => 'ja', 'mode' => 'AND', 'limit' => 10])), 'mixed Latin digits and Japanese query should find the same document');
+    $tokyoIds = qrs_ids($searcher->search('東京検索', ['query_lang' => 'ja', 'limit' => 10]));
     assert_same(6501, $tokyoIds[0] ?? null, 'Japanese full no-space target should outrank short repeated bait for a more specific query');
     assert_true(in_array(6502, $tokyoIds, true), 'Japanese bait remains recallable for broad overlapping n-gram searches');
-    assert_same([6503], qrs_ids($searcher->search('搜索质量', ['lang' => 'zh', 'mode' => 'AND', 'limit' => 10])), 'Chinese no-space quality query should exclude repeated short-ngram bait');
-    assert_same([6505], qrs_ids($searcher->search('검색품질', ['lang' => 'ko', 'mode' => 'AND', 'limit' => 10])), 'Korean no-space quality query should exclude repeated short-ngram bait');
-    assert_same([], $searcher->search('검색품질', ['lang' => 'ja', 'mode' => 'AND', 'limit' => 10]), 'Korean Hangul query should not leak into Japanese partition');
+    assert_same([6503], qrs_ids($searcher->search('搜索质量', ['query_lang' => 'zh', 'mode' => 'AND', 'limit' => 10])), 'Chinese no-space quality query should exclude repeated short-ngram bait');
+    assert_same([6505], qrs_ids($searcher->search('검색품질', ['query_lang' => 'ko', 'mode' => 'AND', 'limit' => 10])), 'Korean no-space quality query should exclude repeated short-ngram bait');
+    assert_same([], $searcher->search('검색품질', ['query_lang' => 'ja', 'mode' => 'AND', 'limit' => 10]), 'Korean Hangul query should not leak into Japanese partition');
 });
 
 test_case('quality rigorous FTS mixed-language documents route explicit spans automatic detection and unsupported fallback conservatively', function (): void {
@@ -853,17 +853,17 @@ test_case('quality rigorous FTS mixed-language documents route explicit spans au
     $indexer->index_document(6304, $autoCjk, ['metadata' => qrs_metadata(6304, 'post', 'publish', '2026-06-17 00:00:00', 'Auto CJK', $autoCjk, ['language' => 'auto'])]);
     $indexer->index_document(6305, $unsupported, ['lang' => 'zz', 'metadata' => qrs_metadata(6305, 'post', 'publish', '2026-06-18 00:00:00', 'Unsupported fallback', $unsupported, ['language' => 'zz'])]);
 
-    assert_same([6301], qrs_ids($searcher->search('openai api', ['lang' => 'en', 'mode' => 'AND', 'limit' => 10])), 'English acronym span inside Polish post should be searchable only in English partition');
-    assert_same([6303], qrs_ids($searcher->search('openai api', ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10])), 'Polish acronym bait should remain in the Polish partition');
-    $polishQuoteIds = qrs_ids($searcher->search('stajnia', ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10]));
+    assert_same([6301], qrs_ids($searcher->search('openai api', ['query_lang' => 'en', 'mode' => 'AND', 'limit' => 10])), 'English acronym span inside Polish post should be searchable only in English partition');
+    assert_same([6303], qrs_ids($searcher->search('openai api', ['query_lang' => 'pl', 'mode' => 'AND', 'limit' => 10])), 'Polish acronym bait should remain in the Polish partition');
+    $polishQuoteIds = qrs_ids($searcher->search('stajnia', ['query_lang' => 'pl', 'mode' => 'AND', 'limit' => 10]));
     sort($polishQuoteIds, SORT_NUMERIC);
     assert_same([6301, 6302], $polishQuoteIds, 'Polish query should find explicit Polish document text and quoted Polish span inside English post');
-    assert_same([], $searcher->search('stajnia', ['lang' => 'en', 'mode' => 'AND', 'limit' => 10]), 'Polish quote should not leak into the English partition');
-    assert_same([6304], qrs_ids($searcher->search('検索品質', ['lang' => 'zh', 'mode' => 'AND', 'limit' => 10])), 'automatic detection should route untagged CJK no-space text into the current CJK fallback partition');
-    assert_same([], $searcher->search('検索品質', ['lang' => 'en', 'mode' => 'AND', 'disable_language_fallback' => true]), 'automatic CJK content should not appear in an exact English partition');
-    assert_same([6305], qrs_ids($searcher->search('unsupportedalpha fallbacktoken', ['lang' => 'zz', 'mode' => 'AND', 'limit' => 10])), 'unsupported language partition should support conservative exact matching');
-    assert_same([], $searcher->search('unsupportedalpha fallbacktoken', ['lang' => 'en', 'mode' => 'AND', 'disable_language_fallback' => true]), 'unsupported partition should not leak into English exact search');
-    assert_same([6305], qrs_ids($searcher->search('unsupportedalpha fallbacktoken', ['lang' => 'en', 'mode' => 'AND', 'fallback_languages' => ['zz'], 'limit' => 10])), 'explicit fallback should recover unsupported-language exact terms');
+    assert_same([], $searcher->search('stajnia', ['query_lang' => 'en', 'mode' => 'AND', 'limit' => 10]), 'Polish quote should not leak into the English partition');
+    assert_same([6304], qrs_ids($searcher->search('検索品質', ['query_lang' => 'zh', 'mode' => 'AND', 'limit' => 10])), 'automatic detection should route untagged CJK no-space text into the current CJK fallback partition');
+    assert_same([], $searcher->search('検索品質', ['query_lang' => 'en', 'mode' => 'AND', 'disable_language_fallback' => true]), 'automatic CJK content should not appear in an exact English partition');
+    assert_same([6305], qrs_ids($searcher->search('unsupportedalpha fallbacktoken', ['query_lang' => 'zz', 'mode' => 'AND', 'limit' => 10])), 'unsupported language partition should support conservative exact matching');
+    assert_same([], $searcher->search('unsupportedalpha fallbacktoken', ['query_lang' => 'en', 'mode' => 'AND', 'disable_language_fallback' => true]), 'unsupported partition should not leak into English exact search');
+    assert_same([6305], qrs_ids($searcher->search('unsupportedalpha fallbacktoken', ['query_lang' => 'en', 'mode' => 'AND', 'fallback_languages' => ['zz'], 'limit' => 10])), 'explicit fallback should recover unsupported-language exact terms');
 });
 
 test_case('quality rigorous FTS indexing lifecycle removes stale terms, language partitions, metadata, and tombstones', function (): void {
@@ -878,22 +878,22 @@ test_case('quality rigorous FTS indexing lifecycle removes stale terms, language
         'lang' => 'en',
         'metadata' => qrs_metadata(5100, 'post', 'publish', '2026-05-05 00:00:00', 'Initial lifecycle', $initialHtml),
     ]), 'new lifecycle document should index');
-    assert_same([5100], qrs_ids($searcher->search('lifecyclealpha', ['lang' => 'en'])), 'newly indexed English term should be searchable');
+    assert_same([5100], qrs_ids($searcher->search('lifecyclealpha', ['query_lang' => 'en'])), 'newly indexed English term should be searchable');
 
     assert_true($indexer->index_document(5100, $changedHtml, [
         'lang' => 'pl',
         'metadata' => qrs_metadata(5100, 'page', 'draft', '2026-05-06 00:00:00', 'Changed lifecycle', $changedHtml, ['language' => 'pl']),
     ]), 'reindexing with changed language and metadata should rewrite postings');
-    assert_same([], $searcher->search('lifecyclealpha', ['lang' => 'en']), 'reindex should remove stale English postings');
-    assert_same([5100], qrs_ids($searcher->search('lifecyclebeta', ['lang' => 'pl'])), 'reindex should add new Polish postings');
-    assert_same([], $searcher->search('lifecyclebeta', ['lang' => 'en']), 'new term should not leak into old language partition');
-    assert_same([5100], qrs_ids($searcher->search('lifecyclebeta', ['lang' => 'pl', 'post_type' => ['page'], 'post_status' => ['draft']])), 'reindex should update page draft metadata filters');
-    assert_same([], $searcher->search('lifecyclebeta', ['lang' => 'pl', 'post_type' => ['post'], 'post_status' => ['publish']]), 'old post publish metadata should be gone');
+    assert_same([], $searcher->search('lifecyclealpha', ['query_lang' => 'en']), 'reindex should remove stale English postings');
+    assert_same([5100], qrs_ids($searcher->search('lifecyclebeta', ['query_lang' => 'pl'])), 'reindex should add new Polish postings');
+    assert_same([], $searcher->search('lifecyclebeta', ['query_lang' => 'en']), 'new term should not leak into old language partition');
+    assert_same([5100], qrs_ids($searcher->search('lifecyclebeta', ['query_lang' => 'pl', 'post_type' => ['page'], 'post_status' => ['draft']])), 'reindex should update page draft metadata filters');
+    assert_same([], $searcher->search('lifecyclebeta', ['query_lang' => 'pl', 'post_type' => ['post'], 'post_status' => ['publish']]), 'old post publish metadata should be gone');
 
     assert_true($indexer->delete_document(5100), 'delete should tombstone the active lifecycle document');
-    assert_same([], $searcher->search('lifecyclebeta', ['lang' => 'pl']), 'deleted document should be excluded before optimize');
+    assert_same([], $searcher->search('lifecyclebeta', ['query_lang' => 'pl']), 'deleted document should be excluded before optimize');
     $indexer->optimize();
-    assert_same([], $searcher->search('lifecyclebeta', ['lang' => 'pl']), 'deleted document should remain excluded after optimize');
+    assert_same([], $searcher->search('lifecyclebeta', ['query_lang' => 'pl']), 'deleted document should remain excluded after optimize');
     assert_same([], WP_FTS_StorageCompat::get_doc_metadata($storage, [5100]), 'delete should clear product-facing document metadata');
 });
 
@@ -906,12 +906,12 @@ test_case('quality rigorous FTS freshness handles restore pack-configuration cha
     $restoreInitial = '<article lang="en"><p>restorealpha old visible content</p></article>';
     $restoreFinal = '<article lang="en"><p>restorebeta returned visible content</p></article>';
     $restoreIndexer->index_document(6601, $restoreInitial, ['lang' => 'en', 'metadata' => qrs_metadata(6601, 'post', 'publish', '2026-06-21 00:00:00', 'Restore initial', $restoreInitial)]);
-    assert_same([6601], qrs_ids($restoreSearcher->search('restorealpha', ['lang' => 'en'])), 'restore fixture should index initial term');
+    assert_same([6601], qrs_ids($restoreSearcher->search('restorealpha', ['query_lang' => 'en'])), 'restore fixture should index initial term');
     assert_true($restoreIndexer->delete_document(6601), 'restore fixture should tombstone document before restore');
-    assert_same([], $restoreSearcher->search('restorealpha', ['lang' => 'en']), 'tombstoned document should stop matching immediately');
+    assert_same([], $restoreSearcher->search('restorealpha', ['query_lang' => 'en']), 'tombstoned document should stop matching immediately');
     assert_true($restoreIndexer->index_document(6601, $restoreFinal, ['lang' => 'en', 'metadata' => qrs_metadata(6601, 'post', 'publish', '2026-06-22 00:00:00', 'Restore final', $restoreFinal)]), 'restore fixture should reindex the same id after tombstone');
-    assert_same([6601], qrs_ids($restoreSearcher->search('restorebeta', ['lang' => 'en'])), 'restored document should match new content');
-    assert_same([], $restoreSearcher->search('restorealpha', ['lang' => 'en']), 'restored document should not retain pre-trash terms');
+    assert_same([6601], qrs_ids($restoreSearcher->search('restorebeta', ['query_lang' => 'en'])), 'restored document should match new content');
+    assert_same([], $restoreSearcher->search('restorealpha', ['query_lang' => 'en']), 'restored document should not retain pre-trash terms');
 
     $languageStorage = new WP_FTS_Storage_InMemory();
     $languageAnalyzer = qrs_analyzer(true);
@@ -920,10 +920,10 @@ test_case('quality rigorous FTS freshness handles restore pack-configuration cha
     $languageEnglish = '<article lang="en"><p>languageflip visible English partition</p></article>';
     $languagePolish = '<article lang="pl"><p>languageflip widoczne stajniach</p></article>';
     $languageIndexer->index_document(6602, $languageEnglish, ['lang' => 'en', 'metadata' => qrs_metadata(6602, 'post', 'publish', '2026-06-23 00:00:00', 'Language English', $languageEnglish, ['language' => 'en'])]);
-    assert_same([6602], qrs_ids($languageSearcher->search('languageflip', ['lang' => 'en'])), 'language metadata fixture should start in English partition');
+    assert_same([6602], qrs_ids($languageSearcher->search('languageflip', ['query_lang' => 'en'])), 'language metadata fixture should start in English partition');
     $languageIndexer->index_document(6602, $languagePolish, ['lang' => 'pl', 'metadata' => qrs_metadata(6602, 'post', 'publish', '2026-06-24 00:00:00', 'Language Polish', $languagePolish, ['language' => 'pl'])]);
-    assert_same([], $languageSearcher->search('languageflip', ['lang' => 'en']), 'language reindex should remove old English partition terms');
-    assert_same([6602], qrs_ids($languageSearcher->search('languageflip stajnia', ['lang' => 'pl', 'mode' => 'AND'])), 'language reindex should add new Polish partition terms');
+    assert_same([], $languageSearcher->search('languageflip', ['query_lang' => 'en']), 'language reindex should remove old English partition terms');
+    assert_same([6602], qrs_ids($languageSearcher->search('languageflip stajnia', ['query_lang' => 'pl', 'mode' => 'AND'])), 'language reindex should add new Polish partition terms');
 
     $packStorage = new WP_FTS_Storage_InMemory();
     $noPackAnalyzer = qrs_analyzer(false);
@@ -934,11 +934,11 @@ test_case('quality rigorous FTS freshness handles restore pack-configuration cha
     $packSearcher = new WP_FTS_Searcher($packStorage, $packAnalyzer);
     $packHtml = '<article lang="pl"><p>packfresh stajniach po zmianie konfiguracji analizatora</p></article>';
     assert_true($noPackIndexer->index_document(6603, $packHtml, ['lang' => 'pl', 'metadata' => qrs_metadata(6603, 'post', 'publish', '2026-06-25 00:00:00', 'No pack', $packHtml, ['language' => 'pl'])]), 'no-pack analyzer should index initial Polish document');
-    assert_same([], $noPackSearcher->search('stajnia', ['lang' => 'pl']), 'no-pack conservative Polish analyzer should not invent the stajnia/stajniach lemma relation');
-    assert_same([6603], qrs_ids($noPackSearcher->search('stajniach', ['lang' => 'pl'])), 'no-pack analyzer should still find the exact inflected surface');
+    assert_same([], $noPackSearcher->search('stajnia', ['query_lang' => 'pl']), 'no-pack conservative Polish analyzer should not invent the stajnia/stajniach lemma relation');
+    assert_same([6603], qrs_ids($noPackSearcher->search('stajniach', ['query_lang' => 'pl'])), 'no-pack analyzer should still find the exact inflected surface');
     assert_true($packIndexer->index_document(6603, $packHtml, ['lang' => 'pl', 'metadata' => qrs_metadata(6603, 'post', 'publish', '2026-06-25 00:00:00', 'Pack enabled', $packHtml, ['language' => 'pl'])]), 'pack analyzer signature change should force reindex of unchanged HTML');
-    assert_same([6603], qrs_ids($packSearcher->search('stajnia', ['lang' => 'pl'])), 'pack reindex should make the lemma query match');
-    assert_same([], $noPackSearcher->search('stajniach', ['lang' => 'pl']), 'pack reindex should remove stale no-pack postings from the shared storage');
+    assert_same([6603], qrs_ids($packSearcher->search('stajnia', ['query_lang' => 'pl'])), 'pack reindex should make the lemma query match');
+    assert_same([], $noPackSearcher->search('stajniach', ['query_lang' => 'pl']), 'pack reindex should remove stale no-pack postings from the shared storage');
 
     $repeatAnalyzer = qrs_analyzer(false);
     $repeatStorage = new WP_FTS_Storage_InMemory();
@@ -958,9 +958,9 @@ test_case('quality rigorous FTS freshness handles restore pack-configuration cha
         $cleanIndexer->index_document($docId, $finalHtml, ['lang' => 'en', 'metadata' => qrs_metadata($docId, 'post', 'publish', '2026-06-27 00:00:00', "Bulk {$docId} final", $finalHtml)]);
     }
 
-    assert_same(qrs_ids($cleanSearcher->search('bulkfinal', ['lang' => 'en', 'limit' => 10])), qrs_ids($repeatSearcher->search('bulkfinal', ['lang' => 'en', 'limit' => 10])), 'repeated updates should converge to the same final recall as a clean rebuild');
-    assert_same(qrs_ids($cleanSearcher->search('convergence1', ['lang' => 'en', 'limit' => 10])), qrs_ids($repeatSearcher->search('convergence1', ['lang' => 'en', 'limit' => 10])), 'repeated updates should converge to the same final filtered topic as a clean rebuild');
-    assert_same([], $repeatSearcher->search('staleversion1', ['lang' => 'en', 'limit' => 10]), 'repeated updates should remove stale intermediate terms');
+    assert_same(qrs_ids($cleanSearcher->search('bulkfinal', ['query_lang' => 'en', 'limit' => 10])), qrs_ids($repeatSearcher->search('bulkfinal', ['query_lang' => 'en', 'limit' => 10])), 'repeated updates should converge to the same final recall as a clean rebuild');
+    assert_same(qrs_ids($cleanSearcher->search('convergence1', ['query_lang' => 'en', 'limit' => 10])), qrs_ids($repeatSearcher->search('convergence1', ['query_lang' => 'en', 'limit' => 10])), 'repeated updates should converge to the same final filtered topic as a clean rebuild');
+    assert_same([], $repeatSearcher->search('staleversion1', ['query_lang' => 'en', 'limit' => 10]), 'repeated updates should remove stale intermediate terms');
 });
 
 /**
@@ -1032,29 +1032,29 @@ test_case('quality rigorous FTS medium corpus verifies ranking, partition isolat
     $model = qrs_build_medium_corpus($indexer);
 
     assert_same(420, $model['count'], 'medium corpus should contain the expected deterministic document count');
-    $andIds = qrs_ids($searcher->search('mediumanchor rarecontext', ['lang' => 'en', 'mode' => 'AND', 'limit' => 20]));
+    $andIds = qrs_ids($searcher->search('mediumanchor rarecontext', ['query_lang' => 'en', 'mode' => 'AND', 'limit' => 20]));
     assert_same($model['en_gold_ids'], $andIds, 'English medium AND query should recall only English gold documents despite multilingual baits');
     assert_true(($andIds[0] ?? 0) < ($andIds[1] ?? PHP_INT_MAX), 'medium ranking tie-break should remain deterministic by ascending doc id when scores tie');
 
-    $wrongPartition = qrs_ids($searcher->search('mediumanchor rarecontext', ['lang' => 'fa', 'mode' => 'AND', 'limit' => 50]));
+    $wrongPartition = qrs_ids($searcher->search('mediumanchor rarecontext', ['query_lang' => 'fa', 'mode' => 'AND', 'limit' => 50]));
     assert_true($wrongPartition !== [], 'medium corpus should include wrong-language bait documents');
     foreach ($wrongPartition as $docId) {
         assert_true(!in_array($docId, $model['en_gold_ids'], true), 'wrong-language medium search should not return English gold documents');
     }
 
-    $exact = $searcher->search('mediumanchor', ['lang' => 'en', 'limit' => 10, 'exact' => true]);
-    $fast = $searcher->search('mediumanchor', ['lang' => 'en', 'limit' => 10, 'fast_top_k' => true, 'candidate_cap' => 200]);
+    $exact = $searcher->search('mediumanchor', ['query_lang' => 'en', 'limit' => 10, 'exact' => true]);
+    $fast = $searcher->search('mediumanchor', ['query_lang' => 'en', 'limit' => 10, 'fast_top_k' => true, 'candidate_cap' => 200]);
     assert_same(qrs_ids($exact), qrs_ids($fast['results']), 'explicit candidate-capped retrieval should match exact ordering when the cap covers all English candidates');
 
-    $firstPage = $searcher->search('mediumanchor', ['lang' => 'en', 'limit' => 3, 'include_total' => true]);
-    $secondPage = $searcher->search('mediumanchor', ['lang' => 'en', 'limit' => 3, 'offset' => 3, 'include_total' => true]);
+    $firstPage = $searcher->search('mediumanchor', ['query_lang' => 'en', 'limit' => 3, 'include_total' => true]);
+    $secondPage = $searcher->search('mediumanchor', ['query_lang' => 'en', 'limit' => 3, 'offset' => 3, 'include_total' => true]);
     assert_same(count($model['medium_anchor_ids']), $firstPage['total'], 'medium include_total should count every English anchor match');
     assert_same(3, count($firstPage['results']), 'first medium page should honor limit');
     assert_true(array_intersect(qrs_ids($firstPage['results']), qrs_ids($secondPage['results'])) === [], 'medium pagination pages should not overlap');
 
-    assert_same([], $searcher->search('hiddenmediumsecret', ['lang' => 'en', 'limit' => 10]), 'hidden medium script/style terms should not be indexed');
+    assert_same([], $searcher->search('hiddenmediumsecret', ['query_lang' => 'en', 'limit' => 10]), 'hidden medium script/style terms should not be indexed');
     $snippetRows = $searcher->search('mediumanchor', [
-        'lang' => 'en',
+        'query_lang' => 'en',
         'limit' => 1,
         'include_metadata' => true,
         'include_snippets' => true,

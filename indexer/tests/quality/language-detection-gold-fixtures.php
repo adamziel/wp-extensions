@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 $wp_fts_ldgf_direct = !function_exists('test_case');
 if ($wp_fts_ldgf_direct) {
-    require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+    require_once dirname(__DIR__) . '/bootstrap.php';
 
     final class WP_FTS_LDGF_TestFailure extends RuntimeException
     {
@@ -310,12 +310,12 @@ test_case('quality language detection gold fixtures preserve multi-token connect
     );
     assert_same(
         [],
-        wp_fts_ldgf_result_ids($searcher->search('Wrocław oraz Łódź', ['lang' => 'de', 'mode' => 'AND', 'limit' => 10])),
+        wp_fts_ldgf_result_ids($searcher->search('Wrocław oraz Łódź', ['query_lang' => 'de', 'mode' => 'AND', 'limit' => 10])),
         'explicit German query should not cross into the detected Polish partition'
     );
     assert_same(
         [],
-        wp_fts_ldgf_result_ids($searcher->search('Führung mit der Straße', ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10])),
+        wp_fts_ldgf_result_ids($searcher->search('Führung mit der Straße', ['query_lang' => 'pl', 'mode' => 'AND', 'limit' => 10])),
         'explicit Polish query should not cross into the detected German partition'
     );
 });
@@ -469,7 +469,7 @@ test_case('quality language detection gold fixtures isolate top-level text acros
     );
     assert_same(
         [],
-        wp_fts_ldgf_result_ids($searcher->search('oraz jest', ['lang' => 'de', 'mode' => 'AND', 'limit' => 10])),
+        wp_fts_ldgf_result_ids($searcher->search('oraz jest', ['query_lang' => 'de', 'mode' => 'AND', 'limit' => 10])),
         'trailing Polish text should not be indexed into the earlier German namespace'
     );
 });
@@ -483,10 +483,7 @@ test_case('quality language detection gold fixtures honor explicit and preloaded
 
     try {
         $analyzer_options = WP_FTS_Plugin::runtime_analyzer_options();
-        $analyzer_options['lemmatizer_packs_by_lang'] = [];
         $analyzer_options['lemma_packs_by_lang'] = [];
-        $analyzer_options['polish_lemma_pack'] = false;
-        $analyzer_options['polish_lemmatizer_pack'] = false;
         $analyzer = new WP_FTS_Analyzer($analyzer_options);
         assert_true(!isset($analyzer_options['document_language_resolver']), 'runtime analyzer options must not install a provider-backed document resolver');
         assert_true(!isset($analyzer_options['query_language_resolver']), 'runtime analyzer options must not install a provider-backed query resolver');
@@ -503,7 +500,7 @@ test_case('quality language detection gold fixtures honor explicit and preloaded
 
         $explicitOption = test_lang_by_term($analyzer->analyze_content('<p>oraz jest</p>', [
             'post_id' => 10,
-            'lang' => 'en',
+            'document_lang' => 'en',
         ]));
         assert_same('en', $explicitOption['oraz'] ?? null, 'explicit document lang should override Polylang metadata');
 
@@ -625,7 +622,7 @@ test_case('quality language detection gold fixtures preserve OR and AND language
     );
     assert_same(
         [4],
-        wp_fts_ldgf_result_ids($searcher->search('Führung Straße', ['lang' => 'en', 'mode' => 'AND', 'limit' => 10])),
+        wp_fts_ldgf_result_ids($searcher->search('Führung Straße', ['query_lang' => 'en', 'mode' => 'AND', 'limit' => 10])),
         'explicit English AND query should isolate the English override partition'
     );
 });

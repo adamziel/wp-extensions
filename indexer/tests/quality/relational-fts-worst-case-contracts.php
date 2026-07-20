@@ -1388,16 +1388,21 @@ test_case('set-oriented indexing rejects unsupported storage maintenance', funct
     );
 });
 
-test_case('production component bootstrap lazy loads legacy storage fixtures', function (): void {
+test_case('production component bootstrap cannot autoload test storage fixtures', function (): void {
     $bootstrap = dirname(__DIR__, 3) . '/components/full-text-search/src/bootstrap.php';
     $code = 'require ' . var_export($bootstrap, true) . ';'
-        . 'echo class_exists("WP_FTS_Storage_InMemory", false) ? "eager" : "lazy";'
-        . '$storage = new WP_FTS_Storage_InMemory();'
-        . 'echo $storage instanceof WP_FTS_Storage_InMemory ? ":loaded" : ":missing";';
+        . 'echo json_encode(['
+        . '"in_memory" => class_exists("WP_FTS_Storage_InMemory", true),'
+        . '"file" => class_exists("WP_FTS_Storage_File", true),'
+        . '], JSON_THROW_ON_ERROR);';
     $result = test_run_subprocess([PHP_BINARY, '-r', $code], dirname(__DIR__, 2));
 
-    assert_same(0, $result['exit'], 'legacy fixture autoload subprocess should succeed');
-    assert_same('lazy:loaded', $result['stdout'], 'normal bootstrap should defer legacy storage code until a fixture explicitly asks for it');
+    assert_same(0, $result['exit'], 'production bootstrap probe should succeed');
+    assert_same(
+        ['in_memory' => false, 'file' => false],
+        json_decode($result['stdout'], true, 8, JSON_THROW_ON_ERROR),
+        'production bootstrap must not expose either removed application backend'
+    );
 });
 
 test_case('surface-prefix architecture stays bounded and documents its irreducible broad work', function (): void {
@@ -3711,7 +3716,7 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         . $commentClose;
     assert_same($contentBytes, strlen($nearLimitContent), 'near-limit proof source should retain its exact 1.9 MB transport size');
     assert_same('maxsizeprobe', WP_FTS_Html_Text_Stream::visible_text($nearLimitContent), 'near-limit padding must not become a forbidden visible lexical run');
-    $nearLimitTerms = (new WP_FTS_Analyzer())->analyze_content($nearLimitContent, ['lang' => 'en']);
+    $nearLimitTerms = (new WP_FTS_Analyzer())->analyze_content($nearLimitContent, ['document_lang' => 'en']);
     assert_same(1, count($nearLimitTerms), 'near-limit valid source should analyze one bounded visible term');
     assert_same('en', $nearLimitTerms[0]['lang'] ?? null, 'near-limit valid source should preserve its explicit analyzer language');
 

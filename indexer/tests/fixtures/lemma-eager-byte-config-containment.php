@@ -133,14 +133,6 @@ try {
         $discarded['manifest'],
         $survivor['manifest']
     );
-    $canonicalCrossMap = wp_fts_eager_byte_exercise_canonical_cross_map(
-        $discarded['manifest'],
-        $survivor['manifest']
-    );
-    $canonicalPolishPrecedence = wp_fts_eager_byte_exercise_canonical_polish_precedence(
-        $repairable['manifest'],
-        $lateCorrupt['manifest']
-    );
     $productElapsedSeconds += microtime(true) - $phaseStarted;
 
     $peakAfter = memory_get_peak_usage(true);
@@ -160,8 +152,6 @@ try {
         'authoritative_appearance' => $authoritativeAppearance,
         'descriptor_fault_injection_available' => $descriptorFaultInjectionAvailable,
         'canonical_last_wins' => $canonicalLastWins,
-        'canonical_cross_map' => $canonicalCrossMap,
-        'canonical_polish_precedence' => $canonicalPolishPrecedence,
         'elapsed_seconds' => $productElapsedSeconds,
         'fixture_generation_seconds' => $fixtureGenerationSeconds,
         'fault_injection_seconds' => $faultInjectionElapsedSeconds,
@@ -730,49 +720,6 @@ function wp_fts_eager_byte_exercise_canonical_last_wins(
     ];
 }
 
-/** Prove two maximum raw alias maps merge as 32 effective languages. */
-function wp_fts_eager_byte_exercise_canonical_cross_map(
-    string $discardedManifest,
-    string $survivingManifest
-): array
-{
-    $lowerPrecedence = [];
-    $higherPrecedence = [];
-    for ($language = 0; $language < WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES; $language++) {
-        $suffix = str_pad((string) $language, 2, '0', STR_PAD_LEFT);
-        $lowerPrecedence['qaa_x_' . $suffix] = $discardedManifest;
-        $higherPrecedence['qaa-x-' . $suffix] = $survivingManifest;
-    }
-    $pipeline = new WP_FTS_LanguagePipeline([
-        'lemmatizer_packs_by_lang' => $lowerPrecedence,
-        'lemma_packs_by_lang' => $higherPrecedence,
-    ]);
-
-    return [
-        'raw_entries' => count($lowerPrecedence) + count($higherPrecedence),
-        'effective_languages' => count($higherPrecedence),
-        'pack_active' => $pipeline->lemma_pack_diagnostics('qaa-x-00') !== null,
-        'morphology' => array_column($pipeline->analyze_detailed('surface', 'qaa-x-00'), 'term'),
-    ];
-}
-
-/** Prove a canonical generic Polish assignment outranks its legacy fallback. */
-function wp_fts_eager_byte_exercise_canonical_polish_precedence(
-    string $genericManifest,
-    string $legacyManifest
-): array
-{
-    $pipeline = new WP_FTS_LanguagePipeline([
-        'lemma_packs_by_lang' => ['PL' => $genericManifest],
-        'polish_lemma_pack' => $legacyManifest,
-    ]);
-
-    return [
-        'pack_active' => $pipeline->lemma_pack_diagnostics('pl') !== null,
-        'morphology' => array_column($pipeline->analyze_detailed('surface', 'pl'), 'term'),
-    ];
-}
-
 /** Write one valid row followed by bounded comment lines to an exact decoded size. */
 function wp_fts_eager_byte_write_runtime(string $path, string $row, int $decodedBytes, bool $gzip): void
 {
@@ -908,7 +855,7 @@ function wp_fts_eager_byte_runtime_statuses(array $options): array
     $cache->setAccessible(true);
     $cache->setValue(null, null);
     $GLOBALS['wp_fts_eager_byte_runtime_options'] = [
-        'lemmatizer_packs_by_lang' => array_merge(['pl' => false], $options),
+        'lemma_packs_by_lang' => array_merge(['pl' => false], $options),
     ];
 
     try {

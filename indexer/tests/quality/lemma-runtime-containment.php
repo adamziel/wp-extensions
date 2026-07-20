@@ -159,13 +159,13 @@ test_case('active lemma packs treat an exact 4-KiB lexical run as a guaranteed n
         'default_lang' => 'en',
         'document_lang' => 'en',
         'query_lang' => 'en',
-        'lemmatizer_packs_by_lang' => ['en' => $manifest],
+        'lemma_packs_by_lang' => ['en' => $manifest],
     ]);
     $run = str_repeat('x', WP_FTS_Analysis_Limits::MAX_LEXICAL_RUN_BYTES);
     $ioBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
     $digestBefore = $analyzer->lemma_pack_diagnostics('en')['digest'] ?? null;
 
-    $document = $analyzer->analyze_content($run, ['lang' => 'en']);
+    $document = $analyzer->analyze_content($run, ['document_lang' => 'en']);
     $query = $analyzer->analyze_query_occurrences($run, [
         'query_lang' => 'en',
         '_max_query_occurrences' => WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_GROUPS,
@@ -212,9 +212,6 @@ test_case('lazy lemma block reads stay bound to the attested file generation', f
         assert_same(0, $result['exit'], "the {$label} attested-block race proof should exit normally: " . $result['stderr']);
         $payload = json_decode(trim($result['stdout']), true);
         assert_true(is_array($payload), "the {$label} attested-block race proof should emit JSON evidence");
-        assert_same(true, $payload['compatibility_method_exists'] ?? null, "the {$label} validator must retain its public validation-only attestation method");
-        assert_same(0, $payload['compatibility_stream_delta'] ?? null, "the {$label} compatibility attestation must close every descriptor before returning");
-        assert_same('RuntimeException', $payload['compatibility_corruption_error_class'] ?? null, "the {$label} compatibility attestation must still reject corrupt runtime bytes");
         assert_same(true, $payload['atomic_path_contains_mutant'] ?? null, "the {$label} atomic replacement must publish the unmanifested bytes at the original pathname");
         assert_same(['lemmaa'], $payload['atomic_lookup'] ?? null, "the {$label} lookup must read the attested descriptor rather than the replaced pathname");
         assert_same(true, $payload['same_inode_in_place_write'] ?? null, "the {$label} mutation must alter the same inode held by the attested descriptor");
@@ -225,7 +222,6 @@ test_case('lazy lemma block reads stay bound to the attested file generation', f
         assert_same('WP_FTS_Analyzer_Config_Limit_Exceeded', $payload['oversized_error_class'] ?? null, "the {$label} public attestation API must reject block 257 before iteration");
         assert_same('lookup_blocks', $payload['oversized_reason_code'] ?? null, "the {$label} oversized block layout should retain the typed metadata reason");
         assert_same('InvalidArgumentException', $payload['cardinality_error_class'] ?? null, "the {$label} lookup must require exactly one authenticated digest per declared block");
-        assert_same(true, $payload['compatibility_void_result'] ?? null, "the {$label} integrity-only compatibility API must retain its void contract");
         assert_same(8192, $payload['block_cache_bound']['blocks'] ?? null, "the {$label} authenticated-block cache must stop at 8,192 retained digests");
         assert_same(32, $payload['block_cache_bound']['files'] ?? null, "the {$label} authenticated-block cache should evict the oldest 256-block file at its ceiling");
         assert_same(true, $payload['block_cache_bound']['oldest_evicted'] ?? null, "the {$label} authenticated-block cache must evict rather than leak its oldest generation");
@@ -613,12 +609,6 @@ test_case('configured eager fixtures share an exact 8-MiB decoded-byte limit acr
         assert_same(1, $canonical['surviving_declared_rows'] ?? null, 'the surviving canonical assignment should consume only one eager row');
         assert_same(true, $canonical['pack_active'] ?? null, 'the surviving canonical assignment should be admitted');
         assert_same(['lemmasurvivor'], $canonical['morphology'] ?? null, 'canonical last-wins collapse should construct only the surviving physical manifest');
-        assert_same(64, $payload['canonical_cross_map']['raw_entries'] ?? null, 'two maximum raw alias maps should exercise all 64 bounded entries');
-        assert_same(32, $payload['canonical_cross_map']['effective_languages'] ?? null, 'underscore and hyphen aliases should collapse to 32 effective languages during merge');
-        assert_same(true, $payload['canonical_cross_map']['pack_active'] ?? null, 'the higher-precedence canonical alias map should remain active');
-        assert_same(['lemmasurvivor'], $payload['canonical_cross_map']['morphology'] ?? null, 'the discarded lower-precedence alias map should consume no admission or construction work');
-        assert_same(true, $payload['canonical_polish_precedence']['pack_active'] ?? null, 'a canonical generic Polish assignment should suppress legacy fallback');
-        assert_same(['lemmarepair'], $payload['canonical_polish_precedence']['morphology'] ?? null, 'case-equivalent explicit Polish configuration should retain precedence over the legacy pack');
 
         assert_true((float) ($payload['fixture_generation_seconds'] ?? -1.0) >= 0.0, 'eager byte fixture generation should be timed separately from product paths');
         assert_true((float) ($payload['fault_injection_seconds'] ?? -1.0) >= 0.0, 'eager byte descriptor fault injection should be timed separately from product paths');

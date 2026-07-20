@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 
 function wp_fts_french_fixture_fail(string $message): void
 {
@@ -106,7 +106,7 @@ $searcher = new WP_FTS_Searcher($storage, $analyzer);
 
 wp_fts_french_fixture_same(
     [960],
-    array_column($searcher->search('manger donnee claire rapide', ['lang' => 'fr', 'mode' => 'AND']), 'doc_id'),
+    array_column($searcher->search('manger donnee claire rapide', ['query_lang' => 'fr', 'mode' => 'AND']), 'doc_id'),
     'French query and document inflections should meet through the same stems'
 );
 

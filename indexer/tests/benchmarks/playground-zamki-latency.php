@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+require_once dirname(__DIR__) . '/bootstrap.php';
 
 /**
  * Focused benchmark for the Playground/admin Polish full-pack search path.
@@ -40,7 +40,9 @@ final class WP_FTS_Playground_Zamki_Latency_Benchmark
         $started = hrtime(true);
         $analyzer = new WP_FTS_Analyzer([
             'default_lang' => 'pl',
-            'polish_lemma_pack' => $manifest,
+            'lemma_packs_by_lang' => [
+                'pl' => $manifest,
+            ],
         ]);
         $result['phases_ms']['analyzer_construct'] = self::elapsed_ms($started);
 
@@ -65,7 +67,7 @@ final class WP_FTS_Playground_Zamki_Latency_Benchmark
         $searcher = new WP_FTS_Searcher($storage, $analyzer);
         $started = hrtime(true);
         $payload = $searcher->search('Zamki', [
-            'lang' => 'pl',
+            'query_lang' => 'pl',
             'mode' => 'AND',
             'include_total' => true,
             'include_metadata' => true,

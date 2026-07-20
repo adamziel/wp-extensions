@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 
 $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
 $storage = new WP_FTS_Storage_InMemory();
@@ -18,7 +18,7 @@ if (!$indexed) {
 }
 
 $searcher = new WP_FTS_Searcher($storage, $analyzer);
-$results = $searcher->search('portable search', ['mode' => 'AND', 'lang' => 'en']);
+$results = $searcher->search('portable search', ['mode' => 'AND', 'query_lang' => 'en']);
 if (($results[0]['doc_id'] ?? null) !== 1) {
     fwrite(STDERR, "Expected smoke search to find document 1.\n");
     exit(1);

@@ -136,7 +136,7 @@ guard can interrupt a database statement already executing.
   values are rejected before the plugin trims, normalizes, copies, or stores an
   over-limit result.
 - Custom tokenizer, token-normalizer, and stemmer output is limited to one
-  4-KiB lexical run. Legacy third-party analyzer arrays stop at 20,000 rows
+  4-KiB lexical run. Custom analyzer arrays stop at 20,000 rows
   (production relational search still stops at 12 alternatives), and their
   term, language, surface, position, and rank scalars are checked before array
   reindexing or query-plan normalization.
@@ -144,8 +144,8 @@ guard can interrupt a database statement already executing.
   custom render callbacks before extraction. Arbitrary renderer code cannot be
   interrupted or assigned a fixed query/load bound. Save bounded static text in
   `post_content` or a selected custom field instead. Explicit rendering remains
-  available only on legacy in-memory/file component paths without the
-  production relational guarantee.
+  available only on the test-only component path without the production
+  relational guarantee.
 - WordPress metadata and taxonomy API mutations enqueue affected posts. Direct
   SQL writes bypass those hooks and require explicit invalidation or reindexing.
 - On MySQL/MariaDB, an existing-object mutation installs one durable dirty
@@ -181,13 +181,13 @@ Current language support is best read by tier:
 
 | Language or partition | What works today | What it does not claim |
 | --- | --- | --- |
-| Polish (`pl`) | Explicit routing plus the bundled Polish lemmatizer runtime default: the compressed full Polish runtime pack when gzip support is available, falling back to the bundled fixture pack otherwise. `polish_lemma_pack` and `polish_lemmatizer_pack` can replace or disable that default, and `polish_stemming => 'verified'` enables a compact fixture-backed stemmer slice when no valid pack is active. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
+| Polish (`pl`) | Explicit routing plus the bundled Polish lemmatizer runtime default: the compressed full Polish runtime pack when gzip support is available, falling back to the bundled fixture pack otherwise. `lemma_packs_by_lang['pl']` can replace or disable that default, and `polish_stemming => 'verified'` enables a compact fixture-backed stemmer slice when no valid pack is active. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
 | English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Not synonym expansion, phrase search, cross-language merging, or a default-enabled production analyzer path. Built-in stemmers/baselines/no-op behavior remain fallback behavior when packs are not configured. |
 | Japanese (`ja`), Korean (`ko`) | Selectable/detectable partitions using deterministic CJK/Hangul fallback tokenization. | No Japanese or Korean runtime lemma pack is committed because the current PHP pipeline lacks a source-backed word segmenter for those languages. |
 | Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Optional Wamania-backed Snowball stemming when Composer dependencies are present and the compliance harness accepts them. | Dutch now has a source-backed UniMorph pack when configured; no broad Wamania language claim is made beyond the allowlist. |
 | Chinese (`zh`) | Deterministic CJK fallback n-grams up to 4 characters, plus optional Jieba dictionary segmentation from the curated pinned runtime (or initialized source checkout during development). | Jieba is segmentation only, default-disabled outside the sandbox, and not morphology, synonym expansion, phrase search, broad Simplified/Traditional conversion, or a production custom-dictionary API. |
 | Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common feminine, masculine, Arabic-loan, and plural-oblique forms. | UniMorph Urdu is license-blocked because `unimorph/urd` has no redistribution license evidence; no generated Urdu pack is bundled. Persian (`fa`) is now its own partition and is not merged into Urdu routing. |
-| Generic packs | `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` can enable local manifest-backed, language-matched packs. | Invalid, missing, disabled, or mismatched packs do not stop indexing; they fall back to the built-in analyzer path. Runtime lines are capped at 4 KiB. Only `fixture_only` packs with at most 50,000 rows and 8 MiB of decoded runtime data may use eager unindexed storage, and all distinct eager-eligible fixture manifests in one analyzer share both the 50,000-row and 8-MiB decoded allowances; every other shard requires indexed gzip plus a validated block-index sidecar. Multi-shard packs require complete normalized, strictly ordered, non-overlapping surface ranges so one lookup can select at most one shard. |
+| Generic packs | `lemma_packs_by_lang` can enable local manifest-backed, language-matched packs. | Invalid, missing, disabled, or mismatched packs do not stop indexing; they fall back to the built-in analyzer path. Runtime lines are capped at 4 KiB. Only `fixture_only` packs with at most 50,000 rows and 8 MiB of decoded runtime data may use eager unindexed storage, and all distinct eager-eligible fixture manifests in one analyzer share both the 50,000-row and 8-MiB decoded allowances; every other shard requires indexed gzip plus a validated block-index sidecar. Multi-shard packs require complete normalized, strictly ordered, non-overlapping surface ranges so one lookup can select at most one shard. |
 
 Every valid lemma pack is limited to twelve lemmas for one surface across all
 shards. Full validation, eager fixture loading, and indexed runtime lookup
@@ -225,7 +225,7 @@ Stemming is enabled by default and can be disabled with
   compact fixture-backed stemmer slice. Neither path is a full Snowball,
   Stempel, Morfologik, PoliMorf, or dictionary lemmatizer.
 - Generic opt-in lemma-pack infrastructure exists through
-  `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. Bundled source-backed
+  `lemma_packs_by_lang`. Bundled source-backed
   UniMorph packs exist for `en`, `es`, `fr`, `hi`, `ar`, `bn`, `pt`, `id`,
   `ru`, `de`, `te`, `tr`, `it`, `fa`, `uk`, and `nl`.
   They are enabled automatically only for the admin/Playground sandbox and
@@ -257,8 +257,7 @@ Stemming is enabled by default and can be disabled with
   The source archive and extracted TSV are not committed or bundled. Separately
   generated external pack copies remain outside the release package,
   opt-in/default-disabled, and operators must install them externally before
-  enabling
-  `polish_lemma_pack` or `polish_lemmatizer_pack`.
+  assigning the manifest to `lemma_packs_by_lang['pl']`.
 - Unsupported languages return the original normalized term.
 - Chinese (`zh`) continues to use deterministic CJK fallback n-grams up to 4
   characters. Optional Jieba segmentation uses the attested pinned runtime

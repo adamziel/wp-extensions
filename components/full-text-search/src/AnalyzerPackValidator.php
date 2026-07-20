@@ -460,40 +460,6 @@ final class WP_FTS_AnalyzerPackValidator
     }
 
     /**
-     * Validate one candidate shard without retaining its open generation.
-     *
-     * This compatibility API proves file integrity only. It cannot bind a later
-     * pathname-based read to the validated generation; lazy lookup code must use
-     * open_attested_runtime_file() and keep its returned descriptors open.
-     *
-     * @param array{path:string,sha256:string,lookup?:array{path:string,sha256:string}} $runtimeFile
-     */
-    public function attest_runtime_file(array $runtimeFile): void
-    {
-        $runtime = $this->open_attested_file(
-            $runtimeFile['path'],
-            $runtimeFile['sha256'],
-            'Runtime digest mismatch for the candidate analyzer shard.'
-        );
-        $lookupHandle = null;
-        try {
-            if (isset($runtimeFile['lookup']) && is_array($runtimeFile['lookup'])) {
-                $lookup = $this->open_attested_file(
-                    $runtimeFile['lookup']['path'],
-                    $runtimeFile['lookup']['sha256'],
-                    'Runtime lookup digest mismatch for the candidate analyzer shard.'
-                );
-                $lookupHandle = $lookup['handle'];
-            }
-        } finally {
-            if (is_resource($lookupHandle)) {
-                fclose($lookupHandle);
-            }
-            fclose($runtime['handle']);
-        }
-    }
-
-    /**
      * Open and attest one candidate runtime shard and its lookup sidecar.
      *
      * The returned descriptors bind the lookup to the exact generations whose

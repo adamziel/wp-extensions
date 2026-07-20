@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+require_once dirname(__DIR__) . '/bootstrap.php';
 
 /**
  * Deterministic generated-page benchmark and profiler for the reusable FTS engine.
@@ -816,28 +816,40 @@ final class WP_FTS_Profiled_Analyzer
     }
 
     /**
-     * @param array<string,mixed>|string|null $options
+     * @param array<string,mixed> $options
      * @return array<int,array<string,mixed>>
      */
-    public function analyze_content(string $html, array|string|null $options = []): array
+    public function analyze_content(string $html, array $options = []): array
     {
         return $this->timed('analyze_content', fn(): array => $this->inner->analyze_content($html, $options));
     }
 
     /**
-     * @param array<string,mixed>|string|null $options
+     * @param array<string,mixed> $options
      * @return array<int,array<string,mixed>>
      */
-    public function analyze_plain_content(string $text, array|string|null $options = []): array
+    public function analyze_plain_content(string $text, array $options = []): array
     {
         return $this->timed('analyze_plain_content', fn(): array => $this->inner->analyze_plain_content($text, $options));
     }
 
     /**
-     * @param array<string,mixed>|string|null $options
+     * @param array<string,mixed> $options
      * @return array<int,array<string,mixed>>
      */
-    public function analyze_query(string $query, array|string|null $options = []): array
+    public function analyze_query_occurrences(string $query, array $options = []): array
+    {
+        return $this->timed(
+            'analyze_query_occurrences',
+            fn(): array => $this->inner->analyze_query_occurrences($query, $options)
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     * @return string[]
+     */
+    public function analyze_query(string $query, array $options = []): array
     {
         return $this->timed('analyze_query', fn(): array => $this->inner->analyze_query($query, $options));
     }
@@ -961,7 +973,7 @@ class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadata
         return $this->timed('get_doc', fn(): ?array => $this->inner->get_doc($doc_id));
     }
 
-    public function put_doc(int $doc_id, string|int $primary_lang, array|string $lang_lengths, ?string $hash = null): void
+    public function put_doc(int $doc_id, string $primary_lang, array $lang_lengths, ?string $hash): void
     {
         $this->timed('put_doc', function () use ($doc_id, $primary_lang, $lang_lengths, $hash) {
             $this->inner->put_doc($doc_id, $primary_lang, $lang_lengths, $hash);
@@ -1012,7 +1024,7 @@ class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadata
         return $this->timed('get_meta', fn(): array => $this->inner->get_meta($lang));
     }
 
-    public function add_meta(string|int $lang, int $d_docs, ?int $d_len = null): void
+    public function add_meta(string $lang, int $d_docs, int $d_len): void
     {
         $this->timed('add_meta', function () use ($lang, $d_docs, $d_len) {
             $this->inner->add_meta($lang, $d_docs, $d_len);

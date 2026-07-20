@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+require_once dirname(__DIR__) . '/bootstrap.php';
 
 const WP_FTS_SNIPPET_BENCH_DOCS = 1000;
 const WP_FTS_SNIPPET_BENCH_REPEATS = 20;
@@ -109,7 +109,7 @@ function wp_fts_snippet_bench_query_times(WP_FTS_Storage_InMemory $storage): arr
         foreach (wp_fts_snippet_bench_queries() as $query) {
             $start = hrtime(true);
             $payload = $searcher->search($query['query'], [
-                'lang' => $query['lang'],
+                'query_lang' => $query['lang'],
                 'mode' => $query['mode'],
                 'limit' => 10,
                 'include_total' => true,

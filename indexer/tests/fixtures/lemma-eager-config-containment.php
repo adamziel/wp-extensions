@@ -45,7 +45,7 @@ try {
     $statusMethod = new ReflectionMethod(WP_FTS_Plugin::class, 'analyzer_pack_statuses');
     $statusMethod->setAccessible(true);
     $exactStatuses = $statusMethod->invoke(null, [
-        'lemmatizer_packs_by_lang' => $exact['options'],
+        'lemma_packs_by_lang' => $exact['options'],
     ], false);
     $exactActiveStatuses = is_array($exactStatuses)
         ? count(array_filter(
@@ -79,7 +79,7 @@ try {
     $statusOverflowError = null;
     try {
         $statusMethod->invoke(null, [
-            'lemmatizer_packs_by_lang' => $overflow['options'],
+            'lemma_packs_by_lang' => $overflow['options'],
         ], false);
     } catch (Throwable $caught) {
         $statusOverflowError = $caught;

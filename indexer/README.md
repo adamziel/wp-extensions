@@ -119,7 +119,7 @@ The defaults match the extractor defaults: title `5.0`, content `1.0`, excerpt
 `2.0`, taxonomy terms `2.0`, selected custom fields `1.0`, and rendered-only
 content `1.0`. The bounded relational worker rejects dynamic block, shortcode,
 and callback rendering before execution; the rendered weight remains only for
-legacy in-memory/file component callers. These are index-time
+test-only in-memory component callers. These are index-time
 weights stored with indexed content, so
 changed weights fully affect existing content only after it is reindexed.
 Saving changed weights marks stale reindex debt in Health/status; it does not
@@ -158,8 +158,8 @@ the fixed query shape and deployment guidance.
 ## Architecture
 
 - `wp-php-toolkit/full-text-search` provides the analyzer, term generation,
-  storage contracts, in-memory/file storage, `WP_FTS_Indexer`, and
-  `WP_FTS_Searcher`.
+  storage contracts, `WP_FTS_Indexer`, and `WP_FTS_Searcher`. Its in-memory
+  storage oracle is loaded only by tests.
 - WordPress activation, post-save/status/delete hooks, cron, optional REST, and WP-CLI
   live in the plugin adapter and wire WordPress posts into the component.
 - `WP_FTS_PostContentExtractor` extracts title, content, excerpt, taxonomy terms,
@@ -181,9 +181,7 @@ the fixed query shape and deployment guidance.
 - MySQL/MariaDB storage is the supported WordPress production backend. The same
   relational code has a `$wpdb`-compatible SQLite path for a single-request
   WordPress Playground smoke; multi-connection generation-CAS interleavings are
-  validated only on the supported production database families. File storage
-  remains in the component as a small local and test backend for non-WordPress
-  contexts.
+  validated only on the supported production database families.
 
 The index is derived state. Rebuild it after content imports, analyzer changes,
 language-routing changes, or environment moves where the FTS tables were not
@@ -291,8 +289,8 @@ constraints remain on core search. Once FTS owns an otherwise-supported search,
 an unavailable index or malformed/oversized adapter input fails closed instead
 of silently running an unindexed core `LIKE`/`OFFSET` query.
 
-Legacy candidate options remain component compatibility inputs for local
-in-memory/file adapters. The plugin rejects them before relational planning;
+Candidate-cap options remain inputs for the test-only in-memory component
+oracle. The plugin rejects them before relational planning;
 they cannot alter membership, add posting reads, or select another production
 path.
 
@@ -352,13 +350,13 @@ morphology lane.
 
 | Language or partition | Current analyzer tier | Boundary |
 | --- | --- | --- |
-| Polish (`pl`) | The WordPress runtime keeps the bundled Polish lemmatizer behavior by default: it uses the compressed full Polish runtime pack when gzip support is available and falls back to the bundled fixture pack otherwise. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases to replace or disable that default. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
-| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Bundled source-backed UniMorph analyzer packs are available as opt-in gzip-sharded lemma packs from Settings > Full-Text Search > Analyzer packs, or through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. | Packs are CC BY-SA-family or upstream-declared data, default-disabled for production runtime, and not synonym, phrase, or cross-language expansion. Built-in Snowball/baseline/no-op behavior remains the fallback when no pack is configured. |
+| Polish (`pl`) | The WordPress runtime keeps the bundled Polish lemmatizer behavior by default: it uses the compressed full Polish runtime pack when gzip support is available and falls back to the bundled fixture pack otherwise. `lemma_packs_by_lang['pl']` replaces or disables that default. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
+| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Bundled source-backed UniMorph analyzer packs are available as opt-in gzip-sharded lemma packs from Settings > Full-Text Search > Analyzer packs, or through `lemma_packs_by_lang`. | Packs are CC BY-SA-family or upstream-declared data, default-disabled for production runtime, and not synonym, phrase, or cross-language expansion. Built-in Snowball/baseline/no-op behavior remains the fallback when no pack is configured. |
 | Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Optional Wamania-backed Snowball support when Composer dependencies are installed and the compliance harness accepts them. | Dutch now has a source-backed UniMorph pack when configured; the Wamania path is only the no-pack fallback. Other Wamania languages are treated as no-ops unless they become verified. |
 | Chinese (`zh`) | Deterministic CJK fallback plus optional Jieba dictionary segmentation from the curated pinned runtime, or the initialized source checkout during development, via `segmenter_packs_by_lang`. | Release ZIPs carry only the verified MIT dictionary, license, and attested lookup. Source-only custom dictionaries are fixture-only and omitted by the WordPress runtime. Fallback n-grams remain enabled. |
 | Japanese (`ja`), Korean (`ko`) | Deterministic CJK/Hangul fallback tokenization with selectable/detectable language partitions. | No Japanese or Korean runtime lemma pack is committed because the current PHP pipeline has no source-backed word segmenter for those languages. Pinned UniMorph source submodules are retained for future external-pack work. |
 | Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common plural-oblique forms. | UniMorph Urdu imports technically, but the upstream `unimorph/urd` repository has no license evidence, so no generated Urdu pack is committed. |
-| Generic packs | `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` accept local manifest-backed packs with matching `language` values. | Missing, invalid, disabled, or language-mismatched packs fall back safely. |
+| Generic packs | `lemma_packs_by_lang` accept local manifest-backed packs with matching `language` values. | Missing, invalid, disabled, or language-mismatched packs fall back safely. |
 
 Morphology support must come from verified algorithms, analyzers, or
 manifest-backed lemmatizer packs. The plugin does not use hard-coded word

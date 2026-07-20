@@ -338,7 +338,7 @@ function wp_fts_playground_assert_wpcli_reindex_effect(): void
     wp_fts_playground_assert(count($ids) === 2, 'WP-CLI fixture post IDs were not persisted', ['ids' => $ids]);
 
     $searcher = new WP_FTS_Searcher(WP_FTS_Plugin::storage(true), new WP_FTS_Analyzer(['default_lang' => 'en']));
-    $actual = array_map('intval', array_column($searcher->search(WP_FTS_PLAYGROUND_CLI_QUERY, ['lang' => 'en', 'limit' => 10]), 'doc_id'));
+    $actual = array_map('intval', array_column($searcher->search(WP_FTS_PLAYGROUND_CLI_QUERY, ['query_lang' => 'en', 'limit' => 10]), 'doc_id'));
     sort($actual, SORT_NUMERIC);
 
     wp_fts_playground_assert($actual === $ids, 'WP-CLI reindex should make fixture posts searchable in SQLite', [

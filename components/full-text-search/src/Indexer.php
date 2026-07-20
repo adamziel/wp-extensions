@@ -57,7 +57,7 @@ final class WP_FTS_Indexer
      * posting, document, metadata, and collection-statistic changes in one
      * storage transaction.
      *
-     * @param int $doc_id Stable non-negative document identifier used in
+     * @param int $doc_id Stable positive document identifier used in
      *        postings.
      * @param string $html HTML fragment or document to analyze.
      * @param array<string,mixed> $opts Document analysis options. Important keys
@@ -65,7 +65,7 @@ final class WP_FTS_Indexer
      *        and WordPress context such as `post_id`.
      * @return bool True when postings or metadata changed; false when an
      *         existing active document already had the same content hash.
-     * @throws InvalidArgumentException If `$doc_id` is negative.
+     * @throws InvalidArgumentException If `$doc_id` is not positive.
      * @throws LogicException If the analyzer does not provide `analyze_content()`.
      * @throws Throwable Re-throws storage/analyzer failures after rollback.
      */
@@ -74,8 +74,8 @@ final class WP_FTS_Indexer
         if ($this->storage instanceof WP_FTS_Set_Oriented_Search_Storage) {
             throw new LogicException('Set-oriented storage mutations must use the bounded batch writer.');
         }
-        if ($doc_id < 0) {
-            throw new InvalidArgumentException('Document id must be non-negative.');
+        if ($doc_id <= 0) {
+            throw new InvalidArgumentException('Document id must be positive.');
         }
         WP_FTS_Analysis_Limits::assert_source_bytes($html);
         WP_FTS_Html_Text_Stream::assert_analysis_markup_limits($html);
@@ -154,7 +154,7 @@ final class WP_FTS_Indexer
      * frequencies. This keeps title/excerpt/term/custom-field contributions
      * tunable without changing the postings format.
      *
-     * @param int $doc_id Stable non-negative document identifier.
+     * @param int $doc_id Stable positive document identifier.
      * @param array<int,array<string,mixed>|string> $fields Weighted fields or
      *        legacy string fields.
      * @param array<string,mixed> $opts Document options plus optional
@@ -176,7 +176,7 @@ final class WP_FTS_Indexer
      * storage statements. `index_document_fields()` consumes this exact payload,
      * so batch and legacy single-document writes cannot drift in analysis.
      *
-     * @param int $doc_id Stable non-negative document identifier.
+     * @param int $doc_id Stable positive document identifier.
      * @param array<int,array<string,mixed>|string> $fields Weighted fields or
      *        legacy string fields.
      * @param array<string,mixed> $opts Document options plus optional metadata.
@@ -184,8 +184,8 @@ final class WP_FTS_Indexer
      */
     public function prepare_document_fields(int $doc_id, array $fields, array $opts = []): array
     {
-        if ($doc_id < 0) {
-            throw new InvalidArgumentException('Document id must be non-negative.');
+        if ($doc_id <= 0) {
+            throw new InvalidArgumentException('Document id must be positive.');
         }
 
         return $this->analyze_index_source($this->prepare_index_source($doc_id, $fields, $opts));
@@ -222,7 +222,7 @@ final class WP_FTS_Indexer
                 WP_FTS_StorageCompat::put_doc_metadata($this->storage, $doc_id, []);
             }
             $this->add_meta_deltas(
-                WP_FTS_StorageCompat::doc_lang_lengths($existing, WP_FTS_StorageCompat::doc_primary_lang($existing, 'en')),
+                WP_FTS_StorageCompat::doc_lang_lengths($existing),
                 -1
             );
             $this->storage->commit();
@@ -293,7 +293,7 @@ final class WP_FTS_Indexer
             if ($existing !== null) {
                 if (!$existing['deleted']) {
                     $this->add_meta_deltas(
-                        WP_FTS_StorageCompat::doc_lang_lengths($existing, $primaryLang),
+                        WP_FTS_StorageCompat::doc_lang_lengths($existing),
                         -1
                     );
                 }
@@ -527,8 +527,10 @@ final class WP_FTS_Indexer
                 throw new InvalidArgumentException('Invalid prepared post source payload.');
             }
         }
-        if (!is_int($source['doc_id'] ?? null) || $source['doc_id'] < 0
-            || !is_string($source['primary_lang'] ?? null)
+        if (!is_int($source['doc_id'] ?? null) || $source['doc_id'] <= 0) {
+            throw new InvalidArgumentException('Document id must be positive.');
+        }
+        if (!is_string($source['primary_lang'] ?? null)
             || !is_string($source['content_hash'] ?? null)
             || !is_array($source['fields'] ?? null)
             || !is_array($source['analysis_options'] ?? null)
@@ -876,10 +878,7 @@ final class WP_FTS_Indexer
     /**
      * Invoke the analyzer with document-language defaults filled in.
      *
-     * When callers supplied an explicit document language, both `lang` and
-     * `language` are rewritten to the resolved primary language so older
-     * analyzers that only read those keys stay aligned with the indexer's hash
-     * and storage partition.
+     * The analyzer receives only the canonical `document_lang` key.
      *
      * @return array<int,array<string,mixed>>
      */
@@ -895,24 +894,16 @@ final class WP_FTS_Indexer
     /**
      * Analyze a field value that is already plain text.
      *
-     * New analyzers can skip HTML segmentation for these fields. Older analyzer
-     * objects fall back to the existing HTML wrapper so the public indexer
-     * contract stays compatible.
-     *
      * @return array<int,array<string,mixed>>
      */
     private function analyze_plain_content(string $text, array $opts, string $primaryLang): array
     {
         $analysisOpts = $this->analysis_options($opts, $primaryLang);
-        if (is_callable([$this->analyzer, 'analyze_plain_content'])) {
-            return $this->analyzer->analyze_plain_content($text, $analysisOpts);
+        if (!is_callable([$this->analyzer, 'analyze_plain_content'])) {
+            throw new LogicException('Analyzer must provide analyze_plain_content().');
         }
 
-        return $this->analyze_content(
-            '<div>' . htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8') . '</div>',
-            $opts,
-            $primaryLang
-        );
+        return $this->analyzer->analyze_plain_content($text, $analysisOpts);
     }
 
     /**
@@ -924,11 +915,12 @@ final class WP_FTS_Indexer
     private function analysis_options(array $opts, string $primaryLang): array
     {
         $analysisOpts = $opts;
-        $analysisOpts['default_lang'] = $primaryLang;
-        if (WP_FTS_TermNamespace::language_from_options($opts, null, ['lang', 'language', 'primary_lang', 'document_lang']) !== null) {
+        unset($analysisOpts['lang'], $analysisOpts['language'], $analysisOpts['primary_lang'], $analysisOpts['locale'], $analysisOpts['default_lang']);
+        if (WP_FTS_TermNamespace::language_from_options($opts, null, ['document_lang', 'primary_lang', 'lang', 'language']) !== null) {
             $analysisOpts['document_lang'] = $primaryLang;
-            $analysisOpts['lang'] = $primaryLang;
-            $analysisOpts['language'] = $primaryLang;
+        } else {
+            unset($analysisOpts['document_lang']);
+            $analysisOpts['_default_document_lang'] = $primaryLang;
         }
 
         return $analysisOpts;
@@ -1491,11 +1483,6 @@ final class WP_FTS_Indexer
     {
         $langLengths = WP_FTS_StorageCompat::normalize_lang_lengths($langLengths);
         if ($langLengths === []) {
-            return;
-        }
-
-        if (!WP_FTS_StorageCompat::supports_language_meta($this->storage)) {
-            WP_FTS_StorageCompat::add_meta($this->storage, 'en', $docDelta, $docDelta * array_sum($langLengths));
             return;
         }
 

@@ -118,9 +118,9 @@ test_case('quality polish verified stemmer preserves analyzer document/query par
 
     $content = $analyzer->analyze_content(
         '<article lang="pl"><p>Samochody książkę kobietą mieście.</p></article>',
-        ['lang' => 'pl']
+        ['document_lang' => 'pl']
     );
-    $query = $analyzer->analyze_query('samochodem książki kobiety miasta', ['lang' => 'pl']);
+    $query = $analyzer->analyze_query('samochodem książki kobiety miasta', ['query_lang' => 'pl']);
 
     assert_same(['samochod', 'ksiazk', 'kobiet', 'miast'], test_terms($content), 'document forms should stem through analyzer');
     assert_same(test_terms($content), $query, 'alternate query forms should share verified stems with document forms');
@@ -143,7 +143,7 @@ test_case('quality polish verified stemmer improves indexed recall when explicit
 
     assert_same(
         [501],
-        array_column($searcher->search('samochodem książki miasta czytają', ['lang' => 'pl', 'mode' => 'AND']), 'doc_id'),
+        array_column($searcher->search('samochodem książki miasta czytają', ['query_lang' => 'pl', 'mode' => 'AND']), 'doc_id'),
         'verified Polish stems should make alternate inflections match in AND search'
     );
 });

@@ -270,8 +270,7 @@ function wp_fts_ppew_case_builds_local_fixture_and_stays_offline(): array
         wp_fts_ppew_check(($summary['validation']['activatable'] ?? null) === true, 'external fixture build should certify runtime activation', $errors);
         wp_fts_ppew_check(($summary['runtime_network_access'] ?? null) === false, 'summary should declare no runtime network access', $errors);
         wp_fts_ppew_check(str_contains((string) $summary['package_boundary'], 'not committed or bundled'), 'summary should state package boundary', $errors);
-        wp_fts_ppew_check(isset($summary['configuration_example']['polish_lemma_pack']), 'summary should include polish_lemma_pack example', $errors);
-        wp_fts_ppew_check(isset($summary['configuration_example']['polish_lemmatizer_pack']), 'summary should include polish_lemmatizer_pack example', $errors);
+        wp_fts_ppew_check(isset($summary['configuration_example']['lemma_packs_by_lang']['pl']), 'summary should include the canonical Polish lemma-pack example', $errors);
 
         $validation = (new WP_FTS_AnalyzerPackValidator())->validate((string) $summary['manifest_path'], false);
         wp_fts_ppew_check(($validation['manifest']['pack_id'] ?? null) === 'pl-polimorf-external-fixture', 'generated external pack should validate', $errors);
@@ -281,7 +280,7 @@ function wp_fts_ppew_case_builds_local_fixture_and_stays_offline(): array
         }
 
         WP_FTS_PPEW_Network_Trap_Stream::$opens = 0;
-        $lemmatizer = WP_FTS_PolishMorfologikLemmatizer::from_manifest_file((string) $summary['manifest_path']);
+        $lemmatizer = WP_FTS_LanguageLemmaPack::from_manifest_file((string) $summary['manifest_path']);
         wp_fts_ppew_check($lemmatizer->stem('kotami', 'pl') === 'kot', 'generated external pack should drive Polish lemmatizer lookup', $errors);
         wp_fts_ppew_check($lemmatizer->stem('drogi', 'pl') === 'drogi', 'generated external pack should preserve ambiguous forms', $errors);
         wp_fts_ppew_check(WP_FTS_PPEW_Network_Trap_Stream::$opens === 0, 'analyzer lookup should not open the source URL wrapper', $errors);
