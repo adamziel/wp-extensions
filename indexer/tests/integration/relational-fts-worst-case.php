@@ -233,12 +233,19 @@ VALUES " . implode(',', $rows),
     $postings = wp_fts_wc_identifier($wpdb->prefix . 'fts_postings');
     $documents = wp_fts_wc_identifier($wpdb->prefix . 'fts_documents');
     $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
+    // Deleting WordPress's starter posts above correctly enqueues direct delete
+    // work. Those rows predate the deterministic corpus and are not part of its
+    // initial-index measurement; retain only the coalesced corpus scope.
+    wp_fts_wc_assert(
+        $wpdb->query("DELETE FROM `{$work}` WHERE kind='post'") !== false,
+        'Could not remove starter-post delete work before the clean-install index.'
+    );
     $derivedRows = [
         'terms' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$terms}`", 'terms before the initial current index'),
         'postings' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$postings}`", 'postings before the initial current index'),
         'documents' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$documents}`", 'documents before the initial current index'),
     ];
-    wp_fts_wc_assert($derivedRows === ['terms' => 0, 'postings' => 0, 'documents' => 0], 'The clean install contains derived rows before its explicit initial index.');
+    wp_fts_wc_assert($derivedRows === ['terms' => 0, 'postings' => 0, 'documents' => 0], 'The clean install contains derived rows before its initial index.');
     $initialWork = [
         'post' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='post'", 'post work before the clean-install index'),
         'scope' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='scope'", 'scope work before the clean-install index'),
