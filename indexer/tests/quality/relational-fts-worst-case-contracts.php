@@ -3023,7 +3023,7 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     assert_true(!str_contains($storage, 'dictionary_delta_relation'), 'production storage must not restore the self-referential dictionary INSERT/SELECT');
     assert_contains('run_wpcli_php_phase wpcli-adapter', $runner, 'real database runner should measure the installed WP-CLI command through wpdb');
     assert_contains('run_wpcli_php_phase runtime-profile', $runner, 'real database runner should compare the complete web and WP-CLI index profiles');
-    assert_contains("eval 'require \"/proof/relational-fts-worst-case.php\";'", $runner, 'WP-CLI phases should require the strict-types proof as a file instead of evaluating its body');
+    assert_contains("eval 'ini_set(\"memory_limit\", \"128M\"); require \"/proof/relational-fts-worst-case.php\";'", $runner, 'WP-CLI phases should restore the 128M limit before requiring the strict-types proof');
     assert_true(!str_contains($runner, 'eval-file /proof/relational-fts-worst-case.php'), 'WP-CLI phases must not place bootstrap statements before the proof strict-types declaration');
     assert_contains('config set DISABLE_WP_CRON true --raw', $runner, 'fault injection must not race a spawned loopback repair process');
     foreach (['runtime_profile_full_parity', 'runtime_analyzer_signature_parity', 'runtime_unicode_normalizer_signature_parity'] as $gate) {
