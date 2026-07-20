@@ -598,7 +598,12 @@ try {
     $databaseIdentity = strtolower($databaseVersion);
     $actualEngine = str_contains($databaseIdentity, 'mariadb')
         ? 'mariadb-10.11'
-        : (version_compare($databaseIdentity, '8.0', '>=') ? 'mysql-8.0' : 'mysql-5.7');
+        : (
+            version_compare($databaseIdentity, '8.0', '>=')
+                && version_compare($databaseIdentity, '8.1', '<')
+                ? 'mysql-8.0'
+                : 'unsupported'
+        );
     wp_fts_frontier_assert($actualEngine === $expectedEngine, 'The frontier proof ran against the wrong database family.');
     $evidence = [
         'schema' => 'relational-old-posting-frontier-v2',

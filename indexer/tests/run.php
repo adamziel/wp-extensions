@@ -32525,22 +32525,6 @@ final class QueryLimitStorage implements WP_FTS_Set_Oriented_Search_Storage
         $this->alternativeCount = array_sum(array_map('count', $groups));
         return ['results' => [], 'has_more' => false, 'query_lang' => (string) ($options['query_lang'] ?? 'zh')];
     }
-    public function get_terms(array $terms): array { return []; }
-    public function put_term(string $term, int $df, string $postings): void {}
-    public function delete_term(string $term): void {}
-    public function get_doc_lengths(array $doc_ids, ?string $lang = null): array { return []; }
-    public function get_doc(int $doc_id): ?array { return null; }
-    public function put_doc(int $doc_id, string|int $primary_lang, array|string $lang_lengths, ?string $hash = null): void {}
-    public function delete_doc(int $doc_id): void {}
-    public function get_meta(?string $lang = null): array { return ['doc_count' => 0, 'len_sum' => 0]; }
-    public function add_meta(string|int $lang, int $d_docs, ?int $d_len = null): void {}
-    public function all_terms(): array { return []; }
-    public function all_doc_ids(bool $include_deleted = false): array { return []; }
-    public function begin_transaction(): void {}
-    public function commit(): void {}
-    public function rollback(): void {}
-    public function flush(): void {}
-    public function optimize(): void {}
 }
 
 /** Read one Linux process-memory field without buffering `/proc/self/status`. */
@@ -35852,36 +35836,39 @@ test_case('storage prefix lookups are capped', function (): void {
     ], WP_FTS_StorageCompat::terms_with_prefix($storage, $prefix, 2), 'prefix term lookup should return a deterministic capped term list');
 });
 
-test_case('mysql legacy collection enumeration APIs fail closed before SQL', function (): void {
+test_case('mysql set-oriented storage has no legacy posting-list API', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
     $wpdb->recordReadQueries = true;
     $storage = new WP_FTS_Storage_Mysql($wpdb);
-    $prefix = WP_FTS_TermNamespace::namespace_term('pl', 'aktor');
-    $operations = [
-        'all_terms' => static fn(): array => $storage->all_terms(),
-        'all_doc_ids' => static fn(): array => $storage->all_doc_ids(),
-        'all_doc_ids including deleted' => static fn(): array => $storage->all_doc_ids(true),
-        'filter_doc_ids_by_metadata' => static fn(): array => $storage->filter_doc_ids_by_metadata([1], ['post'], ['publish']),
-        'terms_with_prefix' => static fn(): array => $storage->terms_with_prefix($prefix, 2),
-    ];
 
-    foreach ($operations as $method => $operation) {
-        $preparedBefore = count($wpdb->prepared);
-        $queriesBefore = count($wpdb->queries);
-        $queryCountBefore = $wpdb->num_queries;
-        $failure = null;
-        try {
-            $operation();
-        } catch (BadMethodCallException $error) {
-            $failure = $error;
-        }
-
-        assert_true($failure instanceof BadMethodCallException, "{$method} should reject production collection materialization");
-        assert_contains('only through bounded set-oriented operations', $failure?->getMessage() ?? '', "{$method} should identify the production set-oriented boundary");
-        assert_same($preparedBefore, count($wpdb->prepared), "{$method} should fail before preparing SQL");
-        assert_same($queriesBefore, count($wpdb->queries), "{$method} should fail before executing SQL");
-        assert_same($queryCountBefore, $wpdb->num_queries, "{$method} should not increment the database query counter");
+    assert_true($storage instanceof WP_FTS_Set_Oriented_Search_Storage, 'mysql should expose the relational search contract');
+    assert_true($storage instanceof WP_FTS_Resettable_Storage, 'mysql should expose the relational reset contract');
+    assert_true(!$storage instanceof WP_FTS_Storage, 'mysql should not implement the legacy blob storage contract');
+    assert_true(!$storage instanceof WP_FTS_DocumentMetadataStorage, 'mysql should not claim the legacy point-metadata writer contract');
+    foreach ([
+        'get_terms',
+        'put_term',
+        'delete_term',
+        'replace_doc_postings',
+        'get_postings',
+        'get_capped_postings',
+        'get_budgeted_postings',
+        'get_doc_lengths',
+        'put_doc',
+        'put_doc_metadata',
+        'filter_doc_ids_by_metadata',
+        'delete_doc',
+        'get_meta',
+        'add_meta',
+        'all_terms',
+        'all_doc_ids',
+        'terms_with_prefix',
+        'flush',
+    ] as $method) {
+        assert_true(!method_exists($storage, $method), "mysql should not expose legacy {$method}");
     }
+    assert_same([], $wpdb->prepared, 'capability inspection should not prepare SQL');
+    assert_same([], $wpdb->queries, 'capability inspection should not execute SQL');
 });
 
 test_case('mysql bounded diagnostic list APIs reject oversized id sets before SQL', function (): void {
@@ -35917,37 +35904,6 @@ test_case('mysql bounded diagnostic list APIs reject oversized id sets before SQ
         assert_same($preparedBefore, count($wpdb->prepared), "{$method} should reject oversized input before preparing SQL");
         assert_same($queriesBefore, count($wpdb->queries), "{$method} should reject oversized input before executing SQL");
         assert_same($queryCountBefore, $wpdb->num_queries, "{$method} oversized rejection should not increment the database query counter");
-    }
-});
-
-test_case('mysql legacy posting-list reads fail closed before SQL', function (): void {
-    $wpdb = new WP_FTS_Test_WPDB();
-    $wpdb->recordReadQueries = true;
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
-    $term = WP_FTS_TermNamespace::namespace_term('en', 'blocked');
-    $operations = [
-        'get_terms' => static fn(): array => $storage->get_terms([$term]),
-        'get_postings' => static fn(): array => $storage->get_postings([$term]),
-        'get_capped_postings' => static fn(): array => $storage->get_capped_postings([$term], 2),
-        'get_budgeted_postings' => static fn(): array => $storage->get_budgeted_postings([$term], 2, 3),
-    ];
-
-    foreach ($operations as $method => $operation) {
-        $preparedBefore = count($wpdb->prepared);
-        $queriesBefore = count($wpdb->queries);
-        $queryCountBefore = $wpdb->num_queries;
-        $failure = null;
-        try {
-            $operation();
-        } catch (BadMethodCallException $error) {
-            $failure = $error;
-        }
-
-        assert_true($failure instanceof BadMethodCallException, "{$method} should reject production posting-list materialization");
-        assert_contains('only through bounded set-oriented operations', $failure?->getMessage() ?? '', "{$method} should identify the production set-oriented boundary");
-        assert_same($preparedBefore, count($wpdb->prepared), "{$method} should fail before preparing SQL");
-        assert_same($queriesBefore, count($wpdb->queries), "{$method} should fail before executing SQL");
-        assert_same($queryCountBefore, $wpdb->num_queries, "{$method} should not increment the database query counter");
     }
 });
 
@@ -36041,8 +35997,6 @@ test_case('mysql storage emits language-aware binary schema and stores per-langu
     $doc = $storage->get_doc(7);
     assert_same('pl-PL', $doc['primary_lang'], 'document primary language should be canonicalized');
     assert_same([], $doc['lang_lengths'], 'v4 should not retain a legacy aggregate document length');
-    assert_same([], $storage->get_doc_lengths([7], 'pl_PL'), 'production storage should have no document-length projection');
-    assert_same([], $storage->get_doc_lengths([7], 'en'), 'v4 should not duplicate one document across secondary language-length rows');
     $metadata = $storage->get_doc_metadata([7]);
     assert_same('post', $metadata[7]['post_type'], 'document metadata should round trip post type');
     assert_same('publish', $metadata[7]['post_status'], 'document metadata should round trip post status');
@@ -37195,7 +37149,7 @@ test_case('T5 relational impact ranking preserves compatibility membership and g
     $mysql->create_tables();
     $file = new WP_FTS_Storage_File(temp_index_path('t5_mysql_file_full_suite'));
 
-    $buildCorpus = static function (WP_FTS_Storage $storage, string $label) use ($analyzer, $initialDocuments, $updatedDocuments, $deletedDocumentIds): void {
+    $buildCorpus = static function (WP_FTS_Storage|WP_FTS_Set_Oriented_Search_Storage $storage, string $label) use ($analyzer, $initialDocuments, $updatedDocuments, $deletedDocumentIds): void {
         $indexer = new WP_FTS_Indexer($storage, $analyzer);
         if ($storage instanceof WP_FTS_Storage_Mysql) {
             $initialPrepared = [];

@@ -643,11 +643,9 @@ function wp_fts_mysql_proof_cleanup(array $postIds): void
             'mysql-proof-cleanup',
             static function () use ($postIds): int {
                 (new WP_FTS_Index_Queue($GLOBALS['wpdb']))->clear();
-                $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(false), new WP_FTS_Analyzer());
-                foreach ($postIds as $postId) {
-                    $indexer->delete_document($postId);
-                }
-                $indexer->optimize();
+                $storage = WP_FTS_Plugin::storage(false);
+                $storage->replace_prepared_documents([], $postIds);
+                $storage->optimize();
 
                 return count($postIds);
             },

@@ -320,14 +320,6 @@ function wp_fts_ib_preflight(): array
                 && version_compare($version, '10.12', '<'),
             'The mariadb-10.11 lane must run MariaDB 10.11.x.'
         );
-    } elseif ($engine === 'mysql-5.7') {
-        wp_fts_ib_assert(
-            !str_contains($identity, 'mariadb')
-                && str_contains($identity, 'mysql')
-                && version_compare($version, '5.7', '>=')
-                && version_compare($version, '5.8', '<'),
-            'The mysql-5.7 lane must run MySQL 5.7.x.'
-        );
     } elseif ($engine === 'mysql-8.0') {
         wp_fts_ib_assert(
             !str_contains($identity, 'mariadb')

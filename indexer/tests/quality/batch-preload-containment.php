@@ -485,7 +485,7 @@ test_case('100-post 32-key dependency adversary keeps three branches and disting
     assert_same(1, substr_count($sql, 'FORCE INDEX (PRIMARY)'), 'the taxonomy source should keep the requested object-ID ranges on its composite primary key');
     assert_same(2, substr_count($sql, 'LIMIT 2049'), 'both dependency sources should retain their batch-wide hard stop');
     foreach (['WITH ', 'ROW_NUMBER', 'LATERAL', 'JSON_TABLE', 'VALUES ', ' OFFSET '] as $unsupported) {
-        assert_true(!str_contains(strtoupper($sql), $unsupported), "the MySQL 5.7/MariaDB statement must not require {$unsupported}");
+        assert_true(!str_contains(strtoupper($sql), $unsupported), "the MariaDB-compatible statement must not require {$unsupported}");
     }
     assert_same(2, $fake->num_queries, 'the accepted maximum boundary should use one measurement and one selected-value query');
     assert_same(1, count($fake->dependencyValueQueries), 'all 32 selected identities should hydrate in one value statement');

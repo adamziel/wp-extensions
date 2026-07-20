@@ -472,12 +472,32 @@ function wp_fts_release_readiness_contract_package_fixture(string $tmp, string $
     wp_fts_release_readiness_contract_write_file($package . '/README.md', "# Pure PHP FTS Indexer\n");
     wp_fts_release_readiness_contract_write_file($package . '/src/bootstrap.php', "<?php\n");
     wp_fts_release_readiness_contract_write_file($package . '/src/Plugin.php', "<?php\n");
-    wp_fts_release_readiness_contract_write_file($package . '/tools/build-release-zip.php', "<?php\n");
+    wp_fts_release_readiness_contract_write_file($package . '/src/WPCLICommand.php', "<?php\n");
     wp_fts_release_readiness_contract_write_file($package . '/vendor/autoload.php', "<?php\n");
     wp_fts_release_readiness_contract_write_file($package . '/vendor/wp-php-toolkit/full-text-search/src/bootstrap.php', "<?php\n");
     wp_fts_release_readiness_contract_write_file($package . '/vendor/wp-php-toolkit/full-text-search/src/LemmaPackLookupIndex.php', "<?php\n");
+    foreach (wp_fts_release_readiness_contract_shipped_tool_paths() as $relativePath) {
+        wp_fts_release_readiness_contract_write_file($package . '/' . $relativePath, "<?php\n");
+    }
 
     return $package;
+}
+
+/** @return string[] */
+function wp_fts_release_readiness_contract_shipped_tool_paths(): array
+{
+    return [
+        'tools/import-lemma-tsv-pack.php',
+        'tools/import-conllu-lemma-pack.php',
+        'tools/import-unimorph-lemma-pack.php',
+        'tools/import-polish-polimorf-lemmatizer.php',
+        'tools/validate-analyzer-pack.php',
+        'tools/audit-top-language-lemma-packs.php',
+        'tools/build-lemma-pack-lookup-index.php',
+        'tools/build-polish-polimorf-external-pack.php',
+        'tools/lemma-source-import-limits.php',
+        'tools/lemma-chunk-merge.php',
+    ];
 }
 
 /**
@@ -596,6 +616,37 @@ function wp_fts_release_readiness_contract_direct_ready(): void
         wp_fts_release_readiness_contract_true(
             wp_fts_release_readiness_contract_has_check($report, 'direct_package_prohibited_paths', 'pass'),
             'direct-install readiness should validate the package exclusion boundary'
+        );
+    } finally {
+        wp_fts_release_readiness_contract_remove_tree($tmp);
+    }
+}
+
+function wp_fts_release_readiness_contract_missing_shipped_tool(): void
+{
+    $tmp = wp_fts_release_readiness_contract_temp_dir();
+    try {
+        $source = wp_fts_release_readiness_contract_source_fixture($tmp);
+        $package = wp_fts_release_readiness_contract_package_fixture($tmp);
+        $missing = 'tools/validate-analyzer-pack.php';
+        unlink($package . '/' . $missing);
+
+        $report = (new WP_FTS_ReleaseReadinessChecker())->check([
+            'target' => 'direct-install',
+            'plugin_src' => $source,
+            'monorepo_root' => $tmp,
+            'package_dir' => $package,
+        ]);
+
+        wp_fts_release_readiness_contract_same('blocked', $report['status'] ?? null, 'a missing shipped tool module should block direct-install readiness');
+        wp_fts_release_readiness_contract_true(
+            in_array('direct_required_runtime_files', wp_fts_release_readiness_contract_blocker_ids($report), true),
+            'a missing shipped tool module should report the required-runtime blocker'
+        );
+        wp_fts_release_readiness_contract_contains(
+            'indexer/' . $missing,
+            WP_FTS_ReleaseReadinessChecker::render_json($report),
+            'the required-runtime blocker should name the missing shipped tool module'
         );
     } finally {
         wp_fts_release_readiness_contract_remove_tree($tmp);
@@ -1069,6 +1120,7 @@ function wp_fts_release_readiness_contract_prohibited_package_paths(): void
         $source = wp_fts_release_readiness_contract_source_fixture($tmp);
         $package = wp_fts_release_readiness_contract_package_fixture($tmp);
         wp_fts_release_readiness_contract_write_file($package . '/tests/smoke.php', "<?php\n");
+        wp_fts_release_readiness_contract_write_file($package . '/tools/smoke-disposable-wordpress-release.php', "<?php\n");
         wp_fts_release_readiness_contract_write_file($package . '/vendor/bin/phpunit', "#!/usr/bin/env php\n");
         wp_fts_release_readiness_contract_write_file($package . '/vendor/example/library/coverage/report.xml', "<xml />\n");
         wp_fts_release_readiness_contract_write_file($package . '/vendor/wp-php-toolkit/full-text-search/resources/sources/jieba/jieba/dict.txt', "raw source fixture\n");
@@ -1087,7 +1139,7 @@ function wp_fts_release_readiness_contract_prohibited_package_paths(): void
         wp_fts_release_readiness_contract_same('blocked', $report['status'] ?? null, 'prohibited staged package paths should block direct-install readiness');
         wp_fts_release_readiness_contract_true(in_array('direct_package_prohibited_paths', $ids, true), 'prohibited paths should report the package boundary blocker');
         $json = WP_FTS_ReleaseReadinessChecker::render_json($report);
-        foreach (['indexer/tests', 'indexer/vendor/bin', 'indexer/vendor/example/library/coverage', 'indexer/vendor/wp-php-toolkit/full-text-search/resources/sources', 'indexer/playground/indexer-preview.zip'] as $path) {
+        foreach (['indexer/tests', 'indexer/tools/smoke-disposable-wordpress-release.php', 'indexer/vendor/bin', 'indexer/vendor/example/library/coverage', 'indexer/vendor/wp-php-toolkit/full-text-search/resources/sources', 'indexer/playground/indexer-preview.zip'] as $path) {
             wp_fts_release_readiness_contract_contains($path, $json, "prohibited path report should include {$path}");
         }
     } finally {
@@ -1192,6 +1244,12 @@ function wp_fts_release_readiness_contract_cases(): array
             'name' => 'quality release readiness accepts a staged direct-install package',
             'fn' => static function (): void {
                 wp_fts_release_readiness_contract_direct_ready();
+            },
+        ],
+        [
+            'name' => 'quality release readiness requires every shipped tool module',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_missing_shipped_tool();
             },
         ],
         [

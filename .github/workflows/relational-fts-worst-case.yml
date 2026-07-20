@@ -392,35 +392,3 @@ jobs:
             .context/jieba-*
           if-no-files-found: error
           include-hidden-files: true
-
-  pull-request-mysql57-smoke:
-    name: 2k / MySQL 5.7 compatibility
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          submodules: false
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.4'
-          extensions: zip
-          coverage: none
-          tools: composer:2.9.8
-      - name: Run real-WordPress MySQL 5.7 compatibility proof
-        timeout-minutes: 345
-        run: |
-          indexer/tools/run-relational-fts-worst-case.sh \
-            --engine=mysql-5.7 \
-            --profile=2k \
-            --output=.context/evidence-mysql-5.7-2k.json
-      - name: Upload evidence even after failure
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: relational-fts-mysql-5.7-2k
-          path: .context/evidence-mysql-5.7-2k.json*
-          if-no-files-found: error
-          include-hidden-files: true

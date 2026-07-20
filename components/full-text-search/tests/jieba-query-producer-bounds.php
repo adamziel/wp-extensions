@@ -21,22 +21,6 @@ final class WP_FTS_Jieba_Query_Bound_Storage implements WP_FTS_Set_Oriented_Sear
         ];
     }
 
-    public function get_terms(array $terms): array { return []; }
-    public function put_term(string $term, int $df, string $postings): void {}
-    public function delete_term(string $term): void {}
-    public function get_doc_lengths(array $doc_ids, ?string $lang = null): array { return []; }
-    public function get_doc(int $doc_id): ?array { return null; }
-    public function put_doc(int $doc_id, string|int $primary_lang, array|string $lang_lengths, ?string $hash = null): void {}
-    public function delete_doc(int $doc_id): void {}
-    public function get_meta(?string $lang = null): array { return ['doc_count' => 0, 'len_sum' => 0]; }
-    public function add_meta(string|int $lang, int $d_docs, ?int $d_len = null): void {}
-    public function all_terms(): array { return []; }
-    public function all_doc_ids(bool $include_deleted = false): array { return []; }
-    public function begin_transaction(): void {}
-    public function commit(): void {}
-    public function rollback(): void {}
-    public function flush(): void {}
-    public function optimize(): void {}
 }
 
 $wp_fts_jieba_query_bound_checks = 0;

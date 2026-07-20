@@ -20834,8 +20834,8 @@ WHERE pm.meta_id IN ({$id_sql})";
      * `IN (...)` is the constant requested-post relation here. Unlike one
      * derived query per post, both source arms use their native leading
      * post-id index and have one batch-wide row stop. The third arm emits one
-     * sentinel from the primary-key post lookup. MySQL 5.7 and MariaDB need no
-     * CTE, lateral join, window function, temporary table, or OFFSET.
+     * sentinel from the primary-key post lookup. MariaDB needs no CTE, lateral
+     * join, window function, temporary table, or OFFSET.
      *
      * @param array<int,string[]> $meta_keys_by_post
      * @return array{0:string,1:array<int,int|string>,2:string[]}

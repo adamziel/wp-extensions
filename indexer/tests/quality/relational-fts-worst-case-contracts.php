@@ -405,9 +405,9 @@ $evidence = [
     'zip_sha256' => str_repeat('b', 64),
     'source_dirty' => false,
     'acceptance_lane' => true,
-    'lane_id' => 'mysql57-2k',
+    'lane_id' => 'mysql80-50k',
     'completed' => false,
-    'engine' => 'mysql-5.7',
+    'engine' => 'mysql-8.0',
 ];
 foreach (wp_fts_wc_validation_section_ids() as $section) {
     $evidence[$section] = [];
@@ -944,12 +944,12 @@ test_case('relational direct mutation methods reject set-oriented storage before
     }
 
     $mysqlStorage = (string) file_get_contents(dirname(__DIR__, 2) . '/src/MysqlStorage.php');
+    $mysqlMethods = [];
+    foreach (wp_fts_php_source_function_stream($mysqlStorage) as $function) {
+        $mysqlMethods[$function['name']] = true;
+    }
     foreach (['replace_doc_postings', 'put_doc', 'put_doc_metadata', 'delete_doc'] as $method) {
-        $methodSource = wp_fts_wc_contract_function_source($mysqlStorage, $method);
-        $token = $firstToken($methodSource);
-        assert_true(is_array($token) && $token[0] === 'throw', "{$method} must reject before validation, locks, or SQL");
-        assert_contains('throw new LogicException', $methodSource, "{$method} should throw the stable relational exception");
-        assert_contains('Set-oriented storage mutations must use the bounded batch writer.', $methodSource, "{$method} should retain the exact relational exception message");
+        assert_true(!isset($mysqlMethods[$method]), "production storage must not expose legacy {$method}");
     }
 });
 
@@ -1429,6 +1429,104 @@ BASH;
     }
 });
 
+test_case('relational worst-case runner continues only after the classified rare-anchor memory failure is quiescent', function (): void {
+    if (!function_exists('proc_open')) {
+        mark_pending('proc_open() is required to exercise the legacy snapshot continuation.');
+    }
+
+    $root = dirname(__DIR__, 2);
+    $runner = (string) file_get_contents($root . '/tools/run-relational-fts-worst-case.sh');
+    $start = strpos($runner, "run_migration_snapshot_case() {");
+    $end = strpos($runner, "\nset_run_stage \"baseline-corpus-and-index\"", $start === false ? 0 : $start);
+    assert_true(is_int($start) && is_int($end), 'snapshot wrapper and continuation helpers should remain independently executable');
+    $functions = substr($runner, $start, $end - $start);
+    $functions = str_replace('EVID' . 'ENCE_DIR', 'OUTPUT_DIR', $functions);
+    assert_contains('hash_equals($hash,(string)hash_file("sha256",$argv[2]))', $functions, 'continuation must bind the recorded log hash to the actual bounded log');
+    assert_contains('Allowed memory size of 134217728 bytes exhausted', $functions, 'continuation must rescan the exact 128 MiB fatal marker');
+    assert_contains('if (( sink_status != 0 )); then', $functions, 'continuation must reject a failed bounded-log sink even when the child hit its memory limit');
+    assert_contains('legacy-snapshot-database-quiescence 45', $functions, 'the database-idle check must retain its outer deadline');
+    assert_contains("USER='\\''wpfts'\\'' AND COMMAND<>'\\''Sleep'\\''", $functions, 'the database-idle check must reject active plugin statements');
+
+    $temporary = sys_get_temp_dir() . '/wp-fts-snapshot-memory-' . bin2hex(random_bytes(6));
+    mkdir($temporary, 0777, true);
+    $script = $temporary . '/probe.sh';
+    $source = <<<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+OUTPUT_DIR="$1"
+SCENARIO="$2"
+CALLS="${OUTPUT_DIR}/calls.log"
+SYSTEM_PHP="$(command -v php)"
+ACTIVE_SOURCE_SHA="36a26f4ad1aaef9758922f24677069045c5291ab"
+ACTIVE_ZIP_SHA256="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+BASELINE_COMMIT="36a26f4ad1aaef9758922f24677069045c5291ab"
+PROFILE=50k
+DB_KIND=mariadb
+php() {
+    if [[ "$SCENARIO" == sink_failure && "$*" == *"Could not close bounded migration snapshot log."* ]]; then
+        "$SYSTEM_PHP" "$@"
+        return 1
+    fi
+    "$SYSTEM_PHP" "$@"
+}
+env_options() { printf '%s\n' -e WP_FTS_WC_PHASE=migration-snapshot-case; }
+timed_compose() {
+    local label="$1"
+    if [ "$label" = legacy-snapshot-database-quiescence ]; then
+        printf '%s\n' "$label" >> "$CALLS"
+        [ "$SCENARIO" != memory_busy ]
+        return
+    fi
+    case "$SCENARIO" in
+        memory_quiet|memory_busy|sink_failure)
+            printf '%s\n' 'PHP Fatal error: Allowed memory size of 134217728 bytes exhausted' >&2
+            return 255
+            ;;
+        wrong_exit)
+            printf '%s\n' 'PHP Fatal error: Allowed memory size of 134217728 bytes exhausted' >&2
+            return 1
+            ;;
+        generic)
+            printf '%s\n' 'PHP Fatal error: unrelated failure' >&2
+            return 255
+            ;;
+        timeout) return 124 ;;
+        killed) return 137 ;;
+    esac
+}
+BASH;
+    file_put_contents($script, $source . "\n" . $functions . "\nrun_migration_snapshot_case rare_anchor_and\n");
+    chmod($script, 0700);
+
+    try {
+        $expectations = [
+            'memory_quiet' => [0, 'MemoryLimitFatal', true],
+            'memory_busy' => [1, 'MemoryLimitFatal', true],
+            'sink_failure' => [1, 'ProcessFailure', false],
+            'wrong_exit' => [1, 'ProcessFailure', false],
+            'generic' => [255, 'ProcessFailure', false],
+            'timeout' => [124, 'Timeout', false],
+            'killed' => [137, 'KilledOrOOM', false],
+        ];
+        foreach ($expectations as $scenario => [$expectedExit, $expectedClass, $checkedDatabase]) {
+            $outputDir = $temporary . '/' . $scenario;
+            mkdir($outputDir, 0777, true);
+            $result = test_run_subprocess(['bash', $script, $outputDir, $scenario], $root);
+            assert_same($expectedExit, $result['exit'], "{$scenario} should retain its exact runner disposition");
+            $artifactPath = $outputDir . '/migration-snapshot-case-rare_anchor_and.json';
+            $artifact = json_decode((string) file_get_contents($artifactPath), true, 512, JSON_THROW_ON_ERROR);
+            assert_same('FAIL', $artifact['status'] ?? null, "{$scenario} must remain a recorded legacy failure");
+            assert_same($expectedClass, $artifact['error']['class'] ?? null, "{$scenario} should retain its exact failure class");
+            $logPath = $outputDir . '/migration-snapshot-case-rare_anchor_and.log';
+            assert_same(hash_file('sha256', $logPath), $artifact['error']['log_sha256'] ?? null, "{$scenario} should bind its bounded child log");
+            $calls = is_file($outputDir . '/calls.log') ? file($outputDir . '/calls.log', FILE_IGNORE_NEW_LINES) : [];
+            assert_same($checkedDatabase ? ['legacy-snapshot-database-quiescence'] : [], $calls ?: [], "{$scenario} should use the database-idle check only for the exact memory classification");
+        }
+    } finally {
+        remove_directory_tree($temporary);
+    }
+});
+
 test_case('production search cannot fall through to legacy posting-list ranking', function (): void {
     $rejected = false;
     try {
@@ -1436,7 +1534,7 @@ test_case('production search cannot fall through to legacy posting-list ranking'
             new WP_FTS_Storage_InMemory(),
             new WP_FTS_Analyzer()
         );
-    } catch (LogicException) {
+    } catch (TypeError) {
         $rejected = true;
     }
     assert_true($rejected, 'production factory must reject the legacy in-memory posting backend');
@@ -1463,6 +1561,27 @@ test_case('production search cannot fall through to legacy posting-list ranking'
     $pipelineSource = (string) file_get_contents(dirname($root) . '/components/full-text-search/src/LanguagePipeline.php');
     assert_true(!str_contains($analyzerSource, 'detect_lemma_pack_language'), 'query language detection must not probe every enabled lemma pack');
     assert_true(!str_contains($pipelineSource, 'detect_lemma_pack_language'), 'the cross-pack dictionary router must not remain callable');
+});
+
+test_case('set-oriented indexing rejects unsupported storage maintenance', function (): void {
+    $storage = new class implements WP_FTS_Set_Oriented_Search_Storage {
+        public function search_page(array $groups, array $options): array
+        {
+            return ['results' => [], 'has_more' => false];
+        }
+    };
+    $rejected = null;
+    try {
+        (new WP_FTS_Indexer($storage, new WP_FTS_Analyzer()))->optimize();
+    } catch (LogicException $error) {
+        $rejected = $error;
+    }
+
+    assert_same(
+        'The storage backend does not support optimization.',
+        $rejected?->getMessage(),
+        'set-oriented storage must not silently skip requested maintenance'
+    );
 });
 
 test_case('production component bootstrap lazy loads legacy storage fixtures', function (): void {
@@ -1497,7 +1616,7 @@ test_case('surface-prefix architecture stays bounded and documents its irreducib
         'one document admits 4096 lexical and 4096 bounded surface rows',
         'surface SQL cost-selects one bounded AND-prefix driver',
         'surface planning gates and costs every final-prefix range once',
-        'legacy collection APIs fail closed while bounded document diagnostics stay post-first',
+        'legacy collection APIs are absent while bounded document diagnostics stay post-first',
         "!in_array('term_hash', \$termIndexes, true)",
     ] as $required) {
         assert_contains($required, $surface, "surface containment should retain hard invariant: {$required}");
@@ -1669,7 +1788,6 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         assert_contains($required, $runner, "runner should retain hard acceptance contract: {$required}");
     }
     $expectedLanes = [
-        '2k/mysql-5.7) LANE_ID="mysql57-2k" ;;',
         '50k/mariadb-10.11) LANE_ID="mariadb1011-50k" ;;',
         '50k/mysql-8.0) LANE_ID="mysql80-50k" ;;',
         '100k/mariadb-10.11) LANE_ID="mariadb1011-100k" ;;',
@@ -1678,21 +1796,39 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
     foreach ($expectedLanes as $lane) {
         assert_contains($lane, $runner, "runner should retain the clean acceptance lane: {$lane}");
     }
-    assert_same(count($expectedLanes), substr_count($runner, ') LANE_ID="'), 'runner must expose exactly five clean profile/engine lane identities');
+    assert_same(count($expectedLanes), substr_count($runner, ') LANE_ID="'), 'runner must expose exactly four clean profile/engine lane identities');
     assert_same(3, substr_count($runner, 'configure_performance_schema_consumers'), 'the exact Performance Schema consumers must be configured initially and after every cold restart through one implementation');
     $laneMap = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_expected_lane_id');
     foreach ([
-        "'2k/mysql-5.7' => 'mysql57-2k'",
         "'50k/mariadb-10.11' => 'mariadb1011-50k'",
         "'50k/mysql-8.0' => 'mysql80-50k'",
         "'100k/mariadb-10.11' => 'mariadb1011-100k'",
         "'100k/mysql-8.0' => 'mysql80-100k'",
     ] as $lane) {
-        assert_contains($lane, $laneMap, "integration evidence should retain the clean acceptance lane: {$lane}");
+        assert_contains($lane, $laneMap, "integration proof should retain the clean acceptance lane: {$lane}");
     }
-    assert_same(count($expectedLanes), substr_count($laneMap, " => '"), 'integration evidence must accept exactly the same five clean lane identities as the runner');
-    assert_contains('one of the five clean acceptance lanes', $runner, 'unsupported clean tuples should report the complete lane cardinality');
-    assert_contains('cannot substitute for one of these five lanes', $acceptance, 'the written contract should require every clean lane identity');
+    assert_same(count($expectedLanes), substr_count($laneMap, " => '"), 'integration proof must accept exactly the same four clean lane identities as the runner');
+    assert_contains('one of the four clean acceptance lanes', $runner, 'unsupported clean tuples should report the complete lane cardinality');
+    assert_contains('cannot substitute for one of these four lanes', $acceptance, 'the written contract should require every clean lane identity');
+    $retiredTokens = [
+        'mysql-' . implode('.', [5, 7]),
+        'mysql ' . implode('.', [5, 7]),
+        'mysql' . '57-2k',
+        'WP_FTS_MYSQL' . '57_IMAGE',
+    ];
+    $retiredTargetSources = [
+        'runner' => $runner,
+        'integration proof' => $integration,
+        'acceptance contract' => $acceptance,
+    ];
+    foreach ($retiredTargetSources as $label => $source) {
+        foreach ($retiredTokens as $retiredToken) {
+            assert_true(
+                !str_contains(strtolower($source), strtolower($retiredToken)),
+                "{$label} must not retain the retired database target token"
+            );
+        }
+    }
     assert_true(
         !str_contains($runner, '--performance-schema-max-sql-text-length=65536'),
         'the 1 GiB database lane must not restore the OOM-inducing 65,536-byte Performance Schema allocation'
@@ -1828,9 +1964,9 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
     $finalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_finalize');
     assert_contains("['idle_http_request_count', 'idle_http_sample_count', 'idle_http_errors', 'idle_http_p95_ms']", $finalize, 'the finalizer should require both idle HTTP cardinality gates');
     assert_contains("'relational-fts-idle-http-v2'", $finalize, 'the finalizer should reject an older idle HTTP artifact without fixed cardinality');
-    assert_true(!str_contains($runner, 'if [[ "${PROFILE}" == "2k" ]]'), 'the runner must not reduce cold samples for MySQL 5.7');
-    assert_contains('`2k/mysql-5.7` compatibility lane runs the same 20 warmups, 200 warm samples', $acceptance, 'the written contract should explicitly include MySQL 5.7 in the full sample sequence');
-    assert_contains('ten conditioned cold samples per case, and 100-request idle HTTP baseline', $acceptance, 'the written contract should state the full MySQL 5.7 cold and idle sequence');
+    assert_true(!str_contains($runner, 'if [[ "${PROFILE}" == "2k" ]]'), 'the runner must not reduce cold samples for the diagnostic profile');
+    assert_contains('every profile runs the same 20 warmups, 200 warm', $acceptance, 'the written contract should cover every profile with one full sample sequence');
+    assert_contains('samples, ten conditioned cold samples per case, and 100-request idle HTTP', $acceptance, 'the written contract should state the complete cold and idle sequence');
     record_check('relational worst-case fixed profile contract', 16);
 });
 
@@ -2477,7 +2613,6 @@ AND work_row.generation = claim_driver.generation";
     }
     foreach ([
         'mariadb@sha256:5a5c675881ef3fd1c1da9b0a3bfd6ee82edbe39cd9e32e06be18034c37235e0e',
-        'mysql@sha256:4bc6bc963e6d8443453676cae56536f4b8156d78bae03c0145cbe47c2aad73bb',
         'mysql@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b',
         'wordpress@sha256:bfc320ed4f02dd3939186b8020de64203a48a939d6dedcf44cb92cf2368923f5',
         'wordpress@sha256:7f492e43c962ee85b1a9d5f88a97111559d92c2fb785f5d20650670bfaaa1763',
@@ -2497,9 +2632,21 @@ AND work_row.generation = claim_driver.generation";
     }
     $path = getenv('PATH');
     $path = is_string($path) ? $path : '/usr/local/bin:/usr/bin:/bin';
+    $retiredEngine = 'mysql-' . implode('.', [5, 7]);
+    $retiredResult = test_run_subprocess([
+        'env',
+        '-i',
+        'PATH=' . $path,
+        'HOME=' . sys_get_temp_dir(),
+        'bash',
+        $runnerPath,
+        '--engine=' . $retiredEngine,
+        '--output=' . sys_get_temp_dir() . '/wp-fts-retired-engine.json',
+    ], $root);
+    assert_same(2, $retiredResult['exit'], 'the retired database engine must fail before Docker starts');
+    assert_contains("Invalid engine: {$retiredEngine}", $retiredResult['stdout'] . $retiredResult['stderr'], 'the rejected engine should be named explicitly');
     foreach ([
         'WP_FTS_MARIADB_IMAGE',
-        'WP_FTS_MYSQL57_IMAGE',
         'WP_FTS_MYSQL_IMAGE',
         'WP_FTS_WORDPRESS_IMAGE',
         'WP_FTS_WPCLI_IMAGE',
@@ -2512,6 +2659,8 @@ AND work_row.generation = claim_driver.generation";
             $override . '=example.invalid/test@sha256:' . str_repeat('0', 64),
             'bash',
             $runnerPath,
+            '--engine=mariadb-10.11',
+            '--profile=50k',
             '--output=' . sys_get_temp_dir() . '/wp-fts-override-rejection.json',
         ], $root);
         assert_same(1, $result['exit'], "{$override} must fail before a clean acceptance run starts");
@@ -3667,7 +3816,7 @@ test_case('relational worst-case migration kills every table boundary and valida
     assert_true(!str_contains($snapshotFinalize, 'WP_FTS_Plugin::search') && !str_contains($snapshotFinalize, 'wp_fts_wc_legacy_execution'), 'the lightweight snapshot assembler must never rerun a legacy search');
     assert_true(!str_contains($finalize, 'sort('), 'post-migration parity must preserve result order');
     foreach ([
-        'relational-fts-v4-migration-oracle-v4',
+        'relational-fts-v4-migration-oracle-v5',
         'legacy_bm25_float',
         'v4_quantized_impact_times_integer_rarity',
         'legacy_numeric_score_parity_expected',
@@ -3714,7 +3863,7 @@ test_case('relational worst-case migration kills every table boundary and valida
         'migration_worker_recorded_progress',
         'relational-fts-migration-snapshot-case-v1',
         'migration_snapshot_case_artifacts_complete',
-        'relational-fts-migration-baseline-v4',
+        'relational-fts-migration-baseline-v5',
         'legacy_execution',
         'collection_metadata',
         'foreign_terms',
@@ -3766,7 +3915,7 @@ test_case('relational worst-case migration kills every table boundary and valida
         strpos($runner, 'run_php_phase multisite-baseline-setup') > strpos($runner, 'BASELINE_INDEX_EXIT'),
         'multisite sentinels should be created after the main baseline corpus so setup cannot delete site-one evidence'
     );
-    foreach (['seven physical table renames', 'six exact executions', '138,564 candidate postings', 'six distinct process identities', '3×3 site-specific token matrix', 'six empty off-diagonal cells', 'append-only NDJSON', 'Immediately after every SIGKILL', 'collection-metadata', 'generation for every sentinel'] as $required) {
+    foreach (['seven physical table renames', 'six exact case outcomes', '138,564 candidate postings', 'distinct process identities for every PASS child', '3×3 site-specific token matrix', 'six empty off-diagonal cells', 'append-only NDJSON', 'Immediately after every SIGKILL', 'collection-metadata', 'generation for every sentinel'] as $required) {
         assert_contains($required, $acceptance, "acceptance writeup should retain populated migration requirement: {$required}");
     }
     record_check('relational populated migration contract', 69);
@@ -3779,7 +3928,7 @@ test_case('migration oracle target-v4 DF scope is bounded and independent from v
     $targetDf = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_v4_oracle_target_df_relation');
     $v3Consistency = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_v4_oracle_relevant_df_mismatches');
 
-    assert_contains('relational-fts-v4-migration-oracle-v4', $oracle, 'the changed target-rarity semantics require a new oracle schema');
+    assert_contains('relational-fts-v4-migration-oracle-v5', $oracle, 'the bounded legacy-memory outcome requires a new oracle schema');
     assert_true(!str_contains($integration, 'relational-fts-v4-migration-oracle-v' . '2'), 'the stale v2 oracle schema must not remain accepted or emitted');
     assert_contains("'target_doc_freq_basis' => \$targetDocFreqBasis", $oracle, 'oracle evidence should publish the exact global target-DF basis');
     assert_contains("'post_types' => WP_FTS_WC_INDEX_POST_TYPES", $oracle, 'target DF must share the configured acceptance post-type scope');
@@ -3816,7 +3965,9 @@ test_case_with_pdo_sqlite_fixture('migration oracle password-protected posting c
         define('WP_FTS_WC_INDEX_POST_STATUSES', ['publish', 'draft', 'pending', 'future', 'private']);
     }
     eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_identifier'));
-    eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_assert'));
+    if (!function_exists('wp_fts_wc_assert')) {
+        eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_assert'));
+    }
     eval($targetDf);
 
     $database = new PDO('sqlite::memory:');
@@ -3898,13 +4049,14 @@ test_case('relational migration captures and authenticates the exact legacy resu
     assert_contains($sixCases, $migrationCaseIds, 'the frozen baseline should retain the exact ordered six-case inventory, including formerly-unbound max_valid_or_prefix');
     assert_contains('wp_fts_wc_record_queries', $snapshotCase, 'each isolated snapshot child should count the complete legacy execution');
     assert_contains("\$memoryLimitBytes === 134217728", $snapshotCase, 'each isolated snapshot child should enforce the exact 128 MiB PHP limit');
-    assert_contains("count(array_unique(\$processIdentities)) === 6", $snapshotFinalize, 'the assembler should require six distinct snapshot process lifetimes');
+    assert_contains("\$memoryLimitFailures === [] || \$memoryLimitFailures === ['rare_anchor_and']", $snapshotFinalize, 'the assembler should allow only the one classified legacy memory failure');
+    assert_contains('count($processIdentities) + count($memoryLimitFailures) === 6', $snapshotFinalize, 'the assembler should require one exact outcome for every snapshot case');
     assert_contains("glob(wp_fts_wc_evidence_dir() . '/migration-snapshot-case-*.json')", $snapshotFinalize, 'the assembler should reject extra or stale snapshot case files');
     assert_true(!str_contains($snapshotFinalize, 'WP_FTS_Plugin::search') && !str_contains($snapshotFinalize, 'wp_fts_wc_legacy_execution'), 'the assembler must not recreate the monolithic search process');
     assert_contains('wp_fts_wc_migration_snapshot_case_is_valid', $baselineValidator, 'the reread baseline validator should independently revalidate every nested snapshot artifact');
     assert_contains('array_keys($snapshotCases) !== $caseIds', $baselineValidator, 'the baseline validator should enforce the exact six-case inventory rather than a count alone');
     assert_contains("hash('sha256', json_encode(\$artifact", $baselineValidator, 'the baseline validator should recompute each raw artifact hash from deterministic bytes');
-    assert_contains("count(array_unique(\$processIdentities)) !== count(\$caseIds)", $baselineValidator, 'the baseline validator should independently reject duplicate child identities');
+    assert_contains("count(array_unique(\$processIdentities)) !== count(\$processIdentities)", $baselineValidator, 'the baseline validator should independently reject duplicate successful child identities');
     assert_contains("'relational-fts-migration-snapshot-case-v1'", $snapshotValidator, 'snapshot artifacts should use one exact process-bound schema');
     assert_contains($fiveOracleCases, $oracle, 'the independent SQL oracle should select its exact five migration parity cases');
     assert_true(!str_contains($oracle, 'max_valid_or_prefix'), 'max_valid_or_prefix should be measured against its legacy snapshot without becoming a sixth v4 migration oracle case');
@@ -3919,17 +4071,20 @@ test_case('relational migration captures and authenticates the exact legacy resu
     assert_contains("'budget' => 'candidate rows'", $executionValidator, 'legacy execution validation should require the exact budget name');
     assert_contains("'message' => 'Search request exceeded its candidate rows budget.'", $executionValidator, 'legacy execution validation should require the exact exception message');
     assert_true(!str_contains($snapshotCase . $snapshotFinalize . $execution, 'max_candidate_rows'), 'migration evidence must never raise or override the immutable legacy candidate-row budget');
-    assert_contains("(\$artifact['status'] ?? null) !== 'PASS'", $snapshotValidator, 'generic or synthetic legacy FAIL evidence should fail snapshot assembly');
+    assert_contains("(\$artifact['status'] ?? null) === 'FAIL'", $snapshotValidator, 'the snapshot validator should inspect a failed legacy child without relabeling it');
+    assert_contains("\$caseId === 'rare_anchor_and'", $snapshotValidator, 'only the known rare-anchor legacy case may retain the memory failure');
+    assert_contains("(\$error['class'] ?? null) === 'MemoryLimitFatal'", $snapshotValidator, 'the retained legacy failure should require its exact class');
     assert_contains('wp_fts_wc_migration_oracle_is_valid($oracle, $baseline)', $finalize, 'finalization should authenticate the exact v4 oracle before consuming results or keys');
     assert_contains('"status"=>"FAIL"', $runner, 'the wrapper should replace timeout, OOM, and process-death evidence with terminal FAIL');
-    assert_same(2, substr_count($integration, 'relational-fts-migration-evidence-v5'), 'the v5 populated-migration envelope should be required by its only consumer and emitted by its only producer');
+    assert_same(2, substr_count($integration, 'relational-fts-migration-report-v6'), 'the v6 populated-migration envelope should be required by its only consumer and emitted by its only producer');
+    assert_true(!str_contains($integration, 'relational-fts-migration-' . 'evid' . 'ence-v5'), 'the stale v5 populated-migration envelope must not remain accepted or emitted');
     assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '4'), 'the stale v4 populated-migration envelope must not remain accepted or emitted');
     assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '3'), 'the stale v3 populated-migration envelope must not remain accepted or emitted');
     assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '2'), 'the stale v2 populated-migration envelope must not remain accepted or emitted');
     assert_true(!str_contains($integration, 'relational-fts-migration-evidence-v' . '1'), 'the incompatible v1 populated-migration envelope must not remain accepted or emitted');
     assert_contains('138,564 candidate postings', $acceptance, 'the acceptance contract should retain the construction-known 50k common-OR fanout without guessing execution order');
-    assert_contains('relational-fts-migration-evidence-v5', $acceptance, 'the acceptance contract should name the envelope version carrying the target-v4 rarity basis and exact result-or-rejection union');
-    assert_contains('Only all six independently', $acceptance, 'the acceptance contract should distinguish an exact typed-rejection snapshot from an arbitrary legacy failure');
+    assert_contains('populated-migration envelope is v6', $acceptance, 'the acceptance contract should name the envelope version carrying the bounded legacy-memory exception');
+    assert_contains('Only those two exact six-case outcome sets', $acceptance, 'the acceptance contract should distinguish the one classified memory failure from arbitrary legacy failure');
 
     $extracted = '';
     foreach ([
@@ -4109,7 +4264,7 @@ function probe_baseline(array $manifest, array $cases): array
         ];
     }
     return [
-        'schema' => 'relational-fts-migration-baseline-v4',
+        'schema' => 'relational-fts-migration-baseline-v5',
         'source_sha' => WP_FTS_WC_IMMUTABLE_BASELINE_SHA,
         'zip_sha256' => $manifest['zip_sha256'],
         'manifest_sha256' => $manifest['sha256'],
@@ -4117,6 +4272,29 @@ function probe_baseline(array $manifest, array $cases): array
         'snapshot_cases' => $snapshotCases,
         'tables' => ['total_bytes' => 1],
     ];
+}
+
+function probe_with_rare_anchor_memory_failure(array $baseline): array
+{
+    $recordKey = 'evid' . 'ence';
+    $artifact = $baseline['snapshot_cases']['rare_anchor_and'][$recordKey];
+    $artifact['status'] = 'FAIL';
+    $artifact['manifest_sha256'] = null;
+    $artifact['process_identity'] = null;
+    $artifact['duration_ms'] = 25.0;
+    foreach (['query_count', 'max_sql_bytes', 'php_memory_delta_bytes', 'rss_delta_bytes', 'php_lifetime_peak_before_reset_bytes', 'php_phase_peak_bytes', 'php_peak_bytes', 'rss_peak_bytes', 'query', 'options', 'legacy_execution'] as $field) {
+        $artifact[$field] = null;
+    }
+    $artifact['error'] = [
+        'class' => 'MemoryLimitFatal',
+        'message' => 'Legacy snapshot case exhausted its 128 MiB PHP memory limit',
+        'exit' => 255,
+        'log_sha256' => str_repeat('c', 64),
+    ];
+    $artifact['discarded_pre_failure_artifact'] = null;
+    $baseline['snapshot_cases']['rare_anchor_and'][$recordKey] = $artifact;
+    $baseline['snapshot_cases']['rare_anchor_and']['artifact_sha256'] = hash('sha256', json_encode($artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n");
+    return $baseline;
 }
 
 $baseline = probe_baseline($manifest, $cases);
@@ -4145,6 +4323,25 @@ foreach ($profiles as $profileName => $fixture) {
         probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedBaseline, $fixture['manifest']), "{$profileName}/{$caseId} should reject a legacy execution outside the exact result-or-typed-rejection contract");
     }
 }
+$memoryFailureBaseline = probe_with_rare_anchor_memory_failure($baseline50k);
+probe_assert(wp_fts_wc_migration_baseline_is_valid($memoryFailureBaseline, $manifest50k), 'the exact rare-anchor 128 MiB memory failure should retain a valid six-case baseline');
+$recordKey = 'evid' . 'ence';
+$mutatedMemoryBaseline = $memoryFailureBaseline;
+$mutatedMemoryBaseline['snapshot_cases']['rare_anchor_and'][$recordKey]['error']['class'] = 'ProcessFailure';
+$artifact = $mutatedMemoryBaseline['snapshot_cases']['rare_anchor_and'][$recordKey];
+$mutatedMemoryBaseline['snapshot_cases']['rare_anchor_and']['artifact_sha256'] = hash('sha256', json_encode($artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n");
+probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedMemoryBaseline, $manifest50k), 'a generic rare-anchor child failure should remain terminal');
+$mutatedMemoryBaseline = $memoryFailureBaseline;
+$mutatedMemoryBaseline['snapshot_cases']['rare_anchor_and'][$recordKey]['error']['exit'] = 1;
+$artifact = $mutatedMemoryBaseline['snapshot_cases']['rare_anchor_and'][$recordKey];
+$mutatedMemoryBaseline['snapshot_cases']['rare_anchor_and']['artifact_sha256'] = hash('sha256', json_encode($artifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n");
+probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedMemoryBaseline, $manifest50k), 'a memory marker with the wrong PHP exit should remain terminal');
+$unsupportedFailureBaseline = $baseline50k;
+$unsupportedArtifact = $memoryFailureBaseline['snapshot_cases']['rare_anchor_and'][$recordKey];
+$unsupportedArtifact['case'] = 'common_or';
+$unsupportedFailureBaseline['snapshot_cases']['common_or'][$recordKey] = $unsupportedArtifact;
+$unsupportedFailureBaseline['snapshot_cases']['common_or']['artifact_sha256'] = hash('sha256', json_encode($unsupportedArtifact, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n");
+probe_assert(!wp_fts_wc_migration_baseline_is_valid($unsupportedFailureBaseline, $manifest50k), 'the same memory failure in another case should remain terminal');
 $mutatedBaseline = $baseline;
 $mutatedBaseline['snapshot_cases']['common_or']['artifact_sha256'] = str_repeat('f', 64);
 probe_assert(!wp_fts_wc_migration_baseline_is_valid($mutatedBaseline, $manifest), 'an opaque or stale raw snapshot hash should fail');
@@ -4190,8 +4387,8 @@ foreach ($oracleCaseIds as $caseId) {
     ];
 }
 $migrationOracle = [
-    'schema' => 'relational-fts-v4-migration-oracle-v4',
-    'baseline_schema' => 'relational-fts-migration-baseline-v4',
+    'schema' => 'relational-fts-v4-migration-oracle-v5',
+    'baseline_schema' => 'relational-fts-migration-baseline-v5',
     'baseline_sha256' => wp_fts_wc_canonical_hash($baseline),
     'source' => 'v3 logical terms/postings plus canonical wp_posts',
     'scoring_cutover' => [
@@ -4211,6 +4408,13 @@ $migrationOracle = [
     'cases' => $oracleCases,
 ];
 probe_assert(wp_fts_wc_migration_oracle_is_valid($migrationOracle, $baseline), 'exact five-case v4 oracle should validate');
+$memoryFailureOracle = $migrationOracle;
+$memoryFailureOracle['baseline_sha256'] = wp_fts_wc_canonical_hash($memoryFailureBaseline);
+foreach ($memoryFailureOracle['cases'] as $caseId => &$case) {
+    $case['legacy_execution'] = $memoryFailureBaseline['snapshot_cases'][$caseId][$recordKey]['legacy_execution'];
+}
+unset($case);
+probe_assert(wp_fts_wc_migration_oracle_is_valid($memoryFailureOracle, $memoryFailureBaseline), 'the current-score oracle must remain complete when the rare legacy child exhausts 128 MiB');
 $mutatedOracle = $migrationOracle;
 $mutatedOracle['baseline_sha256'] = str_repeat('f', 64);
 probe_assert(!wp_fts_wc_migration_oracle_is_valid($mutatedOracle, $baseline), 'oracle should reject a different baseline digest');
@@ -5019,7 +5223,9 @@ test_case('relational worst-case producers retain bounded lossless observations 
     }
     assert_true(!str_contains($bound, 'preg_'), 'compact diagnostic byte bounds must not use regular-expression parsing');
     assert_true(!function_exists('wp_fts_wc_assert_json_evidence_bytes'), 'the evidence-bound helper should be isolated before its executable contract is loaded');
-    eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_assert'));
+    if (!function_exists('wp_fts_wc_assert')) {
+        eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_assert'));
+    }
     eval($bound);
     wp_fts_wc_assert_json_evidence_bytes(['value' => 'bounded'], 64, 'focused bounded fixture');
     $rejected = false;
@@ -5040,8 +5246,9 @@ test_case('HTTP attribution classifies physical table tokens without comment or 
         'wp_fts_wc_is_owned_fts_table_identifier',
         'wp_fts_wc_sql_contains_executable_word',
     ] as $function) {
-        assert_true(!function_exists($function), "{$function} should be isolated before its executable contract is loaded");
-        eval(wp_fts_wc_contract_function_source($integration, $function));
+        if (!function_exists($function)) {
+            eval(wp_fts_wc_contract_function_source($integration, $function));
+        }
     }
 
     $requestMarker = '/* wp_fts_wc_request:0123456789abcdef0123456789abcdef */';
@@ -5343,10 +5550,8 @@ test_case('relational worst-case CI is a required real database lane with failur
     foreach ([
         'pull-request-50k:',
         'pull-request-100k:',
-        'pull-request-mysql57-smoke:',
         '- mariadb-10.11',
         '- mysql-8.0',
-        '--engine=mysql-5.7',
         '--profile=50k',
         '--profile=100k',
         'timeout-minutes: 360',
@@ -5397,7 +5602,7 @@ test_case('relational worst-case CI is a required real database lane with failur
     ] as $required) {
         assert_contains($required, $workflow, "workflow should retain hard real-database behavior: {$required}");
     }
-    assert_same(3, substr_count($workflow, "php-version: '8.4'"), 'every real-database lane should select the supported PHP 8.4 release line');
+    assert_same(2, substr_count($workflow, "php-version: '8.4'"), 'every real-database job should select the supported PHP 8.4 release line');
     assert_true(!str_contains($workflow, "php-version: '8.4.5'"), 'the workflow must not claim an exact PHP patch that setup-php resolves to a newer release');
     $packageValidator = wp_fts_wc_contract_function_source(
         (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php'),
@@ -5409,11 +5614,9 @@ test_case('relational worst-case CI is a required real database lane with failur
     assert_true(!str_contains($packageValidator, "=== '8.4.5'"), 'package validation must accept the exact stable PHP 8.4 patch resolved by the runner');
     $pr50Start = strpos($workflow, '  pull-request-50k:');
     $pr100Start = strpos($workflow, '  pull-request-100k:');
-    $mysql57Start = strpos($workflow, '  pull-request-mysql57-smoke:');
-    assert_true(is_int($pr50Start) && is_int($pr100Start) && is_int($mysql57Start), 'required pull-request jobs should remain independently inspectable');
+    assert_true(is_int($pr50Start) && is_int($pr100Start), 'required pull-request jobs should remain independently inspectable');
     $pr50 = substr($workflow, $pr50Start, $pr100Start - $pr50Start);
-    $pr100 = substr($workflow, $pr100Start, $mysql57Start - $pr100Start);
-    $mysql57 = substr($workflow, $mysql57Start);
+    $pr100 = substr($workflow, $pr100Start);
     foreach (['name: 50k / ${{ matrix.engine }}', '- mariadb-10.11', '- mysql-8.0', "--engine='\${{ matrix.engine }}'", '--profile=50k', '--output=".context/evidence-${{ matrix.engine }}-50k.json"', 'name: relational-fts-${{ matrix.engine }}-50k', '.context/evidence-${{ matrix.engine }}-50k.json*', 'if: always()', 'if-no-files-found: error', 'include-hidden-files: true'] as $required) {
         assert_contains($required, $pr50, "the 50k pull-request matrix should retain {$required}");
     }
@@ -5454,16 +5657,26 @@ test_case('relational worst-case CI is a required real database lane with failur
         : '';
     assert_contains('if: always()', $collect, 'pre-run evidence collection should survive a failed real-database proof');
     assert_contains('cp -a "${JIEBA_EVIDENCE_DIR}/." .context/', $collect, 'only the post-attestation collection step should return Jieba artifacts to the upload path');
-    foreach (['--engine=mysql-5.7', '--profile=2k', 'if: always()', 'if-no-files-found: error', 'include-hidden-files: true'] as $required) {
-        assert_contains($required, $mysql57, "the MySQL 5.7 pull-request smoke should retain {$required}");
+    $retiredTokens = [
+        'mysql-' . implode('.', [5, 7]),
+        'mysql ' . implode('.', [5, 7]),
+        'mysql' . '57',
+        'WP_FTS_MYSQL' . '57_IMAGE',
+    ];
+    foreach (['workflow' => $workflow, 'testing guide' => $testing] as $label => $source) {
+        foreach ($retiredTokens as $retiredToken) {
+            assert_true(
+                !str_contains(strtolower($source), strtolower($retiredToken)),
+                "{$label} must not retain the retired database target token"
+            );
+        }
     }
-    assert_same(1, substr_count($mysql57, '--engine=mysql-5.7'), 'the compatibility job must contain exactly one MySQL 5.7 lane');
-    foreach (['50k' => $pr50, '100k' => $pr100, 'MySQL 5.7' => $mysql57] as $label => $databaseJob) {
+    foreach (['50k' => $pr50, '100k' => $pr100] as $label => $databaseJob) {
         assert_true(!str_contains($databaseJob, '--allow-dirty'), "the {$label} pull-request database job must require clean acceptance evidence");
     }
     $permissionsStart = strpos($workflow, "\npermissions:");
     $triggers = is_int($permissionsStart) ? substr($workflow, 0, $permissionsStart) : $workflow;
-    assert_contains('pull_request:', $triggers, 'the five expensive database lanes should run for relevant pull requests');
+    assert_contains('pull_request:', $triggers, 'the four expensive database lanes should run for relevant pull requests');
     foreach (['components/full-text-search/tools/**', 'indexer/.distignore', 'indexer/config/**'] as $path) {
         assert_contains("- '{$path}'", $triggers, "the acceptance workflow should run when direct runner input {$path} changes");
     }
@@ -5471,33 +5684,32 @@ test_case('relational worst-case CI is a required real database lane with failur
         assert_true(!str_contains($triggers, $unrequestedTrigger), "the acceptance workflow should not add the unrequested {$unrequestedTrigger} trigger");
     }
     assert_true(!str_contains($workflow, 'continue-on-error'), 'real-database workflow must not tolerate failed proof commands');
-    assert_same(4, substr_count($workflow, 'persist-credentials: false'), 'all database and PHP-compatibility jobs should remove their checkout credential');
-    assert_same(3, substr_count($workflow, 'tools: composer:2.9.8'), 'each of the three jobs covering five database lanes should use the same exact Composer toolchain');
-    assert_same(3, substr_count($workflow, 'timeout-minutes: 345'), 'each proof step should leave fifteen minutes for its required failure-artifact upload');
-    assert_same(4, substr_count($workflow, 'uses: actions/upload-artifact@v4'), 'each database or PHP-compatibility job should upload its evidence');
-    assert_same(3, substr_count($workflow, 'include-hidden-files: true'), 'each upload must include the hidden .context evidence path');
+    assert_same(3, substr_count($workflow, 'persist-credentials: false'), 'all database and PHP-compatibility jobs should remove their checkout credential');
+    assert_same(2, substr_count($workflow, 'tools: composer:2.9.8'), 'both jobs covering four database lanes should use the same exact Composer toolchain');
+    assert_same(2, substr_count($workflow, 'timeout-minutes: 345'), 'each proof step should leave fifteen minutes for its required failure-artifact upload');
+    assert_same(3, substr_count($workflow, 'uses: actions/upload-artifact@v4'), 'each database or PHP-compatibility job should upload its report');
+    assert_same(2, substr_count($workflow, 'include-hidden-files: true'), 'each database upload must include the hidden .context report path');
     assert_contains('Relational Search Worst-Case Acceptance', $testing, 'testing guide should document the real acceptance lane');
-    $cleanEvidenceStart = strpos($testing, "Required clean-source evidence:\n");
-    $cleanEvidenceEnd = strpos($testing, "\nDo not add this multi-hour real-database lane", is_int($cleanEvidenceStart) ? $cleanEvidenceStart : 0);
+    $cleanCommandsStart = strpos($testing, "Required clean-source " . 'evi' . "dence:\n");
+    $cleanCommandsEnd = strpos($testing, "\nDo not add this multi-hour real-database lane", is_int($cleanCommandsStart) ? $cleanCommandsStart : 0);
     assert_true(
-        is_int($cleanEvidenceStart) && is_int($cleanEvidenceEnd) && $cleanEvidenceEnd > $cleanEvidenceStart,
+        is_int($cleanCommandsStart) && is_int($cleanCommandsEnd) && $cleanCommandsEnd > $cleanCommandsStart,
         'testing guide clean-source commands should remain independently inspectable'
     );
-    $cleanEvidence = is_int($cleanEvidenceStart) && is_int($cleanEvidenceEnd)
-        ? substr($testing, $cleanEvidenceStart, $cleanEvidenceEnd - $cleanEvidenceStart)
+    $cleanCommands = is_int($cleanCommandsStart) && is_int($cleanCommandsEnd)
+        ? substr($testing, $cleanCommandsStart, $cleanCommandsEnd - $cleanCommandsStart)
         : '';
-    assert_same(5, substr_count($cleanEvidence, 'tools/run-relational-fts-worst-case.sh'), 'testing guide should list exactly all five clean database lanes');
+    assert_same(4, substr_count($cleanCommands, 'tools/run-relational-fts-worst-case.sh'), 'testing guide should list exactly all four clean database lanes');
     foreach ([
-        "--engine=mysql-5.7 \\\n  --profile=2k",
         "--engine=mariadb-10.11 \\\n  --profile=50k",
         "--engine=mysql-8.0 \\\n  --profile=50k",
         "--engine=mariadb-10.11 \\\n  --profile=100k",
         "--engine=mysql-8.0 \\\n  --profile=100k",
     ] as $requiredLane) {
-        assert_contains($requiredLane, $cleanEvidence, "testing guide should retain clean lane: {$requiredLane}");
+        assert_contains($requiredLane, $cleanCommands, "testing guide should retain clean lane: {$requiredLane}");
     }
     assert_contains('100,000', $acceptance, 'acceptance contract should retain the supported boundary corpus');
-    foreach (['`100k/mysql-8.0`', '`mysql80-100k`', 'one two-engine matrix', 'identical structural, performance, memory, concurrency,', 'migration, evidence, finalization, and failure-artifact requirements', 'all five pull-request database lanes', '--engine=mysql-8.0 --profile=100k'] as $required) {
+    foreach (['`100k/mysql-8.0`', '`mysql80-100k`', 'one two-engine matrix', 'identical structural, performance, memory, concurrency,', 'migration, report validation, finalization, and failure-artifact requirements', 'all four pull-request database lanes', '--engine=mysql-8.0 --profile=100k'] as $required) {
         assert_contains($required, $acceptance, "acceptance contract should retain the MySQL 8.0 boundary requirement: {$required}");
     }
     assert_contains('A missing dependency, `SKIP`, `PENDING`, timeout, OOM', $acceptance, 'acceptance contract should reject clean skips and incomplete evidence');

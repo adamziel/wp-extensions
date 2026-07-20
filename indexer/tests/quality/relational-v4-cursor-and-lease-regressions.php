@@ -638,10 +638,10 @@ test_case('relational visibility never walks taxonomy relationships per ranked c
     $storage = new WP_FTS_Storage_Mysql(new WP_FTS_Test_WPDB());
     $visibilitySql = new ReflectionMethod(WP_FTS_Storage_Mysql::class, 'visibility_sql');
     $visibilitySql->setAccessible(true);
-    $visibility = $visibilitySql->invoke($storage, 'ranked.post_id', 'mysql57', []);
+    $visibility = $visibilitySql->invoke($storage, 'ranked.post_id', 'ranked', []);
     assert_true(!str_contains((string) ($visibility['where'] ?? ''), 'term_relationships'), 'ranked visibility must not inspect taxonomy relationships');
     assert_true(!str_contains((string) ($visibility['joins'] ?? ''), 'term_relationships'), 'ranked visibility joins must remain independent of taxonomy fanout');
-    assert_contains('LEFT JOIN wp_fts_work dirty_mysql57 FORCE INDEX (dirty)', (string) ($visibility['joins'] ?? ''), 'dirty visibility should always probe the post-first work index');
+    assert_contains('LEFT JOIN wp_fts_work dirty_ranked FORCE INDEX (dirty)', (string) ($visibility['joins'] ?? ''), 'dirty visibility should always probe the post-first work index');
 });
 
 test_case('relational v6 real Russian ambiguity retains exact lemmas without mbstring', function (): void {
@@ -2537,8 +2537,9 @@ test_case_with_pdo_sqlite_fixture('relational v6 Mysql advertises set-oriented c
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
 
     assert_true($storage instanceof WP_FTS_Set_Oriented_Search_Storage, 'Mysql should expose database-owned planning, ranking, and pagination');
-    assert_true($storage instanceof WP_FTS_DocumentMetadataStorage, 'Mysql should expose only bounded document metadata operations');
     assert_true($storage instanceof WP_FTS_Resettable_Storage, 'Mysql should expose its constant-statement index reset');
+    assert_true(!$storage instanceof WP_FTS_Storage, 'Mysql must not implement the legacy blob storage contract');
+    assert_true(!$storage instanceof WP_FTS_DocumentMetadataStorage, 'Mysql must not claim the legacy point-metadata writer contract');
     assert_true(!$storage instanceof WP_FTS_Row_Postings_Writer_Storage, 'Mysql must not expose the obsolete one-document posting primitive');
     assert_true(!$storage instanceof WP_FTS_Row_Postings_Storage, 'Mysql must not claim that legacy callers can read materialized posting maps');
     assert_true(!$storage instanceof WP_FTS_Capped_Postings_Storage, 'Mysql must not publish a capped posting-list reader that always throws');
@@ -2548,10 +2549,11 @@ test_case_with_pdo_sqlite_fixture('relational v6 Mysql advertises set-oriented c
     assert_true(new WP_FTS_Storage_InMemory() instanceof WP_FTS_Row_Postings_Storage, 'the legacy in-memory fixture should retain its existing decoded posting reader');
     assert_true(!is_subclass_of(WP_FTS_Storage_File::class, WP_FTS_Row_Postings_Writer_Storage::class), 'the legacy file backend should retain its existing blob writer behavior');
 
-    $termKey = WP_FTS_TermNamespace::namespace_term('en', 'writerprobe');
-    assert_same(false, WP_FTS_StorageCompat::replace_doc_postings($storage, 991, [$termKey => 3]), 'the generic compatibility bridge must not route Mysql through an unmeasured primitive');
-    assert_same(0, (int) $wpdb->dbh->query('SELECT COUNT(*) FROM wp_fts_postings')->fetchColumn(), 'rejecting the obsolete primitive must not publish a posting');
+    foreach (['replace_doc_postings', 'get_terms', 'get_postings', 'put_doc', 'delete_doc'] as $method) {
+        assert_true(!method_exists($storage, $method), "Mysql must not expose obsolete {$method}");
+    }
 
+    $termKey = WP_FTS_TermNamespace::namespace_term('en', 'writerprobe');
     $result = $storage->replace_prepared_documents([[
         'doc_id' => 991,
         'primary_lang' => 'en',

@@ -207,10 +207,10 @@ legacy non-relational storage adapters. They do not change relational result
 membership or cause the WordPress plugin to fetch posting lists into PHP.
 
 The File/InMemory component fixtures retain the budgeted-postings compatibility
-contract for those tests and experiments. Production MySQL exposes only the
-set-oriented search API and fails legacy posting-list reads closed. A production
-request therefore cannot turn one of these component limits into a posting list
-scan followed by PHP slicing.
+contract for those tests and experiments. Production MySQL implements only the
+set-oriented search contract; legacy posting-list methods are not present. A
+production request therefore cannot turn one of these component limits into a
+posting list scan followed by PHP slicing.
 
 ## Ranking Field Weights
 

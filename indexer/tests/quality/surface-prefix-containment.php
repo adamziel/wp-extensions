@@ -396,20 +396,7 @@ test_case('surface bounds and cursors are bytewise and v6-specific', function ()
     assert_true($componentConstant instanceof ReflectionClassConstant, 'surface storage must expose an explicit migration signature');
     assert_same('wp-fts-indexer-v6', $componentConstant->getValue(), 'surface rows are incompatible with the abandoned v5 proper-prefix generation');
     assert_same(false, $storage instanceof WP_FTS_Row_Postings_Writer_Storage, 'MySQL must expose only its bounded prepared-document writer capability');
-    assert_same(true, method_exists($storage, 'replace_doc_postings'), 'the former public method should remain an explicit compatibility boundary');
-    $queriesBeforeLegacyWrite = count($wpdb->queries);
-    $legacyWriteError = null;
-    try {
-        $storage->replace_doc_postings(1, []);
-    } catch (LogicException $error) {
-        $legacyWriteError = $error;
-    }
-    assert_same(
-        'Set-oriented storage mutations must use the bounded batch writer.',
-        $legacyWriteError?->getMessage(),
-        'the flat-identity compatibility symbol must reject with the stable bounded-writer contract'
-    );
-    assert_same($queriesBeforeLegacyWrite, count($wpdb->queries), 'the compatibility rejection must execute zero SQL');
+    assert_same(false, method_exists($storage, 'replace_doc_postings'), 'the obsolete one-document writer must not exist on production storage');
     assert_same(true, $storage->indexes_surface_postings(), 'the production storage must explicitly request normalized analyzer surfaces');
 
     $maxPrefix = str_repeat('z', 252);
@@ -454,27 +441,14 @@ test_case('surface bounds and cursors are bytewise and v6-specific', function ()
     assert_true(!hash_equals($firstFingerprint, $secondFingerprint), 'cursor authentication must bind the exact normalized typed surface');
 });
 
-test_case('legacy collection APIs fail closed while bounded document diagnostics stay post-first', function (): void {
+test_case('legacy collection APIs are absent while bounded document diagnostics stay post-first', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
     $storage = new WP_FTS_Storage_Mysql($wpdb);
-    $blob = str_repeat("\xff", 400000);
-    foreach ([
-        static fn() => $storage->put_term(WP_FTS_TermNamespace::namespace_term('en', 'common'), 50000, $blob),
-        static fn() => $storage->delete_term(WP_FTS_TermNamespace::namespace_term('en', 'common')),
-        static fn() => $storage->get_meta(),
-        static fn() => $storage->all_terms(),
-        static fn() => $storage->all_doc_ids(),
-    ] as $operation) {
-        $thrown = false;
-        try {
-            $operation();
-        } catch (BadMethodCallException) {
-            $thrown = true;
-        }
-        assert_true($thrown, 'every complete collection/posting-list compatibility operation must fail closed');
+    foreach (['put_term', 'delete_term', 'get_meta', 'all_terms', 'all_doc_ids'] as $method) {
+        assert_true(!method_exists($storage, $method), "production storage should not expose legacy {$method}");
     }
-    assert_same([], $wpdb->queries, 'legacy collection failures must occur before mutation SQL');
-    assert_same([], $wpdb->prepared, 'legacy collection failures must occur before SQL preparation or blob decoding');
+    assert_same([], $wpdb->queries, 'legacy capability inspection must not execute SQL');
+    assert_same([], $wpdb->prepared, 'legacy capability inspection must not prepare SQL');
 
     $storage->terms_for_doc(1);
     $diagnosticSql = (string) ($wpdb->prepared[0]['sql'] ?? '');

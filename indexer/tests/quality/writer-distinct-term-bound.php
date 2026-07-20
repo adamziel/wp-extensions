@@ -69,7 +69,7 @@ test_case('relational writer exact posting boundary uses one memory-safe INSERT'
         ? (string) ($dictionaryIdReads[0][0] ?? '')
         : (string) ($dictionaryIdReads[0] ?? '');
     assert_same(1, count($dictionaryIdReads), 'the largest valid batch should resolve its dictionary ids once');
-    assert_contains('stored_term.term_id', $dictionaryIdSql, 'dictionary-id SQL must use a non-reserved table alias on MySQL 5.7 and 8');
+    assert_contains('stored_term.term_id', $dictionaryIdSql, 'dictionary-id SQL must use a non-reserved table alias on MySQL and MariaDB');
     assert_true(!str_contains($dictionaryIdSql, ' stored.'), 'dictionary-id SQL must never emit the reserved stored alias');
     $dfWrites = array_values(array_filter(
         $wpdb->prepared,

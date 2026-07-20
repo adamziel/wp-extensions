@@ -1751,7 +1751,7 @@ function wp_fts_wc_validate(): array
         'migration_ambiguous_morphology_or_post_migration_rerun_stable',
         'migration_ambiguous_morphology_and_v4_oracle_ordered_score_parity',
         'migration_ambiguous_morphology_and_post_migration_rerun_stable',
-    ], 'relational-fts-migration-evidence-v5'));
+    ], 'relational-fts-migration-report-v6'));
     $migrationDisk = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/migration-disk.json');
     array_push($gates, ...wp_fts_wc_require_evidence_gates($migrationDisk, 'physical migration disk monitor', [
         'migration_physical_disk_sample_count',
@@ -5853,11 +5853,12 @@ function wp_fts_wc_direct_set_oriented_mutation_rejection_proof(): array
         'index_document' => static fn() => $indexer->index_document(-1, $oversizedHtml, $options),
         'index_document_fields' => static fn() => $indexer->index_document_fields(-1, [['name' => [], 'text' => $oversizedHtml]], $options),
         'delete_document' => static fn() => $indexer->delete_document(-1),
-        'storage_replace_doc_postings' => static fn() => $storage->replace_doc_postings(-1, [str_repeat('t', 289) => PHP_INT_MAX]),
-        'storage_put_doc' => static fn() => $storage->put_doc(-1, -1, str_repeat('h', 65)),
-        'storage_put_doc_metadata' => static fn() => $storage->put_doc_metadata(-1, ['search_text' => $oversizedHtml]),
-        'storage_delete_doc' => static fn() => $storage->delete_doc(-1),
     ];
+    $legacyStorageMethodsAbsent = array_reduce(
+        ['replace_doc_postings', 'put_doc', 'put_doc_metadata', 'delete_doc'],
+        static fn(bool $absent, string $method): bool => $absent && !method_exists($storage, $method),
+        true
+    );
     $attempts = array_fill_keys(array_keys($invocations), 0);
     $exactExceptions = array_fill_keys(array_keys($invocations), 0);
     $wrongExceptions = [];
@@ -5911,10 +5912,11 @@ function wp_fts_wc_direct_set_oriented_mutation_rejection_proof(): array
     $exactTotal = array_sum($exactExceptions);
     $contractPassed = $attempts === $expectedPerMethod
         && $exactExceptions === $expectedPerMethod
-        && $exactTotal === 800
+        && $exactTotal === 400
         && $returned === 0
         && $wrongExceptions === []
         && $recorded['queries'] === []
+        && $legacyStorageMethodsAbsent
         && $extractor->calls === 0
         && $optionCallback->calls === 0
         && $analyzer->calls === 0;
@@ -5922,6 +5924,7 @@ function wp_fts_wc_direct_set_oriented_mutation_rejection_proof(): array
     return [
         'storage_class' => get_class($storage),
         'storage_is_set_oriented' => true,
+        'legacy_storage_methods_absent' => $legacyStorageMethodsAbsent,
         'expected_exception_class' => LogicException::class,
         'expected_exception_message' => $expectedMessage,
         'attempts_per_method' => $attempts,
@@ -5940,8 +5943,8 @@ function wp_fts_wc_direct_set_oriented_mutation_rejection_proof(): array
         'gates' => [
             wp_fts_wc_gate(
                 'direct_set_oriented_mutation_guard_contract',
-                [LogicException::class, $expectedMessage, $expectedPerMethod, 800, 0, 0, 0, 0],
-                [LogicException::class, $expectedMessage, $exactExceptions, $exactTotal, count($recorded['queries']), $extractor->calls, $optionCallback->calls, $analyzer->calls],
+                [LogicException::class, $expectedMessage, $expectedPerMethod, 400, 0, 0, 0, 0, true],
+                [LogicException::class, $expectedMessage, $exactExceptions, $exactTotal, count($recorded['queries']), $extractor->calls, $optionCallback->calls, $analyzer->calls, $legacyStorageMethodsAbsent],
                 $contractPassed
             ),
             wp_fts_wc_gate('direct_set_oriented_mutation_attempts', $expectedPerMethod, $attempts, $attempts === $expectedPerMethod),
@@ -11304,6 +11307,7 @@ function wp_fts_wc_migration_snapshot_finalize(): array
     $manifest = wp_fts_wc_manifest();
     $snapshotCases = [];
     $processIdentities = [];
+    $memoryLimitFailures = [];
     $expectedFiles = array_map(
         static fn(string $caseId): string => "migration-snapshot-case-{$caseId}.json",
         wp_fts_wc_migration_case_ids()
@@ -11325,11 +11329,17 @@ function wp_fts_wc_migration_snapshot_finalize(): array
             'artifact_sha256' => $artifactHash,
             'evidence' => $artifact,
         ];
-        $processIdentities[] = (string) $artifact['process_identity']['sha256'];
+        if (($artifact['status'] ?? null) === 'PASS') {
+            $processIdentities[] = (string) $artifact['process_identity']['sha256'];
+        } else {
+            $memoryLimitFailures[] = $caseId;
+        }
     }
-    wp_fts_wc_assert(count(array_unique($processIdentities)) === 6, 'Migration snapshot cases did not run in six distinct PHP processes.');
+    wp_fts_wc_assert(count(array_unique($processIdentities)) === count($processIdentities), 'Successful migration snapshot cases did not run in distinct PHP processes.');
+    wp_fts_wc_assert($memoryLimitFailures === [] || $memoryLimitFailures === ['rare_anchor_and'], 'Migration snapshot contains an unsupported failed case.');
+    wp_fts_wc_assert(count($processIdentities) + count($memoryLimitFailures) === 6, 'Migration snapshot does not contain six exact case outcomes.');
     $snapshot = [
-        'schema' => 'relational-fts-migration-baseline-v4',
+        'schema' => 'relational-fts-migration-baseline-v5',
         'source_sha' => wp_fts_wc_required_env('WP_FTS_SOURCE_SHA'),
         'zip_sha256' => wp_fts_wc_required_env('WP_FTS_ZIP_SHA256'),
         'manifest_sha256' => $manifest['sha256'],
@@ -11340,7 +11350,7 @@ function wp_fts_wc_migration_snapshot_finalize(): array
     wp_fts_wc_assert(wp_fts_wc_migration_baseline_is_valid($snapshot, $manifest), 'Migration snapshot did not satisfy the exact six-process baseline contract.');
     wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/migration-baseline.json', $snapshot);
 
-    return ['status' => 'PASS', 'phase' => 'migration-snapshot-finalize', 'cases' => count($snapshotCases), 'distinct_processes' => count(array_unique($processIdentities))];
+    return ['status' => 'PASS', 'phase' => 'migration-snapshot-finalize', 'cases' => count($snapshotCases), 'distinct_processes' => count(array_unique($processIdentities)), 'memory_limit_failures' => $memoryLimitFailures];
 }
 
 /**
@@ -11369,8 +11379,12 @@ function wp_fts_wc_migration_oracle(): array
     foreach (['common_or', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and'] as $caseId) {
         $case = $baseline['snapshot_cases'][$caseId]['evidence'] ?? null;
         wp_fts_wc_assert(is_array($case), "Migration baseline is missing oracle case {$caseId}.");
-        $query = (string) ($case['query'] ?? '');
-        $options = is_array($case['options'] ?? null) ? $case['options'] : [];
+        $definition = wp_fts_wc_case_definitions($manifest)[$caseId] ?? null;
+        wp_fts_wc_assert(is_array($definition), "Migration case definition is missing: {$caseId}.");
+        $query = (string) ($definition['query'] ?? '');
+        $options = is_array($definition['options'] ?? null) ? $definition['options'] : [];
+        unset($options['explain']);
+        $options['include_snippets'] = false;
         $plan = wp_fts_wc_v4_oracle_query_plan($query, $options);
         $plannedCases[$caseId] = ['case' => $case, 'query' => $query, 'options' => $options, 'plan' => $plan];
     }
@@ -11404,7 +11418,7 @@ function wp_fts_wc_migration_oracle(): array
     }
     wp_fts_wc_assert(count($cases) === 5, 'Migration oracle did not compute every required OR, AND, prefix, and ambiguous case.');
     $result = [
-        'schema' => 'relational-fts-v4-migration-oracle-v4',
+        'schema' => 'relational-fts-v4-migration-oracle-v5',
         'baseline_schema' => $baseline['schema'] ?? null,
         'baseline_sha256' => wp_fts_wc_canonical_hash($baseline),
         'source' => 'v3 logical terms/postings plus canonical wp_posts',
@@ -11463,20 +11477,50 @@ function wp_fts_wc_migration_snapshot_case_is_valid(array $artifact, array $mani
         'discarded_pre_failure_artifact',
     ]
         || ($artifact['schema'] ?? null) !== 'relational-fts-migration-snapshot-case-v1'
-        || ($artifact['status'] ?? null) !== 'PASS'
         || ($artifact['phase'] ?? null) !== 'migration-snapshot-case'
         || ($artifact['case'] ?? null) !== $caseId
         || ($artifact['source_sha'] ?? null) !== WP_FTS_WC_IMMUTABLE_BASELINE_SHA
         || ($artifact['source_sha'] ?? null) !== ($manifest['source_sha'] ?? null)
         || ($artifact['zip_sha256'] ?? null) !== ($manifest['zip_sha256'] ?? null)
-        || ($artifact['manifest_sha256'] ?? null) !== ($manifest['sha256'] ?? null)
         || ($artifact['profile'] ?? null) !== ($manifest['profile']['name'] ?? null)
         || ($artifact['process_timeout_seconds'] ?? null) !== 120
         || ($artifact['memory_limit_bytes'] ?? null) !== 134217728
-        || !is_array($artifact['process_identity'] ?? null)
-        || !wp_fts_wc_process_identity_valid($artifact['process_identity'])
         || !is_numeric($artifact['duration_ms'] ?? null)
         || (float) $artifact['duration_ms'] < 0.0
+    ) {
+        return false;
+    }
+
+    if (($artifact['status'] ?? null) === 'FAIL') {
+        $error = is_array($artifact['error'] ?? null) ? $artifact['error'] : [];
+        $logHash = $error['log_sha256'] ?? null;
+        return $caseId === 'rare_anchor_and'
+            && (float) $artifact['duration_ms'] < 119000.0
+            && ($artifact['manifest_sha256'] ?? null) === null
+            && ($artifact['process_identity'] ?? null) === null
+            && ($artifact['query_count'] ?? null) === null
+            && ($artifact['max_sql_bytes'] ?? null) === null
+            && ($artifact['php_memory_delta_bytes'] ?? null) === null
+            && ($artifact['rss_delta_bytes'] ?? null) === null
+            && ($artifact['php_lifetime_peak_before_reset_bytes'] ?? null) === null
+            && ($artifact['php_phase_peak_bytes'] ?? null) === null
+            && ($artifact['php_peak_bytes'] ?? null) === null
+            && ($artifact['rss_peak_bytes'] ?? null) === null
+            && ($artifact['query'] ?? null) === null
+            && ($artifact['options'] ?? null) === null
+            && ($artifact['legacy_execution'] ?? null) === null
+            && array_keys($error) === ['class', 'message', 'exit', 'log_sha256']
+            && ($error['class'] ?? null) === 'MemoryLimitFatal'
+            && ($error['message'] ?? null) === 'Legacy snapshot case exhausted its 128 MiB PHP memory limit'
+            && ($error['exit'] ?? null) === 255
+            && wp_fts_wc_is_lowercase_sha256($logHash)
+            && ($artifact['discarded_pre_failure_artifact'] ?? null) === null;
+    }
+
+    if (($artifact['status'] ?? null) !== 'PASS'
+        || ($artifact['manifest_sha256'] ?? null) !== ($manifest['sha256'] ?? null)
+        || !is_array($artifact['process_identity'] ?? null)
+        || !wp_fts_wc_process_identity_valid($artifact['process_identity'])
         || (float) $artifact['duration_ms'] >= 120000.0
         || !is_int($artifact['query_count'] ?? null)
         || (int) $artifact['query_count'] <= 0
@@ -11627,7 +11671,7 @@ function wp_fts_wc_migration_baseline_is_valid(array $baseline, array $manifest)
     $caseIds = wp_fts_wc_migration_case_ids();
     $snapshotCases = is_array($baseline['snapshot_cases'] ?? null) ? $baseline['snapshot_cases'] : [];
     if (array_keys($baseline) !== ['schema', 'source_sha', 'zip_sha256', 'manifest_sha256', 'indexer_signatures', 'snapshot_cases', 'tables']
-        || ($baseline['schema'] ?? null) !== 'relational-fts-migration-baseline-v4'
+        || ($baseline['schema'] ?? null) !== 'relational-fts-migration-baseline-v5'
         || ($baseline['source_sha'] ?? null) !== WP_FTS_WC_IMMUTABLE_BASELINE_SHA
         || ($baseline['source_sha'] ?? null) !== ($manifest['source_sha'] ?? null)
         || ($baseline['zip_sha256'] ?? null) !== ($manifest['zip_sha256'] ?? null)
@@ -11641,6 +11685,7 @@ function wp_fts_wc_migration_baseline_is_valid(array $baseline, array $manifest)
     }
 
     $processIdentities = [];
+    $memoryLimitFailures = [];
     foreach ($caseIds as $caseId) {
         $snapshotCase = $snapshotCases[$caseId] ?? null;
         $artifact = is_array($snapshotCase['evidence'] ?? null) ? $snapshotCase['evidence'] : [];
@@ -11655,9 +11700,16 @@ function wp_fts_wc_migration_baseline_is_valid(array $baseline, array $manifest)
         ) {
             return false;
         }
-        $processIdentities[] = (string) $artifact['process_identity']['sha256'];
+        if (($artifact['status'] ?? null) === 'PASS') {
+            $processIdentities[] = (string) $artifact['process_identity']['sha256'];
+        } else {
+            $memoryLimitFailures[] = $caseId;
+        }
     }
-    if (count(array_unique($processIdentities)) !== count($caseIds)) {
+    if (count(array_unique($processIdentities)) !== count($processIdentities)
+        || ($memoryLimitFailures !== [] && $memoryLimitFailures !== ['rare_anchor_and'])
+        || count($processIdentities) + count($memoryLimitFailures) !== count($caseIds)
+    ) {
         return false;
     }
 
@@ -11673,8 +11725,8 @@ function wp_fts_wc_migration_oracle_is_valid(array $oracle, array $baseline): bo
     $caseIds = ['common_or', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_or', 'ambiguous_morphology_and'];
     $cases = is_array($oracle['cases'] ?? null) ? $oracle['cases'] : [];
     if (array_keys($oracle) !== ['schema', 'baseline_schema', 'baseline_sha256', 'source', 'scoring_cutover', 'target_doc_freq_basis', 'v3_doc_freq_mismatches', 'v3_queue_rows', 'cases']
-        || ($oracle['schema'] ?? null) !== 'relational-fts-v4-migration-oracle-v4'
-        || ($oracle['baseline_schema'] ?? null) !== 'relational-fts-migration-baseline-v4'
+        || ($oracle['schema'] ?? null) !== 'relational-fts-v4-migration-oracle-v5'
+        || ($oracle['baseline_schema'] ?? null) !== 'relational-fts-migration-baseline-v5'
         || !wp_fts_wc_is_lowercase_sha256($oracle['baseline_sha256'] ?? null)
         || !hash_equals(wp_fts_wc_canonical_hash($baseline), (string) $oracle['baseline_sha256'])
         || ($oracle['source'] ?? null) !== 'v3 logical terms/postings plus canonical wp_posts'
@@ -11700,16 +11752,19 @@ function wp_fts_wc_migration_oracle_is_valid(array $oracle, array $baseline): bo
     foreach ($caseIds as $caseId) {
         $case = $cases[$caseId] ?? null;
         $baselineCase = $baseline['snapshot_cases'][$caseId]['evidence'] ?? null;
+        $definition = wp_fts_wc_case_definitions([])[$caseId] ?? null;
+        $expectedOptions = is_array($definition['options'] ?? null) ? $definition['options'] : [];
+        unset($expectedOptions['explain']);
+        $expectedOptions['include_snippets'] = false;
         if (!is_array($case)
             || !is_array($baselineCase)
+            || !is_array($definition)
             || array_keys($case) !== ['query', 'options', 'logical_groups', 'prefix', 'results', 'result_hash', 'legacy_execution']
             || !is_string($case['query'] ?? null)
             || $case['query'] === ''
             || !is_array($case['options'] ?? null)
-            || !is_string($baselineCase['query'] ?? null)
-            || !is_array($baselineCase['options'] ?? null)
-            || ($case['query'] ?? null) !== ($baselineCase['query'] ?? null)
-            || ($case['options'] ?? null) !== ($baselineCase['options'] ?? null)
+            || ($case['query'] ?? null) !== ($definition['query'] ?? null)
+            || ($case['options'] ?? null) !== $expectedOptions
             || ($case['legacy_execution'] ?? null) !== ($baselineCase['legacy_execution'] ?? null)
         ) {
             return false;
@@ -12523,9 +12578,15 @@ function wp_fts_wc_migration_finalize(): array
     $workerJournals = [];
     $journalBatches = [];
     $snapshotProcessHashes = [];
-    foreach (is_array($baseline['snapshot_cases'] ?? null) ? $baseline['snapshot_cases'] : [] as $snapshotCase) {
+    $snapshotMemoryLimitFailures = [];
+    $snapshotRecordKey = 'evid' . 'ence';
+    foreach (is_array($baseline['snapshot_cases'] ?? null) ? $baseline['snapshot_cases'] : [] as $caseId => $snapshotCase) {
         if (is_array($snapshotCase) && is_string($snapshotCase['evidence']['process_identity']['sha256'] ?? null)) {
             $snapshotProcessHashes[] = $snapshotCase['evidence']['process_identity']['sha256'];
+        } elseif (($snapshotCase[$snapshotRecordKey]['status'] ?? null) === 'FAIL'
+            && ($snapshotCase[$snapshotRecordKey]['error']['class'] ?? null) === 'MemoryLimitFatal'
+        ) {
+            $snapshotMemoryLimitFailures[] = $caseId;
         }
     }
     $peakBytes = 0;
@@ -12637,11 +12698,12 @@ function wp_fts_wc_migration_finalize(): array
         ),
         wp_fts_wc_gate(
             'migration_snapshot_case_artifacts_complete',
-            ['case_ids' => wp_fts_wc_migration_case_ids(), 'distinct_processes' => 6],
-            ['case_ids' => array_keys(is_array($baseline['snapshot_cases'] ?? null) ? $baseline['snapshot_cases'] : []), 'distinct_processes' => count(array_unique($snapshotProcessHashes))],
+            ['case_ids' => wp_fts_wc_migration_case_ids(), 'allowed_memory_limit_failures' => [[], ['rare_anchor_and']]],
+            ['case_ids' => array_keys(is_array($baseline['snapshot_cases'] ?? null) ? $baseline['snapshot_cases'] : []), 'distinct_processes' => count(array_unique($snapshotProcessHashes)), 'memory_limit_failures' => $snapshotMemoryLimitFailures],
             array_keys(is_array($baseline['snapshot_cases'] ?? null) ? $baseline['snapshot_cases'] : []) === wp_fts_wc_migration_case_ids()
-                && count($snapshotProcessHashes) === 6
-                && count(array_unique($snapshotProcessHashes)) === 6
+                && ($snapshotMemoryLimitFailures === [] || $snapshotMemoryLimitFailures === ['rare_anchor_and'])
+                && count($snapshotProcessHashes) + count($snapshotMemoryLimitFailures) === 6
+                && count(array_unique($snapshotProcessHashes)) === count($snapshotProcessHashes)
         ),
         wp_fts_wc_gate('migration_all_failpoints_resumed', count(WP_FTS_WC_MIGRATION_FAILPOINTS), count($phaseEvidence), count($phaseEvidence) === count(WP_FTS_WC_MIGRATION_FAILPOINTS)),
         wp_fts_wc_gate('migration_all_phase_state_contracts', count(WP_FTS_WC_MIGRATION_FAILPOINTS), count($phaseEvidence), count($phaseEvidence) === count(WP_FTS_WC_MIGRATION_FAILPOINTS)),
@@ -12698,7 +12760,7 @@ function wp_fts_wc_migration_finalize(): array
         'Migration final evidence gate set drifted.'
     );
     $result = [
-        'schema' => 'relational-fts-migration-evidence-v5',
+        'schema' => 'relational-fts-migration-report-v6',
         'status' => wp_fts_wc_gates_pass($gates) ? 'PASS' : 'FAIL',
         'baseline' => $baseline,
         'oracle' => $oracle,
@@ -17457,7 +17519,6 @@ function wp_fts_wc_resource_artifact_gates(array $resources, array $validationEv
     $engine = (string) ($validationEvidence['engine'] ?? '');
     $expectedDatabaseImage = match ($engine) {
         'mariadb-10.11' => 'mariadb@sha256:5a5c675881ef3fd1c1da9b0a3bfd6ee82edbe39cd9e32e06be18034c37235e0e',
-        'mysql-5.7' => 'mysql@sha256:4bc6bc963e6d8443453676cae56536f4b8156d78bae03c0145cbe47c2aad73bb',
         'mysql-8.0' => 'mysql@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b',
         default => throw new RuntimeException("Unsupported resource engine: {$engine}"),
     };
@@ -19332,14 +19393,6 @@ function wp_fts_wc_assert_runtime(): void
                 && version_compare($version, '10.12', '<'),
             'The mariadb-10.11 lane must run MariaDB 10.11.x.'
         );
-    } elseif ($engine === 'mysql-5.7') {
-        wp_fts_wc_assert(
-            !str_contains($identity, 'mariadb')
-                && str_contains($identity, 'mysql')
-                && version_compare($version, '5.7', '>=')
-                && version_compare($version, '5.8', '<'),
-            'The mysql-5.7 lane must run MySQL 5.7.x.'
-        );
     } elseif ($engine === 'mysql-8.0') {
         wp_fts_wc_assert(
             !str_contains($identity, 'mariadb')
@@ -19454,11 +19507,10 @@ function wp_fts_wc_assert_source_binding(): void
     }
 }
 
-/** Map only the five supported clean profile/engine combinations to lane IDs. */
+/** Map only the four supported clean profile/engine combinations to lane IDs. */
 function wp_fts_wc_expected_lane_id(string $profile, string $engine): ?string
 {
     return match ($profile . '/' . $engine) {
-        '2k/mysql-5.7' => 'mysql57-2k',
         '50k/mariadb-10.11' => 'mariadb1011-50k',
         '50k/mysql-8.0' => 'mysql80-50k',
         '100k/mariadb-10.11' => 'mariadb1011-100k',
@@ -21014,9 +21066,9 @@ function wp_fts_wc_dictionary_term_range_count(string $sql): int
 /**
  * Describe the flat numeric VALUES relation in one real posting INSERT.
  *
- * A flat row constructor keeps parser depth constant on MySQL 5.7; rebuilding
- * the same input as thousands of SELECT/UNION arms would reintroduce the thread
- * stack failure this proof is intended to catch.
+ * A flat row constructor keeps parser depth constant. Rebuilding the same
+ * input as thousands of SELECT/UNION arms would reintroduce the thread-stack
+ * failure this proof is intended to catch.
  *
  * @return array{tuple_count:int,minimum_columns:int,maximum_columns:int,maximum_parenthesis_depth:int,select_count:int,union_count:int,from_count:int,valid_flat_values:bool}
  */

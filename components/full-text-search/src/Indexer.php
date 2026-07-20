@@ -26,8 +26,8 @@ final class WP_FTS_Indexer
     private const MAX_OCCURRENCE_SOURCE_BYTES = 256;
 
     /**
-     * @param WP_FTS_Storage $storage Storage backend for terms, documents, and
-     *        metadata. Backends may be language-aware or legacy aggregate-only.
+     * @param WP_FTS_Storage|WP_FTS_Set_Oriented_Search_Storage $storage Legacy
+     *        mutable storage, or the relational production analysis target.
      * @param object $analyzer Analyzer object exposing `analyze_content()`.
      * @param object|null $postContentExtractor Optional adapter exposing
      *        `extract(object $post, array $opts): array` for post preparation.
@@ -35,7 +35,7 @@ final class WP_FTS_Indexer
      *        `index_document_fields()`.
      */
     public function __construct(
-        private WP_FTS_Storage $storage,
+        private WP_FTS_Storage|WP_FTS_Set_Oriented_Search_Storage $storage,
         private object $analyzer,
         private ?object $postContentExtractor = null,
     ) {
@@ -755,7 +755,9 @@ final class WP_FTS_Indexer
      */
     public function flush(): void
     {
-        $this->storage->flush();
+        if ($this->storage instanceof WP_FTS_Storage) {
+            $this->storage->flush();
+        }
     }
 
     /**
@@ -763,6 +765,10 @@ final class WP_FTS_Indexer
      */
     public function optimize(): void
     {
+        if (!is_callable([$this->storage, 'optimize'])) {
+            throw new LogicException('The storage backend does not support optimization.');
+        }
+
         $this->storage->optimize();
     }
 

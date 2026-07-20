@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * Storage contract shared by in-memory, file, and MySQL index backends.
+ * Legacy blob-storage contract used by the in-memory and file backends.
  *
  * Implementations store postings by namespaced term key, document metadata with
  * per-language lengths, and collection metadata used by BM25. The interface also
@@ -145,14 +145,14 @@ interface WP_FTS_Storage
 }
 
 /**
- * Optional storage extension for set-oriented search and pagination.
+ * Storage contract for set-oriented search and pagination.
  *
  * Backends implementing this contract own dictionary resolution, candidate
  * discovery, visibility filtering, ranking, and pagination in the database.
  * The searcher supplies one analyzed logical-group plan and never expands
  * prefixes or reads postings through the legacy storage primitives first.
  */
-interface WP_FTS_Set_Oriented_Search_Storage extends WP_FTS_Storage
+interface WP_FTS_Set_Oriented_Search_Storage
 {
     public const MAX_QUERY_GROUPS = 12;
     public const MAX_ALTERNATIVES_PER_GROUP = 12;
@@ -306,12 +306,12 @@ interface WP_FTS_Prefix_Term_Storage extends WP_FTS_Storage
 }
 
 /**
- * Optional storage extension for table-preserving whole-index resets.
+ * Storage capability for table-preserving whole-index resets.
  *
  * Implementations must remove only derived FTS rows and leave schema/table
  * contracts intact so a later reindex can repopulate the same backend.
  */
-interface WP_FTS_Resettable_Storage extends WP_FTS_Storage
+interface WP_FTS_Resettable_Storage
 {
     /**
      * Clear all indexed document, posting, term, and collection metadata rows.

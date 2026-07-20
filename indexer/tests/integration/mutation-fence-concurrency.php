@@ -1863,13 +1863,11 @@ function wp_fts_mutation_proof_production_worker_cas(): array
         if ($postId > 0) {
             try {
                 // Fixture teardown is intentionally outside the production
-                // factory: the worker has atomically removed its writer lease,
-                // so the always-guarded public storage instance must reject a
-                // later mutation. This explicitly unguarded instance is scoped
-                // to the disposable proof and followed by physical row checks.
+                // factory. This explicitly unguarded instance is scoped to the
+                // disposable proof and followed by physical row checks.
                 $storage = new WP_FTS_Storage_Mysql($wpdb);
                 if ($storage->get_doc($postId) !== null) {
-                    $storage->delete_doc($postId);
+                    $storage->replace_prepared_documents([], [$postId]);
                 }
             } catch (Throwable $error) {
                 // Finish direct cleanup before surfacing a failed relational cleanup.

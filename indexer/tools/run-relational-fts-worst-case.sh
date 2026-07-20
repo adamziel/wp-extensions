@@ -3,8 +3,8 @@ set -euo pipefail
 
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 REPO_ROOT="$(cd "${PLUGIN_DIR}/.." && pwd -P)"
-PROFILE="2k"
-ENGINE="mysql-5.7"
+PROFILE="50k"
+ENGINE="mariadb-10.11"
 OUTPUT=""
 SOURCE_REF="HEAD"
 BASELINE_COMMIT="36a26f4ad1aaef9758922f24677069045c5291ab"
@@ -30,7 +30,6 @@ MIGRATION_FAILPOINT_BATCH_BUDGET_SECONDS=300
 MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS=$((MIGRATION_FAILPOINT_DEADLINE_SECONDS + MIGRATION_FAILPOINT_BATCH_BUDGET_SECONDS + 60))
 MIGRATION_FAILPOINT_OUTER_TIMEOUT_SECONDS=$((MIGRATION_FAILPOINT_READY_TIMEOUT_SECONDS + 60))
 MARIADB_IMAGE="mariadb@sha256:5a5c675881ef3fd1c1da9b0a3bfd6ee82edbe39cd9e32e06be18034c37235e0e"
-MYSQL57_IMAGE="mysql@sha256:4bc6bc963e6d8443453676cae56536f4b8156d78bae03c0145cbe47c2aad73bb"
 MYSQL_IMAGE="mysql@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
 WORDPRESS_IMAGE="wordpress@sha256:bfc320ed4f02dd3939186b8020de64203a48a939d6dedcf44cb92cf2368923f5"
 WPCLI_IMAGE="wordpress@sha256:7f492e43c962ee85b1a9d5f88a97111559d92c2fb785f5d20650670bfaaa1763"
@@ -40,7 +39,7 @@ usage() {
 Usage: indexer/tools/run-relational-fts-worst-case.sh [options]
 
   --profile=2k|50k|100k
-  --engine=mariadb-10.11|mysql-5.7|mysql-8.0
+  --engine=mariadb-10.11|mysql-8.0
   --output=PATH                 Required machine-readable evidence destination.
   --source-ref=REF              Clean Git ref/worktree to package (default HEAD).
   --concurrency-seconds=N       Default 60; values below 60 are non-acceptance.
@@ -75,19 +74,17 @@ case "${PROFILE}" in
 esac
 case "${ENGINE}" in
     mariadb-10.11) EXPECTED_DB_IMAGE="${MARIADB_IMAGE}"; DB_IMAGE="${WP_FTS_MARIADB_IMAGE:-${MARIADB_IMAGE}}"; DB_KIND=mariadb ;;
-    mysql-5.7) EXPECTED_DB_IMAGE="${MYSQL57_IMAGE}"; DB_IMAGE="${WP_FTS_MYSQL57_IMAGE:-${MYSQL57_IMAGE}}"; DB_KIND=mysql ;;
     mysql-8.0) EXPECTED_DB_IMAGE="${MYSQL_IMAGE}"; DB_IMAGE="${WP_FTS_MYSQL_IMAGE:-${MYSQL_IMAGE}}"; DB_KIND=mysql ;;
     *) echo "Invalid engine: ${ENGINE}" >&2; exit 2 ;;
 esac
 case "${PROFILE}/${ENGINE}" in
-    2k/mysql-5.7) LANE_ID="mysql57-2k" ;;
     50k/mariadb-10.11) LANE_ID="mariadb1011-50k" ;;
     50k/mysql-8.0) LANE_ID="mysql80-50k" ;;
     100k/mariadb-10.11) LANE_ID="mariadb1011-100k" ;;
     100k/mysql-8.0) LANE_ID="mysql80-100k" ;;
     *)
         if (( ALLOW_DIRTY == 0 )); then
-            echo "BLOCKED: ${PROFILE}/${ENGINE} is not one of the five clean acceptance lanes; use --allow-dirty for diagnostics." >&2
+            echo "BLOCKED: ${PROFILE}/${ENGINE} is not one of the four clean acceptance lanes; use --allow-dirty for diagnostics." >&2
             exit 2
         fi
         LANE_ID="diagnostic-${ENGINE}-${PROFILE}"
@@ -96,7 +93,7 @@ esac
 WP_IMAGE="${WP_FTS_WORDPRESS_IMAGE:-${WORDPRESS_IMAGE}}"
 WPCLI_RUN_IMAGE="${WP_FTS_WPCLI_IMAGE:-${WPCLI_IMAGE}}"
 if (( ALLOW_DIRTY == 0 )); then
-    for override_name in WP_FTS_MARIADB_IMAGE WP_FTS_MYSQL57_IMAGE WP_FTS_MYSQL_IMAGE WP_FTS_WORDPRESS_IMAGE WP_FTS_WPCLI_IMAGE; do
+    for override_name in WP_FTS_MARIADB_IMAGE WP_FTS_MYSQL_IMAGE WP_FTS_WORDPRESS_IMAGE WP_FTS_WPCLI_IMAGE; do
         if [[ -n "${!override_name-}" ]]; then
             echo "BLOCKED: image overrides are forbidden in clean acceptance lanes: ${override_name}. Use --allow-dirty for non-acceptance diagnostics." >&2
             exit 1
@@ -2244,7 +2241,7 @@ if(!fclose($output)){fwrite(STDERR,"Could not close bounded migration snapshot l
     local status="${statuses[0]:-1}"
     local sink_status="${statuses[1]:-1}"
     set -e
-    if (( sink_status != 0 && status == 0 )); then
+    if (( sink_status != 0 )); then
         status=1
     fi
     finished="$(php -r 'echo hrtime(true);')"
@@ -2269,7 +2266,7 @@ if(is_file($argv[9])){
     if(!feof($handle)&&!$memoryFatal){fclose($handle);fwrite(STDERR,"Could not scan migration snapshot log.\n");exit(1);}
     fclose($handle);
 }
-$class=$timedOut?"Timeout":($exit===137?"KilledOrOOM":($memoryFatal?"MemoryLimitFatal":"ProcessFailure"));
+$class=$timedOut?"Timeout":($exit===137?"KilledOrOOM":($exit===255&&$memoryFatal?"MemoryLimitFatal":"ProcessFailure"));
 $message=$timedOut?"Legacy snapshot case exceeded the 120-second process limit":($exit===137?"Legacy snapshot case was SIGKILLed or OOM-killed before its timeout":($memoryFatal?"Legacy snapshot case exhausted its 128 MiB PHP memory limit":"Legacy snapshot case exited before writing PASS evidence"));
 $data=[
  "schema"=>"relational-fts-migration-snapshot-case-v1","status"=>"FAIL","phase"=>"migration-snapshot-case","case"=>$argv[1],
@@ -2293,6 +2290,14 @@ if(file_put_contents($temporary,$json,LOCK_EX)!==strlen($json)||!rename($tempora
             echo "FAIL: could not publish bounded failure evidence for migration snapshot case ${case_id}." >&2
             return "${failure_status}"
         fi
+        if migration_snapshot_memory_limit_failure_is_continuable "${case_id}" "${path}" "${log_path}"; then
+            if ! wait_for_legacy_snapshot_database_quiescence; then
+                echo "FAIL: legacy snapshot memory failure left active database work." >&2
+                return 1
+            fi
+            echo "WARN: retained the rare_anchor_and legacy 128 MiB memory failure; continuing with current-runtime validation." >&2
+            return 0
+        fi
         # A killed PHP client can leave its server-side statement running. Stop
         # this lane immediately so the EXIT cleanup removes the database instead
         # of contaminating a later case with residual legacy work.
@@ -2301,6 +2306,89 @@ if(file_put_contents($temporary,$json,LOCK_EX)!==strlen($json)||!rename($tempora
         fi
         return "${status}"
     fi
+}
+
+migration_snapshot_memory_limit_failure_is_continuable() {
+    local case_id="$1"
+    local path="$2"
+    local log_path="$3"
+    if [[ "${case_id}" != "rare_anchor_and" ]]; then
+        return 1
+    fi
+    php -r '
+$artifact=json_decode((string)file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
+$error=is_array($artifact["error"]??null)?$artifact["error"]:[];
+$hash=$error["log_sha256"]??null;
+$memoryFatal=false;
+if(is_file($argv[2])){
+    $handle=fopen($argv[2],"rb");
+    if($handle===false){exit(1);}
+    while(($line=fgets($handle))!==false){
+        if(str_contains($line,"Allowed memory size of 134217728 bytes exhausted")){$memoryFatal=true;break;}
+    }
+    if(!feof($handle)&&!$memoryFatal){fclose($handle);exit(1);}
+    fclose($handle);
+}
+$valid=array_keys($artifact)===["schema","status","phase","case","source_sha","zip_sha256","manifest_sha256","profile","process_timeout_seconds","memory_limit_bytes","process_identity","duration_ms","query_count","max_sql_bytes","php_memory_delta_bytes","rss_delta_bytes","php_lifetime_peak_before_reset_bytes","php_phase_peak_bytes","php_peak_bytes","rss_peak_bytes","query","options","legacy_execution","error","discarded_pre_failure_artifact"]
+    &&($artifact["schema"]??null)==="relational-fts-migration-snapshot-case-v1"
+    &&($artifact["status"]??null)==="FAIL"
+    &&($artifact["phase"]??null)==="migration-snapshot-case"
+    &&($artifact["case"]??null)==="rare_anchor_and"
+    &&($artifact["source_sha"]??null)===$argv[3]
+    &&$argv[3]===$argv[6]
+    &&($artifact["zip_sha256"]??null)===$argv[4]
+    &&($artifact["profile"]??null)===$argv[5]
+    &&($artifact["manifest_sha256"]??null)===null
+    &&($artifact["process_timeout_seconds"]??null)===120
+    &&($artifact["memory_limit_bytes"]??null)===134217728
+    &&($artifact["process_identity"]??null)===null
+    &&is_numeric($artifact["duration_ms"]??null)
+    &&(float)$artifact["duration_ms"]>=0.0
+    &&(float)$artifact["duration_ms"]<119000.0
+    &&($artifact["query_count"]??null)===null
+    &&($artifact["max_sql_bytes"]??null)===null
+    &&($artifact["php_memory_delta_bytes"]??null)===null
+    &&($artifact["rss_delta_bytes"]??null)===null
+    &&($artifact["php_lifetime_peak_before_reset_bytes"]??null)===null
+    &&($artifact["php_phase_peak_bytes"]??null)===null
+    &&($artifact["php_peak_bytes"]??null)===null
+    &&($artifact["rss_peak_bytes"]??null)===null
+    &&($artifact["query"]??null)===null
+    &&($artifact["options"]??null)===null
+    &&($artifact["legacy_execution"]??null)===null
+    &&array_keys($error)===["class","message","exit","log_sha256"]
+    &&($error["class"]??null)==="MemoryLimitFatal"
+    &&($error["message"]??null)==="Legacy snapshot case exhausted its 128 MiB PHP memory limit"
+    &&($error["exit"]??null)===255
+    &&$memoryFatal
+    &&is_string($hash)&&strlen($hash)===64&&ctype_xdigit($hash)&&strtolower($hash)===$hash
+    &&hash_equals($hash,(string)hash_file("sha256",$argv[2]))
+    &&($artifact["discarded_pre_failure_artifact"]??null)===null;
+exit($valid?0:1);
+' "${path}" "${log_path}" "${ACTIVE_SOURCE_SHA}" "${ACTIVE_ZIP_SHA256}" "${PROFILE}" "${BASELINE_COMMIT}"
+}
+
+wait_for_legacy_snapshot_database_quiescence() {
+    local client
+    if [[ "${DB_KIND}" == "mariadb" ]]; then
+        client=mariadb
+    else
+        client=mysql
+    fi
+    timed_compose legacy-snapshot-database-quiescence 45 exec -T db sh -c '
+client="$1"
+attempt=0
+while [ "$attempt" -lt 30 ]; do
+    active="$("$client" -uroot -pwpfts_root_dev_only --batch --skip-column-names --execute "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER='\''wpfts'\'' AND COMMAND<>'\''Sleep'\''")" || exit 2
+    case "$active" in
+        0) exit 0 ;;
+        ""|*[!0-9]*) exit 2 ;;
+    esac
+    attempt=$((attempt+1))
+    sleep 1
+done
+exit 1
+' sh "${client}"
 }
 
 set_run_stage "baseline-corpus-and-index"

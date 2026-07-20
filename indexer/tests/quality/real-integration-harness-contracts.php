@@ -260,9 +260,12 @@ test_case('quality real mysql harness source tracks exact four-table current sch
         assert_contains($contract, $proof, "real MySQL proof should assert schema contract {$contract}");
     }
 
-    foreach (['get_terms', 'get_postings', 'get_capped_postings', 'get_budgeted_postings'] as $method) {
-        assert_contains("\$storage->{$method}", $script, "real integration harness should prove {$method} fails closed before SQL");
-    }
+    assert_contains(
+        "['get_terms', 'get_postings', 'get_capped_postings', 'get_budgeted_postings']",
+        $script,
+        'real integration harness should inspect every removed posting-list method'
+    );
+    assert_contains('!method_exists($storage, $method)', $script, 'real integration harness should require legacy posting-list methods to be absent');
     assert_contains('wp_fts_real_integration_term_state', $script, 'real integration harness should inspect one exact relational term through a bounded test helper');
     assert_contains('WP_FTS_MYSQL_PROOF_ALLOW_DISPOSABLE', $proof, 'real MySQL proof should require disposable-site opt-in');
 });

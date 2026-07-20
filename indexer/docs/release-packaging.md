@@ -20,6 +20,16 @@ indexer/
     analyzer-packs/
   src/
   tools/
+    import-lemma-tsv-pack.php
+    import-conllu-lemma-pack.php
+    import-unimorph-lemma-pack.php
+    import-polish-polimorf-lemmatizer.php
+    validate-analyzer-pack.php
+    audit-top-language-lemma-packs.php
+    build-lemma-pack-lookup-index.php
+    build-polish-polimorf-external-pack.php
+    lemma-source-import-limits.php
+    lemma-chunk-merge.php
   vendor/
     wp-php-toolkit/full-text-search/
 ```
@@ -42,7 +52,9 @@ Ship:
 - `playground/*.json` and `playground/sqlite-smoke.php`;
 - `resources/analyzer-packs/` runtime manifests, notices, provenance, and
   runtime shards that the plugin can validate locally;
-- `tools/` importer, validator, audit, and external-pack helper scripts;
+- the ten `tools/` modules that back the shipped WP-CLI import commands and
+  documented pack validation, audit, lookup retrofit, and external PoliMorf
+  workflows;
 - runtime Composer dependencies under `vendor/`, including
   `wp-php-toolkit/full-text-search`, for release archives.
 - the curated Jieba runtime dictionary, MIT license, and compact lookup index
@@ -58,6 +70,8 @@ Do not ship:
 - `.cao/` task and review artifacts;
 - `review-artifacts/`;
 - `tests/`;
+- all other `tools/` source-checkout build, test, release, corpus-generation,
+  source-verification, and smoke utilities;
 - `goal.md`;
 - Composer auth files such as `indexer/auth.json` and
   `indexer/.composer/auth.json`;
@@ -314,9 +328,10 @@ Inspect the archive contents:
 php -r '$z=new ZipArchive(); $z->open($argv[1]); for ($i=0; $i<$z->numFiles; $i++) { echo $z->getNameIndex($i), PHP_EOL; }' "$BUILD/wp-fts-indexer.zip" | sed -n '1,120p'
 ```
 
-The listing should include `indexer/resources/analyzer-packs/`,
-`indexer/tools/`, and production `indexer/vendor/` dependencies. It should not
-include `.cao`, root `indexer/tests/`, dependency-internal vendor tests such as
+The listing should include `indexer/resources/analyzer-packs/`, the ten listed
+`indexer/tools/` modules, and production `indexer/vendor/` dependencies. It
+should not include `.cao`, root `indexer/tests/`, unlisted source-checkout
+`indexer/tools/` utilities, dependency-internal vendor tests such as
 `indexer/vendor/wp-php-toolkit/full-text-search/tests/*`, `indexer/vendor/bin/`,
 dependency dotfiles such as `indexer/vendor/wamania/php-stemmer/.gitignore`,
 Composer auth files such as `indexer/auth.json` or

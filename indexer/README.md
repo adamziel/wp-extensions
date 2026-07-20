@@ -69,6 +69,9 @@ development-only Composer path repository points to the adjacent
 Developers working in the monorepo can build the same standalone package with
 `php indexer/tools/build-release-zip.php` as described in
 [`docs/release-packaging.md`](docs/release-packaging.md).
+Release ZIPs contain only the importer and documented pack-management tools
+listed there. Composer development scripts and every other `tools/` command
+require a complete source checkout.
 
 Activation creates or repairs the `fts_*` tables and schedules the bounded
 runtime queue processor. Reindex stores one filtered durable scope and returns;

@@ -1204,7 +1204,7 @@ test_case('quality extractor filters share fixed metadata and field-boost envelo
     assert_same(['value'], $boundary['metadata']['custom_fields']['signal'] ?? null, 'the shared node boundary should include both structured maps');
 });
 
-test_case('quality MySQL compatibility adapters reject explosive inputs before normalization', function (): void {
+test_case('quality MySQL set-oriented APIs reject explosive inputs before normalization', function (): void {
     $fake = new WP_FTS_Test_WPDB();
     $fake->recordReadQueries = true;
     $storage = new WP_FTS_Storage_Mysql($fake);
@@ -1234,44 +1234,16 @@ test_case('quality MySQL compatibility adapters reject explosive inputs before n
     assert_true($deleteError instanceof InvalidArgumentException, 'prepared writes should reject raw delete cardinality before traversal');
 
     foreach ([
-        'over-limit posting count' => static fn(): mixed => $storage->put_term(
-            WP_FTS_TermNamespace::namespace_term('en', 'term'),
-            20001,
-            WP_FTS_PostingsCodec::encode_varint(20001)
-        ),
-        'oversized dictionary key' => static fn(): mixed => $storage->put_term(
-            str_repeat('t', 289),
-            1,
-            WP_FTS_PostingsCodec::encode([1 => 1])
-        ),
-        'oversized posting blob' => static fn(): mixed => $storage->put_term(
-            WP_FTS_TermNamespace::namespace_term('en', 'term'),
-            1,
-            str_repeat("\0", 400011)
-        ),
-    ] as $label => $legacyWrite) {
-        $legacyWriteError = psic_caught($legacyWrite);
-        assert_true($legacyWriteError instanceof BadMethodCallException, "{$label} should fail at the removed production posting-list mutation boundary");
-        assert_contains('only through bounded set-oriented operations', $legacyWriteError?->getMessage() ?? '', "{$label} should identify the production writer contract");
+        'put_term',
+        'get_meta',
+        'replace_doc_postings',
+        'put_doc',
+        'put_doc_metadata',
+        'delete_doc',
+    ] as $method) {
+        assert_true(!method_exists($storage, $method), "production storage should not expose legacy {$method}");
     }
-
-    $languageError = psic_caught(static fn(): array => $storage->get_meta(str_repeat('l', 65)));
-    assert_true($languageError instanceof BadMethodCallException, 'legacy collection metadata should fail closed before inspecting its language input');
-    assert_contains('only through bounded set-oriented operations', $languageError?->getMessage() ?? '', 'legacy collection metadata should identify the production set-oriented boundary');
-
-    $mutationMessage = 'Set-oriented storage mutations must use the bounded batch writer.';
-    foreach ([
-        'replace_doc_postings' => static fn(): mixed => $storage->replace_doc_postings(-1, [str_repeat('t', 289) => PHP_INT_MAX]),
-        'put_doc' => static fn(): mixed => $storage->put_doc(1, str_repeat('l', 65), 'hash'),
-        'put_doc_metadata' => static fn(): mixed => $storage->put_doc_metadata(1, [
-            'search_text' => str_repeat('s', WP_FTS_Analysis_Limits::MAX_SOURCE_BYTES + 1),
-        ]),
-        'delete_doc' => static fn(): mixed => $storage->delete_doc(-1),
-    ] as $method => $mutation) {
-        $error = psic_caught($mutation);
-        assert_true($error instanceof LogicException, "{$method} should reject the relational point-mutation path before input validation");
-        assert_same($mutationMessage, $error?->getMessage(), "{$method} should expose the exact bounded-writer contract");
-    }
+    assert_same($before, $fake->num_queries, 'legacy capability inspection should not execute SQL');
 
     $preparedLanguageError = psic_caught(static fn(): array => $storage->replace_prepared_documents([[
         'doc_id' => 1,
@@ -1366,10 +1338,10 @@ test_case('quality MySQL compatibility adapters reject explosive inputs before n
     $guardedStorage = new WP_FTS_Storage_Mysql($fake, null, static function () use (&$guardCalls): void {
         $guardCalls++;
     });
-    psic_caught(static fn(): mixed => $guardedStorage->put_doc(-1, str_repeat('l', 65), 'hash'));
-    psic_caught(static fn(): mixed => $guardedStorage->put_doc_metadata(-1, ['search_text' => str_repeat('s', 3000000)]));
-    psic_caught(static fn(): mixed => $guardedStorage->delete_doc(-1));
-    assert_same(0, $guardCalls, 'legacy relational point mutations should fail before invoking a potentially SQL-backed mutation guard');
+    foreach (['put_doc', 'put_doc_metadata', 'delete_doc'] as $method) {
+        assert_true(!method_exists($guardedStorage, $method), "guarded production storage should not expose legacy {$method}");
+    }
+    assert_same(0, $guardCalls, 'legacy capability inspection should not invoke the mutation guard');
     psic_caught(static fn(): array => $guardedStorage->replace_prepared_documents([[
         'doc_id' => 1,
         'term_frequencies' => [],

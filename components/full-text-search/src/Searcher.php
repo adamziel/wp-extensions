@@ -81,29 +81,26 @@ final class WP_FTS_Searcher
     /**
      * Construct the only searcher shape supported by production WordPress.
      *
-     * Keeping the assertion here makes a future storage-factory change fail
-     * closed instead of silently reactivating PHP posting-list ranking.
+     * The parameter type makes a future storage-factory change fail closed
+     * instead of silently reactivating PHP posting-list ranking.
      */
     public static function for_set_oriented_storage(
-        WP_FTS_Storage $storage,
+        WP_FTS_Set_Oriented_Search_Storage $storage,
         object $analyzer,
     ): self {
-        if (!$storage instanceof WP_FTS_Set_Oriented_Search_Storage) {
-            throw new LogicException('Production search requires a set-oriented storage backend.');
-        }
-
         return new self($storage, $analyzer);
     }
 
     /**
-     * @param WP_FTS_Storage $storage Relational production storage, or a
-     *        legacy File/InMemory backend used only by component fixtures.
+     * @param WP_FTS_Storage|WP_FTS_Set_Oriented_Search_Storage $storage
+     *        Relational production storage, or a legacy File/InMemory backend
+     *        used only by component fixtures.
      * @param object $analyzer Analyzer object exposing query analysis methods.
      * @param float $k1 BM25 term-frequency saturation parameter.
      * @param float $b BM25 document-length normalization parameter.
      */
     public function __construct(
-        private WP_FTS_Storage $storage,
+        private WP_FTS_Storage|WP_FTS_Set_Oriented_Search_Storage $storage,
         private object $analyzer,
         private float $k1 = 1.2,
         private float $b = 0.75,

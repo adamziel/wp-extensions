@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-test_case('mysql 5.7 bounded term previews use deterministic per-document limits', function (): void {
+test_case('bounded term previews use deterministic per-document limits', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
     $storage = new WP_FTS_Storage_Mysql($wpdb);
 
@@ -20,12 +20,12 @@ test_case('mysql 5.7 bounded term previews use deterministic per-document limits
     foreach (['@wp_fts_', 'ROW_NUMBER()', 'term_rank', 'CROSS JOIN'] as $optimizerSensitiveShape) {
         assert_true(
             !str_contains($sql, $optimizerSensitiveShape),
-            "MySQL 5.7 term previews should not contain {$optimizerSensitiveShape}"
+            "bounded term previews should not contain {$optimizerSensitiveShape}"
         );
     }
 });
 
-test_case('mysql 5.7 bounded term previews avoid a database call for an empty document set', function (): void {
+test_case('bounded term previews avoid a database call for an empty document set', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
     $storage = new WP_FTS_Storage_Mysql($wpdb);
 

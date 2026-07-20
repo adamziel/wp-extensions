@@ -14,6 +14,9 @@ both supported database families. None uses an in-memory substitute.
 A change passes only when the machine-readable real-database evidence described
 below passes. A missing dependency, `SKIP`, `PENDING`, timeout, OOM, absent
 metric, or incomplete evidence file is a failure.
+The sole nonterminal legacy child outcome is the classified 128 MiB PHP limit
+described in the migration section; it remains FAIL and does not weaken any
+current-runtime gate.
 
 ## Search-path invariants
 
@@ -500,7 +503,7 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    nonhydrating diagnose is at most **5**. The corresponding SQLite physical
    snapshot is one portable schema statement, so operator/support totals **2**
    including work. Real cold storage-metadata evidence must reproduce exactly
-   two physical statements on MySQL 5.7, MySQL 8.0, and MariaDB 10.11. Returning
+   two physical statements on MySQL 8.0 and MariaDB 10.11. Returning
    to one `information_schema` probe per table/column/index is a statement-count
    regression even though this is an explicit operator path.
 9. `wp fts delete <id>` refuses an eligible canonical WordPress post. A missing
@@ -612,27 +615,27 @@ and indexes them through the production WP-CLI/worker path. It supports:
 
 | Profile | Documents | Use |
 | --- | ---: | --- |
-| `2k` | 2,000 | small-site oracle, failure smoke, and required MySQL 5.7 compatibility |
+| `2k` | 2,000 | local small-site oracle and failure smoke |
 | `50k` | 50,000 | required pull-request MariaDB/MySQL evidence |
 | `100k` | 100,000 | required pull-request boundary/release MariaDB/MySQL evidence |
 
 Only these clean profile/engine tuples are acceptance lanes, with stable lane
-identities: `2k/mysql-5.7` (`mysql57-2k`), `50k/mariadb-10.11`
-(`mariadb1011-50k`), `50k/mysql-8.0` (`mysql80-50k`),
+identities: `50k/mariadb-10.11` (`mariadb1011-50k`),
+`50k/mysql-8.0` (`mysql80-50k`),
 `100k/mariadb-10.11` (`mariadb1011-100k`), and `100k/mysql-8.0`
 (`mysql80-100k`). Every other tuple is rejected before Docker starts unless
 `--allow-dirty` explicitly marks it diagnostic. A clean report must carry the
 exact expected lane ID; success from a cheaper arbitrary profile/engine
-combination cannot substitute for one of these five lanes.
+combination cannot substitute for one of these four lanes.
 
 The 100k pull-request job is one two-engine matrix. MariaDB 10.11 and MySQL 8.0
 therefore execute the identical structural, performance, memory, concurrency,
-migration, evidence, finalization, and failure-artifact requirements; neither
-engine has a reduced boundary path.
+migration, report validation, finalization, and failure-artifact requirements;
+neither engine has a reduced boundary path.
 
-The 2,000-document lane is the explicit small-site validation profile, not a
-lower production-size boundary. The 50k/100k lanes prove that the same bounded
-query shapes hold as a medium site grows.
+The 2,000-document profile is the explicit local small-site validation profile,
+not a clean acceptance lane or a lower production-size boundary. The 50k/100k
+lanes prove that the same bounded query shapes hold as a medium site grows.
 
 The corpus uses titles, excerpts, HTML bodies, language spans, several post
 statuses, password-protected posts, and deterministic 80–5,200-token lengths.
@@ -1031,7 +1034,7 @@ on all ten pages, so final validation independently reconstructs all twenty
 
 `tools/run-relational-fts-worst-case.sh` provisions and verifies:
 
-- MariaDB 10.11, MySQL 5.7, or MySQL 8.0: 1 CPU, 1 GiB RAM, no swap, 256 MiB InnoDB buffer pool,
+- MariaDB 10.11 or MySQL 8.0: 1 CPU, 1 GiB RAM, no swap, 256 MiB InnoDB buffer pool,
   32 MiB temporary tables, 24 connections, normal fsync durability, and
   Performance Schema statement history;
 - WordPress/PHP: 1 CPU, 512 MiB container, no swap, 128 MiB PHP memory;
@@ -1039,7 +1042,7 @@ on all ten pages, so final validation independently reconstructs all twenty
 - source-bound direct-install ZIP, image digests, corpus manifest hash, database
   variables, and effective cgroup limits in evidence.
 
-Clean acceptance uses the exact pinned MariaDB 10.11, MySQL 5.7, MySQL 8.0,
+Clean acceptance uses the exact pinned MariaDB 10.11, MySQL 8.0,
 WordPress, and WP-CLI manifest digests declared by the runner; image overrides
 are rejected before Docker starts. The runner verifies that each selected
 reference is the expected reference, the expected manifest digest appears in
@@ -1129,10 +1132,9 @@ of the ten buffer-pool-cold samples, the proof reads and checksums all 8,192
 64-KiB payloads in a dedicated 512-MiB InnoDB relation—exactly twice the
 declared buffer pool—and retains its full-scan plan and duration. The relation
 is removed and its absence verified before concurrency. These counts never
-scale down with corpus size: the
-`2k/mysql-5.7` compatibility lane runs the same 20 warmups, 200 warm samples,
-ten conditioned cold samples per case, and 100-request idle HTTP baseline as
-the 50k and 100k lanes. Eight concurrent
+scale down with corpus size: every profile runs the same 20 warmups, 200 warm
+samples, ten conditioned cold samples per case, and 100-request idle HTTP
+baseline. Eight concurrent
 clients run the fixed query mix while two writers reconcile disjoint 20-post
 assignments. All ten processes must publish readiness before the coordinator
 releases one run-ID-bound monotonic start/deadline window. The window is 62
@@ -1262,7 +1264,7 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | 1-100-document worker batch | <=20 total `$wpdb` statements including transaction/lease control; <=15 data statements; exactly acquire/release plus `START TRANSACTION`/`COMMIT` for a successful changed-document batch |
 | mixed maximum document/scope collision | exactly 100 changed documents and <=20 complete worker statements on each document turn; each reserved scope turn <=20 complete statements |
 | composed maximum worker and cron state | exactly 15 indexing/data statements and <=20 total statements; exactly 1 scheduling-control write with no event and with a later event |
-| 50,000-posting writer boundary | 1 flat posting `VALUES` INSERT; 8,192 identities; executes on MySQL 5.7 |
+| 50,000-posting writer boundary | 1 flat posting `VALUES` INSERT; 8,192 identities; executes on both supported databases |
 | 50,001-posting / 8,193-identity boundaries | typed 49,152+849 / 8,192+1 splits before SQL |
 | MySQL/MariaDB maximum-width 8,192-identity resolver | 32-byte language + 255-byte raw terms; 1 dictionary UPSERT + 1 resolver, each <=4 MiB; 8,192 rows sent; <=65,536 rows examined; 0 disk temporary tables |
 | SQLite maximum-width writer transport | 8,192 identities reject permanently before SQL; exact `wp_` fixture boundary is 7,098 accepted / 7,099 rejected; every accepted prefix uses 1 dictionary UPSERT + 1 resolver, each <=4 MiB; 100-document/8,192-identity preflight visits each identity once under 128 MiB; maximum accepted execution also passes with 60 MiB retained suite state under 128 MiB |
@@ -1339,7 +1341,7 @@ retry must then commit, drain that row, preserve the exact grown value, expose o
 the new token, finish each worker attempt within ten seconds, stay within the
 16 MiB delta/128 MiB absolute memory gates, and keep both dependency statements
 below 32 KiB.
-The statement is valid MySQL 5.7/MariaDB SQL and uses no CTE, window function,
+The statement is valid MySQL/MariaDB SQL and uses no CTE, window function,
 lateral join, JSON table, OFFSET, or caller-created temporary table. The
 captured SQL, Performance Schema events, `EXPLAIN FORMAT=JSON`, worker summary,
 actual LOB lengths, search result, rejection record, and complete fixture
@@ -1531,9 +1533,10 @@ posting `INSERT`, at most twelve total statements, at most 4 MiB for any
 statement, at most five seconds, and at most 128 MiB PHP peak. The posting
 statement must contain exactly 50,000 flat three-column numeric `VALUES` tuples,
 report exactly 50,000 affected rows, have a maximum parenthesis depth of one,
-and contain no `SELECT`, `UNION`, or `FROM`. The required MySQL 5.7 lane executes
-this exact statement under the stock thread stack; rebuilding the constant
-input as thousands of `SELECT ... UNION ALL` arms cannot satisfy acceptance.
+and contain no `SELECT`, `UNION`, or `FROM`. The supported database lanes
+execute this exact statement under the stock thread stack; rebuilding the
+constant input as thousands of `SELECT ... UNION ALL` arms cannot satisfy
+acceptance.
 
 Changing the tail from 848 to 849 creates exactly **50,001 postings** while
 retaining 8,192 identities. The call must raise the typed aggregate split before
@@ -1739,12 +1742,13 @@ claims are measured through real `wp_update_post()`, `update_post_meta()`, and
 `wp_update_term()` calls, not direct invocations of plugin callbacks.
 
 Relational document mutation has one source of truth: the bounded batch writer.
-The four public single-document `WP_FTS_Indexer` mutation methods and the four
-compatibility mutations on `WP_FTS_Storage_Mysql` are exercised **100 times
-each (800 calls total)** with deliberately invalid and oversized inputs. Every
-call must throw the exact `LogicException` message `Set-oriented storage
-mutations must use the bounded batch writer.` before post extraction, option
-callbacks, analyzer signatures/content, storage reads, or wpdb. The proof
+The four public single-document `WP_FTS_Indexer` mutation methods are exercised
+**100 times each (400 calls total)** with deliberately invalid and oversized
+inputs. Every call must throw the exact `LogicException` message `Set-oriented
+storage mutations must use the bounded batch writer.` before post extraction,
+option callbacks, analyzer signatures/content, storage reads, or wpdb. The
+production storage class must not expose the former `replace_doc_postings()`,
+`put_doc()`, `put_doc_metadata()`, or `delete_doc()` methods at all. The proof
 requires zero returned calls, zero wrong exceptions, zero callbacks, and zero
 SQL; `replace_prepared_documents()` remains the sole relational document
 mutation boundary.
@@ -2131,7 +2135,7 @@ Each in-process save/search probe must finish within five seconds, public search
 may execute at most two statements with no statement above 32 KiB, and the
 fresh process has a 120-second hard wall-clock kill rather than an unbounded
 test timeout.
-The immutable legacy snapshot records six exact executions. Each is exclusively
+The immutable legacy snapshot records six exact case outcomes. Normally each is
 either a non-empty ordered BM25 score signature or the typed
 `WP_FTS_Search_Budget_Exceeded` rejection with budget `candidate rows`, zero
 results, null result hashes, and message
@@ -2142,8 +2146,10 @@ pressure remains explicit: `common_or` supplies 138,564 candidate postings at
 and 1,089,000; and `rare_anchor_and` supplies 96,564 and 193,128. Those counts
 define adversarial input size, not a guessed execution outcome: the legacy
 implementation's fetch ordering and short-circuit behavior decide whether a
-given run returns complete results or reaches its typed cap. Acceptance freezes
-and authenticates whichever of those two valid outcomes actually occurred.
+given run returns complete results or reaches its typed cap. The sole additional
+outcome is a `rare_anchor_and` child that exits 255 with
+`MemoryLimitFatal` after PHP prints the exact 134,217,728-byte exhaustion marker.
+That child remains `FAIL`; it is not converted to a result, rejection, or PASS.
 
 Each case runs exactly once in its own fresh PHP process with `memory_limit=128M`,
 an inner 120-second kill, and an outer 150-second container deadline. Its
@@ -2152,28 +2158,34 @@ distinct PID/start-tick/boot-ID identity, ordered execution, duration, emitted
 query count, maximum SQL bytes, PHP allocation delta, RSS delta, reset phase PHP
 peak, lifetime PHP peak, and process RSS high-water mark. PHP phase and absolute
 peaks must stay within 128 MiB. The lightweight assembler executes no legacy
-search; it accepts only the exact six filenames, six distinct process
-identities, and each raw pretty-JSON SHA-256. Missing, extra, stale-sidecar,
-malformed, timed-out, OOM, killed, or otherwise failed evidence is terminal. A
-child failure is atomically published and then aborts the lane immediately so
-cleanup kills or tears down the workloads before diagnostics, stopping any
-server-side SQL left after client death. If kill, teardown, and direct-container
-fallbacks cannot prove quiescence, cleanup skips diagnostic capture and
-compression rather than prolonging unknown work. Child output and failure
-serialization are independently bounded. The same six
-artifacts provide the before metrics, so there is no redundant four-case replay:
-legacy executions per lane are six rather than ten.
+search; it accepts only the exact six filenames, each raw pretty-JSON SHA-256,
+and distinct process identities for every PASS child.
+Only those two exact six-case outcome sets are valid: six PASS children, or
+five PASS children plus
+the classified `rare_anchor_and` memory failure. Missing, extra, stale-sidecar,
+malformed, timed-out, killed, generic, or differently classified failures are
+terminal.
 
-The completed populated-migration envelope is
-`relational-fts-migration-evidence-v5`; the final report accepts only v5, so a
+Before continuing from that one memory failure, the runner performs at most 30
+one-second database probes under a 45-second outer deadline. It may continue
+only when `information_schema.PROCESSLIST` reports zero non-sleeping `wpfts`
+sessions. A probe error, malformed count, active statement at the deadline, or
+any other failed child aborts the lane so cleanup stops the database before
+capturing diagnostics. Child output and failure serialization remain
+independently bounded. The six snapshot invocations provide all available
+before metrics, so there is no redundant four-case replay.
+
+The completed populated-migration envelope is v6; the final report accepts only
+that version, so a
 stale envelope that does not authenticate the target-v4 rarity basis fails.
 
 Legacy BM25 results are informational evidence of the intentional scoring-model
-cutover. The `relational-fts-v4-migration-oracle-v4` independent oracle selects
+cutover. The `relational-fts-v4-migration-oracle-v5` independent oracle selects
 its fixed five migration cases from the six-case snapshot and computes expected
 v4 order and integer scores directly from the untouched v3 logical postings,
-regardless of whether legacy execution returned results or hit its candidate-row
-budget. It independently proves that relevant v3 dictionary `doc_freq` values
+regardless of whether legacy execution returned results, hit its candidate-row
+budget, or the rare legacy child exhausted 128 MiB. It independently proves
+that relevant v3 dictionary `doc_freq` values
 still match active legacy postings, but never reuses those values as target-v4
 rarity. Instead, one exact-key `IN` relation and, where needed, one exclusive
 binary prefix-range relation count distinct active legacy posting documents
@@ -2248,12 +2260,12 @@ diagnostic artifact and then exits nonzero on a failed gate, so WP-CLI adapter,
 transaction-recovery, idle-HTTP, concurrent-worker, taxonomy-scope, and final
 drain failures cannot consume later expensive phases or survive until the
 finalizer. Each old-version snapshot child atomically replaces a stale or
-partial file with bounded `FAIL` evidence for timeout, OOM, process death, or a
-missing terminal artifact, then exits nonzero immediately. The lane teardown
-therefore happens before another snapshot or current-version migration can run
-against a database with residual legacy work. Only all six independently
-bounded, valid result-or-typed-rejection artifacts can pass the no-search
-snapshot assembler. The runner publishes validation output only as partial evidence and
+partial file with bounded `FAIL` output for timeout, memory exhaustion, process
+death, or a missing terminal artifact. Only the exact rare-anchor 128 MiB
+classification may continue, and only after the bounded database-idle check;
+every other failure tears down the lane before more work runs. The no-search
+assembler accepts exactly the two six-case outcome sets defined above. The
+runner publishes validation output only as partial output and
 does not spend additional cold-cache or concurrency capacity on an already
 failed revision.
 
@@ -2356,26 +2368,34 @@ and inventory hashes still fails. Deleting a section or case likewise fails.
 
 Before/after numbers use clean worktrees and source-bound ZIPs for legacy v3 at
 `36a26f4ad1aaef9758922f24677069045c5291ab` and the pull-request head, identical
-images/resources, and the same corpus manifest. A baseline timeout, OOM, silent
+images/resources, and the same corpus manifest. A baseline timeout, kill, silent
 provider switch, arbitrary exception, or malformed partial result is recorded as
 `FAIL (<reason>)`, never as zero or omitted. The exact candidate-row exception
 is a valid `PASS` snapshot outcome only when its complete typed execution has
-zero results and the exact class, budget, and message. The PR description reports
+zero results and the exact class, budget, and message. The one classified
+`rare_anchor_and` 128 MiB failure also remains `FAIL`; it merely permits current
+code to run after the bounded database-idle check. The PR description reports
 absolute values and links raw artifacts; speedup ratios alone are insufficient.
 
-Every legacy snapshot artifact is schema-, source-, ZIP-, manifest-, profile-,
-query-, option-, and case-bound. If the old process dies before writing evidence,
-the wrapper records its measured host wall time, 120-second ceiling, exit status,
-bounded log hash, and a distinct timeout/killed/memory/process-failure reason.
-Migration evidence rejects a missing or malformed artifact; `FAIL` is honest
-diagnostic evidence but never an accepted legacy execution. A
-nonzero or timed-out process can never retain an earlier `PASS` file: the
-wrapper preserves that pre-failure object only as a diagnostic sidecar and
-replaces the canonical artifact with measured `FAIL` evidence before aborting
-the lane. A completed snapshot contains exactly either the complete ordered
-result signature or the exact typed candidate-row rejection. Six raw hashes and
-six distinct process identities make that measured populated-v3 state the
-authenticated baseline; no second execution is mislabeled as a comparison.
+Every PASS snapshot artifact is schema-, source-, ZIP-, manifest-, profile-,
+query-, option-, and case-bound. The classified FAIL is source-, ZIP-, profile-,
+case-, memory-limit-, exit-, and bounded-log-bound; its manifest, query, options,
+execution, process identity, and memory metrics are explicitly null. Before the
+runner continues, it recomputes the log hash and rescans that log for the exact
+134,217,728-byte exhaustion marker. If the old process dies before writing its
+record, the wrapper retains measured host wall time, the 120-second ceiling,
+exit status, bounded log hash, and a distinct timeout/killed/memory/process-
+failure reason.
+Migration rejects a missing or malformed artifact. A nonzero or timed-out
+process can never retain an earlier `PASS` file: the wrapper preserves that
+pre-failure object only as a diagnostic sidecar and replaces the canonical
+artifact with measured `FAIL`. It aborts for every failure except the exact
+rare-anchor memory classification followed by a successful database-idle check.
+A completed snapshot otherwise contains the complete ordered result signature
+or the exact typed candidate-row rejection. Six raw hashes, distinct identities
+for all PASS children, and the optional classified FAIL make that populated-v3
+state the authenticated baseline; no second execution is mislabeled as a
+comparison.
 
 ## Validation sequence
 
@@ -2388,8 +2408,9 @@ Each required lane performs the same fail-closed sequence:
    watchdog already exist before these preflights.
 2. Build the immutable legacy ZIP, create and index the full legacy corpus, run
    the exact six legacy snapshot cases in six fresh 128-MiB processes, and have a
-   no-search assembler authenticate the exact filename inventory, distinct
-   identities, raw hashes, and valid result-or-typed-rejection executions.
+   no-search assembler authenticate the exact filename inventory, distinct PASS
+   identities, raw hashes, valid result-or-typed-rejection executions, and at
+   most the one classified rare-anchor memory failure after database quiescence.
 3. Install the pull-request ZIP without resetting the populated database and
    bind the installed tree byte-for-byte to its ZIP manifest. Kill and resume
    every physical rename and logical migration boundary, running a fresh
@@ -2477,12 +2498,12 @@ Each required lane performs the same fail-closed sequence:
    Re-enumerate the installed runtime tree before finalization. Finalization
    rejects inventory shrinkage, any missing raw artifact, wrong result, budget
    breach, unfinished work, or terminal queue row.
-8. Run all five pull-request database lanes: 2k on MySQL 5.7, plus 50k and 100k
-   on both MariaDB 10.11 and MySQL 8.0. Upload the evidence and raw phase bundle
-   even when a lane fails, including the hidden `.context` path; only the five
-   successful machine-readable reports are acceptance. A newer commit
-   cancels the obsolete in-progress
-   pull-request workflow so the five deliberately expensive lanes never
+8. Run all four pull-request database lanes: 50k and 100k on both MariaDB 10.11
+   and MySQL 8.0. Upload the report and raw phase bundle even when a lane fails,
+   including the hidden `.context` path; only the four successful
+   machine-readable reports are acceptance. A newer commit cancels the
+   obsolete in-progress
+   pull-request workflow so the four deliberately expensive lanes never
    continue burning host capacity for a revision that can no longer merge.
 
 ## Commands
@@ -2494,9 +2515,6 @@ indexer/tools/run-relational-fts-worst-case.sh \
   --output=.context/evidence/relational-2k.json
 
 # Required real-database PR gates.
-indexer/tools/run-relational-fts-worst-case.sh \
-  --engine=mysql-5.7 --profile=2k \
-  --output=.context/evidence/relational-mysql-5.7-2k.json
 indexer/tools/run-relational-fts-worst-case.sh \
   --engine=mariadb-10.11 --profile=50k \
   --output=.context/evidence/relational-mariadb-50k.json

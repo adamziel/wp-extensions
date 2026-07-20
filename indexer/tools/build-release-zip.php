@@ -21,6 +21,18 @@ final class WP_FTS_ReleasePackageBuilder
     private const JIEBA_LOOKUP_SHA256 = '4c979fd244e59b8343c2e584dbd5ba062deb1f836b8ae9ca2b56b54f130b9046';
     private const JIEBA_LOOKUP_BYTES = 329972;
     private const VENDOR_DEVELOPMENT_DIRS = ['test', 'tests', 'Tests', 'coverage'];
+    private const SHIPPED_TOOL_PATHS = [
+        'tools/import-lemma-tsv-pack.php',
+        'tools/import-conllu-lemma-pack.php',
+        'tools/import-unimorph-lemma-pack.php',
+        'tools/import-polish-polimorf-lemmatizer.php',
+        'tools/validate-analyzer-pack.php',
+        'tools/audit-top-language-lemma-packs.php',
+        'tools/build-lemma-pack-lookup-index.php',
+        'tools/build-polish-polimorf-external-pack.php',
+        'tools/lemma-source-import-limits.php',
+        'tools/lemma-chunk-merge.php',
+    ];
     private const PROHIBITED_RELATIVE_PATHS = [
         '.cao',
         '.distignore',
@@ -241,6 +253,12 @@ final class WP_FTS_ReleasePackageBuilder
         }
 
         $removedPaths = self::prune_staged_package($stagePlugin);
+        $missingShippedTools = self::find_missing_shipped_tool_paths($stagePlugin);
+        if ($missingShippedTools !== []) {
+            throw new RuntimeException(
+                "Staged package is missing shipped tool modules:\n" . implode("\n", $missingShippedTools)
+            );
+        }
         $prohibitedPaths = self::find_prohibited_package_paths($stagePlugin);
         if ($prohibitedPaths !== []) {
             throw new RuntimeException(
@@ -398,6 +416,26 @@ final class WP_FTS_ReleasePackageBuilder
             }
         }
 
+        $tools = $stagePlugin . '/tools';
+        if (is_link($tools)) {
+            self::remove_path($tools);
+            $removed[] = self::package_path('tools');
+        } elseif (is_dir($tools)) {
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($tools, FilesystemIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::CHILD_FIRST
+            );
+            foreach ($iterator as $item) {
+                $relativePath = self::relative_path($stagePlugin, $item->getPathname());
+                if (!self::is_unshipped_tool_path($relativePath)) {
+                    continue;
+                }
+
+                $removed[] = self::package_path($relativePath);
+                self::remove_path($item->getPathname());
+            }
+        }
+
         $vendor = $stagePlugin . '/vendor';
         if (is_dir($vendor)) {
             $iterator = new RecursiveIteratorIterator(
@@ -489,6 +527,10 @@ final class WP_FTS_ReleasePackageBuilder
                     continue 2;
                 }
             }
+            if (self::is_unshipped_tool_path($relativePath)) {
+                $prohibited[] = self::package_path($relativePath);
+                continue;
+            }
             if (self::is_composer_auth_relative_path($relativePath)) {
                 $prohibited[] = self::package_path($relativePath);
                 continue;
@@ -509,6 +551,25 @@ final class WP_FTS_ReleasePackageBuilder
         sort($prohibited, SORT_STRING);
 
         return $prohibited;
+    }
+
+    /** @return string[] */
+    private static function find_missing_shipped_tool_paths(string $stagePlugin): array
+    {
+        $missing = [];
+        foreach (self::SHIPPED_TOOL_PATHS as $relativePath) {
+            if (!is_file($stagePlugin . '/' . $relativePath)) {
+                $missing[] = self::package_path($relativePath);
+            }
+        }
+
+        return $missing;
+    }
+
+    private static function is_unshipped_tool_path(string $relativePath): bool
+    {
+        return str_starts_with($relativePath, 'tools/')
+            && !in_array($relativePath, self::SHIPPED_TOOL_PATHS, true);
     }
 
     /** Archive only a pre-screened stage and normalize metadata for reproducible bytes. */

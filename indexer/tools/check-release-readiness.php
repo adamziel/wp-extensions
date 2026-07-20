@@ -73,10 +73,23 @@ final class WP_FTS_ReleaseReadinessChecker
         'README.md',
         'src/bootstrap.php',
         'src/Plugin.php',
-        'tools/build-release-zip.php',
+        'src/WPCLICommand.php',
         'vendor/autoload.php',
         'vendor/wp-php-toolkit/full-text-search/src/bootstrap.php',
         'vendor/wp-php-toolkit/full-text-search/src/LemmaPackLookupIndex.php',
+    ];
+
+    private const SHIPPED_TOOL_PATHS = [
+        'tools/import-lemma-tsv-pack.php',
+        'tools/import-conllu-lemma-pack.php',
+        'tools/import-unimorph-lemma-pack.php',
+        'tools/import-polish-polimorf-lemmatizer.php',
+        'tools/validate-analyzer-pack.php',
+        'tools/audit-top-language-lemma-packs.php',
+        'tools/build-lemma-pack-lookup-index.php',
+        'tools/build-polish-polimorf-external-pack.php',
+        'tools/lemma-source-import-limits.php',
+        'tools/lemma-chunk-merge.php',
     ];
 
     private const PROHIBITED_PACKAGE_PREFIXES = [
@@ -710,7 +723,7 @@ final class WP_FTS_ReleaseReadinessChecker
         );
 
         $missing = [];
-        foreach (self::REQUIRED_PACKAGE_PATHS as $relativePath) {
+        foreach (self::required_package_paths() as $relativePath) {
             if (!file_exists($packageDir . '/' . $relativePath)) {
                 $missing[] = 'indexer/' . $relativePath;
             }
@@ -941,7 +954,7 @@ final class WP_FTS_ReleaseReadinessChecker
         }
 
         $requiredMissing = [];
-        foreach (self::REQUIRED_PACKAGE_PATHS as $relativePath) {
+        foreach (self::required_package_paths() as $relativePath) {
             if (!in_array('indexer/' . $relativePath, $names, true)) {
                 $requiredMissing[] = 'indexer/' . $relativePath;
             }
@@ -962,6 +975,12 @@ final class WP_FTS_ReleaseReadinessChecker
                 'missing_required_paths' => $requiredMissing,
             ]
         );
+    }
+
+    /** @return string[] */
+    private static function required_package_paths(): array
+    {
+        return array_merge(self::REQUIRED_PACKAGE_PATHS, self::SHIPPED_TOOL_PATHS);
     }
 
     /**
@@ -1003,6 +1022,10 @@ final class WP_FTS_ReleaseReadinessChecker
         $basename = basename($relativePath);
         if ($basename !== '' && $basename[0] === '.') {
             return true;
+        }
+
+        if (str_starts_with($relativePath, 'tools/')) {
+            return !in_array($relativePath, self::SHIPPED_TOOL_PATHS, true);
         }
 
         foreach (self::PROHIBITED_PACKAGE_PREFIXES as $blocked) {

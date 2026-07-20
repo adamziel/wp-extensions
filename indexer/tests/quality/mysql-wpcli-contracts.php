@@ -422,7 +422,7 @@ namespace {
         assert_true(!str_contains($allSql, 'postings longblob'), 'posting rows must never collapse back into a PHP blob write');
     });
 
-    test_case_with_pdo_sqlite_fixture('quality mysql SQLite fixture preserves typed surface rows and rejects legacy collections', function (): void {
+    test_case_with_pdo_sqlite_fixture('quality mysql SQLite fixture preserves typed surface rows without legacy collections', function (): void {
         $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
         wp_fts_v4_regression_create_schema($wpdb);
         $storage = new WP_FTS_Storage_Mysql($wpdb);
@@ -443,25 +443,14 @@ namespace {
         assert_same(2, (int) $wpdb->dbh->query('SELECT COUNT(*) FROM wp_fts_terms')->fetchColumn(), 'one token should persist exactly one lexical and one normalized-surface dictionary row');
         assert_same([0, 1], array_map('intval', $wpdb->dbh->query('SELECT kind FROM wp_fts_terms ORDER BY kind')->fetchAll(PDO::FETCH_COLUMN)), 'typed identities must remain distinct without materializing every proper prefix');
 
-        foreach ([
-            static fn() => $storage->get_terms([$lexical]),
-            static fn() => $storage->get_postings([$lexical]),
-            static fn() => $storage->all_terms(),
-            static fn() => $storage->all_doc_ids(),
-        ] as $operation) {
-            $before = count($wpdb->queries);
-            $failure = null;
-            try {
-                $operation();
-            } catch (BadMethodCallException $error) {
-                $failure = $error;
-            }
-            assert_true($failure instanceof BadMethodCallException, 'production collection APIs should fail closed instead of returning an unbounded PHP graph');
-            assert_same($before, count($wpdb->queries), 'legacy collection rejection must happen before SQL');
+        $queriesBefore = count($wpdb->queries);
+        foreach (['get_terms', 'get_postings', 'all_terms', 'all_doc_ids'] as $method) {
+            assert_true(!method_exists($storage, $method), "production storage should not expose {$method}");
         }
+        assert_same($queriesBefore, count($wpdb->queries), 'capability inspection must not execute SQL');
     });
 
-    test_case('quality mysql documents retain bounded identity while collection statistics fail closed', function (): void {
+    test_case('quality mysql documents retain bounded identity without legacy statistics', function (): void {
         $wpdb = new WP_FTS_Test_WPDB();
         $storage = new WP_FTS_Storage_Mysql($wpdb);
 
@@ -475,8 +464,6 @@ namespace {
         $legacy = $storage->get_doc(101);
         assert_same('und', $legacy['primary_lang'], 'the bounded writer should preserve the unspecified partition');
         assert_same([], $legacy['lang_lengths'], 'production documents should not recreate a legacy length projection');
-        assert_same([], $storage->get_doc_lengths([101], 'und'), 'production storage should expose no legacy language-length source');
-        assert_same([], $storage->get_doc_lengths([101]), 'production storage should expose no legacy aggregate-length source');
 
         $docs = [
             [201, 'pl_PL', ['pl_PL' => 4, 'en' => 2, 'empty' => 0], 'hash-pl', 'pl-PL', 6],
@@ -484,7 +471,7 @@ namespace {
             [203, 'sr_Cyrl_RS', ['sr_Cyrl_RS' => 6], 'hash-sr', 'sr-Cyrl-RS', 6],
         ];
 
-        foreach ($docs as [$docId, $primary, $lengths, $hash, $expectedPrimary, $_expectedLength]) {
+        foreach ($docs as [$docId, $primary, $_lengths, $hash, $expectedPrimary, $_expectedLength]) {
             $storage->replace_prepared_documents([[
                 'doc_id' => $docId,
                 'primary_lang' => $primary,
@@ -498,44 +485,17 @@ namespace {
             assert_same(0, $doc['doc_len'], "{$docId} compatibility shape should report no stored document length");
             assert_same($hash, $doc['content_hash'], "{$docId} content hash should round trip");
             assert_true(!$doc['deleted'], "{$docId} v4 document should be active");
-
-            assert_same([], $storage->get_doc_lengths([$docId], $expectedPrimary), "{$docId} primary language lookup should not resurrect legacy length scoring");
         }
 
-        assert_same([], $storage->get_doc_lengths([201], 'en'), 'v4 should not pretend to retain a second per-language length table');
         $putSql = wp_fts_quality_last_prepared_like($wpdb, 'INSERT INTO wp_fts_documents');
         assert_contains('ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(content_hash)', $putSql['sql'], 'the bounded writer should upsert the v4 identity row');
         assert_true(!str_contains($putSql['sql'], 'doc_len'), 'the bounded writer should not write a legacy document length');
-
-        // Compatibility deltas remain harmless no-ops, while collection-wide
-        // statistics are no longer a production search capability.
-        foreach ([['und', 1, 5], ['pl_PL', 1, 4], ['pl_PL', 1, 2], ['pt_BR', 1, 3], ['es_419', 1, 1]] as [$lang, $docsDelta, $lenDelta]) {
-            $storage->add_meta($lang, $docsDelta, $lenDelta);
+        foreach (['get_doc_lengths', 'get_meta', 'add_meta'] as $method) {
+            assert_true(!method_exists($storage, $method), "production storage should not expose legacy {$method}");
         }
-        $storage->add_meta(1, 5);
-        $storage->add_meta('pl_PL', -10, -20);
-        $storage->add_meta(lang_or_d_docs: 'pl_PL', d_docs_or_d_len: 1, d_len: 2);
-        assert_same(
-            ['lang_or_d_docs', 'd_docs_or_d_len', 'd_len'],
-            array_map(
-                static fn(ReflectionParameter $parameter): string => $parameter->getName(),
-                (new ReflectionMethod($storage, 'add_meta'))->getParameters()
-            ),
-            'legacy named arguments should remain source-compatible on the concrete MySQL storage API'
-        );
-        $queriesBeforeMeta = count($wpdb->queries);
-        $metaFailure = null;
-        try {
-            $storage->get_meta('pl-PL');
-        } catch (BadMethodCallException $error) {
-            $metaFailure = $error;
-        }
-        assert_true($metaFailure instanceof BadMethodCallException, 'collection statistics should not reopen the legacy PHP ranking path');
-        assert_same($queriesBeforeMeta, count($wpdb->queries), 'collection-statistic rejection must happen before SQL');
 
         $storage->replace_prepared_documents([], [201]);
         assert_same(null, $storage->get_doc(201), 'physical deletion should not retain a tombstone document');
-        assert_same([], $storage->get_doc_lengths([201], 'pl_PL'), 'deleted documents should be absent from primary-language length lookups');
         assert_same([101, 202, 203], wp_fts_quality_fake_mysql_document_ids($wpdb), 'bounded relational inspection should contain only physical document rows');
     });
 
@@ -555,7 +515,6 @@ namespace {
         $enAlphaImpacts = wp_fts_quality_fake_mysql_term_state($wpdb, $enAlpha)['postings'] ?? [];
         $storage->replace_prepared_documents([], [301]);
 
-        assert_same([], $storage->get_doc_lengths([301, 302], 'pl'), 'production storage should retain no aggregate document lengths');
         assert_true(!isset($wpdb->ftsTerms[$plBeta]), 'bounded replacement should retire a dictionary row whose final posting was deleted');
 
         for ($offset = 1; $offset <= WP_FTS_Storage_Mysql::MAX_EMPTY_TERM_CLEANUP + 1; $offset++) {

@@ -81,11 +81,11 @@ final class WP_FTS_Prepared_Replacement_Plan
  * is resolved with one dictionary read, a second set-oriented statement
  * performs candidate discovery, visibility filtering, and ranking, and an
  * optional third statement hydrates only the returned page.
- * Bounded primitive methods remain as compatibility adapters for diagnostics
- * and one-document callers. Collection-wide and posting-list reads fail closed
- * because production search must use `search_page()`.
+ * Bounded diagnostic methods remain for explicit production callers. Legacy
+ * posting-list reads and point mutations are not part of this backend's type or
+ * public API; production search must use `search_page()`.
  */
-final class WP_FTS_Storage_Mysql implements WP_FTS_Set_Oriented_Search_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_Resettable_Storage
+final class WP_FTS_Storage_Mysql implements WP_FTS_Set_Oriented_Search_Storage, WP_FTS_Resettable_Storage
 {
     private const LEXICAL_KIND = 0;
     private const SURFACE_KIND = 1;
@@ -1604,64 +1604,6 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         $type = preg_replace('/\b(tinyint|smallint|mediumint|int|bigint)\([0-9]+\)/', '$1', $type) ?? $type;
 
         return preg_replace('/\s+/', ' ', $type) ?? $type;
-    }
-
-    /** @return array<string,array{df:int,postings:string}> */
-    public function get_terms(array $terms): array
-    {
-        $this->reject_legacy_unbounded_operation();
-    }
-
-    /** Legacy point mutations are incompatible with the bounded relational writer. */
-    public function replace_doc_postings(int $doc_id, array $term_frequencies): void
-    {
-        throw new LogicException('Set-oriented storage mutations must use the bounded batch writer.');
-    }
-
-    /** Complete posting-list mutations are not a production storage capability. */
-    public function put_term(string $term, int $df, string $postings): void
-    {
-        $this->reject_legacy_unbounded_operation();
-    }
-
-    /** Reject legacy point deletion before it can bypass dictionary invariants. */
-    public function delete_term(string $term): void
-    {
-        $this->reject_legacy_unbounded_operation();
-    }
-
-    /** @return array<string,array<int,int>> */
-    public function get_postings(array $terms): array
-    {
-        $this->reject_legacy_unbounded_operation();
-    }
-
-    /** @return array<string,array<int,int>> */
-    public function get_capped_postings(array $terms, int $candidate_cap): array
-    {
-        $this->reject_legacy_unbounded_operation();
-    }
-
-    /** @return array<string,array<int,int>> */
-    public function get_budgeted_postings(array $terms, ?int $candidate_cap, int $row_cap): array
-    {
-        $this->reject_legacy_unbounded_operation();
-    }
-
-    /**
-     * Production MySQL never materializes posting lists, whole dictionaries,
-     * whole document-id sets, or prefix expansions in PHP.
-     *
-     * These methods remain only because the component compatibility interfaces
-     * are shared with the in-memory and file fixtures. Failing here is safer
-     * than making a diagnostic or third-party caller an accidental unbounded
-     * production search path.
-     */
-    private function reject_legacy_unbounded_operation(): never
-    {
-        throw new BadMethodCallException(
-            'The production MySQL backend exposes collections and mutations only through bounded set-oriented operations.'
-        );
     }
 
     /**
@@ -3477,15 +3419,6 @@ WHERE {$range['sql']}",
         return gmdate('Y-m-d H:i:s', $timestamp === false ? time() : max(0, $timestamp));
     }
 
-    /** @return array<int,int> */
-    public function get_doc_lengths(array $doc_ids, ?string $lang = null): array
-    {
-        // The production relational backend scores from posting impacts. It
-        // deliberately has no document-length source for the legacy PHP BM25
-        // path; that path remains available only on File/InMemory fixtures.
-        return [];
-    }
-
     /** Return the minimal compatibility shape without reviving length scoring. */
     public function get_doc(int $doc_id): ?array
     {
@@ -3539,18 +3472,6 @@ WHERE {$range['sql']}",
         return $hashes;
     }
 
-    /** Legacy point mutations are incompatible with the bounded relational writer. */
-    public function put_doc(int $doc_id, int|string $doc_len_or_primary_lang, string|array $hash_or_lang_lengths, ?string $hash = null): void
-    {
-        throw new LogicException('Set-oriented storage mutations must use the bounded batch writer.');
-    }
-
-    /** Legacy point mutations are incompatible with the bounded relational writer. */
-    public function put_doc_metadata(int $doc_id, array $metadata): void
-    {
-        throw new LogicException('Set-oriented storage mutations must use the bounded batch writer.');
-    }
-
     /** @return array<int,array<string,mixed>> */
     public function get_doc_metadata(array $doc_ids): array
     {
@@ -3588,46 +3509,6 @@ WHERE {$range['sql']}",
         }
         ksort($result, SORT_NUMERIC);
         return $result;
-    }
-
-    /** @return int[] */
-    public function filter_doc_ids_by_metadata(
-        array $doc_ids,
-        array $post_types = [],
-        array $post_statuses = [],
-        ?string $date_after = null,
-        ?string $date_before = null
-    ): array {
-        $this->reject_legacy_unbounded_operation();
-    }
-
-    /** Legacy point mutations are incompatible with the bounded relational writer. */
-    public function delete_doc(int $doc_id): void
-    {
-        throw new LogicException('Set-oriented storage mutations must use the bounded batch writer.');
-    }
-
-    /** @return array{doc_count:int,len_sum:int} */
-    public function get_meta(?string $lang = null): array
-    {
-        $this->reject_legacy_unbounded_operation();
-    }
-
-    /** Collection statistics are derived from the documents table in v4. */
-    public function add_meta(int|string $lang_or_d_docs, int $d_docs_or_d_len, ?int $d_len = null): void
-    {
-    }
-
-    /** @return string[] */
-    public function all_terms(): array
-    {
-        $this->reject_legacy_unbounded_operation();
-    }
-
-    /** @return int[] */
-    public function all_doc_ids(bool $include_deleted = false): array
-    {
-        $this->reject_legacy_unbounded_operation();
     }
 
     /** @return string[] */
@@ -3686,10 +3567,10 @@ ORDER BY ranked.post_id, ranked.lang, ranked.term",
                 ...[...$ids, $perDocLimit]
             );
         } else {
-            // MySQL 5.7 has no window functions. Keep each document's lexical
-            // limit inside its own UNION branch: unlike session-variable row
-            // numbers, this does not depend on the optimizer preserving a
-            // derived table's ORDER BY during expression evaluation.
+            // Keep each document's lexical limit inside its own UNION branch:
+            // unlike session-variable row numbers, this does not depend on the
+            // optimizer preserving a derived table's ORDER BY during expression
+            // evaluation, and it preserves the same shape on MariaDB.
             $branches = [];
             $args = [];
             foreach ($ids as $postId) {
@@ -3722,12 +3603,6 @@ ORDER BY bounded.post_id, bounded.lang, bounded.term",
         }
 
         return $terms;
-    }
-
-    /** @return string[] */
-    public function terms_with_prefix(string $prefix, int $limit): array
-    {
-        $this->reject_legacy_unbounded_operation();
     }
 
     /** Start the single writer transaction after enforcing mutation ownership. */
@@ -3786,11 +3661,6 @@ ORDER BY bounded.post_id, bounded.lang, bounded.term",
             $this->transactionMutated = false;
             $this->transactionEpochAdvanced = false;
         }
-    }
-
-    /** No-op for MySQL because writes are sent immediately. */
-    public function flush(): void
-    {
     }
 
     /**
@@ -4428,14 +4298,14 @@ VALUES ";
                         . $lang . ' AS lang, '
                         . (int) $identity['kind'] . ' AS kind, ' . $term . ' AS term';
                 } else {
-                    // MySQL 5.7 derives UNION column names from the first arm.
+                    // MySQL and MariaDB derive UNION column names from the first arm.
                     $rows[] = 'SELECT ' . $ordinal . ', '
                         . $lang . ', ' . (int) $identity['kind'] . ', ' . $term;
                 }
             }
-            // A flat thousands-arm UNION overruns the default MySQL 5.7 thread
-            // stack. Keep both the leaf and outer relations at a few hundred
-            // arms by grouping constants into fixed 100-row derived tables.
+            // A flat thousands-arm UNION can overrun the database thread stack.
+            // Keep both the leaf and outer relations at a few hundred arms by
+            // grouping constants into fixed 100-row derived tables.
             $chunks[] = "SELECT term_ordinal, lang, kind, term\nFROM ("
                 . implode("\nUNION ALL\n", $rows) . ") identity_chunk_{$chunkIndex}";
         }

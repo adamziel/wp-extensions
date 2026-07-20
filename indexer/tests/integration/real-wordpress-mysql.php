@@ -192,7 +192,7 @@ function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix
         1005 => wp_fts_real_integration_impact(7),
     ], $codecRow['postings'], 'encoded compatibility writes should become quantized relational posting rows.');
 
-    wp_fts_real_integration_assert_legacy_reads_fail_closed($storage, $wpdb, $codecTerm);
+    wp_fts_real_integration_assert_legacy_reads_absent($storage, $wpdb);
 
     echo "ok binary dictionary identities and bounded prepared posting writes round trip\n";
 }
@@ -542,26 +542,14 @@ function wp_fts_real_integration_term_state(object $wpdb, string $prefix, string
     return ['df' => (int) $termRow->doc_freq, 'postings' => $result];
 }
 
-/** Require every legacy posting-list API to reject before touching the database. */
-function wp_fts_real_integration_assert_legacy_reads_fail_closed(WP_FTS_Storage_Mysql $storage, object $wpdb, string $termKey): void
+/** Require every legacy posting-list API to be absent from production storage. */
+function wp_fts_real_integration_assert_legacy_reads_absent(WP_FTS_Storage_Mysql $storage, object $wpdb): void
 {
-    $operations = [
-        static fn(): array => $storage->get_terms([$termKey]),
-        static fn(): array => $storage->get_postings([$termKey]),
-        static fn(): array => $storage->get_capped_postings([$termKey], 1),
-        static fn(): array => $storage->get_budgeted_postings([$termKey], 1, 1),
-    ];
-    foreach ($operations as $operation) {
-        $queriesBefore = (int) ($wpdb->num_queries ?? 0);
-        $failure = null;
-        try {
-            $operation();
-        } catch (BadMethodCallException $error) {
-            $failure = $error;
-        }
-        wp_fts_real_integration_assert($failure instanceof BadMethodCallException, 'production posting-list reads should fail closed.');
-        wp_fts_real_integration_assert_same($queriesBefore, (int) ($wpdb->num_queries ?? 0), 'production posting-list rejection should happen before SQL.');
+    $queriesBefore = (int) ($wpdb->num_queries ?? 0);
+    foreach (['get_terms', 'get_postings', 'get_capped_postings', 'get_budgeted_postings'] as $method) {
+        wp_fts_real_integration_assert(!method_exists($storage, $method), "production storage should not expose {$method}.");
     }
+    wp_fts_real_integration_assert_same($queriesBefore, (int) ($wpdb->num_queries ?? 0), 'production capability inspection should not run SQL.');
 }
 
 /** Reproduce the bounded integer impact expected from the production writer. */
