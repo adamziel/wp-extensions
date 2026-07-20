@@ -233,13 +233,15 @@ VALUES " . implode(',', $rows),
     $postings = wp_fts_wc_identifier($wpdb->prefix . 'fts_postings');
     $documents = wp_fts_wc_identifier($wpdb->prefix . 'fts_documents');
     $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
-    // Deleting WordPress's starter posts above correctly enqueues direct delete
-    // work. Those rows predate the deterministic corpus and are not part of its
-    // initial-index measurement; retain only the coalesced corpus scope.
+    // Deleting WordPress's starter posts above correctly enqueues direct and
+    // taxonomy work. Those rows predate this corpus. Remove that setup work,
+    // then ask the current profile detector for one authoritative corpus scope.
     wp_fts_wc_assert(
-        $wpdb->query("DELETE FROM `{$work}` WHERE kind='post'") !== false,
-        'Could not remove starter-post delete work before the clean-install index.'
+        $wpdb->query("DELETE FROM `{$work}` WHERE kind IN ('post','scope')") !== false,
+        'Could not remove starter-post setup work before the clean-install index.'
     );
+    WP_FTS_Plugin::reset_request_caches();
+    WP_FTS_Plugin::detect_index_profile_drift();
     $derivedRows = [
         'terms' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$terms}`", 'terms before the initial current index'),
         'postings' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$postings}`", 'postings before the initial current index'),
