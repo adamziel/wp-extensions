@@ -26,25 +26,7 @@ jobs:
           submodules: false
 
       - name: Initialize the pinned Jieba dictionary
-        run: |
-          set -euo pipefail
-          path=components/full-text-search/resources/sources/jieba
-          gitlink=67fa2e36e72f69d9134b8a1037b83fbb070b9775
-          read -r mode indexed_gitlink stage indexed_path <<< "$(git ls-files --stage -- "${path}")"
-          test "${mode}" = 160000
-          test "${indexed_gitlink}" = "${gitlink}"
-          test "${stage}" = 0
-          test "${indexed_path}" = "${path}"
-          test "$(git config -f .gitmodules --get "submodule.${path}.path")" = "${path}"
-          test "$(git config -f .gitmodules --get "submodule.${path}.url")" = https://github.com/fxsjy/jieba
-          git submodule sync -- "${path}"
-          git -c protocol.version=2 submodule update --init --depth 1 -- "${path}"
-          test "$(git -C "${path}" rev-parse HEAD)" = "${gitlink}"
-          test -z "$(git -C "${path}" status --porcelain --untracked-files=all)"
-          test "$(sha256sum "${path}/jieba/dict.txt" | cut -d ' ' -f 1)" = 7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8
-          test "$(stat -c %s "${path}/jieba/dict.txt")" = 5071852
-          test "$(sha256sum "${path}/LICENSE" | cut -d ' ' -f 1)" = 18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37
-          test "$(stat -c %s "${path}/LICENSE")" = 1075
+        run: components/full-text-search/tools/initialize-jieba-source.sh
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -96,31 +78,17 @@ jobs:
           submodules: false
 
       - name: Initialize the pinned Jieba dictionary
-        run: |
-          set -euo pipefail
-          path=components/full-text-search/resources/sources/jieba
-          gitlink=67fa2e36e72f69d9134b8a1037b83fbb070b9775
-          read -r mode indexed_gitlink stage indexed_path <<< "$(git ls-files --stage -- "${path}")"
-          test "${mode}" = 160000
-          test "${indexed_gitlink}" = "${gitlink}"
-          test "${stage}" = 0
-          test "${indexed_path}" = "${path}"
-          test "$(git config -f .gitmodules --get "submodule.${path}.path")" = "${path}"
-          test "$(git config -f .gitmodules --get "submodule.${path}.url")" = https://github.com/fxsjy/jieba
-          git submodule sync -- "${path}"
-          git -c protocol.version=2 submodule update --init --depth 1 -- "${path}"
-          test "$(git -C "${path}" rev-parse HEAD)" = "${gitlink}"
-          test -z "$(git -C "${path}" status --porcelain --untracked-files=all)"
-          test "$(sha256sum "${path}/jieba/dict.txt" | cut -d ' ' -f 1)" = 7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8
-          test "$(stat -c %s "${path}/jieba/dict.txt")" = 5071852
-          test "$(sha256sum "${path}/LICENSE" | cut -d ' ' -f 1)" = 18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37
-          test "$(stat -c %s "${path}/LICENSE")" = 1075
+        run: components/full-text-search/tools/initialize-jieba-source.sh
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
           coverage: none
+
+      - name: Install component dependencies
+        working-directory: components/full-text-search
+        run: composer install --no-interaction --prefer-dist
 
       - name: Test source fallbacks without php.ini
         env:
@@ -142,25 +110,7 @@ jobs:
           submodules: false
 
       - name: Initialize the pinned Jieba dictionary
-        run: |
-          set -euo pipefail
-          path=components/full-text-search/resources/sources/jieba
-          gitlink=67fa2e36e72f69d9134b8a1037b83fbb070b9775
-          read -r mode indexed_gitlink stage indexed_path <<< "$(git ls-files --stage -- "${path}")"
-          test "${mode}" = 160000
-          test "${indexed_gitlink}" = "${gitlink}"
-          test "${stage}" = 0
-          test "${indexed_path}" = "${path}"
-          test "$(git config -f .gitmodules --get "submodule.${path}.path")" = "${path}"
-          test "$(git config -f .gitmodules --get "submodule.${path}.url")" = https://github.com/fxsjy/jieba
-          git submodule sync -- "${path}"
-          git -c protocol.version=2 submodule update --init --depth 1 -- "${path}"
-          test "$(git -C "${path}" rev-parse HEAD)" = "${gitlink}"
-          test -z "$(git -C "${path}" status --porcelain --untracked-files=all)"
-          test "$(sha256sum "${path}/jieba/dict.txt" | cut -d ' ' -f 1)" = 7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8
-          test "$(stat -c %s "${path}/jieba/dict.txt")" = 5071852
-          test "$(sha256sum "${path}/LICENSE" | cut -d ' ' -f 1)" = 18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37
-          test "$(stat -c %s "${path}/LICENSE")" = 1075
+        run: components/full-text-search/tools/initialize-jieba-source.sh
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -168,6 +118,10 @@ jobs:
           php-version: '8.4'
           extensions: zip
           coverage: none
+
+      - name: Install component dependencies
+        working-directory: components/full-text-search
+        run: composer install --no-interaction --prefer-dist
 
       - name: Lint Language FTS PHP
         run: |

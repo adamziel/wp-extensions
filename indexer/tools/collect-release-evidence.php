@@ -4,8 +4,8 @@ declare(strict_types=1);
 /**
  * Read-only release evidence collector for current-main review.
  *
- * The collector intentionally normalizes existing release, smoke, integration,
- * and benchmark commands into one bounded JSON report. It does not build
+ * The collector intentionally normalizes existing release, smoke, and integration
+ * commands into one bounded JSON report. It does not build
  * direct-install artifacts by default and does not enable WordPress writes; any
  * write-enabled lane must still satisfy the existing lane-specific opt-in
  * guards before the delegated tool can mutate a disposable environment.
@@ -44,7 +44,6 @@ final class WP_FTS_ReleaseEvidenceCollector
     public static function parse_cli_options(array $args): array
     {
         $options = [
-            'format' => 'json',
             'release_target' => self::TARGET_DIRECT_INSTALL,
             'timeout' => self::DEFAULT_TIMEOUT_SECONDS,
         ];
@@ -52,10 +51,6 @@ final class WP_FTS_ReleaseEvidenceCollector
         foreach ($args as $arg) {
             if ($arg === '--help' || $arg === '-h') {
                 $options['help'] = true;
-                continue;
-            }
-            if ($arg === '--json') {
-                $options['format'] = 'json';
                 continue;
             }
             if ($arg === '--run-direct-install-readiness') {
@@ -74,7 +69,7 @@ final class WP_FTS_ReleaseEvidenceCollector
                 $options['run_docker_lifecycle_smokes'] = true;
                 continue;
             }
-            foreach (['format', 'release-target', 'plugin-src', 'monorepo-root', 'direct-package-dir', 'timeout'] as $name) {
+            foreach (['release-target', 'plugin-src', 'monorepo-root', 'direct-package-dir', 'timeout'] as $name) {
                 $prefix = "--{$name}=";
                 if (str_starts_with($arg, $prefix)) {
                     $key = str_replace('-', '_', $name);
@@ -86,9 +81,6 @@ final class WP_FTS_ReleaseEvidenceCollector
             throw new InvalidArgumentException("Unknown option: {$arg}");
         }
 
-        if ((string) $options['format'] !== 'json') {
-            throw new InvalidArgumentException('Only --format=json is supported.');
-        }
         $options['release_target'] = self::normalize_release_target((string) $options['release_target']);
 
         $timeout = (int) $options['timeout'];
@@ -106,8 +98,6 @@ final class WP_FTS_ReleaseEvidenceCollector
             'Usage: php indexer/tools/collect-release-evidence.php [options]',
             '',
             'Options:',
-            '  --format=json                    Output JSON. This is the default.',
-            '  --json                           Alias for --format=json.',
             '  --release-target=TARGET          direct-install (default) or public-submission.',
             '  --plugin-src=PATH                Plugin source directory. Defaults to this script parent.',
             '  --monorepo-root=PATH             Monorepo root. Defaults to the plugin source parent.',
@@ -174,7 +164,6 @@ final class WP_FTS_ReleaseEvidenceCollector
                 $pluginSource,
                 $timeout
             ),
-            $this->production_scale_benchmark_lane($pluginSource, $timeout),
         ];
 
         $counts = self::status_counts($lanes);
@@ -509,224 +498,6 @@ final class WP_FTS_ReleaseEvidenceCollector
             $pluginSource,
             $timeout
         );
-    }
-
-    /**
-     * @return array<string,mixed>
-     */
-    private function production_scale_benchmark_lane(string $pluginSource, int $timeout): array
-    {
-        $args = ['tests/production-scale-benchmark.php', '--json'];
-        $result = $this->run_php_script($args, $pluginSource, $timeout);
-        $decoded = $this->decode_json_object($result['stdout']);
-        if ($decoded === null) {
-            return $this->command_failure_lane(
-                'production_scale_benchmark',
-                'PR-safe production-scale benchmark',
-                $args,
-                $result,
-                'Production-scale benchmark did not emit parseable JSON.',
-                true
-            );
-        }
-
-        $passed = $result['exit'] === 0 && ($decoded['passed'] ?? null) === true;
-        $profile = is_array($decoded['profile'] ?? null) ? $decoded['profile'] : [];
-        $metrics = is_array($decoded['metrics'] ?? null) ? $decoded['metrics'] : [];
-        $failures = isset($decoded['failures']) && is_array($decoded['failures']) ? array_values($decoded['failures']) : [];
-        $gates = isset($decoded['gates']) && is_array($decoded['gates']) ? array_values($decoded['gates']) : [];
-        $failedGateNames = self::benchmark_failed_gate_names($gates);
-        $gateCounts = self::benchmark_gate_counts($gates);
-        $performanceBudget = self::benchmark_performance_budget($metrics, $gates);
-        $passed = $passed && $gates !== [] && $failedGateNames === [];
-
-        return [
-            'id' => 'production_scale_benchmark',
-            'label' => 'PR-safe production-scale benchmark',
-            'status' => $passed ? 'pass' : 'fail',
-            'command' => self::display_command($args),
-            'exit_code' => $result['exit'],
-            'summary' => $passed
-                ? sprintf(
-                    'Benchmark passed for %d generated documents with %d query checks and %d performance budget gates.',
-                    (int) ($metrics['indexed_documents'] ?? 0),
-                    (int) ($metrics['query_checks_passed'] ?? 0),
-                    (int) (($performanceBudget['gate_counts']['pass'] ?? 0) + ($performanceBudget['gate_counts']['fail'] ?? 0))
-                )
-                : self::benchmark_failure_summary($failures, $failedGateNames, $gates),
-            'details' => [
-                'profile' => [
-                    'name' => $profile['name'] ?? null,
-                    'documents' => $profile['documents'] ?? null,
-                ],
-                'metrics' => self::sanitize_value([
-                    'indexed_documents' => $metrics['indexed_documents'] ?? null,
-                    'raw_token_occurrences' => $metrics['raw_token_occurrences'] ?? null,
-                    'weighted_token_instances' => $metrics['weighted_token_instances'] ?? null,
-                    'unique_terms' => $metrics['unique_terms'] ?? null,
-                    'posting_rows' => $metrics['posting_rows'] ?? null,
-                    'query_checks_passed' => $metrics['query_checks_passed'] ?? null,
-                    'hydrated_result_rows' => $metrics['hydrated_result_rows'] ?? null,
-                    'index_duration_ms' => $metrics['index_duration_ms'] ?? null,
-                    'query_check_total_duration_ms' => $metrics['query_check_total_duration_ms'] ?? null,
-                    'query_check_max_duration_ms' => $metrics['query_check_max_duration_ms'] ?? null,
-                    'result_window_total_duration_ms' => $metrics['result_window_total_duration_ms'] ?? null,
-                    'result_window_max_duration_ms' => $metrics['result_window_max_duration_ms'] ?? null,
-                    'search_read_total_duration_ms' => $metrics['search_read_total_duration_ms'] ?? null,
-                    'memory_delta_bytes' => $metrics['memory_delta_bytes'] ?? null,
-                    'peak_memory_delta_bytes' => $metrics['peak_memory_delta_bytes'] ?? null,
-                ]),
-                'gate_count' => count($gates),
-                'gate_status_counts' => $gateCounts,
-                'gates' => self::benchmark_gate_rows($gates),
-                'gates_truncated' => count($gates) > 32,
-                'failed_gates' => array_slice($failedGateNames, 0, 16),
-                'failed_gates_truncated' => count($failedGateNames) > 16,
-                'performance_budget' => self::sanitize_value($performanceBudget),
-                'failure_count' => count($failures),
-                'stdout_truncated' => !empty($result['stdout_truncated']),
-                'stderr_excerpt' => self::sanitize_text($result['stderr'], self::OUTPUT_EXCERPT_BYTES),
-                'stderr_truncated' => !empty($result['stderr_truncated']),
-            ],
-            'required' => true,
-        ];
-    }
-
-    /**
-     * @param array<int,mixed> $gates
-     * @return string[]
-     */
-    private static function benchmark_failed_gate_names(array $gates): array
-    {
-        $failed = [];
-        foreach ($gates as $gate) {
-            if (!is_array($gate) || !array_key_exists('passed', $gate) || (bool) $gate['passed']) {
-                continue;
-            }
-            $metric = (string) ($gate['metric'] ?? '');
-            if ($metric !== '') {
-                $failed[] = $metric;
-            }
-        }
-
-        return $failed;
-    }
-
-    /**
-     * @param array<int,mixed> $gates
-     * @return array<string,int>
-     */
-    private static function benchmark_gate_counts(array $gates): array
-    {
-        $counts = [
-            'total' => 0,
-            'pass' => 0,
-            'fail' => 0,
-            'performance_pass' => 0,
-            'performance_fail' => 0,
-            'structural_pass' => 0,
-            'structural_fail' => 0,
-        ];
-
-        foreach ($gates as $gate) {
-            if (!is_array($gate)) {
-                continue;
-            }
-            $counts['total']++;
-            $category = (string) ($gate['category'] ?? 'structural');
-            $passed = array_key_exists('passed', $gate) && (bool) $gate['passed'];
-            $counts[$passed ? 'pass' : 'fail']++;
-            $categoryKey = $category === 'performance' ? 'performance' : 'structural';
-            $counts[$categoryKey . '_' . ($passed ? 'pass' : 'fail')]++;
-        }
-
-        return $counts;
-    }
-
-    /**
-     * @param array<string,mixed> $metrics
-     * @param array<int,mixed> $gates
-     * @return array<string,mixed>
-     */
-    private static function benchmark_performance_budget(array $metrics, array $gates): array
-    {
-        $passCount = 0;
-        $failCount = 0;
-        $failed = [];
-        foreach ($gates as $gate) {
-            if (!is_array($gate) || (string) ($gate['category'] ?? '') !== 'performance') {
-                continue;
-            }
-            if (!empty($gate['passed'])) {
-                $passCount++;
-                continue;
-            }
-            $failCount++;
-            $metric = (string) ($gate['metric'] ?? '');
-            if ($metric !== '') {
-                $failed[] = $metric;
-            }
-        }
-
-        return [
-            'metrics' => [
-                'index_duration_ms' => self::numeric_or_null($metrics['index_duration_ms'] ?? null),
-                'query_check_total_duration_ms' => self::numeric_or_null($metrics['query_check_total_duration_ms'] ?? null),
-                'query_check_max_duration_ms' => self::numeric_or_null($metrics['query_check_max_duration_ms'] ?? null),
-                'result_window_total_duration_ms' => self::numeric_or_null($metrics['result_window_total_duration_ms'] ?? null),
-                'result_window_max_duration_ms' => self::numeric_or_null($metrics['result_window_max_duration_ms'] ?? null),
-                'search_read_total_duration_ms' => self::numeric_or_null($metrics['search_read_total_duration_ms'] ?? null),
-            ],
-            'gate_counts' => [
-                'pass' => $passCount,
-                'fail' => $failCount,
-            ],
-            'failed_gates' => array_slice($failed, 0, 16),
-            'failed_gates_truncated' => count($failed) > 16,
-        ];
-    }
-
-    /**
-     * @param array<int,mixed> $gates
-     * @return array<int,array<string,mixed>>
-     */
-    private static function benchmark_gate_rows(array $gates): array
-    {
-        $rows = [];
-        foreach (array_slice($gates, 0, 32) as $gate) {
-            if (!is_array($gate)) {
-                continue;
-            }
-            $rows[] = self::sanitize_value([
-                'metric' => (string) ($gate['metric'] ?? ''),
-                'category' => (string) ($gate['category'] ?? 'structural'),
-                'operator' => (string) ($gate['operator'] ?? ''),
-                'expected' => self::numeric_or_null($gate['expected'] ?? null),
-                'actual' => self::numeric_or_null($gate['actual'] ?? null),
-                'passed' => array_key_exists('passed', $gate) ? (bool) $gate['passed'] : false,
-            ]);
-        }
-
-        return $rows;
-    }
-
-    /**
-     * @param array<int,mixed> $failures
-     * @param string[] $failedGateNames
-     * @param array<int,mixed> $gates
-     */
-    private static function benchmark_failure_summary(array $failures, array $failedGateNames, array $gates): string
-    {
-        if ($gates === []) {
-            return 'Benchmark failed: benchmark JSON did not include gate evidence.';
-        }
-        if ($failedGateNames !== []) {
-            return 'Benchmark failed gates: ' . self::sanitize_text(implode(', ', array_slice($failedGateNames, 0, 12)), 400);
-        }
-
-        $message = implode('; ', array_map('strval', $failures));
-
-        return 'Benchmark failed: ' . self::sanitize_text($message !== '' ? $message : 'subprocess did not report passing benchmark evidence', 400);
     }
 
     /**
@@ -1305,31 +1076,6 @@ final class WP_FTS_ReleaseEvidenceCollector
         return implode(' ', $parts);
     }
 
-    private static function command_failure_status(array $result): string
-    {
-        if (!empty($result['timed_out'])) {
-            return 'fail';
-        }
-
-        $output = strtolower((string) ($result['stdout'] ?? '') . "\n" . (string) ($result['stderr'] ?? ''));
-        foreach ([
-            'command not found',
-            'no such file or directory',
-            'is unavailable',
-            'proc_open() is unavailable',
-            'zip extension is required',
-            'network is disabled',
-            'composer_disable_network',
-            'could not launch',
-        ] as $needle) {
-            if (str_contains($output, $needle)) {
-                return 'unavailable';
-            }
-        }
-
-        return 'fail';
-    }
-
     public static function sanitize_text(string $text, int $maxBytes = self::OUTPUT_EXCERPT_BYTES): string
     {
         $text = str_replace(["\r\n", "\r", "\0"], ["\n", "\n", ''], $text);
@@ -1390,22 +1136,6 @@ final class WP_FTS_ReleaseEvidenceCollector
         }
 
         return $value;
-    }
-
-    private static function numeric_or_null(mixed $value): int|float|null
-    {
-        if (is_int($value) || is_float($value)) {
-            return $value;
-        }
-        if (!is_numeric($value)) {
-            return null;
-        }
-
-        $string = (string) $value;
-
-        return str_contains($string, '.') || stripos($string, 'e') !== false
-            ? (float) $value
-            : (int) $value;
     }
 
     private static function is_sensitive_key(string $key): bool

@@ -37,7 +37,6 @@ final class WP_FTS_Analyzer_Config_Limits
     public const MAX_OPTION_SCALAR_BYTES = 4096;
     public const MAX_LANGUAGE_BYTES = 64;
     public const MAX_PATH_BYTES = 4096;
-    public const MAX_PACK_OPTION_ITEMS = 32;
     public const MAX_MANIFEST_BYTES = 65536;
     public const MAX_MANIFEST_GRAPH_NODES = 2048;
     public const MAX_MANIFEST_GRAPH_DEPTH = 8;
@@ -85,6 +84,11 @@ final class WP_FTS_Analyzer_Config_Limits
                 );
             }
             self::assert_language_map($options[$key], "{$label} {$key}");
+            if ($key === 'lemma_packs_by_lang') {
+                self::assert_lemma_pack_values($options[$key], "{$label} {$key}");
+            } elseif ($key === 'segmenter_packs_by_lang') {
+                self::assert_segmenter_pack_values($options[$key], "{$label} {$key}");
+            }
             foreach ($options[$key] as $language => $_option) {
                 $identity = strtolower(str_replace('_', '-', trim((string) $language)));
                 if ($identity === '') {
@@ -148,6 +152,30 @@ final class WP_FTS_Analyzer_Config_Limits
         }
     }
 
+    /** Require every lemma-pack setting to be an exact path or false. */
+    private static function assert_lemma_pack_values(array $map, string $label): void
+    {
+        foreach ($map as $option) {
+            if ($option === false) {
+                continue;
+            }
+            if (!is_string($option) || $option === '' || trim($option) !== $option) {
+                throw new InvalidArgumentException("{$label} values must be unpadded nonempty paths or false.");
+            }
+            self::assert_path($option, "{$label} path");
+        }
+    }
+
+    /** Require every bundled segmenter-pack setting to be a native boolean. */
+    private static function assert_segmenter_pack_values(array $map, string $label): void
+    {
+        foreach ($map as $option) {
+            if (!is_bool($option)) {
+                throw new InvalidArgumentException("{$label} values must be booleans.");
+            }
+        }
+    }
+
     /**
      * Merge precedence-ordered language maps without an unbounded array_replace().
      *
@@ -173,7 +201,7 @@ final class WP_FTS_Analyzer_Config_Limits
         return $merged;
     }
 
-    /** Assert a supported per-language pack option before resolving any path. */
+    /** Bound one language-map value before its option-specific type check. */
     public static function assert_pack_option(mixed $option, string $label = 'Analyzer pack option'): void
     {
         if (is_string($option)) {
@@ -183,19 +211,7 @@ final class WP_FTS_Analyzer_Config_Limits
         if (!is_array($option)) {
             return;
         }
-        if (count($option) > self::MAX_PACK_OPTION_ITEMS) {
-            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-                'pack_option_items',
-                "{$label} exceeds the " . self::MAX_PACK_OPTION_ITEMS . '-item limit.'
-            );
-        }
         self::assert_option_graph($option, $label);
-
-        foreach (['manifest', 'manifest_path', 'path', 'source_file', 'dict_path', 'dictionary', 'source_root', 'root', 'submodule_path'] as $key) {
-            if (isset($option[$key]) && is_scalar($option[$key])) {
-                self::assert_path((string) $option[$key], "{$label} {$key}");
-            }
-        }
     }
 
     /** Assert a path before trim(), realpath(), is_file(), or a stream open. */
@@ -224,7 +240,6 @@ final class WP_FTS_Analyzer_Config_Limits
         $captures = [];
         foreach ([
             'stemmer',
-            'polish_stemmer',
             'cjk_tokenizer',
             'token_normalizer',
             'document_language_resolver',

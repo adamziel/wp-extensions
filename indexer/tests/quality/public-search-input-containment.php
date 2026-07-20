@@ -41,16 +41,29 @@ function psic_searcher_private(WP_FTS_Searcher $searcher, string $method, mixed 
 }
 
 /** Exercise storage input fences before any public wrapper can sanitize them. */
-function psic_mysql_private(WP_FTS_Storage_Mysql $storage, string $method, mixed ...$args): mixed
+function psic_mysql_private(WP_FTS_Relational_Storage $storage, string $method, mixed ...$args): mixed
 {
-    $reflection = new ReflectionMethod(WP_FTS_Storage_Mysql::class, $method);
+    $reflection = new ReflectionMethod(WP_FTS_Relational_Storage::class, $method);
     $reflection->setAccessible(true);
 
     return $reflection->invoke($storage, ...$args);
 }
 
+/** Build the exact six-field document accepted by the relational writer. */
+function psic_prepared_document(array $overrides = []): array
+{
+    return array_replace([
+        'doc_id' => 1,
+        'primary_lang' => 'en',
+        'content_hash' => sha1('public-search-containment'),
+        'snippet_text' => '',
+        'term_frequencies' => [],
+        'surface_frequencies' => [],
+    ], $overrides);
+}
+
 test_case('set-oriented snippets use only the typed prefix surface', function (): void {
-    $searcher = new WP_FTS_Searcher(new WP_FTS_Storage_InMemory(), new WP_FTS_Analyzer([
+    $searcher = new WP_FTS_Searcher(new WP_FTS_Relational_Storage(new WP_FTS_Test_WPDB()), new WP_FTS_Analyzer([
         'auto_detect_language' => false,
         'default_lang' => 'en',
     ]));
@@ -83,6 +96,51 @@ test_case('set-oriented snippets use only the typed prefix surface', function ()
     );
 });
 
+test_case('set-oriented search sends storage only key-rank candidates and supplied optional values', function (): void {
+    $storage = new class implements WP_FTS_Set_Oriented_Search_Storage {
+        /** @var array<int,array<int,array<string,mixed>>> */
+        public array $groups = [];
+        /** @var array<string,mixed> */
+        public array $options = [];
+
+        public function search_page(array $groups, array $options): array
+        {
+            $this->groups = $groups;
+            $this->options = $options;
+
+            return ['results' => [], 'has_more' => false, 'next_cursor' => null, 'previous_cursor' => null];
+        }
+    };
+    $analyzer = new class {
+        /** Return one fully described occurrence so projection can discard analyzer-only fields. */
+        public function analyze_query_occurrences(string $_query, array $_options): array
+        {
+            return [[
+                'term' => 'alpha',
+                'lang' => 'en',
+                'position' => 0,
+                'rank' => 3,
+                'source' => 'token',
+                'surface' => 'Alpha',
+                'normalized_surface' => 'alpha',
+            ]];
+        }
+    };
+
+    $page = (new WP_FTS_Searcher($storage, $analyzer))->search('Alpha', [
+        'mode' => 'OR',
+        'query_lang' => 'en',
+    ]);
+    assert_same([], $page['results'] ?? null, 'the projected storage call should retain an empty result page');
+    assert_same([[['key' => WP_FTS_TermNamespace::namespace_term('en', 'alpha'), 'rank' => 3]]], $storage->groups, 'storage candidates should contain exactly key and rank');
+    foreach (['term', 'lang', 'position', 'source', 'surface', 'normalized_surface'] as $analyzerField) {
+        assert_true(!array_key_exists($analyzerField, $storage->groups[0][0] ?? []), "storage candidates must omit analyzer-only {$analyzerField}");
+    }
+    foreach (['cursor', 'direction', 'date_after', 'date_before'] as $optionalKey) {
+        assert_true(!array_key_exists($optionalKey, $storage->options), "storage options must omit absent {$optionalKey}");
+    }
+});
+
 test_case('quality lexical streaming rejects oversized runs during construction', function (): void {
     $boundary = iterator_to_array(WP_FTS_Html_Text_Stream::visible_word_stream(str_repeat('a', 4096)), false);
     assert_same(4096, strlen((string) ($boundary[0]['text'] ?? '')), 'the exact 4 KiB lexical-run boundary should remain accepted');
@@ -103,268 +161,11 @@ test_case('quality lexical streaming rejects oversized runs during construction'
     assert_true(microtime(true) - $started < 1.0, 'a near-2 MiB contiguous run should reject in bounded time under the 128 MiB test worker');
 });
 
-test_case('quality direct indexer and metadata inputs are fenced before analysis', function (): void {
-    $analyzer = new class {
-        public int $calls = 0;
-        /** @var array<int,array<string,mixed>|string> */
-        public array $output = [];
-
-        /** Return caller-controlled rows and count any analysis that escaped preflight. */
-        public function analyze_content(string $source, array $options = []): array
-        {
-            $this->calls++;
-            return $this->output;
-        }
-
-        /** Share the hostile output across HTML and plain-field paths. */
-        public function analyze_plain_content(string $source, array $options = []): array
-        {
-            $this->calls++;
-            return $this->output;
-        }
-
-        /** Keep prepared-source fingerprints stable across input-boundary cases. */
-        public function index_signature(): string
-        {
-            return 'bounded-test-analyzer';
-        }
-    };
-    $indexer = new WP_FTS_Indexer(new WP_FTS_Storage_InMemory(), $analyzer);
-
-    foreach ([
-        [array_fill(0, 33, ''), []],
-        [[['name' => str_repeat('n', 192), 'text' => 'value']], []],
-        [[['name' => 'content', 'text' => 'value', 'boost' => str_repeat('1', 65)]], []],
-        [[], ['field_boosts' => array_fill(0, 33, 1)]],
-        [[], ['lang' => str_repeat('l', 65)]],
-        [[], ['metadata_text_limit' => str_repeat('1', 65)]],
-        [[], array_fill(0, 100000, 'unknown')],
-        [[], ['unknown' => array_fill(0, 100000, 'value')]],
-    ] as [$fields, $options]) {
-        $error = psic_caught(static fn(): array => $indexer->prepare_document_fields(1, $fields, $options));
-        assert_true($error instanceof InvalidArgumentException || $error instanceof WP_FTS_Analysis_Limit_Exceeded, 'direct index fields, boosts, languages, and numeric options should fail before analysis');
-    }
-    assert_same(0, $analyzer->calls, 'pre-analysis direct indexer failures should not invoke the analyzer');
-
-    $dualSource = str_repeat('s', 1100000);
-    $dualSourceError = psic_caught(static fn(): array => $indexer->prepare_document_fields(1, [[
-        'name' => 'content',
-        'text' => $dualSource,
-        'html' => $dualSource,
-    ]]));
-    assert_true($dualSourceError instanceof WP_FTS_Analysis_Limit_Exceeded, 'text and HTML buffers should share one 2 MiB direct-field source budget');
-    assert_same(0, $analyzer->calls, 'aggregate direct-field source rejection should precede analyzer work');
-
-    foreach ([
-        ['term' => str_repeat('t', WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES + 1)],
-        ['term' => 'term', 'lang' => str_repeat('l', 65)],
-        ['term' => 'term', 'position' => str_repeat('1', 65)],
-        ['term' => 'term', 'rank' => str_repeat('1', 65)],
-        ['term' => 'term', 'source' => str_repeat('s', 257)],
-        ['term' => 'term', 'payload' => array_fill(0, 100000, 'value')],
-    ] as $occurrence) {
-        $analyzer->output = [$occurrence];
-        $error = psic_caught(static fn(): array => $indexer->prepare_document_fields(1, [['name' => 'content', 'text' => 'value']]));
-        assert_true($error instanceof WP_FTS_Analysis_Limit_Exceeded, 'custom document analyzer scalars should be bounded before trim, canonicalization, or numeric casts');
-    }
-
-    $analyzer->output = array_fill(0, WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES + 1, 'term');
-    $occurrenceCountError = psic_caught(static fn(): array => $indexer->prepare_document_fields(1, [['name' => 'content', 'text' => 'value']]));
-    assert_true($occurrenceCountError instanceof WP_FTS_Analysis_Limit_Exceeded, 'custom document analyzer cardinality should be checked before copying occurrence rows');
-    $analyzer->output = [];
-
-    $baseSource = [
-        'doc_id' => 1,
-        'primary_lang' => 'en',
-        'content_hash' => str_repeat('h', 40),
-        'fields' => [],
-        'analysis_options' => [],
-        'metadata' => null,
-        'replace_metadata_on_hash_match' => true,
-    ];
-    foreach ([
-        ['fields' => array_fill(0, 33, ['name' => 'content', 'text' => ''])],
-        ['primary_lang' => str_repeat('l', 65)],
-        ['content_hash' => str_repeat('h', 65)],
-        ['analysis_options' => ['lang' => str_repeat('l', 65)]],
-        ['analysis_options' => array_fill(0, 100000, 'unknown')],
-        ['metadata' => array_fill(0, 33, 'value')],
-    ] as $override) {
-        $error = psic_caught(static fn(): array => $indexer->prepare_post_from_source(array_replace($baseSource, $override)));
-        assert_true($error instanceof InvalidArgumentException || $error instanceof WP_FTS_Analysis_Limit_Exceeded, 'caller-crafted prepared sources should be revalidated before field analysis');
-    }
-
-    $metadataError = psic_caught(static fn(): bool => $indexer->index_document(1, '<p>value</p>', [
-        'metadata' => array_fill(0, 33, 'value'),
-    ]));
-    assert_true($metadataError instanceof WP_FTS_Analysis_Limit_Exceeded, 'direct document metadata should reject more than 32 keys before analysis');
-    $metadataCalls = $analyzer->calls;
-    $metadataKeyError = psic_caught(static fn(): bool => $indexer->index_document(1, '<p>value</p>', [
-        'metadata' => [str_repeat('k', 192) => 'value'],
-    ]));
-    assert_true($metadataKeyError instanceof WP_FTS_Analysis_Limit_Exceeded, 'direct document metadata keys should be rejected before analysis');
-    assert_same($metadataCalls, $analyzer->calls, 'invalid direct document metadata should not invoke the analyzer');
-
-    $extractor = new class {
-        public int $calls = 0;
-
-        /** Emit twenty base keys so twenty overrides cross the shared metadata cap. */
-        public function extract(object $post, array $options): array
-        {
-            $this->calls++;
-            $metadata = [];
-            for ($index = 1; $index <= 20; $index++) {
-                $metadata['base_' . $index] = 'value';
-            }
-            return ['fields' => [['name' => 'content', 'text' => 'value']], 'metadata' => $metadata, 'field_boosts' => []];
-        }
-    };
-    $postIndexer = new WP_FTS_Indexer(new WP_FTS_Storage_InMemory(), $analyzer, $extractor);
-    $overrideMetadata = [];
-    for ($index = 1; $index <= 20; $index++) {
-        $overrideMetadata['override_' . $index] = 'value';
-    }
-    $mergeError = psic_caught(static fn(): array => $postIndexer->prepare_post_source(
-        (object) ['ID' => 1],
-        ['metadata' => $overrideMetadata]
-    ));
-    assert_true($mergeError instanceof WP_FTS_Analysis_Limit_Exceeded, 'extracted and override metadata should share one 32-key envelope before array replacement');
-
-    $validSource = $postIndexer->prepare_post_source((object) ['ID' => 2]);
-    $hashCalls = $analyzer->calls;
-    $hashError = psic_caught(static fn(): array => $postIndexer->prepare_post_from_source(
-        array_replace($validSource, ['content_hash' => str_repeat('0', 40)])
-    ));
-    assert_true($hashError instanceof InvalidArgumentException, 'caller-crafted prepared sources should not analyze content under a stale fingerprint');
-    assert_same($hashCalls, $analyzer->calls, 'prepared-source hash integrity should be verified before analyzer work');
-
-    $extractorCalls = $extractor->calls;
-    $postIdError = psic_caught(static fn(): array => $postIndexer->prepare_post_source(
-        (object) ['ID' => str_repeat('1', 65)]
-    ));
-    assert_true($postIdError instanceof InvalidArgumentException, 'post-like IDs should be bounded before integer casts');
-    assert_same($extractorCalls, $extractor->calls, 'invalid post-like IDs should be rejected before extractor callbacks');
-
-    foreach ([
-        array_fill(0, 33, 'value'),
-        [str_repeat('k', 192) => 'value'],
-        ['title' => str_repeat('t', 140000), 'excerpt' => str_repeat('e', 140000)],
-        ['terms' => ['category' => array_fill(0, 1023, 'term')], 'custom_fields' => ['signal' => array_fill(0, 1023, 'value')]],
-    ] as $metadata) {
-        $error = psic_caught(static fn(): array => WP_FTS_StorageCompat::normalize_doc_metadata($metadata));
-        assert_true($error instanceof WP_FTS_Analysis_Limit_Exceeded, 'direct metadata normalization should share fixed key, node, and source-byte envelopes');
-    }
-
-    $magicMetadata = new class {
-        public int $calls = 0;
-
-        /** Fail if normalization invokes magic behavior on an untrusted object. */
-        public function __get(string $name): mixed
-        {
-            $this->calls++;
-            throw new RuntimeException('metadata magic access must not run');
-        }
-    };
-    $normalizedMagic = WP_FTS_StorageCompat::normalize_doc_metadata(['custom_extra' => $magicMetadata]);
-    assert_same('', $normalizedMagic['custom_extra'] ?? null, 'metadata objects without declared public data should normalize to an empty scalar');
-    assert_same(0, $magicMetadata->calls, 'metadata normalization should not invoke magic object access');
-});
-
-test_case('set-oriented point mutations and dynamic rendering fail before callbacks, guards, or SQL', function (): void {
-    $fake = new WP_FTS_Test_WPDB();
-    $guardCalls = 0;
-    $storage = new WP_FTS_Storage_Mysql($fake, null, static function () use (&$guardCalls): void {
-        $guardCalls++;
-        throw new RuntimeException('the mutation guard must not run');
-    });
-    $analyzer = new class {
-        public int $calls = 0;
-
-        /** Fail if relational point-mutation fences allow analyzer callbacks. */
-        public function analyze_content(string $source, array $options = []): array
-        {
-            $this->calls++;
-            throw new RuntimeException('the analyzer must not run');
-        }
-
-        /** Fail if a plain relational field bypasses the same mutation fence. */
-        public function analyze_plain_content(string $source, array $options = []): array
-        {
-            $this->calls++;
-            throw new RuntimeException('the analyzer must not run');
-        }
-
-        /** Provide the signature required to construct the fenced indexer. */
-        public function index_signature(): string
-        {
-            return 'set-oriented-fence-test';
-        }
-    };
-    $extractor = new class {
-        public int $calls = 0;
-
-        /** Fail if authoritative-snapshot checks invoke extraction first. */
-        public function extract(object $post, array $options): array
-        {
-            $this->calls++;
-            throw new RuntimeException('the extractor must not run');
-        }
-    };
-    $indexer = new WP_FTS_Indexer($storage, $analyzer, $extractor);
-    $post = (object) ['ID' => 1, 'terms' => [], 'custom_fields' => []];
-    $mutationMessage = 'Set-oriented storage mutations must use the bounded batch writer.';
-
-    foreach ([
-        'index_document' => static fn(): bool => $indexer->index_document(-1, str_repeat('x', WP_FTS_Analysis_Limits::MAX_SOURCE_BYTES + 1)),
-        'index_document_fields' => static fn(): bool => $indexer->index_document_fields(-1, array_fill(0, 33, 'x')),
-        'index_post' => static fn(): bool => $indexer->index_post((object) ['ID' => 0]),
-        'delete_document' => static fn(): bool => $indexer->delete_document(-1),
-    ] as $method => $mutation) {
-        $error = psic_caught($mutation);
-        assert_true($error instanceof LogicException, "{$method} should reject the relational point-mutation path");
-        assert_same($mutationMessage, $error?->getMessage(), "{$method} should expose the exact bounded-writer contract");
-    }
-
-    $missingSnapshot = psic_caught(static fn(): array => $indexer->prepare_post_source((object) ['ID' => 1]));
-    assert_true($missingSnapshot instanceof LogicException, 'relational post preparation should require authoritative attached dependencies');
-    assert_same(
-        'Set-oriented post preparation requires authoritative terms and custom_fields arrays.',
-        $missingSnapshot?->getMessage(),
-        'relational post preparation should expose the exact authoritative-snapshot contract'
-    );
-
-    $renderCallbackCalls = 0;
-    foreach ([
-        ['render_blocks' => true],
-        ['render_shortcodes' => 1],
-        ['render_content_callback' => static function () use (&$renderCallbackCalls): string {
-            $renderCallbackCalls++;
-            return 'dynamic';
-        }],
-        ['render_content_callback' => 'non-callable-but-non-null'],
-    ] as $options) {
-        $error = psic_caught(static fn(): array => $indexer->prepare_post_source($post, $options));
-        assert_true($error instanceof WP_FTS_Analysis_Limit_Exceeded, 'relational dynamic rendering should be a permanent typed analysis rejection');
-        assert_same('dynamic_rendering_not_set_oriented', $error instanceof WP_FTS_Analysis_Limit_Exceeded ? $error->reason_code : null, 'dynamic rendering should use the stable worker rejection reason');
-        assert_same(
-            'Dynamic rendering is unavailable in the bounded relational worker; index static post_content or provide precomputed attached fields.',
-            $error?->getMessage(),
-            'dynamic rendering should explain the static/precomputed replacement'
-        );
-    }
-
-    assert_same(0, $renderCallbackCalls, 'the dynamic rendering callback must never execute');
-    assert_same(0, $extractor->calls, 'relational fences must reject before extractor callbacks');
-    assert_same(0, $analyzer->calls, 'relational fences must reject before analyzer callbacks');
-    assert_same(0, $guardCalls, 'relational fences must reject before the mutation guard');
-    assert_same(0, $fake->num_queries, 'relational fences must reject before SQL');
-});
-
 test_case('quality public search containment rejects custom analyzer expansion before storage', function (): void {
     $fake = new WP_FTS_Test_WPDB();
     $analysis = [];
     for ($index = 0; $index < 10000; $index++) {
-        $analysis['occurrence_' . $index] = 'term';
+        $analysis[] = ['term' => 'term', 'lang' => 'en'];
     }
     $analyzer = new class($analysis) {
         public int $calls = 0;
@@ -381,7 +182,7 @@ test_case('quality public search containment rejects custom analyzer expansion b
             return $this->analysis;
         }
     };
-    $searcher = WP_FTS_Searcher::for_set_oriented_storage(new WP_FTS_Storage_Mysql($fake), $analyzer);
+    $searcher = new WP_FTS_Searcher(new WP_FTS_Relational_Storage($fake), $analyzer);
     $before = $fake->num_queries;
     $error = psic_caught(static fn(): array => $searcher->search('term', ['prefix_matching' => false]));
 
@@ -394,7 +195,6 @@ test_case('quality public search containment rejects custom analyzer expansion b
         'term' => ['term' => str_repeat('t', WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES + 1), 'lang' => 'en'],
         'language' => ['term' => 'term', 'lang' => str_repeat('l', 65)],
         'surface' => ['term' => 'term', 'lang' => 'en', 'normalized_surface' => str_repeat('s', 4097)],
-        'position' => ['term' => 'term', 'lang' => 'en', 'position' => str_repeat('1', 65)],
     ] as $label => $occurrence) {
         $boundedAnalyzer = new class($occurrence) {
             /** Configure one independently oversized analyzer field. */
@@ -408,9 +208,12 @@ test_case('quality public search containment rejects custom analyzer expansion b
                 return [$this->occurrence];
             }
         };
-        $boundedSearcher = WP_FTS_Searcher::for_set_oriented_storage(new WP_FTS_Storage_Mysql($fake), $boundedAnalyzer);
+        $boundedSearcher = new WP_FTS_Searcher(new WP_FTS_Relational_Storage($fake), $boundedAnalyzer);
         $fieldError = psic_caught(static fn(): array => $boundedSearcher->search('term', ['prefix_matching' => false]));
-        assert_true($fieldError instanceof WP_FTS_Search_Budget_Exceeded, "an oversized analyzer {$label} should be rejected before trim or canonicalization");
+        assert_true(
+            $fieldError instanceof InvalidArgumentException,
+            "an oversized analyzer {$label} should violate the exact occurrence contract"
+        );
     }
 
     $modeAnalyzer = new class {
@@ -423,98 +226,87 @@ test_case('quality public search containment rejects custom analyzer expansion b
             return [];
         }
     };
-    $modeSearcher = WP_FTS_Searcher::for_set_oriented_storage(new WP_FTS_Storage_Mysql($fake), $modeAnalyzer);
+    $modeSearcher = new WP_FTS_Searcher(new WP_FTS_Relational_Storage($fake), $modeAnalyzer);
 
-    $wideSnippetOptions = [];
-    for ($index = 0; $index < 65; $index++) {
-        $wideSnippetOptions['custom_' . $index] = 'value';
+    foreach ([
+        ['unsupported' => true],
+        [0 => 'numeric option key'],
+        ['include_snippets' => true],
+        ['mode' => 'OR'],
+        ['query_lang' => null],
+        ['query_lang' => ''],
+        ['default_lang' => false],
+        ['result_lang' => []],
+        ['prefix_matching' => 1],
+        ['highlight' => 'true'],
+        ['prefix_min_length' => 1],
+        ['prefix_min_length' => 256],
+        ['snippet_length' => 39],
+        ['snippet_length' => 501],
+    ] as $snippetOptions) {
+        $snippetOptionError = psic_caught(static fn(): string => $modeSearcher->snippet_for_text(
+            'bounded source',
+            'term',
+            $snippetOptions
+        ));
+        assert_true($snippetOptionError instanceof InvalidArgumentException, 'the public snippet API should reject unsupported or malformed exact options before analyzer work');
     }
-    $wideSnippetError = psic_caught(static fn(): string => $modeSearcher->snippet_for_text(
-        'bounded source',
-        'term',
-        $wideSnippetOptions
-    ));
-    assert_true($wideSnippetError instanceof InvalidArgumentException, 'the public snippet API should reject more than 64 option keys before copying them into analyzer options');
-    assert_same(0, $modeAnalyzer->calls, 'an over-wide snippet option map should be rejected before analyzer work');
-
-    $nestedSnippetOption = 'leaf';
-    for ($depth = 0; $depth < 10; $depth++) {
-        $nestedSnippetOption = ['next' => $nestedSnippetOption];
-    }
-    $nestedSnippetError = psic_caught(static fn(): string => $modeSearcher->snippet_for_text(
-        'bounded source',
-        'term',
-        ['custom_analyzer_option' => $nestedSnippetOption]
-    ));
-    assert_true($nestedSnippetError instanceof InvalidArgumentException, 'the public snippet API should reject an over-deep unknown analyzer option before forwarding it');
-    assert_same(0, $modeAnalyzer->calls, 'an over-deep snippet option graph should be rejected before analyzer work');
-    assert_same($before, $fake->num_queries, 'hostile public snippet option maps should execute no SQL');
+    assert_same(0, $modeAnalyzer->calls, 'invalid exact snippet options should be rejected before analyzer work');
+    assert_same($before, $fake->num_queries, 'invalid public snippet options should execute no SQL');
 
     $modeError = psic_caught(static fn(): array => $modeSearcher->search('term', ['mode' => str_repeat('O', 4097)]));
     assert_true($modeError instanceof InvalidArgumentException, 'an oversized public mode should be rejected before strtoupper normalization');
     assert_same(0, $modeAnalyzer->calls, 'an invalid mode should be rejected before analyzer work');
     foreach ([
+        ['mode' => 'or'],
+        ['mode' => 'and'],
+        ['mode' => ' OR '],
+        ['mode' => 'XOR'],
+        ['mode' => 1],
         ['cursor' => str_repeat('c', 2049)],
         ['prefix_matching' => str_repeat('y', 17)],
         ['date_after' => str_repeat('d', 65)],
         ['limit' => str_repeat('1', 65)],
-        ['post_statues' => ['publish']],
+        ['result_lang' => 'en'],
+        ['max_query_terms' => 12],
+        ['now_gmt' => '2026-01-02T00:00:00'],
+        ['request_budget_guard' => static fn(): bool => true],
+        ['unsupported_option' => true],
         ['_empty_search_scope' => true],
         [0 => 'numeric option key'],
-        ['include_total' => false],
-        ['query_lang' => 'en', 'lang' => 'fr'],
-        ['default_lang' => 'en', 'locale' => 'fr'],
-        ['result_lang' => 'en', 'document_lang' => 'fr'],
-        ['prefix_matching' => true, 'prefix' => false],
-        ['include_snippets' => true, 'snippets' => false],
-        ['date_after' => '2026-01-01', 'after' => '2026-01-02'],
-        ['date_before' => '2026-01-02', 'post_date_before' => '2026-01-03'],
-        ['recency_boost' => true, 'freshness_boost' => false],
-        ['recency_boost_strength' => 1.0, 'freshness_boost_strength' => 2.0],
-        ['recency_boost_half_life_days' => 30, 'freshness_boost_half_life_days' => 31],
-        ['now_gmt' => '2026-01-01', 'recency_now' => '2026-01-02'],
         ['direction' => 'after'],
-        ['after_cursor' => 'signed-token', 'direction' => 'before'],
-        ['before_cursor' => 'signed-token', 'direction' => 'after'],
         ['cursor' => 'signed-token', 'direction' => 'AFTER'],
         ['cursor' => '   '],
         ['post_types' => array_fill(0, 33, 'post')],
+        ['post_types' => ['post' => true]],
+        ['post_types' => [['post']]],
         ['post_types' => ['']],
         ['post_types' => [false]],
         ['post_types' => ['post', '']],
         ['post_types' => 'post,'],
-        ['post_type' => ['post'], 'post_types' => ['page']],
         ['post_statuses' => ['   ']],
-        ['post_status' => ['publish'], 'post_statuses' => ['draft']],
-        ['post_statuses' => null],
-        ['_search_ready_incarnation' => str_repeat('a', 31)],
-        ['_search_ready_incarnation' => str_repeat('A', 32)],
-        ['_search_ready_incarnation' => ' ' . str_repeat('a', 32)],
-        ['_search_ready_incarnation' => 1234],
-        ['_search_ready_profile_hash' => str_repeat('b', 39)],
-        ['_search_ready_profile_hash' => str_repeat('B', 40)],
-        ['_search_ready_profile_hash' => ' ' . str_repeat('b', 40)],
-        ['_search_ready_profile_hash' => 1234],
         array_fill(0, 100000, 'unknown'),
     ] as $options) {
         $optionError = psic_caught(static fn(): array => $modeSearcher->search('term', $options));
-        assert_true($optionError instanceof InvalidArgumentException, 'set-oriented public options should be bounded before analyzer work');
+        assert_true(
+            $optionError instanceof InvalidArgumentException,
+            'set-oriented public options should reject keys: ' . implode(', ', array_map('strval', array_keys($options)))
+                . '; got ' . (is_object($optionError) ? get_class($optionError) : gettype($optionError))
+        );
     }
     $cursorResource = fopen('php://memory', 'rb');
     assert_true(is_resource($cursorResource), 'the hostile cursor fixture should allocate a resource');
     try {
-        foreach (['cursor', 'after_cursor', 'before_cursor'] as $cursorAlias) {
-            foreach ([["nested"], new stdClass(), $cursorResource, false, 0] as $cursorValue) {
-                $optionError = psic_caught(static fn(): array => $modeSearcher->search('term', [
-                    $cursorAlias => $cursorValue,
-                ]));
-                assert_true(
-                    $optionError instanceof InvalidArgumentException,
-                    "a non-string {$cursorAlias} must be rejected before analyzer work"
-                );
-            }
+        foreach ([["nested"], new stdClass(), $cursorResource, false, 0] as $cursorValue) {
+            $optionError = psic_caught(static fn(): array => $modeSearcher->search('term', [
+                'cursor' => $cursorValue,
+            ]));
+            assert_true(
+                $optionError instanceof InvalidArgumentException,
+                'a non-string cursor must be rejected before analyzer work'
+            );
         }
-        foreach (['phrase', 'prefix_matching', 'prefix', 'include_metadata', 'include_snippets', 'snippets', '_include_canonical_post_rows', 'highlight', 'explain', 'debug'] as $switchKey) {
+        foreach (['prefix_matching', 'include_metadata', 'include_snippets', '_include_canonical_post_rows', 'highlight', 'explain'] as $switchKey) {
             foreach ([null, '', 'maybe', 2, -1, 1.0, NAN, INF, [], new stdClass(), $cursorResource] as $switchValue) {
                 $optionError = psic_caught(static fn(): array => $modeSearcher->search('term', [
                     $switchKey => $switchValue,
@@ -526,11 +318,9 @@ test_case('quality public search containment rejects custom analyzer expansion b
             }
         }
         foreach ([
-            'offset' => [-1, 1, false, 0.0, '00', '0.0', 'nonsense', NAN, INF, [], $cursorResource],
             'limit' => [0, 51, false, 1.0, '01', '1.0', 'nonsense', NAN, INF, [], $cursorResource],
-            'max_query_terms' => [0, 13, false, 1.0, '01', '1.0', 'nonsense', NAN, INF, [], $cursorResource],
-            'prefix_min_length' => [-1, 0, 1, 256, false, 1.0, '01', '1.0', 'nonsense', NAN, INF, [], $cursorResource],
-            'snippet_length' => [0, 501, false, 1.0, '01', '1.0', 'nonsense', NAN, INF, [], $cursorResource],
+            'prefix_min_length' => [-1, 0, 1, 13, false, 1.0, '01', '1.0', 'nonsense', NAN, INF, [], $cursorResource],
+            'snippet_length' => [0, 39, 501, false, 1.0, '01', '1.0', 'nonsense', NAN, INF, [], $cursorResource],
         ] as $numericKey => $numericValues) {
             foreach ($numericValues as $numericValue) {
                 $optionError = psic_caught(static fn(): array => $modeSearcher->search('term', [
@@ -543,13 +333,8 @@ test_case('quality public search containment rejects custom analyzer expansion b
             }
         }
         foreach ([
-            'recency_boost' => [-0.1, 2.1, '', '01', '1e0', 'nonsense', NAN, INF, [], $cursorResource],
-            'freshness_boost' => [-0.1, 2.1, '', '01', '1e0', 'nonsense', NAN, INF, [], $cursorResource],
             'recency_boost_strength' => [false, -0.1, 2.1, '', '01', '1e0', 'nonsense', NAN, INF, [], $cursorResource],
-            'freshness_boost_strength' => [false, -0.1, 2.1, '', '01', '1e0', 'nonsense', NAN, INF, [], $cursorResource],
             'recency_boost_half_life_days' => [false, 0, 3651, '', '01', '1e0', 'nonsense', NAN, INF, [], $cursorResource],
-            'freshness_boost_half_life_days' => [false, 0, 3651, '', '01', '1e0', 'nonsense', NAN, INF, [], $cursorResource],
-            'recency_boost_window_days' => [false, 0, 3651, '', '01', '1e0', 'nonsense', NAN, INF, [], $cursorResource],
         ] as $numericKey => $numericValues) {
             foreach ($numericValues as $numericValue) {
                 $optionError = psic_caught(static fn(): array => $modeSearcher->search('term', [
@@ -561,7 +346,7 @@ test_case('quality public search containment rejects custom analyzer expansion b
                 );
             }
         }
-        foreach (['date_after', 'after', 'post_date_after', 'date_before', 'before', 'post_date_before', 'now_gmt', 'recency_now'] as $dateKey) {
+        foreach (['date_after', 'date_before'] as $dateKey) {
             foreach ([null, false, 0, ' ', '2026-02-30', 'tomorrow', [], new stdClass(), $cursorResource] as $dateValue) {
                 $optionError = psic_caught(static fn(): array => $modeSearcher->search('term', [
                     $dateKey => $dateValue,
@@ -572,58 +357,40 @@ test_case('quality public search containment rejects custom analyzer expansion b
                 );
             }
         }
-        foreach ([null, false, 0, 'guard', [], new stdClass(), $cursorResource] as $guard) {
-            $optionError = psic_caught(static fn(): array => $modeSearcher->search('term', [
-                'request_budget_guard' => $guard,
-            ]));
-            assert_true($optionError instanceof InvalidArgumentException, 'a noncallable request budget guard must be rejected before analyzer work');
-        }
     } finally {
         fclose($cursorResource);
     }
-    assert_same(0, $modeAnalyzer->calls, 'cursor, switch, date, numeric, and filter failures should all precede analyzer work');
+    assert_same(0, $modeAnalyzer->calls, 'cursor, switch, date, numeric, filter, and unsupported-option failures should all precede analyzer work');
     assert_same($before, $fake->num_queries, 'all analyzer-bound failures should leave storage untouched');
 
-    $exactCursor = ' signed.cursor.bytes ';
-    assert_same(
-        $exactCursor,
-        psic_searcher_private($modeSearcher, 'set_oriented_cursor_value', $exactCursor),
-        'cursor validation must preserve every nonblank signed byte instead of trimming it'
+    assert_true(
+        psic_caught(
+            static fn(): mixed => psic_searcher_private(
+                $modeSearcher,
+                'set_oriented_cursor_value',
+                ' signed.cursor.bytes '
+            )
+        ) instanceof InvalidArgumentException,
+        'cursor validation must reject padded signed bytes instead of changing their identity'
     );
-    $guardCalls = 0;
     $boundaryPage = $modeSearcher->search('term', [
         'query_lang' => 'en_US',
-        'lang' => 'en-US',
-        'prefix_matching' => '1',
-        'prefix' => true,
-        'include_snippets' => '0',
-        'snippets' => false,
-        'offset' => '0',
-        'limit' => '50',
-        'max_query_terms' => '12',
-        'prefix_min_length' => '255',
-        'snippet_length' => '500',
-        'recency_boost_strength' => '2.0',
-        'freshness_boost_strength' => 2,
-        'recency_boost_half_life_days' => '3650',
-        'freshness_boost_half_life_days' => 3650.0,
+        'prefix_matching' => true,
+        'include_snippets' => false,
+        'limit' => 50,
+        'prefix_min_length' => 12,
+        'snippet_length' => 500,
+        'recency_boost_strength' => 2.0,
+        'recency_boost_half_life_days' => 3650.0,
         'date_after' => '2026-01-01',
-        'after' => '2026-01-01 00:00:00',
-        'now_gmt' => '2026-01-02T00:00:00',
-        'recency_now' => '2026-01-02 00:00:00',
-        'request_budget_guard' => static function () use (&$guardCalls): bool {
-            $guardCalls++;
-            return true;
-        },
     ]);
     assert_same([], $boundaryPage['results'] ?? null, 'the exact strict option boundaries should retain an analyzer-empty first page');
     assert_same(1, $modeAnalyzer->calls, 'one valid strict-boundary request should invoke the analyzer exactly once');
-    assert_true($guardCalls >= 1, 'a valid callable request budget guard must remain active');
     assert_same($before, $fake->num_queries, 'an analyzer-empty strict-boundary page should not execute storage SQL');
 
     $snippetAnalysis = [];
     for ($index = 0; $index < 10000; $index++) {
-        $snippetAnalysis['snippet_' . $index] = ['term' => 'term', 'surface' => 'term', 'lang' => 'en'];
+        $snippetAnalysis[] = ['term' => 'term', 'surface' => 'term', 'lang' => 'en'];
     }
     $snippetAnalyzer = new class($snippetAnalysis) {
         public int $calls = 0;
@@ -640,7 +407,7 @@ test_case('quality public search containment rejects custom analyzer expansion b
             return $this->analysis;
         }
     };
-    $snippetSearcher = WP_FTS_Searcher::for_set_oriented_storage(new WP_FTS_Storage_Mysql($fake), $snippetAnalyzer);
+    $snippetSearcher = new WP_FTS_Searcher(new WP_FTS_Relational_Storage($fake), $snippetAnalyzer);
     $key = WP_FTS_TermNamespace::namespace_term('en', 'term');
     $groups = [[['key' => $key, 'lang' => 'en', 'term' => 'term', 'rank' => 0]]];
     $surfaces = psic_searcher_private(
@@ -699,8 +466,6 @@ test_case('quality public search containment keeps oversized WordPress cursors F
         foreach ([
             ['lang' => str_repeat('l', 65)],
             ['cursor' => str_repeat('c', 2049)],
-            ['after_cursor' => str_repeat('c', 2049)],
-            ['before_cursor' => str_repeat('c', 2049)],
             ['direction' => str_repeat('d', 9)],
             ['mode' => str_repeat('m', 9)],
             ['prefix_matching' => str_repeat('y', 17)],
@@ -712,7 +477,14 @@ test_case('quality public search containment keeps oversized WordPress cursors F
         }
         assert_same($before, $fake->num_queries, 'public option byte rejections should execute no SQL');
 
-        assert_same('after', psic_plugin_private('search_cursor_direction', str_repeat('b', 4097)), 'the WordPress direction adapter should not normalize an oversized scalar');
+        foreach ([str_repeat('b', 4097), ' after ', 'AFTER', 1, null] as $direction) {
+            $error = psic_caught(
+                static fn(): mixed => psic_plugin_private('search_cursor_direction', $direction)
+            );
+            assert_true($error instanceof InvalidArgumentException, 'the WordPress direction adapter should reject every non-exact value');
+        }
+        assert_same('after', psic_plugin_private('search_cursor_direction', 'after'), 'the exact forward direction should remain accepted');
+        assert_same('before', psic_plugin_private('search_cursor_direction', 'before'), 'the exact reverse direction should remain accepted');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -729,9 +501,10 @@ test_case('quality WordPress search facade rejects every untyped unsupported or 
     try {
         $invalidOptions = [
             ['post_statues' => ['publish']],
+            ['post_type' => ['post']],
+            ['post_status' => ['publish']],
             ['_empty_search_scope' => true],
             ['_search_ready_incarnation' => str_repeat('a', 32)],
-            ['include_total' => false],
             ['phrase' => false],
             ['explain' => false],
             ['debug' => false],
@@ -739,80 +512,71 @@ test_case('quality WordPress search facade rejects every untyped unsupported or 
             array_fill(0, 100000, 'unknown'),
             ['mode' => false],
             ['mode' => 'XOR'],
-            ['offset' => 1],
-            ['offset' => 0.0],
-            ['offset' => '00'],
+            ['offset' => 0],
             ['limit' => false],
             ['limit' => 1.0],
             ['limit' => '01'],
             ['limit' => 51],
             ['lang' => null],
             ['lang' => false],
+            ['lang' => ''],
+            ['lang' => '   '],
             ['cursor' => null],
             ['cursor' => '   '],
+            ['cursor' => ' signed '],
             ['cursor' => false],
             ['cursor' => str_repeat('c', 2049)],
             ['direction' => 'after'],
             ['cursor' => 'signed', 'direction' => 'AFTER'],
-            ['after_cursor' => 'signed', 'before_cursor' => 'signed'],
-            ['after_cursor' => 'signed', 'direction' => 'before'],
             ['prefix_matching' => 'maybe'],
-            ['prefix_matching' => true, 'prefix' => false],
-            ['include_snippets' => true, 'snippets' => false],
-            ['post_type' => ['post'], 'post_types' => ['post']],
-            ['post_type' => false],
+            ['include_snippets' => 'no'],
             ['post_types' => null],
+            ['post_types' => 'post,page'],
             ['post_types' => ['post', '']],
-            ['post_status' => ['publish'], 'post_statuses' => ['publish']],
+            ['post_statuses' => 'publish'],
             ['post_statuses' => [false]],
+            ['recency_boost_strength' => '2.0'],
+            ['recency_boost_half_life_days' => '3650'],
             ['date_after' => null],
             ['date_after' => '2026-02-30'],
             ['date_before' => ' tomorrow '],
-            ['recency_boost' => true, 'freshness_boost' => false],
-            ['recency_boost_strength' => 1.0, 'freshness_boost_strength' => 2.0],
-            ['recency_boost_half_life_days' => 30, 'recency_boost_window_days' => 31],
-            ['now_gmt' => '2026-01-01', 'recency_now' => '2026-01-02'],
-            ['request_budget_guard' => 'not-callable'],
+            ['snippet_length' => 39],
+            ['max_query_terms' => 12],
+            ['now_gmt' => '2026-01-01T00:00:00'],
+            ['request_budget_guard' => static fn(): bool => true],
         ];
         $before = $fake->num_queries;
         foreach ($invalidOptions as $options) {
             $error = psic_caught(static fn(): array => WP_FTS_Plugin::search_page('typed boundary', $options));
-            assert_true($error instanceof InvalidArgumentException, 'the WordPress facade must reject malformed options before readiness or storage');
+            assert_true(
+                $error instanceof InvalidArgumentException,
+                'the WordPress facade must reject malformed options before readiness or storage: '
+                    . json_encode($options, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+            );
         }
         assert_same($before, $fake->num_queries, 'all exact public option-boundary failures should execute zero SQL');
 
-        $guardCalls = 0;
         $normalized = psic_plugin_private('normalize_public_search_options', [
-            'mode' => 'and',
-            'offset' => '0',
-            'limit' => '50',
-            'after_cursor' => ' exact.signed.bytes ',
-            'prefix' => 'yes',
-            'snippets' => 'no',
-            'post_type' => 'post,page',
-            'post_status' => ['publish'],
-            'recency_boost' => 'true',
-            'freshness_boost' => 0.25,
-            'freshness_boost_strength' => '2.0',
-            'recency_boost_window_days' => '3650',
-            'recency_now' => '2026-01-01T00:00:00',
-            'request_budget_guard' => static function () use (&$guardCalls): bool {
-                $guardCalls++;
-                return true;
-            },
+            'mode' => 'AND',
+            'limit' => 50,
+            'cursor' => 'exact.signed.bytes',
+            'direction' => 'after',
+            'prefix_matching' => true,
+            'include_snippets' => false,
+            'post_types' => ['post', 'page'],
+            'post_statuses' => ['publish'],
+            'recency_boost_strength' => 2.0,
+            'recency_boost_half_life_days' => 3650.0,
         ]);
         assert_same('AND', $normalized['mode'] ?? null, 'mode should canonicalize without permissive casting');
         assert_same(50, $normalized['limit'] ?? null, 'the exact page boundary should normalize to an integer');
-        assert_same(' exact.signed.bytes ', $normalized['cursor'] ?? null, 'cursor aliases must preserve every signed byte');
-        assert_same('after', $normalized['direction'] ?? null, 'after_cursor should canonicalize its direction');
-        assert_same(true, $normalized['prefix_matching'] ?? null, 'the supported prefix alias should canonicalize once');
-        assert_same(false, $normalized['include_snippets'] ?? null, 'the supported snippet alias should canonicalize once');
-        assert_same(['page', 'post'], $normalized['post_types'] ?? null, 'singular scope input should become one sorted canonical list');
-        assert_float_near(0.25, (float) ($normalized['recency_boost'] ?? -1), 'matching recency toggle aliases should retain their effective strength');
-        assert_float_near(2.0, (float) ($normalized['recency_boost_strength'] ?? -1), 'freshness strength should map to the canonical recency option');
-        assert_float_near(3650.0, (float) ($normalized['recency_boost_half_life_days'] ?? -1), 'recency window should map to canonical half-life');
-        assert_same('2026-01-01T00:00:00', $normalized['now_gmt'] ?? null, 'recency clock should map to the canonical clock without changing bytes');
-        assert_true(is_callable($normalized['request_budget_guard'] ?? null), 'the valid request guard should survive canonicalization');
+        assert_same('exact.signed.bytes', $normalized['cursor'] ?? null, 'cursor validation must preserve one canonical signed value');
+        assert_same('after', $normalized['direction'] ?? null, 'cursor direction should remain explicit');
+        assert_same(true, $normalized['prefix_matching'] ?? null, 'prefix matching should normalize once');
+        assert_same(false, $normalized['include_snippets'] ?? null, 'snippet selection should normalize once');
+        assert_same(['page', 'post'], $normalized['post_types'] ?? null, 'post types should become one sorted canonical list');
+        assert_float_near(2.0, (float) ($normalized['recency_boost_strength'] ?? -1), 'recency strength should normalize to the canonical option');
+        assert_float_near(3650.0, (float) ($normalized['recency_boost_half_life_days'] ?? -1), 'recency half-life should normalize to the canonical option');
         assert_same($before, $fake->num_queries, 'valid option normalization itself should execute zero SQL');
     } finally {
         $wpdb = $oldWpdb;
@@ -832,7 +596,7 @@ test_case('quality empty WordPress scopes authenticate cursors on facade and ada
     $GLOBALS['wp_fts_test_post_types']['attachment']->exclude_from_search = true;
 
     try {
-        $storage = WP_FTS_Plugin::storage(false);
+        $storage = wp_fts_test_storage(false);
         $cursor = psic_mysql_private($storage, 'encode_cursor', (object) [
             'score' => 123,
             'post_date_gmt' => '2026-01-01 00:00:00',
@@ -906,33 +670,300 @@ test_case('quality empty WordPress scopes authenticate cursors on facade and ada
     }
 });
 
-test_case('quality WP CLI search containment bounds cursor language and CSV options before parsing', function (): void {
+test_case('quality WP CLI search containment rejects malformed supplied strings before parsing', function (): void {
     $command = new WP_FTS_WPCLI_Command();
 
     foreach ([
+        ['mode' => null],
+        ['mode' => false],
+        ['mode' => 1],
+        ['mode' => []],
+        ['mode' => 'or'],
+        ['mode' => 'and'],
+        ['mode' => ' OR '],
+        ['mode' => 'XOR'],
+        ['lang' => null],
+        ['lang' => true],
+        ['lang' => 1],
+        ['lang' => []],
+        ['lang' => ''],
+        ['lang' => '   '],
+        ['lang' => ' en'],
+        ['lang' => 'en '],
         ['lang' => str_repeat('l', 65)],
+        ['cursor' => null],
+        ['cursor' => true],
+        ['cursor' => 1],
+        ['cursor' => []],
+        ['cursor' => ''],
+        ['cursor' => '   '],
+        ['cursor' => ' padded '],
         ['cursor' => str_repeat('c', 2049)],
+        ['direction' => 'after'],
+        ['direction' => null, 'cursor' => 'cursor'],
+        ['direction' => true, 'cursor' => 'cursor'],
+        ['direction' => 1, 'cursor' => 'cursor'],
+        ['direction' => [], 'cursor' => 'cursor'],
+        ['direction' => 'AFTER', 'cursor' => 'cursor'],
+        ['direction' => ' after ', 'cursor' => 'cursor'],
         ['direction' => str_repeat('d', 9), 'cursor' => 'cursor'],
+        ['post_status' => null],
+        ['post_status' => true],
+        ['post_status' => 1],
+        ['post_status' => []],
+        ['post_status' => ''],
+        ['post_status' => '   '],
+        ['post_status' => ',publish'],
+        ['post_status' => 'publish,'],
+        ['post_status' => 'publish,,draft'],
         ['post_status' => str_repeat('s', 4097)],
+        ['post_type' => null],
+        ['post_type' => true],
+        ['post_type' => 1],
+        ['post_type' => []],
+        ['post_type' => ''],
+        ['post_type' => '   '],
+        ['post_type' => ',post'],
+        ['post_type' => 'post,'],
+        ['post_type' => 'post,,page'],
         ['post_type' => implode(',', array_map(static fn(int $index): string => 'type' . $index, range(1, 33)))],
         ['post_status' => str_repeat('s', 65)],
-        ['mode' => str_repeat('m', 9)],
+        ['after' => null],
+        ['after' => true],
+        ['after' => 1],
+        ['after' => []],
+        ['after' => ''],
+        ['after' => '   '],
+        ['after' => ' 2026-01-01'],
+        ['before' => '2026-01-01 '],
         ['limit' => str_repeat('1', 65)],
         ['after' => str_repeat('d', 65)],
         ['prefix_matching' => str_repeat('y', 17)],
     ] as $args) {
         $error = psic_caught(static fn(): array => psic_cli_private($command, 'search_options_from_cli_args', $args));
-        assert_true($error instanceof InvalidArgumentException, 'WP-CLI should reject over-wide search options before trim or CSV expansion');
+        assert_true($error instanceof InvalidArgumentException, 'WP-CLI should reject malformed supplied search options before normalization or CSV expansion');
     }
 
+    $maximumLanguage = 'lll-aaaaaaaa-bbbbbbbb-cccccccc-dddddddd-eeeeeeee-ffffffff-gggggg';
     $boundary = psic_cli_private($command, 'search_options_from_cli_args', [
-        'lang' => str_repeat('l', 64),
+        'mode' => 'AND',
+        'lang' => $maximumLanguage,
         'cursor' => str_repeat('c', 2048),
+        'direction' => 'before',
+        'after' => '2026-01-01',
+        'before' => '2026-01-31',
         'post_type' => implode(',', array_map(static fn(int $index): string => 't' . $index, range(1, 32))),
     ]);
-    assert_same(64, strlen((string) ($boundary['lang'] ?? '')), 'the exact CLI language boundary should remain accepted');
+    assert_same('AND', $boundary['mode'] ?? null, 'the exact CLI AND mode should remain accepted');
+    assert_same($maximumLanguage, $boundary['lang'] ?? null, 'the exact CLI language boundary should remain accepted');
     assert_same(2048, strlen((string) ($boundary['cursor'] ?? '')), 'the exact CLI cursor boundary should remain accepted');
-    assert_same(32, count($boundary['post_type'] ?? []), 'the exact CLI filter cardinality boundary should remain accepted');
+    assert_same('before', $boundary['direction'] ?? null, 'an exact CLI direction should remain paired with its cursor');
+    assert_same('2026-01-01', $boundary['date_after'] ?? null, 'an exact CLI after date should remain accepted');
+    assert_same('2026-01-31', $boundary['date_before'] ?? null, 'an exact CLI before date should remain accepted');
+    assert_same(32, count($boundary['post_types'] ?? []), 'the exact CLI filter cardinality boundary should remain accepted');
+});
+
+test_case('quality WP CLI search queries require exactly one native string', function (): void {
+    $command = new WP_FTS_WPCLI_Command();
+
+    foreach (['search', 'diagnose'] as $method) {
+        foreach ([[], [null], [true], [1], [1.0], [[]], [new stdClass()], ['first', 'second'], [1 => 'query'], ['query' => 'value']] as $args) {
+            $error = psic_caught(static fn(): mixed => $command->{$method}($args, []));
+            assert_true(
+                $error instanceof InvalidArgumentException,
+                "wp fts {$method} should reject a missing or malformed query before plugin work"
+            );
+        }
+    }
+    assert_same('', psic_cli_private($command, 'query_arg', ['']), 'an empty native query should remain exact for the PHP search boundary to classify');
+    assert_same('   ', psic_cli_private($command, 'query_arg', ['   ']), 'CLI query parsing should not trim caller bytes');
+});
+
+test_case('quality WP CLI search accepts canonical integers and explicit booleans only', function (): void {
+    $command = new WP_FTS_WPCLI_Command();
+
+    foreach ([10, '10'] as $limit) {
+        $options = psic_cli_private($command, 'search_options_from_cli_args', ['limit' => $limit]);
+        assert_same(10, $options['limit'] ?? null, 'CLI limit should accept native integers and canonical decimal text');
+    }
+    foreach ([3, '3'] as $prefixMinLength) {
+        $options = psic_cli_private($command, 'search_options_from_cli_args', [
+            'prefix_min_length' => $prefixMinLength,
+        ]);
+        assert_same(3, $options['prefix_min_length'] ?? null, 'CLI prefix minimum should accept native integers and canonical decimal text');
+    }
+
+    foreach (['1.0', '1e1', '01', ' 1 ', 1.0, 'garbage', 0, 101] as $limit) {
+        $error = psic_caught(static fn(): array => psic_cli_private(
+            $command,
+            'search_options_from_cli_args',
+            ['limit' => $limit]
+        ));
+        assert_true($error instanceof InvalidArgumentException, 'CLI limit should reject malformed and out-of-range values');
+    }
+    foreach (['3.0', '3e0', '03', ' 3 ', 3.0, 'garbage', 1, 13] as $prefixMinLength) {
+        $error = psic_caught(static fn(): array => psic_cli_private(
+            $command,
+            'search_options_from_cli_args',
+            ['prefix_min_length' => $prefixMinLength]
+        ));
+        assert_true($error instanceof InvalidArgumentException, 'CLI prefix minimum should reject malformed and out-of-range values');
+    }
+
+    $flagNames = ['explain', 'all', 'yes', 'enable'];
+    foreach ($flagNames as $name) {
+        assert_same(false, psic_cli_private($command, 'bool_flag_arg', [], $name, false), "missing --{$name} should use its false default");
+        assert_same(true, psic_cli_private($command, 'bool_flag_arg', [], $name, true), "missing --{$name} should use its true default");
+    }
+
+    $booleanConsumers = [...$flagNames, 'prefix_matching', 'snippet'];
+    $readBoolean = static function (string $name, mixed $value) use ($command): mixed {
+        if ($name === 'prefix_matching' || $name === 'snippet') {
+            $options = psic_cli_private($command, 'search_options_from_cli_args', [$name => $value]);
+
+            return $name === 'snippet'
+                ? ($options['include_snippets'] ?? null)
+                : ($options['prefix_matching'] ?? null);
+        }
+
+        return psic_cli_private($command, 'bool_flag_arg', [$name => $value], $name, false);
+    };
+    foreach ($booleanConsumers as $name) {
+        foreach ([true, 1, '1', 'true', 'TRUE', 'yes', 'YeS', 'on', 'ON'] as $value) {
+            assert_same(true, $readBoolean($name, $value), "CLI {$name} should accept an explicit true value");
+        }
+        foreach ([false, 0, '0', 'false', 'FALSE', 'no', 'No', 'off', 'OFF'] as $value) {
+            assert_same(false, $readBoolean($name, $value), "CLI {$name} should accept an explicit false value");
+        }
+        foreach (['maybe', null, [], ['true'], ' true ', 2, -1, 1.0, new stdClass()] as $value) {
+            $booleanError = psic_caught(static fn(): mixed => $readBoolean($name, $value));
+            assert_true($booleanError instanceof InvalidArgumentException, "CLI {$name} should reject non-explicit boolean input");
+        }
+    }
+});
+
+test_case('quality WP CLI counts IDs and time budgets accept only explicit numeric shapes', function (): void {
+    $command = new WP_FTS_WPCLI_Command();
+
+    foreach ([1, '1', 42, '42'] as $value) {
+        assert_same((int) $value, psic_cli_private($command, 'positive_int_arg', $value, '--count'), 'positive CLI counts should accept native integers and canonical decimal strings');
+    }
+    foreach ([0, '0', 42, '42'] as $value) {
+        assert_same((int) $value, psic_cli_private($command, 'non_negative_int_arg', $value, '--count'), 'nonnegative CLI counts should accept native integers and canonical decimal strings');
+    }
+
+    $malformedIntegers = [1.0, '1.0', '1e0', -1, '-1', '01', ' 1 ', '+1', 'junk', true, false, null, [], new stdClass()];
+    foreach ($malformedIntegers as $value) {
+        foreach (['positive_int_arg', 'non_negative_int_arg'] as $method) {
+            $error = psic_caught(static fn(): mixed => psic_cli_private($command, $method, $value, '--count'));
+            assert_true($error instanceof InvalidArgumentException, "{$method} should reject noncanonical CLI integer input");
+        }
+    }
+    foreach ([0, '0'] as $value) {
+        $error = psic_caught(static fn(): mixed => psic_cli_private($command, 'positive_int_arg', $value, '--count'));
+        assert_true($error instanceof InvalidArgumentException, 'positive CLI counts should reject zero');
+    }
+
+    foreach ([1, 1.5, '1', '1.5'] as $value) {
+        assert_same((float) $value, psic_cli_private($command, 'positive_float_arg', $value, '--time_budget'), 'manual batch time budgets should accept positive native numbers and canonical decimal strings');
+    }
+    foreach ([0, 0.0, '0', '0.0', -1, -0.25, '-1', '-0.25', '01', '01.5', '.5', '1.', ' 1 ', '+1', '1e2', 'junk', 'INF', 'NAN', INF, -INF, NAN, true, false, null, [], new stdClass()] as $value) {
+        $error = psic_caught(static fn(): mixed => psic_cli_private($command, 'positive_float_arg', $value, '--time_budget'));
+        assert_true($error instanceof InvalidArgumentException, 'manual batch time budgets should reject zero, malformed, non-finite, and nonnumeric values');
+    }
+
+    assert_same(1000, WP_FTS_Plugin::MAX_MANUAL_INDEX_BATCH_SIZE, 'the manual CLI batch boundary should remain exactly 1000 posts');
+    $oversizedBatchError = psic_caught(static fn(): mixed => $command->process_batch([], ['batch_size' => 1001]));
+    assert_true($oversizedBatchError instanceof InvalidArgumentException, 'wp fts process-batch should reject the first batch size above 1000 before plugin work');
+
+    foreach ([0, '0', 1.0, '1.0', '1e0', -1, '-1', '01', ' 1 ', '+1', 'junk', true, false, null, [], new stdClass()] as $value) {
+        $error = psic_caught(static fn(): mixed => $command->delete([$value], []));
+        assert_true($error instanceof InvalidArgumentException, 'wp fts delete should reject every present non-positive or noncanonical document ID');
+    }
+});
+
+test_case('quality WP CLI lemma imports preserve strings and reject malformed counts', function (): void {
+    $command = new WP_FTS_WPCLI_Command();
+    $required = [
+        'source' => ' source.tsv ',
+        'language' => 'qaa',
+        'pack-id' => ' pack-id ',
+        'version' => ' version ',
+        'source-name' => ' source name ',
+        'source-url' => ' source URL ',
+        'license' => ' license ',
+    ];
+    $supplied = $required + [
+        'attribution' => ' attribution ',
+        'out' => ' output ',
+        'license-url' => ' license URL ',
+        'source-version' => ' source version ',
+        'tmp-dir' => ' temporary parent ',
+        'max-rows-per-file' => '17',
+        'chunk-rows' => 19,
+    ];
+    $options = psic_cli_private($command, 'lemma_pack_import_options', $supplied);
+    assert_same([
+        'source' => ' source.tsv ',
+        'language' => 'qaa',
+        'pack_id' => ' pack-id ',
+        'version' => ' version ',
+        'source_name' => ' source name ',
+        'source_url' => ' source URL ',
+        'license' => ' license ',
+        'attribution' => ' attribution ',
+        'out' => ' output ',
+        'license_url' => ' license URL ',
+        'source_version' => ' source version ',
+        'tmp_dir' => ' temporary parent ',
+        'max_rows_per_file' => 17,
+        'chunk_rows' => 19,
+    ], $options, 'WP CLI importer parsing should preserve supplied strings byte-for-byte and parse only canonical counts');
+
+    $defaults = psic_cli_private($command, 'lemma_pack_import_options', $required + ['out' => 'output']);
+    assert_same(' source name ', $defaults['attribution'] ?? null, 'an absent attribution should default to the exact source name');
+    assert_true(!array_key_exists('license_url', $defaults), 'an absent license URL should remain absent');
+    assert_true(!array_key_exists('source_version', $defaults), 'an absent source version should remain absent');
+    assert_true(!array_key_exists('tmp_dir', $defaults), 'an absent temporary parent should remain absent');
+    assert_true(!array_key_exists('max_rows_per_file', $defaults), 'an absent rows-per-file count should remain absent');
+    assert_true(!array_key_exists('chunk_rows', $defaults), 'an absent chunk count should remain absent');
+
+    foreach (array_keys($required) as $name) {
+        $candidate = $required + ['out' => 'output'];
+        unset($candidate[$name]);
+        $missingError = psic_caught(static fn(): array => psic_cli_private($command, 'lemma_pack_import_options', $candidate));
+        assert_true($missingError instanceof RuntimeException, "a required importer --{$name} must not default when absent");
+
+        foreach ([null, false, true, 0, 1, 1.0, [], new stdClass(), '', '   '] as $value) {
+            $candidate = $required + ['out' => 'output'];
+            $candidate[$name] = $value;
+            $error = psic_caught(static fn(): array => psic_cli_private($command, 'lemma_pack_import_options', $candidate));
+            assert_true($error instanceof RuntimeException, "a required importer --{$name} must be a supplied nonblank native string");
+        }
+    }
+
+    foreach (['attribution', 'out', 'license-url', 'source-version', 'tmp-dir'] as $name) {
+        foreach ([null, false, true, 0, 1, 1.0, [], new stdClass(), '', '   '] as $value) {
+            $candidate = $required + ['out' => 'output'];
+            $candidate[$name] = $value;
+            $error = psic_caught(static fn(): array => psic_cli_private($command, 'lemma_pack_import_options', $candidate));
+            assert_true($error instanceof InvalidArgumentException, "a supplied importer --{$name} must be a nonblank native string");
+        }
+    }
+
+    foreach (['max-rows-per-file', 'chunk-rows'] as $name) {
+        foreach ([1, '1', 42, '42'] as $value) {
+            $candidate = $required + ['out' => 'output', $name => $value];
+            $parsed = psic_cli_private($command, 'lemma_pack_import_options', $candidate);
+            $key = str_replace('-', '_', $name);
+            assert_same((int) $value, $parsed[$key] ?? null, "importer --{$name} should accept native positive integers and canonical decimal strings");
+        }
+        foreach ([0, '0', 1.0, '1.0', '1e0', -1, '-1', '01', ' 1 ', '+1', 'junk', true, false, null, [], new stdClass()] as $value) {
+            $candidate = $required + ['out' => 'output', $name => $value];
+            $error = psic_caught(static fn(): array => psic_cli_private($command, 'lemma_pack_import_options', $candidate));
+            assert_true($error instanceof InvalidArgumentException, "importer --{$name} should reject non-positive or noncanonical counts");
+        }
+    }
 });
 
 test_case('quality persisted post type scopes cannot expand worker loops beyond 32 values', function (): void {
@@ -1003,12 +1034,23 @@ test_case('quality queue public inputs reject hostile ids and payload graphs bef
     $queue = new WP_FTS_Index_Queue($fake);
     $before = $fake->num_queries;
 
+    assert_same(0, $queue->enqueue_many([]), 'an empty exact ID list should remain a zero-work queue request');
     foreach ([
-        [str_repeat('1', 65)],
+        [1 => 1],
+        ['post' => 1],
+        array_fill(0, WP_FTS_Index_Queue::MAX_ENQUEUE_POSTS + 1, 1),
+        [0],
+        [-1],
+        ['1'],
+        [1.0],
+        [true],
+        [false],
+        [null],
+        [[]],
         [new stdClass()],
     ] as $ids) {
         $error = psic_caught(static fn(): int => $queue->enqueue_many($ids));
-        assert_true($error instanceof InvalidArgumentException, 'queue batches should reject non-scalar or overlong ids before integer casts');
+        assert_true($error instanceof InvalidArgumentException, 'queue batches should require a bounded list of positive native integer IDs');
     }
 
     $claim = [
@@ -1041,37 +1083,109 @@ test_case('quality queue public inputs reject hostile ids and payload graphs bef
     $scopeKeyError = psic_caught(static fn(): mixed => $queue->enqueue_scope(str_repeat(' ', 1025)));
     assert_true($scopeKeyError instanceof InvalidArgumentException, 'scope keys should be byte-bounded before trim or hashing');
 
-    assert_same(false, $queue->acknowledge([
-        'post_id' => str_repeat('1', 65),
-        'generation' => 1,
-        'token' => 'claim-token',
-    ]), 'post claims should reject overlong numeric values before integer casts');
-    assert_same(false, $queue->commit_scope_page([
-        'job_key' => 'scope:bounded',
-        'generation' => str_repeat('1', 65),
-        'token' => 'claim-token',
-    ], [], 1), 'scope claims should reject overlong generations before integer casts');
-    assert_same('lost', $queue->fail_scope([
-        'job_key' => 'scope:bounded',
-        'generation' => 1,
-        'token' => 'claim-token',
-        'attempts' => str_repeat('1', 65),
-    ])['status'], 'scope failures should reject overlong attempt counters before integer casts');
-    assert_same(false, $queue->release([
-        'job_key' => str_repeat('j', 192),
-        'post_id' => 1,
-        'generation' => 1,
-        'token' => str_repeat('l', 65),
-    ]), 'post releases should reject noncanonical job keys and overlong CAS tokens before SQL');
-    assert_same(false, $queue->acknowledge(array_fill(0, 100000, 'unknown')), 'claim maps should reject explosive cardinality before normalization');
+    $malformedSettlements = [
+        'post claim scalar aliases' => static fn(): array => $queue->acknowledge_many([[
+            'post_id' => str_repeat('1', 65),
+            'generation' => 1,
+            'token' => 'claim-token',
+        ]]),
+        'scope generation' => static fn(): bool => $queue->commit_scope_page([
+            'job_key' => 'scope:bounded',
+            'generation' => str_repeat('1', 65),
+            'token' => 'claim-token',
+        ], [], 1),
+        'scope attempt counter' => static fn(): array => $queue->fail_scope([
+            'job_key' => 'scope:bounded',
+            'generation' => 1,
+            'token' => 'claim-token',
+            'attempts' => str_repeat('1', 65),
+        ]),
+        'post release identity' => static fn(): int => $queue->release_many([[
+            'job_key' => str_repeat('j', 192),
+            'post_id' => 1,
+            'generation' => 1,
+            'token' => str_repeat('l', 65),
+        ]]),
+        'explosive claim map' => static fn(): array => $queue->acknowledge_many([
+            array_fill(0, 100000, 'unknown'),
+        ]),
+    ];
+    foreach ($malformedSettlements as $label => $settle) {
+        assert_true(
+            psic_caught($settle) instanceof InvalidArgumentException,
+            "{$label} should throw before SQL instead of impersonating a stale capability"
+        );
+    }
+    foreach ([
+        'negative claim size' => static fn(): array => $queue->claim_batch(-1),
+        'zero timestamp' => static fn(): int => $queue->enqueue_many([1], 0),
+        'padded scope key' => static fn(): mixed => $queue->enqueue_scope(' padded-scope '),
+        'padded corpus hash' => static fn(): bool => $queue->corpus_scope_matches(
+            'scope-key',
+            ' ' . str_repeat('a', 32),
+            str_repeat('b', 40)
+        ),
+    ] as $label => $operation) {
+        assert_true(psic_caught($operation) instanceof InvalidArgumentException, "{$label} should reject before SQL");
+    }
     assert_same($before, $fake->num_queries, 'all hostile queue inputs should fail before SQL');
 });
 
-test_case('quality extractor filters share fixed metadata and field-boost envelopes', function (): void {
+test_case('quality post index options reject unsupported caller and filter fields', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $post = (object) [
+        'ID' => 7100,
+        'fts_language_override' => '',
+        'fts_integration_language' => '',
+    ];
+    $filterCalls = 0;
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER] = static function (array $options) use (&$filterCalls): array {
+        $filterCalls++;
+
+        return $options;
+    };
+    try {
+        foreach ([
+            ['lang' => 'en'],
+            ['unknown' => true],
+            [0 => 'document_lang'],
+        ] as $options) {
+            $error = psic_caught(static fn(): array => WP_FTS_Plugin::prepare_post_index_options($post, $options));
+            assert_true($error instanceof InvalidArgumentException, 'unsupported caller indexing keys should reject before the options filter');
+        }
+        assert_same(0, $filterCalls, 'invalid caller indexing keys must not reach the options filter');
+
+        foreach (['document_lang', 'default_lang'] as $key) {
+            foreach ([null, false, true, 1, 1.0, [], new stdClass(), '', '   ', ' en', 'en ', str_repeat('l', 65)] as $value) {
+                $error = psic_caught(static fn(): array => WP_FTS_Plugin::prepare_post_index_options($post, [$key => $value]));
+                assert_true($error instanceof InvalidArgumentException, "caller {$key} should require an unpadded nonempty native string");
+            }
+        }
+        assert_same(0, $filterCalls, 'malformed caller indexing languages must not reach the options filter');
+    } finally {
+        unset($GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER]);
+    }
+
+    foreach ([
+        static fn(array $options): array => $options + ['unknown' => true],
+        static fn(array $options): array => $options + [0 => 'unknown'],
+        static fn(array $options): array => array_replace($options, ['document_lang' => ' en']),
+    ] as $filteredOptions) {
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER] = $filteredOptions;
+        try {
+            $error = psic_caught(static fn(): array => WP_FTS_Plugin::prepare_post_index_options($post));
+            assert_true($error instanceof InvalidArgumentException, 'the options filter must not inject unsupported keys or malformed languages');
+        } finally {
+            unset($GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER]);
+        }
+    }
+});
+
+test_case('quality extractor enforces exact options and strict custom-field and field-boost inputs', function (): void {
     $extractor = new WP_FTS_PostContentExtractor();
     $post = (object) [
         'ID' => 7101,
-        'post_title' => '',
+        'post_title' => 'Strict boost input',
         'post_content' => '',
         'post_excerpt' => '',
         'post_type' => 'post',
@@ -1081,29 +1195,39 @@ test_case('quality extractor filters share fixed metadata and field-boost envelo
         'custom_fields' => [],
     ];
 
-    $customFieldNodeError = psic_caught(static fn(): array => $extractor->extract($post, [
-        'custom_fields' => array_fill(0, 2048, ''),
-    ]));
-    assert_true($customFieldNodeError instanceof WP_FTS_Analysis_Limit_Exceeded, 'repeated custom-field option values should stop at a fixed traversal budget even when deduplication would leave one key');
-    assert_same('custom_field_key_nodes', $customFieldNodeError instanceof WP_FTS_Analysis_Limit_Exceeded ? $customFieldNodeError->reason_code : null, 'custom-field option traversal should have a stable node-limit reason');
-
-    $deepCustomFields = 'key';
-    for ($depth = 0; $depth < 17; $depth++) {
-        $deepCustomFields = [$deepCustomFields];
+    foreach (['post_title', 'post_content', 'post_excerpt'] as $property) {
+        $malformedPost = clone $post;
+        $malformedPost->{$property} = 7;
+        $error = psic_caught(static fn(): array => $extractor->extract($malformedPost));
+        assert_true($error instanceof InvalidArgumentException, "{$property} should require an authoritative native string");
     }
-    $customFieldDepthError = psic_caught(static fn(): array => $extractor->extract($post, [
-        'filters' => [
-            'wp_fts_post_custom_fields' => static fn(): array => $deepCustomFields,
-        ],
-    ]));
-    assert_true($customFieldDepthError instanceof WP_FTS_Analysis_Limit_Exceeded, 'deeply nested custom-field filter values should stop before recursive stack growth');
-    assert_same('custom_field_key_depth', $customFieldDepthError instanceof WP_FTS_Analysis_Limit_Exceeded ? $customFieldDepthError->reason_code : null, 'custom-field filter nesting should have a stable depth-limit reason');
 
-    $customFieldSourceError = psic_caught(static fn(): array => $extractor->normalize_selected_custom_field_keys(
-        array_fill(0, 33, str_repeat('k', WP_FTS_PostContentExtractor::MAX_CUSTOM_FIELD_KEY_BYTES))
-    ));
-    assert_true($customFieldSourceError instanceof WP_FTS_Analysis_Limit_Exceeded, 'repeated custom-field scalars should share one aggregate source-byte envelope');
-    assert_same('custom_field_key_source_bytes', $customFieldSourceError instanceof WP_FTS_Analysis_Limit_Exceeded ? $customFieldSourceError->reason_code : null, 'custom-field aggregate bytes should have a stable typed reason');
+    foreach (['wp_fts_post_terms', 'wp_fts_post_custom_field_values'] as $hook) {
+        foreach ([
+            'scalar map' => 'term',
+            'numeric key' => [0 => ['term']],
+            'padded key' => [' topic ' => ['term']],
+            'scalar values' => ['topic' => 'term'],
+            'associative values' => ['topic' => ['first' => 'term']],
+            'non-string item' => ['topic' => [7]],
+            'blank item' => ['topic' => ['   ']],
+            'markup-only item' => ['topic' => ['<span></span>']],
+        ] as $description => $filtered) {
+            $filteredPost = clone $post;
+            $filteredPost->custom_fields = ['topic' => ['term']];
+            $GLOBALS['wp_fts_test_filters'][$hook] = static fn(): mixed => $filtered;
+            try {
+                $error = psic_caught(static fn(): array => $extractor->extract($filteredPost));
+                assert_same(
+                    'structured_map_shape',
+                    $error instanceof WP_FTS_Analysis_Limit_Exceeded ? $error->reason_code : null,
+                    "{$hook} should reject {$description}"
+                );
+            } finally {
+                unset($GLOBALS['wp_fts_test_filters'][$hook]);
+            }
+        }
+    }
 
     $magicCustomField = new class {
         public int $calls = 0;
@@ -1115,8 +1239,107 @@ test_case('quality extractor filters share fixed metadata and field-boost envelo
             throw new RuntimeException('magic option access must not run');
         }
     };
-    assert_same([], $extractor->normalize_selected_custom_field_keys([$magicCustomField]), 'objects without declared public key data should contribute no custom-field names');
-    assert_same(0, $magicCustomField->calls, 'custom-field normalization should not invoke option-object magic access');
+    foreach ([
+        'non-array' => null,
+        'scalar' => 'meta_key',
+        'map' => ['meta_key' => true],
+        'integer item' => [1],
+        'boolean item' => [true],
+        'null item' => [null],
+        'nested item' => [['meta_key']],
+        'object item' => [$magicCustomField],
+        'empty item' => [''],
+        'blank item' => ['   '],
+        'padded item' => [' meta_key '],
+    ] as $description => $keys) {
+        $error = psic_caught(static fn(): array => $extractor->normalize_selected_custom_field_keys($keys));
+        assert_true($error instanceof WP_FTS_Analysis_Limit_Exceeded, "custom-field keys should reject {$description}");
+        assert_same('custom_field_key_shape', $error instanceof WP_FTS_Analysis_Limit_Exceeded ? $error->reason_code : null, "custom-field {$description} should use the strict shape reason");
+    }
+    assert_same(0, $magicCustomField->calls, 'custom-field validation should reject objects without invoking magic access');
+
+    $customFieldCountError = psic_caught(static fn(): array => $extractor->normalize_selected_custom_field_keys(
+        array_map(static fn(int $index): string => 'meta_' . $index, range(1, 33))
+    ));
+    assert_same('custom_field_keys', $customFieldCountError instanceof WP_FTS_Analysis_Limit_Exceeded ? $customFieldCountError->reason_code : null, 'the 33rd custom-field key should use the fixed cardinality reason');
+    $customFieldBytesError = psic_caught(static fn(): array => $extractor->normalize_selected_custom_field_keys([
+        str_repeat('k', WP_FTS_PostContentExtractor::MAX_CUSTOM_FIELD_KEY_BYTES + 1),
+    ]));
+    assert_same('custom_field_key_bytes', $customFieldBytesError instanceof WP_FTS_Analysis_Limit_Exceeded ? $customFieldBytesError->reason_code : null, 'custom-field key byte 192 should use the fixed byte-bound reason');
+    assert_same(
+        ['alpha', 'zeta'],
+        $extractor->normalize_selected_custom_field_keys(['zeta', 'alpha', 'alpha']),
+        'valid custom-field key lists should deduplicate and sort without accepting nested shapes'
+    );
+    $GLOBALS['wp_fts_test_filters']['wp_fts_post_custom_fields'] = static fn(): array => [['nested']];
+    try {
+        $filteredCustomFieldError = psic_caught(static fn(): array => $extractor->extract($post, [
+            'custom_field_keys' => [],
+        ]));
+        assert_same('custom_field_key_shape', $filteredCustomFieldError instanceof WP_FTS_Analysis_Limit_Exceeded ? $filteredCustomFieldError->reason_code : null, 'the WordPress custom-field filter must still return a flat string list');
+    } finally {
+        unset($GLOBALS['wp_fts_test_filters']['wp_fts_post_custom_fields']);
+    }
+
+    foreach ([
+        ['filters' => []],
+        ['document_lang' => 'en'],
+        [0 => 'numeric option key'],
+    ] as $options) {
+        $optionError = psic_caught(static fn(): array => $extractor->extract($post, $options));
+        assert_true($optionError instanceof InvalidArgumentException, 'extractor options should contain only custom_field_keys and field_boosts');
+    }
+
+    $validOption = $extractor->extract($post, [
+        'field_boosts' => ['title' => 7, 'content' => 2.0],
+    ]);
+    assert_same(7.0, $validOption['fields'][0]['boost'] ?? null, 'field-boost options should accept native whole-number integers');
+    $GLOBALS['wp_fts_test_filters']['wp_fts_post_field_boosts'] = static fn(array $boosts): array => array_replace($boosts, ['title' => 9.0]);
+    try {
+        $validFilter = $extractor->extract($post);
+        assert_same(9.0, $validFilter['fields'][0]['boost'] ?? null, 'the WordPress field-boost filter should accept native integral floats');
+    } finally {
+        unset($GLOBALS['wp_fts_test_filters']['wp_fts_post_field_boosts']);
+    }
+
+    $malformedBoostMaps = [
+        ['non-array', null],
+        ['numeric key', [0 => 1]],
+        ['empty key', ['' => 1]],
+        ['blank key', ['   ' => 1]],
+        ['padded key', [' title ' => 1]],
+        ['oversized key', [str_repeat('k', 192) => 1]],
+        ['numeric string value', ['title' => '2']],
+        ['boolean value', ['title' => true]],
+        ['null value', ['title' => null]],
+        ['fractional float', ['title' => 2.5]],
+        ['zero value', ['title' => 0]],
+        ['negative value', ['title' => -1]],
+        ['oversized value', ['title' => 101]],
+        ['NAN value', ['title' => NAN]],
+        ['positive infinite value', ['title' => INF]],
+        ['negative infinite value', ['title' => -INF]],
+        ['array value', ['title' => []]],
+    ];
+    foreach (['option', 'filter'] as $source) {
+        foreach ($malformedBoostMaps as [$description, $candidate]) {
+            if ($source === 'filter') {
+                $GLOBALS['wp_fts_test_filters']['wp_fts_post_field_boosts'] = static fn(): mixed => $candidate;
+            }
+            try {
+                $opts = $source === 'option' ? ['field_boosts' => $candidate] : [];
+                $error = psic_caught(static fn(): array => $extractor->extract($post, $opts));
+                assert_true(
+                    $error instanceof WP_FTS_Analysis_Limit_Exceeded,
+                    "{$source} field boosts should reject {$description}"
+                );
+            } finally {
+                if ($source === 'filter') {
+                    unset($GLOBALS['wp_fts_test_filters']['wp_fts_post_field_boosts']);
+                }
+            }
+        }
+    }
 
     $optionBoostError = psic_caught(static fn(): array => $extractor->extract($post, [
         'field_boosts' => array_fill(0, 33, 1),
@@ -1124,90 +1347,32 @@ test_case('quality extractor filters share fixed metadata and field-boost envelo
     assert_true($optionBoostError instanceof WP_FTS_Analysis_Limit_Exceeded, 'field-boost options above 32 entries should be rejected before copying the map');
     assert_same('field_boosts', $optionBoostError instanceof WP_FTS_Analysis_Limit_Exceeded ? $optionBoostError->reason_code : null, 'option field-boost cardinality should have a stable typed reason');
 
-    $filteredBoostError = psic_caught(static fn(): array => $extractor->extract($post, [
-        'filters' => [
-            'wp_fts_post_field_boosts' => static fn(): array => array_fill(0, 33, 1),
-        ],
-    ]));
-    assert_true($filteredBoostError instanceof WP_FTS_Analysis_Limit_Exceeded, 'filtered field boosts above 32 entries should be rejected before normalization');
-    assert_same('field_boosts', $filteredBoostError instanceof WP_FTS_Analysis_Limit_Exceeded ? $filteredBoostError->reason_code : null, 'filtered field-boost cardinality should have a stable typed reason');
-
-    $metadataCountError = psic_caught(static fn(): array => $extractor->extract($post, [
-        'filters' => [
-            'wp_fts_post_index_metadata' => static function (array $metadata): array {
-                for ($index = 1; $index <= 22; $index++) {
-                    $metadata['extra_' . $index] = 'value';
-                }
-
-                return $metadata;
-            },
-        ],
-    ]));
-    assert_true($metadataCountError instanceof WP_FTS_Analysis_Limit_Exceeded, 'filtered metadata above 32 keys should be rejected before copy-on-write normalization');
-    assert_same('metadata_keys', $metadataCountError instanceof WP_FTS_Analysis_Limit_Exceeded ? $metadataCountError->reason_code : null, 'filtered metadata cardinality should have a stable typed reason');
-
-    $mapCountError = psic_caught(static fn(): array => $extractor->extract($post, [
-        'filters' => [
-            'wp_fts_post_index_metadata' => static function (array $metadata): array {
-                $metadata['terms'] = array_fill(0, 33, ['value']);
-
-                return $metadata;
-            },
-        ],
-    ]));
-    assert_true($mapCountError instanceof WP_FTS_Analysis_Limit_Exceeded, 'filtered structured maps above 32 keys should be rejected before traversing values');
-    assert_same('structured_map_keys', $mapCountError instanceof WP_FTS_Analysis_Limit_Exceeded ? $mapCountError->reason_code : null, 'structured-map cardinality should have a stable typed reason');
-
-    $sharedNodeError = psic_caught(static fn(): array => $extractor->extract($post, [
-        'filters' => [
-            'wp_fts_post_index_metadata' => static function (array $metadata): array {
-                $metadata['terms'] = ['category' => array_fill(0, 1023, 'term')];
-                $metadata['custom_fields'] = ['signal' => array_fill(0, 1023, 'value')];
-
-                return $metadata;
-            },
-        ],
-    ]));
-    assert_true($sharedNodeError instanceof WP_FTS_Analysis_Limit_Exceeded, 'terms and custom fields should share one 2,048-node traversal budget');
-    assert_same('structured_value_nodes', $sharedNodeError instanceof WP_FTS_Analysis_Limit_Exceeded ? $sharedNodeError->reason_code : null, 'shared structured traversal should fail with the node-limit reason');
-
-    $sharedSourceError = psic_caught(static fn(): array => $extractor->extract($post, [
-        'filters' => [
-            'wp_fts_post_index_metadata' => static function (array $metadata): array {
-                $metadata['terms'] = ['category' => [str_repeat('t', 140000)]];
-                $metadata['custom_fields'] = ['signal' => [str_repeat('v', 140000)]];
-
-                return $metadata;
-            },
-        ],
-    ]));
-    assert_true($sharedSourceError instanceof WP_FTS_Analysis_Limit_Exceeded, 'terms and custom fields should share one 256 KiB source-text budget');
-    assert_same('structured_source_bytes', $sharedSourceError instanceof WP_FTS_Analysis_Limit_Exceeded ? $sharedSourceError->reason_code : null, 'shared structured source should fail before HTML normalization');
+    $GLOBALS['wp_fts_test_filters']['wp_fts_post_field_boosts'] = static fn(): array => array_fill(0, 33, 1);
+    try {
+        $filteredBoostError = psic_caught(static fn(): array => $extractor->extract($post));
+        assert_true($filteredBoostError instanceof WP_FTS_Analysis_Limit_Exceeded, 'filtered field boosts above 32 entries should be rejected before normalization');
+        assert_same('field_boosts', $filteredBoostError instanceof WP_FTS_Analysis_Limit_Exceeded ? $filteredBoostError->reason_code : null, 'filtered field-boost cardinality should have a stable typed reason');
+    } finally {
+        unset($GLOBALS['wp_fts_test_filters']['wp_fts_post_field_boosts']);
+    }
 
     $boundaryBoosts = [];
     for ($index = 1; $index <= 32; $index++) {
         $boundaryBoosts['field_' . $index] = 1;
     }
-    $boundary = $extractor->extract($post, [
-        'filters' => [
-            'wp_fts_post_field_boosts' => static fn(): array => $boundaryBoosts,
-            'wp_fts_post_index_metadata' => static function (array $metadata): array {
-                $metadata['terms'] = ['category' => array_fill(0, 1022, 'term')];
-                $metadata['custom_fields'] = ['signal' => array_fill(0, 1022, 'value')];
-
-                return $metadata;
-            },
-        ],
-    ]);
-    assert_same(32, count($boundary['field_boosts'] ?? []), 'the exact 32-field-boost boundary should remain accepted');
-    assert_same(['term'], $boundary['metadata']['terms']['category'] ?? null, 'the exact shared 2,048-node boundary should remain accepted');
-    assert_same(['value'], $boundary['metadata']['custom_fields']['signal'] ?? null, 'the shared node boundary should include both structured maps');
+    $GLOBALS['wp_fts_test_filters']['wp_fts_post_field_boosts'] = static fn(): array => $boundaryBoosts;
+    try {
+        $boundary = $extractor->extract($post);
+        assert_same(['fields', 'snippet_text'], array_keys($boundary), 'the exact 32-field-boost boundary should retain the current extractor output');
+    } finally {
+        unset($GLOBALS['wp_fts_test_filters']['wp_fts_post_field_boosts']);
+    }
 });
 
 test_case('quality MySQL set-oriented APIs reject explosive inputs before normalization', function (): void {
     $fake = new WP_FTS_Test_WPDB();
     $fake->recordReadQueries = true;
-    $storage = new WP_FTS_Storage_Mysql($fake);
+    $storage = new WP_FTS_Relational_Storage($fake);
     $before = $fake->num_queries;
 
     $boundaryAlternatives = array_map(
@@ -1230,42 +1395,28 @@ test_case('quality MySQL set-oriented APIs reject explosive inputs before normal
     $deleteError = psic_caught(static fn(): array => $storage->replace_prepared_documents([], array_fill(0, 101, 1)));
     assert_true($deleteError instanceof InvalidArgumentException, 'prepared writes should reject raw delete cardinality before traversal');
 
-    foreach ([
-        'put_term',
-        'get_meta',
-        'replace_doc_postings',
-        'put_doc',
-        'put_doc_metadata',
-        'delete_doc',
-    ] as $method) {
-        assert_true(!method_exists($storage, $method), "production storage should not expose legacy {$method}");
-    }
-    assert_same($before, $fake->num_queries, 'legacy capability inspection should not execute SQL');
-
-    $preparedLanguageError = psic_caught(static fn(): array => $storage->replace_prepared_documents([[
-        'doc_id' => 1,
-        'primary_lang' => str_repeat('l', 65),
-        'term_frequencies' => [],
-    ]]));
+    $preparedLanguageError = psic_caught(static fn(): array => $storage->replace_prepared_documents([
+        psic_prepared_document(['primary_lang' => str_repeat('l', 65)]),
+    ]));
     assert_true($preparedLanguageError instanceof WP_FTS_Prepared_Document_Rejected, 'prepared document languages should be bounded before canonicalization');
 
-    $preparedIdError = psic_caught(static fn(): array => $storage->replace_prepared_documents([[
-        'doc_id' => str_repeat('1', 65),
-        'term_frequencies' => [],
-    ]]));
+    $preparedIdError = psic_caught(static fn(): array => $storage->replace_prepared_documents([
+        psic_prepared_document(['doc_id' => str_repeat('1', 65)]),
+    ]));
     assert_true($preparedIdError instanceof WP_FTS_Prepared_Document_Rejected, 'prepared document ids should be bounded before integer validation');
 
-    $preparedFrequencyError = psic_caught(static fn(): array => $storage->replace_prepared_documents([[
-        'doc_id' => 1,
-        'term_frequencies' => [WP_FTS_TermNamespace::namespace_term('en', 'term') => str_repeat('1', 65)],
-    ]]));
+    $preparedFrequencyError = psic_caught(static fn(): array => $storage->replace_prepared_documents([
+        psic_prepared_document([
+            'term_frequencies' => [WP_FTS_TermNamespace::namespace_term('en', 'term') => str_repeat('1', 65)],
+        ]),
+    ]));
     assert_true($preparedFrequencyError instanceof WP_FTS_Prepared_Document_Rejected, 'prepared term frequencies should be bounded before integer validation');
 
-    $preparedSnippetError = psic_caught(static fn(): array => $storage->replace_prepared_documents([[
-        'doc_id' => 1,
-        'term_frequencies' => [],
-        'metadata' => ['content_search_text' => str_repeat('s', WP_FTS_Analysis_Limits::MAX_SOURCE_BYTES + 1)],
-    ]]));
+    $preparedSnippetError = psic_caught(static fn(): array => $storage->replace_prepared_documents([
+        psic_prepared_document([
+            'snippet_text' => str_repeat('s', WP_FTS_Analysis_Limits::MAX_SOURCE_BYTES + 1),
+        ]),
+    ]));
     assert_true($preparedSnippetError instanceof WP_FTS_Prepared_Document_Rejected, 'prepared snippet sources should be bounded before UTF-8 processing');
 
     $preparedDeleteError = psic_caught(static fn(): array => $storage->replace_prepared_documents([], [str_repeat('1', 65)]));
@@ -1273,19 +1424,21 @@ test_case('quality MySQL set-oriented APIs reject explosive inputs before normal
 
     $filterError = psic_caught(static fn(): array => $storage->search_page(
         [[['key' => WP_FTS_TermNamespace::namespace_term('en', 'term'), 'rank' => 0]]],
-        ['query_lang' => 'en', 'post_types' => [str_repeat('p', 65)]]
+        ['mode' => 'OR', 'direction' => 'after', 'post_types' => [str_repeat('p', 65)]]
     ));
     assert_true($filterError instanceof InvalidArgumentException, 'direct storage filters should check bytes before trim');
-    foreach (['fast_top_k', 'approximate_top_k', 'exact_top_k', 'exact', 'candidate_cap', 'max_candidates'] as $legacyRetrievalOption) {
-        $legacyOptionError = psic_caught(static fn(): array => $storage->search_page(
+    foreach ([
+        ['post_types' => 'post'],
+        ['post_types' => ['post' => 'post']],
+        ['post_types' => [1]],
+        ['post_types' => [' post']],
+        ['post_types' => ['post', 'post']],
+    ] as $filters) {
+        $filterError = psic_caught(static fn(): array => $storage->search_page(
             [[['key' => WP_FTS_TermNamespace::namespace_term('en', 'term'), 'rank' => 0]]],
-            ['query_lang' => 'en', $legacyRetrievalOption => false]
+            ['mode' => 'OR', 'direction' => 'after'] + $filters
         ));
-        assert_true(
-            $legacyOptionError instanceof InvalidArgumentException
-                && str_contains($legacyOptionError->getMessage(), $legacyRetrievalOption),
-            "direct relational storage should reject legacy {$legacyRetrievalOption} instead of silently changing or ignoring retrieval semantics"
-        );
+        assert_true($filterError instanceof InvalidArgumentException, 'direct storage filters must be exact unique lists of native unpadded strings');
     }
     foreach ([
         ['mode' => str_repeat('O', 9)],
@@ -1299,31 +1452,31 @@ test_case('quality MySQL set-oriented APIs reject explosive inputs before normal
     ] as $options) {
         $optionError = psic_caught(static fn(): array => $storage->search_page(
             [[['key' => WP_FTS_TermNamespace::namespace_term('en', 'term'), 'rank' => 0]]],
-            ['query_lang' => 'en'] + $options
+            array_replace(['mode' => 'OR', 'direction' => 'after'], $options)
         ));
         assert_true($optionError instanceof InvalidArgumentException, 'direct storage mode and direction values should be bounded and enumerated before normalization');
     }
 
     $rankError = psic_caught(static fn(): array => $storage->search_page(
         [[['key' => WP_FTS_TermNamespace::namespace_term('en', 'term'), 'rank' => str_repeat('1', 65)]]],
-        ['query_lang' => 'en']
+        ['mode' => 'OR', 'direction' => 'after']
     ));
     assert_true($rankError instanceof InvalidArgumentException, 'direct storage alternative ranks should be bounded before integer normalization');
 
     assert_same($before, $fake->num_queries, 'all direct input rejections should happen before SQL');
 
     $guardCalls = 0;
-    $guardedStorage = new WP_FTS_Storage_Mysql($fake, null, static function () use (&$guardCalls): void {
+    $guardedStorage = new WP_FTS_Relational_Storage($fake, null, static function () use (&$guardCalls): void {
         $guardCalls++;
     });
     foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'put_doc', 'put_doc_metadata', 'delete_doc'] as $method) {
-        assert_true(!method_exists($guardedStorage, $method), "guarded production storage should not expose {$method}");
+        assert_true(!method_exists($guardedStorage, $method), "guarded relational storage should not expose {$method}");
     }
     assert_same(0, $guardCalls, 'capability inspection should not invoke the mutation guard');
-    psic_caught(static fn(): array => $guardedStorage->replace_prepared_documents([[
-        'doc_id' => 1,
-        'term_frequencies' => [],
-        'metadata' => ['search_text' => str_repeat('s', WP_FTS_Analysis_Limits::MAX_SOURCE_BYTES + 1)],
-    ]]));
+    psic_caught(static fn(): array => $guardedStorage->replace_prepared_documents([
+        psic_prepared_document([
+            'snippet_text' => str_repeat('s', WP_FTS_Analysis_Limits::MAX_SOURCE_BYTES + 1),
+        ]),
+    ]));
     assert_same(0, $guardCalls, 'prepared-document input validation should finish before invoking a potentially SQL-backed mutation guard');
 });

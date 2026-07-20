@@ -147,31 +147,6 @@ test_case('lemma source importers reject the first pack above sixteen physical M
     }
 });
 
-test_case('generic importer refuses plain fixtures beyond eager runtime eligibility', function (): void {
-    $payload = wp_fts_importer_containment_case('plain-fixture');
-    assert_same(50000, $payload['row_limit'] ?? null, 'plain fixture importer proof should bind the eager row limit');
-    assert_same(8388608, $payload['decoded_byte_limit'] ?? null, 'plain fixture importer proof should bind the eager decoded-byte limit');
-    foreach (['rows-exact', 'bytes-exact'] as $boundary) {
-        $accepted = $payload['cases'][$boundary] ?? [];
-        assert_same(null, $accepted['class'] ?? null, "plain fixture {$boundary} should remain accepted");
-        assert_same(true, $accepted['manifest_written'] ?? null, "plain fixture {$boundary} should publish its manifest");
-        assert_same(true, $accepted['activatable'] ?? null, "plain fixture {$boundary} should remain eagerly activatable");
-    }
-    assert_same(50000, $payload['cases']['rows-exact']['runtime_rows'] ?? null, 'plain fixture exact row boundary should retain all 50,000 rows');
-    assert_same(8388608, $payload['cases']['bytes-exact']['source_bytes'] ?? null, 'plain fixture exact decoded-byte boundary should retain all 8 MiB');
-    foreach (['rows', 'bytes'] as $boundary) {
-        $error = $payload['cases'][$boundary] ?? [];
-        assert_same('RuntimeException', $error['class'] ?? null, "plain fixture {$boundary} overflow should reject");
-        assert_contains('rerun with --runtime-compression=gzip', (string) ($error['message'] ?? ''), "plain fixture {$boundary} overflow should identify the activatable storage path");
-        assert_same(false, $error['manifest_written'] ?? null, "plain fixture {$boundary} overflow should not publish a manifest");
-        assert_same([], $error['output_entries'] ?? null, "plain fixture {$boundary} overflow should remove partial runtime output");
-    }
-    assert_same(8388609, $payload['cases']['bytes']['source_bytes'] ?? null, 'plain fixture byte proof should reject the exact first decoded byte above eligibility');
-    assert_true((int) ($payload['php_peak_bytes'] ?? PHP_INT_MAX) <= 128 * 1024 * 1024, 'plain fixture overflow proof should finish under the low-host PHP ceiling');
-    assert_true((float) ($payload['elapsed_seconds'] ?? INF) <= 15.0, 'plain fixture row and byte proof should finish within fifteen seconds');
-    wp_fts_assert_importer_proc_memory($payload, 'plain-fixture');
-});
-
 test_case('lemma importers refuse output symlink roots and source-output overlap', function (): void {
     foreach ([false, true] as $noIni) {
         $label = $noIni ? 'path-safety php-n' : 'path-safety normal';

@@ -45,7 +45,7 @@ test_case('batch source preload has hard aggregate and dependency envelopes', fu
         'is_selected',
         'fts_index_deferred',
         'fts_index_rejection',
-        'PRELOADED_POST_LANGUAGE_OPTION',
+        '$posts[$post_id]->fts_language_override = is_scalar($value)',
     ] as $required) {
         assert_contains($required, $source, "bounded preload should retain {$required}");
     }
@@ -145,7 +145,7 @@ test_case('preloaded language absence remains authoritative through analyzer res
     $preloadedPost->fts_integration_language = '';
 
     $options = WP_FTS_Plugin::prepare_post_index_options($preloadedPost);
-    assert_same(true, $options['wp_fts_preloaded_post_language'] ?? null, 'an authoritative batch snapshot should survive into analyzer options even when the override is absent');
+    assert_true(!isset($options['document_lang']), 'an authoritative empty batch language snapshot should preserve automatic analysis');
     assert_true(!isset($options['document_language_resolver']), 'the runtime analyzer must not install a provider-backed document resolver');
     assert_true(!isset($options['query_language_resolver']), 'the runtime analyzer must not install a provider-backed query resolver');
 
@@ -154,7 +154,6 @@ test_case('preloaded language absence remains authoritative through analyzer res
         'fts_language_override' => 'fr',
     ]);
     assert_true(!isset($missingIntegrationMarker['document_lang']), 'one preload marker must never be mistaken for an authoritative language snapshot');
-    assert_true(!isset($missingIntegrationMarker['wp_fts_preloaded_post_language']), 'the analyzer preload marker requires both attached language values');
 });
 
 test_case('100-post preload never fans out through per-post multilingual APIs', function (): void {
@@ -230,7 +229,7 @@ test_case('100-post preload never fans out through per-post multilingual APIs', 
         $posts[8701]->fts_language_override = 'fr';
         $ownOverride = WP_FTS_Plugin::prepare_post_index_options($posts[8701]);
         assert_same('fr', $ownOverride['document_lang'] ?? null, 'the set-oriented plugin-owned language override should remain authoritative');
-        $explicit = WP_FTS_Plugin::prepare_post_index_options($posts[8702], ['lang' => 'es']);
+        $explicit = WP_FTS_Plugin::prepare_post_index_options($posts[8702], ['document_lang' => 'es']);
         assert_same('es', $explicit['document_lang'] ?? null, 'an explicit batch language should remain authoritative');
         assert_same($queriesAfterPreload, $fake->num_queries, 'own and explicit batch languages should require no third-party queries');
 
@@ -994,11 +993,11 @@ test_case('custom-field selection rejects the thirty-third key without truncatin
     $accepted = array_map(static fn(int $index): string => 'field_' . $index, range(1, 32));
     $expected = $accepted;
     sort($expected, SORT_STRING);
-    assert_same($expected, $extractor->selected_custom_field_keys($post, ['custom_fields' => $accepted]), 'the full 32-key boundary should remain usable');
+    assert_same($expected, $extractor->selected_custom_field_keys($post, ['custom_field_keys' => $accepted]), 'the full 32-key boundary should remain usable');
 
     $thrown = null;
     try {
-        $extractor->selected_custom_field_keys($post, ['custom_fields' => [...$accepted, 'field_33']]);
+        $extractor->selected_custom_field_keys($post, ['custom_field_keys' => [...$accepted, 'field_33']]);
     } catch (WP_FTS_Analysis_Limit_Exceeded $error) {
         $thrown = $error;
     }
@@ -1010,10 +1009,10 @@ test_case('custom-field selection rejects an overlong key before SQL constructio
     $extractor = new WP_FTS_PostContentExtractor();
     $thrown = null;
     try {
-        $extractor->selected_custom_field_keys((object) ['ID' => 8], ['custom_fields' => str_repeat('x', 192)]);
+        $extractor->selected_custom_field_keys((object) ['ID' => 8], ['custom_field_keys' => str_repeat('x', 192)]);
     } catch (WP_FTS_Analysis_Limit_Exceeded $error) {
         $thrown = $error;
     }
     assert_true($thrown instanceof WP_FTS_Analysis_Limit_Exceeded, 'a 192-byte key should fail before it reaches a prepared statement');
-    assert_same('custom_field_key_bytes', $thrown?->reason_code, 'an overlong key should have a stable reason code');
+    assert_same('custom_field_key_shape', $thrown?->reason_code, 'an overlong key should have a stable reason code');
 });

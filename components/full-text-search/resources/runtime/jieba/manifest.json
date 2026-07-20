@@ -1,0 +1,27 @@
+{
+  "schema": "wp-fts-jieba-runtime-v1",
+  "upstream": {
+    "repository": "https://github.com/fxsjy/jieba",
+    "commit": "67fa2e36e72f69d9134b8a1037b83fbb070b9775",
+    "dictionary_path": "jieba/dict.txt",
+    "license_path": "LICENSE"
+  },
+  "artifacts": {
+    "dictionary": {
+      "runtime_path": "dict.txt",
+      "sha256": "7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8",
+      "bytes": 5071852
+    },
+    "license": {
+      "runtime_path": "LICENSE",
+      "sha256": "18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37",
+      "bytes": 1075
+    },
+    "lookup": {
+      "runtime_path": "dict.idx",
+      "sha256": "4c979fd244e59b8343c2e584dbd5ba062deb1f836b8ae9ca2b56b54f130b9046",
+      "bytes": 329972,
+      "ranges": 11783
+    }
+  }
+}

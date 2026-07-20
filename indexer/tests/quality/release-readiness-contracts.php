@@ -376,7 +376,11 @@ function wp_fts_release_readiness_contract_source_fixture(string $tmp, array $op
             'wp-php-toolkit/full-text-search' => '^0.1',
         ],
     ], static fn(mixed $value): bool => $value !== null));
-    wp_fts_release_readiness_contract_write_file($source . '/tools/build-release-zip.php', "<?php\n// Fixture builder presence marker.\n");
+    $shippedTools = var_export(wp_fts_release_readiness_contract_shipped_tool_paths(), true);
+    wp_fts_release_readiness_contract_write_file(
+        $source . '/tools/build-release-zip.php',
+        "<?php\nif (!class_exists('WP_FTS_ReleasePackageBuilder')) {\n    final class WP_FTS_ReleasePackageBuilder {\n        public const SHIPPED_TOOL_PATHS = {$shippedTools};\n    }\n}\n"
+    );
 
     if (($options['readme'] ?? false) === true) {
         $faqHeading = (string) ($options['readme_faq_heading'] ?? 'FAQ');
@@ -493,7 +497,6 @@ function wp_fts_release_readiness_contract_shipped_tool_paths(): array
         'tools/import-polish-polimorf-lemmatizer.php',
         'tools/validate-analyzer-pack.php',
         'tools/audit-top-language-lemma-packs.php',
-        'tools/build-lemma-pack-lookup-index.php',
         'tools/build-polish-polimorf-external-pack.php',
         'tools/lemma-source-import-limits.php',
         'tools/lemma-chunk-merge.php',
@@ -516,7 +519,6 @@ function wp_fts_release_readiness_contract_add_analyzer_pack(string $package): a
     wp_fts_release_readiness_contract_write_file($runtime, $compressed);
     $indexed = WP_FTS_LemmaPackLookupIndex::build(
         $runtime,
-        WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
         (string) hash_file('sha256', $runtime),
         $lookup
     );
@@ -528,11 +530,11 @@ function wp_fts_release_readiness_contract_add_analyzer_pack(string $package): a
         'pack_id' => 'qaa-release-readiness-fixture',
         'language' => 'qaa',
         'version' => '1.0.0',
-        'fixture_only' => true,
-        'default_enabled' => false,
-        'capabilities' => ['dictionary-lemmatizer'],
+        'capabilities' => ['dictionary-lemmatizer', 'indexed-runtime-lookups'],
         'runtime' => [
             'format' => WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV,
+            'normalization' => 'WP_FTS_Normalizer qaa with fold_diacritics=true',
+            'ambiguity_policy' => 'ambiguous_surface_noop',
             'total_rows' => 1,
             'total_sha256' => hash('sha256', $rows),
             'files' => [[
@@ -550,12 +552,20 @@ function wp_fts_release_readiness_contract_add_analyzer_pack(string $package): a
                 ],
             ]],
         ],
-        'source' => [],
-        'license' => [],
-        'attribution' => [],
+        'source' => [
+            'name' => 'Project-owned release analyzer source',
+            'version' => '1.0.0',
+            'url' => 'urn:wp-fts:test:release-analyzer-source',
+            'artifact_sha256' => hash('sha256', $rows),
+            'byte_count' => strlen($rows),
+        ],
+        'license' => [
+            'spdx_id' => 'CC0-1.0',
+            'notice_path' => 'NOTICE.txt',
+        ],
+        'attribution' => ['note' => 'Project-owned release analyzer fixture.'],
         'provenance' => [
             'no_runtime_network_access' => true,
-            'no_full_third_party_dictionary_dump' => true,
         ],
     ]);
 
@@ -683,7 +693,6 @@ function wp_fts_release_readiness_contract_analyzer_pack_tampering(): void
         wp_fts_release_readiness_contract_write_file($pack['runtime'], $changedRuntime);
         $changedIndex = WP_FTS_LemmaPackLookupIndex::build(
             $pack['runtime'],
-            WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
             (string) hash_file('sha256', $pack['runtime']),
             $pack['lookup']
         );

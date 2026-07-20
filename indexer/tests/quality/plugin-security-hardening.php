@@ -14,7 +14,18 @@ function qpsh_valid_utf8(string $value): bool
     return preg_match('//u', $value) === 1;
 }
 
-test_case('quality plugin request and REST sanitization preserve valid bounded UTF-8', function (): void {
+function qpsh_caught(callable $callback): ?Throwable
+{
+    try {
+        $callback();
+    } catch (Throwable $error) {
+        return $error;
+    }
+
+    return null;
+}
+
+test_case('quality generated request text sanitizes while REST query input stays exact', function (): void {
     $boundary = str_repeat('a', 199) . 'ż';
     $truncated = qpsh_private('request_text_value', ['q' => $boundary], 'q', 200);
     assert_same(199, strlen($truncated), 'request_text_value should avoid cutting a multibyte character at the byte boundary');
@@ -27,13 +38,19 @@ test_case('quality plugin request and REST sanitization preserve valid bounded U
         assert_true(qpsh_valid_utf8($requestValue), "plugin request text case {$i} should remain valid UTF-8");
         assert_true(!str_contains($requestValue, '<'), "plugin request text case {$i} should strip tags");
 
-        $restValue = qpsh_private('rest_query', ['q' => '', 'query' => $raw]);
-        assert_true(strlen($restValue) <= 200, "plugin REST query case {$i} should be byte bounded");
-        assert_true(qpsh_valid_utf8($restValue), "plugin REST query case {$i} should remain valid UTF-8");
-        assert_true(!str_contains($restValue, '<'), "plugin REST query case {$i} should strip tags");
+        $restValue = qpsh_private('rest_query', ['q' => $raw]);
+        assert_same($raw, $restValue, "plugin REST query case {$i} should preserve the caller's exact native string");
     }
 
-    assert_same('fallback', qpsh_private('rest_query', ['q' => '   ', 'query' => 'fallback']), 'REST query alias should not let an empty q mask query');
+    assert_same('   ', qpsh_private('rest_query', ['q' => '   ']), 'REST q should not trim caller bytes');
+    foreach ([null, false, 1, 1.0, ['array'], new stdClass()] as $query) {
+        $queryError = qpsh_caught(static fn(): string => qpsh_private('rest_query', ['q' => $query]));
+        assert_true($queryError instanceof InvalidArgumentException, 'REST q should reject every present non-string value');
+    }
+    $queryBudgetError = qpsh_caught(static fn(): string => qpsh_private('rest_query', [
+        'q' => str_repeat('q', 4097),
+    ]));
+    assert_same('query bytes', $queryBudgetError instanceof WP_FTS_Search_Budget_Exceeded ? $queryBudgetError->budget() : null, 'REST q byte 4,097 should use the public query budget');
     assert_same('', qpsh_private('request_text_value', ['q' => ['array']], 'q', 200), 'request_text_value should reject non-scalar input');
 });
 
@@ -61,10 +78,6 @@ test_case('quality plugin settings sanitization clamps generated operator input'
             'language_fallback' => $boolInputs[($i + 9) % count($boolInputs)],
             'match_mode' => $modes[$i % count($modes)],
         ];
-        if ($i % 11 === 0) {
-            $raw['replace_search_scope'] = ['frontend-admin', 'frontend', 'admin', 'none', 'junk'][$i % 5];
-        }
-
         $settings = WP_FTS_Plugin::sanitize_settings($raw);
         assert_true($settings['index_post_types'] !== [], "plugin settings case {$i} should keep a non-empty post type allowlist");
         foreach ($settings['index_post_types'] as $postType) {
@@ -163,15 +176,15 @@ test_case('quality plugin visibility scope authorizes type-wide statuses before 
     $defaultSettings = WP_FTS_Plugin::default_settings();
     $typeCases = [
         ['label' => 'configured default', 'opts' => [], 'types' => ['attachment', 'page', 'post'], 'valid' => true],
-        ['label' => 'singular post', 'opts' => ['post_type' => 'post'], 'types' => ['post'], 'valid' => true],
+        ['label' => 'single post', 'opts' => ['post_types' => ['post']], 'types' => ['post'], 'valid' => true],
         ['label' => 'plural page', 'opts' => ['post_types' => ['page']], 'types' => ['page'], 'valid' => true],
-        ['label' => 'normalized configured pair', 'opts' => ['post_types' => ['post,page', 'post']], 'types' => ['page', 'post'], 'valid' => true],
-        ['label' => 'excluded non-public type', 'opts' => ['post_type' => 'secret'], 'types' => ['secret'], 'valid' => false],
-        ['label' => 'unknown type', 'opts' => ['post_type' => 'unknown'], 'types' => ['unknown'], 'valid' => false],
+        ['label' => 'normalized configured pair', 'opts' => ['post_types' => ['post', 'page', 'post']], 'types' => ['page', 'post'], 'valid' => true],
+        ['label' => 'excluded non-public type', 'opts' => ['post_types' => ['secret']], 'types' => ['secret'], 'valid' => false],
+        ['label' => 'unknown type', 'opts' => ['post_types' => ['unknown']], 'types' => ['unknown'], 'valid' => false],
         ['label' => 'mixed enabled and excluded types', 'opts' => ['post_types' => ['post', 'secret']], 'types' => ['post', 'secret'], 'valid' => false],
         [
             'label' => 'type disabled in settings',
-            'opts' => ['post_type' => 'page'],
+            'opts' => ['post_types' => ['page']],
             'types' => ['page'],
             'valid' => false,
             'settings' => array_replace($defaultSettings, ['index_post_types' => ['post']]),
@@ -186,17 +199,17 @@ test_case('quality plugin visibility scope authorizes type-wide statuses before 
     ];
     $statusCases = [
         ['label' => 'published default', 'opts' => [], 'statuses' => ['publish'], 'valid' => true],
-        ['label' => 'published', 'opts' => ['post_status' => 'publish'], 'statuses' => ['publish'], 'valid' => true],
-        ['label' => 'draft', 'opts' => ['post_status' => 'draft'], 'statuses' => ['draft'], 'valid' => true],
-        ['label' => 'pending', 'opts' => ['post_status' => 'pending'], 'statuses' => ['pending'], 'valid' => true],
-        ['label' => 'future', 'opts' => ['post_status' => 'future'], 'statuses' => ['future'], 'valid' => true],
-        ['label' => 'private', 'opts' => ['post_status' => 'private'], 'statuses' => ['private'], 'valid' => true],
-        ['label' => 'published and draft', 'opts' => ['post_statuses' => ['publish,draft']], 'statuses' => ['draft', 'publish'], 'valid' => true],
+        ['label' => 'published', 'opts' => ['post_statuses' => ['publish']], 'statuses' => ['publish'], 'valid' => true],
+        ['label' => 'draft', 'opts' => ['post_statuses' => ['draft']], 'statuses' => ['draft'], 'valid' => true],
+        ['label' => 'pending', 'opts' => ['post_statuses' => ['pending']], 'statuses' => ['pending'], 'valid' => true],
+        ['label' => 'future', 'opts' => ['post_statuses' => ['future']], 'statuses' => ['future'], 'valid' => true],
+        ['label' => 'private', 'opts' => ['post_statuses' => ['private']], 'statuses' => ['private'], 'valid' => true],
+        ['label' => 'published and draft', 'opts' => ['post_statuses' => ['publish', 'draft']], 'statuses' => ['draft', 'publish'], 'valid' => true],
         ['label' => 'all editable', 'opts' => ['post_statuses' => ['future', 'pending', 'draft']], 'statuses' => ['draft', 'future', 'pending'], 'valid' => true],
         ['label' => 'published and private', 'opts' => ['post_statuses' => ['private', 'publish']], 'statuses' => ['private', 'publish'], 'valid' => true],
         ['label' => 'editable and private', 'opts' => ['post_statuses' => ['private', 'draft']], 'statuses' => ['draft', 'private'], 'valid' => true],
         ['label' => 'all supported', 'opts' => ['post_statuses' => ['private', 'publish', 'future', 'pending', 'draft']], 'statuses' => ['draft', 'future', 'pending', 'private', 'publish'], 'valid' => true],
-        ['label' => 'unsupported trash', 'opts' => ['post_status' => 'trash'], 'statuses' => ['trash'], 'valid' => false],
+        ['label' => 'unsupported trash', 'opts' => ['post_statuses' => ['trash']], 'statuses' => ['trash'], 'valid' => false],
         ['label' => 'mixed supported and unsupported', 'opts' => ['post_statuses' => ['publish', 'inherit']], 'statuses' => ['inherit', 'publish'], 'valid' => false],
     ];
     $typeCapabilities = [
@@ -277,8 +290,6 @@ test_case('quality plugin visibility scope authorizes type-wide statuses before 
                 }
                 assert_same($typeCase['types'], $scope['post_types'] ?? null, $label . ' should compile sorted post types');
                 assert_same($statusCase['statuses'], $scope['post_statuses'] ?? null, $label . ' should compile sorted statuses');
-                assert_true(!array_key_exists('post_type', $scope), $label . ' should remove the singular post type input');
-                assert_true(!array_key_exists('post_status', $scope), $label . ' should remove the singular post status input');
             }
         }
     }

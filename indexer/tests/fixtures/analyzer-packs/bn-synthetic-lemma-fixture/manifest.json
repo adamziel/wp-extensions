@@ -1,0 +1,53 @@
+{
+    "schema_version": 1,
+    "pack_id": "bn-synthetic-lemma-fixture",
+    "language": "bn",
+    "version": "0.1.0-synthetic",
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "indexed-runtime-lookups"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer bn with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 7,
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "c7350322106a469e7be2d05eae6e9e0613cc0a4e0b34b41d63236860e1a2f7d4",
+                "rows": 7,
+                "first_surface": "ককগ",
+                "last_surface": "সিনথ000গুলো",
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v2",
+                    "path": "runtime/0001.tsv.gz.lookup",
+                    "sha256": "b97179cfddbbb48b7559a33bfb0207ef3161dc1eeb7f4ec93866d91e6fd9b745",
+                    "blocks": 1
+                }
+            }
+        ],
+        "total_sha256": "f3d6b5b6bcd9506d1c3633097dedfd5721a72807c220c000f5e1c50b872c3305"
+    },
+    "source": {
+        "name": "Project-owned synthetic Bengali-script analyzer fixture",
+        "version": "0.1.0-synthetic",
+        "url": "urn:wp-fts:test:bn-synthetic-lemma-fixture",
+        "artifact_sha256": "b7c2c189ade67476d8699dfaf54615921a3e449c7e856e88fea30e41cc038cc8",
+        "byte_count": 189
+    },
+    "license": {
+        "spdx_id": "CC0-1.0",
+        "notice_path": "PROVENANCE.md"
+    },
+    "attribution": {
+        "note": "Project-owned analyzer test data."
+    },
+    "provenance": {
+        "local_note": "PROVENANCE.md",
+        "no_runtime_network_access": true
+    }
+}

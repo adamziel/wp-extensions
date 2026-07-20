@@ -5,8 +5,7 @@
         "language": "tr",
         "kind": "lemmatizer",
         "status": "production_candidate",
-        "runtime_pack_committed": true,
-        "default_enabled": false
+        "runtime_pack_committed": true
     },
     "source": {
         "name": "UniMorph tur Turkish inflection table",
@@ -42,10 +41,10 @@
         "path": "indexer/tools/import-unimorph-lemma-pack.php",
         "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
         "commit": "recorded-in-task-result",
-        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=tr --pack-id=tr-unimorph-tur-6c179ace7d2f --version=6c179ace7d2f-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/tur/blob/6c179ace7d2f3d7f3484020e5304c1544d07bb6b/tur --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=tr --pack-id=tr-unimorph-tur-6c179ace7d2f --version=6c179ace7d2f-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/tur/blob/6c179ace7d2f3d7f3484020e5304c1544d07bb6b/tur --license=CC-BY-SA-3.0 --attribution=<required-attribution>"
     },
     "runtime": {
-        "manifest_sha256": "0b7f1fc81c54593af741bbcd84c6869bf687c13653dadd680ab5587d2a117ca4",
+        "manifest_sha256": "665879ebfd72662c5e1282e79b595a85bd939ba015f75527d1090a311598fe53",
         "row_count": 223646,
         "file_count": 3,
         "byte_count": 580746,
@@ -63,8 +62,7 @@
         "unsupported_language_policy": "return_original_normalized_term"
     },
     "release": {
-        "default_enabled": false,
-        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+        "claim_boundary": "Source-backed UniMorph lemmatizer. Runtime pack is bundled and activates only through plugin configuration."
     },
     "attribution": {
         "upstream": "UniMorph tur contributors; source repository https://github.com/unimorph/tur"

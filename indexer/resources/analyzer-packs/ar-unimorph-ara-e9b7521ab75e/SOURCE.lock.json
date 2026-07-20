@@ -5,8 +5,7 @@
         "language": "ar",
         "kind": "lemmatizer",
         "status": "production_candidate",
-        "runtime_pack_committed": true,
-        "default_enabled": false
+        "runtime_pack_committed": true
     },
     "source": {
         "name": "UniMorph ara ar inflection table",
@@ -42,10 +41,10 @@
         "path": "indexer/tools/import-unimorph-lemma-pack.php",
         "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
         "commit": "recorded-in-task-result",
-        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=ar --pack-id=ar-unimorph-ara-e9b7521ab75e --version=e9b7521ab75e-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/ara/blob/e9b7521ab75e3a7da6f996a428031164993e6f19/ara --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=ar --pack-id=ar-unimorph-ara-e9b7521ab75e --version=e9b7521ab75e-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/ara/blob/e9b7521ab75e3a7da6f996a428031164993e6f19/ara --license=CC-BY-SA-3.0 --attribution=<required-attribution>"
     },
     "runtime": {
-        "manifest_sha256": "ff757431aa452ac976e837612a542e1d144a66e8c470368973d9bb5f4dab2baa",
+        "manifest_sha256": "769d71b4a0ed797a21dbad4d49a2dc93498f5ce1a7b78228a5079e6650859f45",
         "row_count": 45516,
         "file_count": 1,
         "byte_count": 164192,
@@ -63,8 +62,7 @@
         "unsupported_language_policy": "return_original_normalized_term"
     },
     "release": {
-        "default_enabled": false,
-        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+        "claim_boundary": "Source-backed UniMorph lemmatizer. Runtime pack is bundled and activates only through plugin configuration."
     },
     "attribution": {
         "upstream": "UniMorph ara contributors; source repository https://github.com/unimorph/ara"

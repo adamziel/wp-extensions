@@ -107,7 +107,7 @@ function wp_fts_provider_compatibility_wordpress_inside(): void
         WP_FTS_Plugin::repair_schema();
         $postId = wp_fts_provider_compatibility_wordpress_create_fixture_post();
         WP_FTS_Plugin::handle_post_save($postId, get_post($postId), true);
-        WP_FTS_Plugin::process_queue(10);
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
 
         $matrix = wp_fts_provider_compatibility_wordpress_run_matrix($postId);
         $failed = array_values(array_filter(

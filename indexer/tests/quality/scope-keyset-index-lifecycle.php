@@ -15,8 +15,8 @@ function wp_fts_scope_index_lifecycle_fixture(bool $removeIndexes = false): arra
     if ($removeIndexes) {
         unset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]);
         unset(
-            $fake->schemaIndexes['wp_term_relationships'][WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME],
-            $fake->schemaIndexes['wp_posts'][WP_FTS_Storage_Mysql::FILTERED_SCOPE_INDEX_NAME]
+            $fake->schemaIndexes['wp_term_relationships'][WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME],
+            $fake->schemaIndexes['wp_posts'][WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME]
         );
     }
 
@@ -48,8 +48,8 @@ test_case('quality schema repair reuses exact preexisting scope indexes without 
 
         $fake->queries = [];
         WP_FTS_Plugin::uninstall();
-        assert_true(isset($fake->schemaIndexes['wp_term_relationships'][WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME]), 'uninstall must retain an unowned preexisting relationship index');
-        assert_true(isset($fake->schemaIndexes['wp_posts'][WP_FTS_Storage_Mysql::FILTERED_SCOPE_INDEX_NAME]), 'uninstall must retain an unowned preexisting posts index');
+        assert_true(isset($fake->schemaIndexes['wp_term_relationships'][WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME]), 'uninstall must retain an unowned preexisting relationship index');
+        assert_true(isset($fake->schemaIndexes['wp_posts'][WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME]), 'uninstall must retain an unowned preexisting posts index');
         assert_same(0, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'DROP INDEX '))), 'uninstall must issue no DROP INDEX for reused unowned capabilities');
     } finally {
         $wpdb = $oldWpdb;
@@ -67,13 +67,13 @@ test_case('quality schema creation records ownership before DDL and exact uninst
         assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'successful supporting DDL should publish the current version last');
         assert_same(['filtered', 'targeted'], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION] ?? null, 'ownership intent must cover the exact two missing indexes');
         assert_same(2, count(wp_fts_scope_index_create_queries($fake)), 'a fresh scope capability should use exactly two core-table CREATE INDEX statements');
-        assert_same(['term_taxonomy_id', 'object_id'], $fake->schemaIndexes['wp_term_relationships'][WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME] ?? null, 'targeted DDL must install the exact ordered columns');
-        assert_same(['post_type', 'post_status', 'ID'], $fake->schemaIndexes['wp_posts'][WP_FTS_Storage_Mysql::FILTERED_SCOPE_INDEX_NAME] ?? null, 'filtered DDL must install the exact ordered columns');
+        assert_same(['term_taxonomy_id', 'object_id'], $fake->schemaIndexes['wp_term_relationships'][WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME] ?? null, 'targeted DDL must install the exact ordered columns');
+        assert_same(['post_type', 'post_status', 'ID'], $fake->schemaIndexes['wp_posts'][WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME] ?? null, 'filtered DDL must install the exact ordered columns');
 
         $fake->queries = [];
         WP_FTS_Plugin::uninstall();
-        assert_true(!isset($fake->schemaIndexes['wp_term_relationships'][WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME]), 'uninstall must remove the exact plugin-owned relationship index');
-        assert_true(!isset($fake->schemaIndexes['wp_posts'][WP_FTS_Storage_Mysql::FILTERED_SCOPE_INDEX_NAME]), 'uninstall must remove the exact plugin-owned posts index');
+        assert_true(!isset($fake->schemaIndexes['wp_term_relationships'][WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME]), 'uninstall must remove the exact plugin-owned relationship index');
+        assert_true(!isset($fake->schemaIndexes['wp_posts'][WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME]), 'uninstall must remove the exact plugin-owned posts index');
         assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION]), 'uninstall must delete the ownership record after dropping its exact indexes');
         assert_same(2, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'DROP INDEX '))), 'uninstall must issue exactly two owned DROP INDEX statements');
     } finally {
@@ -86,7 +86,7 @@ test_case('quality schema repair rejects a same-name index collision before owne
 
     $oldWpdb = $wpdb ?? null;
     [$fake] = wp_fts_scope_index_lifecycle_fixture();
-    $fake->schemaIndexes['wp_term_relationships'][WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME] = ['object_id', 'term_taxonomy_id'];
+    $fake->schemaIndexes['wp_term_relationships'][WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME] = ['object_id', 'term_taxonomy_id'];
     $fake->queries = [];
     try {
         $failure = null;
@@ -103,7 +103,7 @@ test_case('quality schema repair rejects a same-name index collision before owne
         $fake->prepared = [];
         $runtimeFailure = null;
         try {
-            (new WP_FTS_Storage_Mysql($fake))->validated_targeted_scope_index_hint();
+            (new WP_FTS_Relational_Storage($fake))->validated_targeted_scope_index_hint();
         } catch (RuntimeException $error) {
             $runtimeFailure = $error;
         }
@@ -113,7 +113,7 @@ test_case('quality schema repair rejects a same-name index collision before owne
             static fn(array $entry): bool => str_starts_with((string) ($entry['sql'] ?? ''), 'SHOW INDEX FROM `wp_term_relationships` WHERE Key_name = %s')
         ));
         assert_same(1, count($runtimeChecks), 'MySQL/MariaDB scope work should verify its one named keyset with one narrow metadata statement');
-        assert_same([WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME], $runtimeChecks[0]['args'] ?? null, 'the runtime metadata probe must bind only the exact plugin index name');
+        assert_same([WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME], $runtimeChecks[0]['args'] ?? null, 'the runtime metadata probe must bind only the exact plugin index name');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -136,8 +136,8 @@ test_case('quality schema creation resumes an interrupted two-index install with
         assert_true($failure instanceof RuntimeException, 'the fixture must interrupt the second supporting CREATE INDEX');
         assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'partial supporting DDL must not publish the current marker');
         assert_same(['filtered', 'targeted'], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION] ?? null, 'both ownership intents must be durable before the first DDL');
-        assert_true(isset($fake->schemaIndexes['wp_term_relationships'][WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME]), 'the completed first index should remain available for idempotent resume');
-        assert_true(!isset($fake->schemaIndexes['wp_posts'][WP_FTS_Storage_Mysql::FILTERED_SCOPE_INDEX_NAME]), 'the failed second index must remain absent');
+        assert_true(isset($fake->schemaIndexes['wp_term_relationships'][WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME]), 'the completed first index should remain available for idempotent resume');
+        assert_true(!isset($fake->schemaIndexes['wp_posts'][WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME]), 'the failed second index must remain absent');
 
         $fake->failQueryNeedle = null;
         $fake->failQueryNeedleOccurrence = 0;
@@ -180,8 +180,8 @@ test_case('quality schema creation stops after first DDL when its writer lease i
         assert_true($failure instanceof WP_FTS_Index_Writer_Ownership_Lost, 'a stale repair writer must observe the stolen lease immediately after long DDL');
         assert_same(1, $creates, 'lease loss after first CREATE must prevent the second core-table DDL');
         assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'a stale repair writer must not publish the current schema marker');
-        assert_true(isset($fake->schemaIndexes['wp_term_relationships'][WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME]), 'the first completed DDL remains owned and recoverable');
-        assert_true(!isset($fake->schemaIndexes['wp_posts'][WP_FTS_Storage_Mysql::FILTERED_SCOPE_INDEX_NAME]), 'no second DDL may cross the stolen lease');
+        assert_true(isset($fake->schemaIndexes['wp_term_relationships'][WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME]), 'the first completed DDL remains owned and recoverable');
+        assert_true(!isset($fake->schemaIndexes['wp_posts'][WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME]), 'no second DDL may cross the stolen lease');
     } finally {
         $fake->queryObserver = null;
         $wpdb = $oldWpdb;
@@ -189,15 +189,15 @@ test_case('quality schema creation stops after first DDL when its writer lease i
 });
 
 test_case_with_pdo_sqlite_fixture('quality SQLite scope index names are complete, nonpartial, and unique per multisite table', function (): void {
-    $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
+    $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
     foreach (['wp_posts', 'wp_2_posts'] as $table) {
         $wpdb->query("CREATE TABLE {$table} (ID INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL)");
     }
     foreach (['wp_term_relationships', 'wp_2_term_relationships'] as $table) {
         $wpdb->query("CREATE TABLE {$table} (object_id INTEGER NOT NULL, term_taxonomy_id INTEGER NOT NULL, PRIMARY KEY(object_id,term_taxonomy_id))");
     }
-    $main = new WP_FTS_Storage_Mysql($wpdb, 'wp_');
-    $site = new WP_FTS_Storage_Mysql($wpdb, 'wp_2_');
+    $main = new WP_FTS_Relational_Storage($wpdb, 'wp_');
+    $site = new WP_FTS_Relational_Storage($wpdb, 'wp_2_');
     $main->ensure_scope_keyset_indexes();
     $site->ensure_scope_keyset_indexes();
     assert_same(true, $main->verify_schema_and_scope_keyset_indexes()['scope_keyset_indexes']['valid'] ?? null, 'main-site SQLite supporting indexes should verify exactly');

@@ -24,7 +24,7 @@ function wp_fts_sqlite_transport_document(int $postId, int $identities, string $
     return [
         'doc_id' => $postId,
         'primary_lang' => $language,
-        'content_hash' => str_repeat('a', 64),
+        'content_hash' => sha1((string) $postId),
         'snippet_text' => '',
         'term_frequencies' => $terms,
         'surface_frequencies' => $surface > 0 ? array_slice($terms, 0, $surface, true) : [],
@@ -32,7 +32,7 @@ function wp_fts_sqlite_transport_document(int $postId, int $identities, string $
 }
 
 /** @return array<string,mixed> */
-function wp_fts_sqlite_transport_measure(WP_FTS_Storage_Mysql $storage, array $documents): array
+function wp_fts_sqlite_transport_measure(WP_FTS_Relational_Storage $storage, array $documents): array
 {
     $method = new ReflectionMethod($storage, 'sqlite_prepared_transport_prefix');
     $result = $method->invoke($storage, $documents);
@@ -40,13 +40,13 @@ function wp_fts_sqlite_transport_measure(WP_FTS_Storage_Mysql $storage, array $d
     return is_array($result) ? $result : [];
 }
 
-/** @return array{0:WP_FTS_Test_WPDB,1:WP_FTS_Storage_Mysql} */
+/** @return array{0:WP_FTS_Test_WPDB,1:WP_FTS_Relational_Storage} */
 function wp_fts_sqlite_transport_storage(): array
 {
     $wpdb = new WP_FTS_Test_WPDB();
     $wpdb->dbh = new WP_FTS_Test_SQLite_Driver();
 
-    return [$wpdb, new WP_FTS_Storage_Mysql($wpdb)];
+    return [$wpdb, new WP_FTS_Relational_Storage($wpdb)];
 }
 
 /** Extract one exact method range for structural transport-boundary assertions. */
@@ -70,7 +70,7 @@ test_case('SQLite maximum prepared identity document is a permanent pre-SQL reje
     $language = str_repeat('a', 32);
     $document = wp_fts_sqlite_transport_document(
         9101,
-        WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS,
+        WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS,
         $language
     );
 
@@ -104,7 +104,7 @@ test_case('SQLite largest maximum-width transport boundary uses one dictionary w
     [$wpdb, $storage] = wp_fts_sqlite_transport_storage();
     $language = str_repeat('a', 32);
     $low = 1;
-    $high = WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS;
+    $high = WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS;
     while ($low < $high) {
         $candidate = intdiv($low + $high + 1, 2);
         $measure = wp_fts_sqlite_transport_measure(
@@ -118,7 +118,7 @@ test_case('SQLite largest maximum-width transport boundary uses one dictionary w
         }
     }
     $largestAccepted = $low;
-    assert_true($largestAccepted > 4096 && $largestAccepted < WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS, 'the hostile SQLite boundary should exercise both lexical and surface identity maps');
+    assert_true($largestAccepted > 4096 && $largestAccepted < WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS, 'the hostile SQLite boundary should exercise both lexical and surface identity maps');
     assert_same(7098, $largestAccepted, 'the maximum-width SQLite transport frontier should retain its exact accepted identity count');
 
     $accepted = wp_fts_sqlite_transport_document(9201, $largestAccepted, $language);
@@ -156,12 +156,12 @@ test_case('SQLite largest maximum-width transport boundary uses one dictionary w
 });
 
 test_case('SQLite maximum-width renderers and fake decoders retain no complete row copy', function (): void {
-    $preflight = wp_fts_sqlite_transport_method_source(WP_FTS_Storage_Mysql::class, 'sqlite_prepared_transport_prefix');
-    $replace = wp_fts_sqlite_transport_method_source(WP_FTS_Storage_Mysql::class, 'replace_prepared_documents');
-    $dictionary = wp_fts_sqlite_transport_method_source(WP_FTS_Storage_Mysql::class, 'sqlite_term_identity_increment_statement');
-    $resolution = wp_fts_sqlite_transport_method_source(WP_FTS_Storage_Mysql::class, 'sqlite_prepared_term_resolution_sql');
-    $fakeDictionary = wp_fts_sqlite_transport_method_source(WP_FTS_Test_WPDB::class, 'v4_inline_dictionary_rows');
-    $fakeResolver = wp_fts_sqlite_transport_method_source(WP_FTS_Test_WPDB::class, 'v4_literal_identity_rows');
+    $preflight = wp_fts_sqlite_transport_method_source(WP_FTS_Relational_Storage::class, 'sqlite_prepared_transport_prefix');
+    $replace = wp_fts_sqlite_transport_method_source(WP_FTS_Relational_Storage::class, 'replace_prepared_documents');
+    $dictionary = wp_fts_sqlite_transport_method_source(WP_FTS_Relational_Storage::class, 'sqlite_term_identity_increment_statement');
+    $resolution = wp_fts_sqlite_transport_method_source(WP_FTS_Relational_Storage::class, 'sqlite_prepared_term_resolution_sql');
+    $fakeDictionary = wp_fts_sqlite_transport_method_source(WP_FTS_Test_WPDB::class, 'relational_inline_dictionary_rows');
+    $fakeResolver = wp_fts_sqlite_transport_method_source(WP_FTS_Test_WPDB::class, 'relational_literal_identity_rows');
 
     assert_true(!str_contains($preflight, '$identities = []'), 'SQLite preflight should retain one deduplication/count map rather than a second complete identity graph');
     assert_contains('unset($batchTerms, $transport);', $replace, 'writer validation should release its maximum-width key map before rendering SQL');
@@ -220,7 +220,7 @@ test_case('SQLite aggregate transport splits once and preflights 100 documents l
     ];
 
     $partition = $storage->partition_prepared_documents($documents);
-    assert_same([9301], array_column($partition['documents'], 'post_id'), 'SQLite partitioning should retain the exact transport-safe prefix');
+    assert_same([9301], array_column($partition['documents'], 'doc_id'), 'SQLite partitioning should retain the exact transport-safe prefix');
     assert_same([9302], $partition['deferred_post_ids'], 'SQLite partitioning should defer the complete suffix for the next bounded transaction');
     assert_same([], $partition['rejections'], 'an individually valid suffix should be deferred, not mislabeled poison');
     assert_same([], $wpdb->queries, 'aggregate SQLite transport partitioning must precede frontier SQL');

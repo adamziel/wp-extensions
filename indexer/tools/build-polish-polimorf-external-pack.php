@@ -16,6 +16,71 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
     public const APPROVED_SOURCE_SHA256 = '2b1f07224c434c8710def382d497cf8221d5764e8d683d2ad34242810ab72746';
     public const APPROVED_SOURCE_BYTES = 41550540;
     public const APPROVED_SOURCE_FILE = 'polimorf-20180722.tab.gz';
+    private const BUILD_OPTION_KEYS = [
+        ...WP_FTS_PolishPolimorfImporter::IMPORT_OPTION_KEYS,
+        'download',
+        'cache_dir',
+        'acknowledge_license',
+        'allow_repo_cache',
+        'allow_repo_output',
+        'expect_source_sha256',
+        'expect_source_bytes',
+        'replace_output',
+    ];
+    private const STRING_OPTION_KEYS = [
+        'source',
+        'out',
+        'pack_id',
+        'version',
+        'source_url',
+        'source_name',
+        'source_version',
+        'source_retrieval_note',
+        'importer_commit',
+        'tmp_dir',
+        'cache_dir',
+        'acknowledge_license',
+        'expect_source_sha256',
+    ];
+    private const PATH_OPTION_KEYS = [
+        'source',
+        'out',
+        'tmp_dir',
+        'cache_dir',
+    ];
+    private const BOOLEAN_OPTION_KEYS = [
+        'download',
+        'allow_repo_cache',
+        'allow_repo_output',
+        'replace_output',
+    ];
+    private const CLI_BOOLEAN_OPTION_KEYS = [
+        'download',
+        'allow-repo-cache',
+        'allow-repo-output',
+        'replace-output',
+    ];
+    private const CLI_INTEGER_OPTION_KEYS = [
+        'max-rows-per-file',
+        'chunk-rows',
+        'expect-source-bytes',
+    ];
+    private const CLI_VALUE_OPTION_KEYS = [
+        'source',
+        'out',
+        'pack-id',
+        'version',
+        'source-url',
+        'source-name',
+        'source-version',
+        'source-retrieval-note',
+        'importer-commit',
+        'tmp-dir',
+        'cache-dir',
+        'acknowledge-license',
+        'expect-source-sha256',
+        ...self::CLI_INTEGER_OPTION_KEYS,
+    ];
 
     /**
      * @param array<string,mixed> $options
@@ -23,9 +88,12 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
      */
     public function build(array $options): array
     {
-        $download = $this->bool_option($options['download'] ?? false);
-        $source = $this->resolve_source($options, $download);
+        $this->assert_option_shapes($options);
+        $download = $this->optional_bool($options, 'download');
         $outDir = $this->required_string($options, 'out');
+        $expectedSha = $this->expected_sha256($options);
+        $expectedBytes = $this->expected_bytes($options);
+        $source = $this->resolve_source($options, $download);
         WP_FTS_LemmaSourceImportLimits::assert_source_output_separate(
             $source,
             $outDir,
@@ -33,58 +101,73 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
         );
 
         $this->reject_secret_path($outDir, 'output directory');
-        $this->assert_external_directory($outDir, 'output directory', $this->bool_option($options['allow_repo_output'] ?? false));
-        $expectedSha = $this->expected_sha256($options);
-        $expectedBytes = $this->expected_bytes($options);
+        $this->assert_external_directory($outDir, 'output directory', $this->optional_bool($options, 'allow_repo_output'));
         $sourceVerification = $this->verify_source($source, $expectedSha, $expectedBytes);
-        $this->prepare_output_directory($outDir, $this->bool_option($options['replace_output'] ?? false));
+        $this->prepare_output_directory($outDir, $this->optional_bool($options, 'replace_output'));
 
         $importOptions = [
             'source' => $source,
             'out' => $outDir,
-            'pack_id' => (string) ($options['pack_id'] ?? 'pl-polimorf-20180722-full'),
-            'version' => (string) ($options['version'] ?? '2018.07.22-external-pack-v1'),
-            'source_url' => (string) ($options['source_url'] ?? self::APPROVED_SOURCE_URL),
-            'source_name' => (string) ($options['source_name'] ?? 'PoliMorf Polish morphological dictionary'),
-            'source_version' => (string) ($options['source_version'] ?? '2018.07.22'),
-            'source_retrieval_note' => (string) ($options['source_retrieval_note'] ?? 'External pack workflow verified the source SHA-256 and byte count before import; generated runtime data is installed outside the plugin package.'),
-            'fixture_only' => $this->bool_option($options['fixture_only'] ?? false),
-            'importer_commit' => (string) ($options['importer_commit'] ?? 'external-pack-workflow'),
+            'pack_id' => $this->optional_string($options, 'pack_id', 'pl-polimorf-20180722-full'),
+            'version' => $this->optional_string($options, 'version', '2018.07.22-external-pack-v1'),
+            'source_url' => $this->optional_string($options, 'source_url', self::APPROVED_SOURCE_URL),
+            'source_name' => $this->optional_string($options, 'source_name', 'PoliMorf Polish morphological dictionary'),
+            'source_version' => $this->optional_string($options, 'source_version', '2018.07.22'),
+            'source_retrieval_note' => $this->optional_string(
+                $options,
+                'source_retrieval_note',
+                'External pack workflow verified the source SHA-256 and byte count before import; generated runtime data is installed outside the plugin package.'
+            ),
+            'importer_commit' => $this->optional_string($options, 'importer_commit', 'external-pack-workflow'),
         ];
         foreach (['max_rows_per_file', 'chunk_rows', 'tmp_dir'] as $key) {
             if (array_key_exists($key, $options)) {
                 if ($key === 'tmp_dir') {
-                    $this->reject_secret_path((string) $options[$key], 'temporary directory');
+                    $this->reject_secret_path($options[$key], 'temporary directory');
                 }
                 $importOptions[$key] = $options[$key];
             }
         }
 
-        $importSummary = (new WP_FTS_PolishPolimorfImporter())->import($importOptions);
-        $importedSource = is_array($importSummary['source'] ?? null) ? $importSummary['source'] : [];
-        if (
-            !is_string($importedSource['sha256'] ?? null)
-            || !hash_equals($sourceVerification['sha256'], $importedSource['sha256'])
-            || ($importedSource['bytes'] ?? null) !== $sourceVerification['bytes']
-        ) {
-            $this->remove_tree($outDir);
-            throw new RuntimeException('PoliMorf source changed between external verification and the importer snapshot.');
-        }
-        $validator = new WP_FTS_AnalyzerPackValidator();
-        $validation = $validator->validate((string) $importSummary['manifest'], false);
-        $pack = WP_FTS_LanguageLemmaPack::from_manifest_file(
-            (string) $importSummary['manifest'],
-            $validator,
-            'pl'
-        );
-        if ($pack->runtime_file_count() !== (int) $importSummary['runtime']['files']) {
-            throw new RuntimeException('Generated PoliMorf pack activation retained an unexpected runtime shard count.');
-        }
-        if ($pack->lookup_block_count() !== (int) $importSummary['lookup']['blocks']) {
-            throw new RuntimeException('Generated PoliMorf pack activation retained an unexpected lookup block count.');
-        }
+        $buildComplete = false;
+        try {
+            $importSummary = (new WP_FTS_PolishPolimorfImporter())->import($importOptions);
+            $importedSource = is_array($importSummary['source'] ?? null) ? $importSummary['source'] : [];
+            if (
+                !is_string($importedSource['sha256'] ?? null)
+                || !hash_equals($sourceVerification['sha256'], $importedSource['sha256'])
+                || ($importedSource['bytes'] ?? null) !== $sourceVerification['bytes']
+            ) {
+                throw new RuntimeException('PoliMorf source changed between external verification and the importer snapshot.');
+            }
+            $validator = new WP_FTS_AnalyzerPackValidator();
+            $validation = $validator->validate((string) $importSummary['manifest']);
+            $pack = WP_FTS_LanguageLemmaPack::from_manifest_file(
+                (string) $importSummary['manifest'],
+                $validator,
+                'pl'
+            );
+            if ($pack->runtime_file_count() !== (int) $importSummary['runtime']['files']) {
+                throw new RuntimeException('Generated PoliMorf pack activation retained an unexpected runtime shard count.');
+            }
+            if ($pack->lookup_block_count() !== (int) $importSummary['lookup']['blocks']) {
+                throw new RuntimeException('Generated PoliMorf pack activation retained an unexpected lookup block count.');
+            }
 
-        return $this->build_summary($download ? 'download' : 'local', $sourceVerification, $importSummary, $validation);
+            $summary = $this->build_summary(
+                $download ? 'download' : 'local',
+                $sourceVerification,
+                $importSummary,
+                $validation
+            );
+            $buildComplete = true;
+
+            return $summary;
+        } finally {
+            if (!$buildComplete) {
+                $this->remove_tree($outDir);
+            }
+        }
     }
 
     /**
@@ -93,7 +176,92 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
      */
     public static function parse_cli_options(array $argv): array
     {
-        return WP_FTS_PolishPolimorfImporter::parse_cli_options($argv);
+        if (!array_is_list($argv)) {
+            throw new RuntimeException('PoliMorf external builder arguments must be a list of strings.');
+        }
+
+        $booleanOptions = array_fill_keys(self::CLI_BOOLEAN_OPTION_KEYS, true);
+        $valueOptions = array_fill_keys(self::CLI_VALUE_OPTION_KEYS, true);
+        $integerOptions = array_fill_keys(self::CLI_INTEGER_OPTION_KEYS, true);
+        $options = [];
+        for ($i = 0, $count = count($argv); $i < $count; $i++) {
+            if (!is_string($argv[$i])) {
+                throw new RuntimeException('PoliMorf external builder arguments must be strings.');
+            }
+            $arg = $argv[$i];
+            if (!str_starts_with($arg, '--')) {
+                throw new RuntimeException("Unexpected argument: {$arg}");
+            }
+            $arg = substr($arg, 2);
+            $equals = strpos($arg, '=');
+            if ($equals !== false) {
+                $key = substr($arg, 0, $equals);
+                $value = substr($arg, $equals + 1);
+            } else {
+                $key = $arg;
+                if (isset($argv[$i + 1]) && is_string($argv[$i + 1]) && !str_starts_with($argv[$i + 1], '--')) {
+                    $value = $argv[++$i];
+                } else {
+                    $value = true;
+                }
+            }
+            if (!isset($booleanOptions[$key]) && !isset($valueOptions[$key])) {
+                throw new RuntimeException("Unsupported PoliMorf external builder option --{$key}.");
+            }
+            if ($value === true && !isset($booleanOptions[$key])) {
+                throw new RuntimeException("PoliMorf external builder option --{$key} requires a value.");
+            }
+            if (isset($booleanOptions[$key])) {
+                $value = self::parse_cli_boolean($key, $value);
+            } elseif (isset($integerOptions[$key])) {
+                $value = self::parse_cli_positive_integer($key, $value);
+            }
+
+            $optionKey = str_replace('-', '_', $key);
+            if (array_key_exists($optionKey, $options)) {
+                throw new RuntimeException("PoliMorf external builder option --{$key} was supplied more than once.");
+            }
+            $options[$optionKey] = $value;
+        }
+
+        return $options;
+    }
+
+    private static function parse_cli_boolean(string $key, mixed $value): bool
+    {
+        if ($value === true || $value === 'true') {
+            return true;
+        }
+        if ($value === 'false') {
+            return false;
+        }
+
+        throw new RuntimeException("PoliMorf external builder option --{$key} must be true or false.");
+    }
+
+    private static function parse_cli_positive_integer(string $key, mixed $value): int
+    {
+        if (!is_string($value)
+            || $value === ''
+            || strspn($value, '0123456789') !== strlen($value)
+            || $value[0] === '0'
+        ) {
+            throw new RuntimeException("PoliMorf external builder option --{$key} must be a canonical positive integer.");
+        }
+
+        $maximum = (string) PHP_INT_MAX;
+        if (strlen($value) > strlen($maximum)
+            || (strlen($value) === strlen($maximum) && strcmp($value, $maximum) > 0)
+        ) {
+            throw new RuntimeException("PoliMorf external builder option --{$key} exceeds the integer range.");
+        }
+
+        $integer = (int) $value;
+        if ((string) $integer !== $value) {
+            throw new RuntimeException("PoliMorf external builder option --{$key} exceeds the integer range.");
+        }
+
+        return $integer;
     }
 
     /**
@@ -101,7 +269,7 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
      */
     private function resolve_source(array $options, bool $download): string
     {
-        $hasSource = isset($options['source']) && is_scalar($options['source']) && trim((string) $options['source']) !== '';
+        $hasSource = array_key_exists('source', $options);
         if ($download && $hasSource) {
             throw new RuntimeException('Use either --source or --download, not both.');
         }
@@ -110,7 +278,7 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
         }
 
         if (!$download) {
-            $source = (string) $options['source'];
+            $source = $options['source'];
             $this->reject_secret_path($source, 'source artifact');
             if (!is_file($source)) {
                 throw new RuntimeException("Source artifact does not exist: {$source}");
@@ -119,16 +287,13 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
             return $source;
         }
 
-        $acknowledgement = isset($options['acknowledge_license']) && is_scalar($options['acknowledge_license'])
-            ? trim((string) $options['acknowledge_license'])
-            : '';
-        if ($acknowledgement !== 'BSD-2-Clause') {
+        if (($options['acknowledge_license'] ?? null) !== 'BSD-2-Clause') {
             throw new RuntimeException('Download mode requires --acknowledge-license=BSD-2-Clause.');
         }
 
         $cacheDir = $this->required_string($options, 'cache_dir');
         $this->reject_secret_path($cacheDir, 'cache directory');
-        $this->assert_external_directory($cacheDir, 'cache directory', $this->bool_option($options['allow_repo_cache'] ?? false));
+        $this->assert_external_directory($cacheDir, 'cache directory', $this->optional_bool($options, 'allow_repo_cache'));
         if (is_file($cacheDir)) {
             throw new RuntimeException("Cache path is a file: {$cacheDir}");
         }
@@ -434,7 +599,11 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
      */
     private function expected_sha256(array $options): string
     {
-        $value = (string) ($options['expect_source_sha256'] ?? self::APPROVED_SOURCE_SHA256);
+        $value = $this->optional_string(
+            $options,
+            'expect_source_sha256',
+            self::APPROVED_SOURCE_SHA256
+        );
         if (preg_match('/^[a-f0-9]{64}$/', $value) !== 1) {
             throw new RuntimeException('--expect-source-sha256 must be a lower-case 64-character SHA-256 digest.');
         }
@@ -447,12 +616,7 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
      */
     private function expected_bytes(array $options): int
     {
-        $raw = $options['expect_source_bytes'] ?? self::APPROVED_SOURCE_BYTES;
-        if (!is_int($raw) && (!is_string($raw) || preg_match('/^[1-9][0-9]*$/', $raw) !== 1)) {
-            throw new RuntimeException('--expect-source-bytes must be a positive integer.');
-        }
-
-        return (int) $raw;
+        return $options['expect_source_bytes'] ?? self::APPROVED_SOURCE_BYTES;
     }
 
     /**
@@ -460,23 +624,97 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
      */
     private function required_string(array $options, string $key): string
     {
-        if (!isset($options[$key]) || !is_scalar($options[$key]) || trim((string) $options[$key]) === '') {
+        if (
+            !array_key_exists($key, $options)
+            || !is_string($options[$key])
+            || $options[$key] === ''
+            || trim($options[$key]) !== $options[$key]
+        ) {
             throw new RuntimeException("Missing required option --" . str_replace('_', '-', $key) . '.');
         }
 
-        return (string) $options[$key];
+        return $options[$key];
     }
 
-    private function bool_option(mixed $value): bool
+    private function optional_string(array $options, string $key, string $default): string
     {
-        if (is_bool($value)) {
-            return $value;
-        }
-        if (is_scalar($value)) {
-            return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
+        if (!array_key_exists($key, $options)) {
+            return $default;
         }
 
-        return false;
+        return $this->required_string($options, $key);
+    }
+
+    private function optional_bool(array $options, string $key): bool
+    {
+        if (!array_key_exists($key, $options)) {
+            return false;
+        }
+
+        return $options[$key];
+    }
+
+    /** Reject options and value shapes outside the one external-pack workflow. */
+    private function assert_option_shapes(array $options): void
+    {
+        $allowed = array_fill_keys(self::BUILD_OPTION_KEYS, true);
+        foreach (array_keys($options) as $key) {
+            if (!is_string($key) || !isset($allowed[$key])) {
+                throw new RuntimeException('PoliMorf external pack builder received an unsupported option.');
+            }
+        }
+        $this->required_string($options, 'out');
+
+        foreach (self::STRING_OPTION_KEYS as $key) {
+            if (array_key_exists($key, $options)) {
+                $this->required_string($options, $key);
+            }
+        }
+        foreach (self::PATH_OPTION_KEYS as $key) {
+            if (!array_key_exists($key, $options)) {
+                continue;
+            }
+            $path = $options[$key];
+            if (strlen($path) > WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PATH_BYTES || str_contains($path, "\0")) {
+                throw new RuntimeException(
+                    'PoliMorf external pack option --' . str_replace('_', '-', $key)
+                    . ' must be a path of at most '
+                    . number_format(WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PATH_BYTES)
+                    . ' bytes without null bytes.'
+                );
+            }
+        }
+        foreach (self::BOOLEAN_OPTION_KEYS as $key) {
+            if (array_key_exists($key, $options) && !is_bool($options[$key])) {
+                throw new RuntimeException(
+                    'PoliMorf external pack option --' . str_replace('_', '-', $key) . ' must be a boolean.'
+                );
+            }
+        }
+        foreach (['max_rows_per_file', 'chunk_rows'] as $key) {
+            if (!array_key_exists($key, $options)) {
+                continue;
+            }
+            $value = $options[$key];
+            if (!is_int($value) || $value < 1 || $value > WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS) {
+                throw new RuntimeException(
+                    'PoliMorf external pack option --' . str_replace('_', '-', $key)
+                    . ' must be an integer between 1 and '
+                    . number_format(WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS)
+                    . '.'
+                );
+            }
+        }
+        if (array_key_exists('expect_source_bytes', $options)) {
+            $bytes = $options['expect_source_bytes'];
+            if (!is_int($bytes) || $bytes < 1 || $bytes > WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PHYSICAL_BYTES) {
+                throw new RuntimeException(
+                    '--expect-source-bytes must be an integer between 1 and '
+                    . number_format(WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PHYSICAL_BYTES)
+                    . '.'
+                );
+            }
+        }
     }
 
     /**
@@ -525,7 +763,7 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
                     'pl' => $manifestPath,
                 ],
             ],
-            'package_boundary' => 'The full PoliMorf runtime pack is generated and installed externally, is opt-in, remains default-disabled, and is not committed or bundled in the plugin repository/package.',
+            'package_boundary' => 'The full PoliMorf runtime pack is generated and installed externally, activates only through plugin configuration, and is not committed or bundled in the plugin repository/package.',
             'runtime_network_access' => false,
         ];
     }

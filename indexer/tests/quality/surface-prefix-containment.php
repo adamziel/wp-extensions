@@ -8,16 +8,10 @@ final class WP_FTS_Surface_Test_Analyzer
     {
     }
 
-    /** @return array<int,array<string,mixed>> */
-    public function analyze_plain_content(string $text, array $options = []): array
+    /** @return array<int,array<int,array<string,mixed>>> */
+    public function analyze_document_fields(array $fields, array $options = []): array
     {
-        return $this->occurrences;
-    }
-
-    /** @return array<int,array<string,mixed>> */
-    public function analyze_content(string $html, array $options = []): array
-    {
-        return $this->occurrences;
+        return array_fill(0, count($fields), $this->occurrences);
     }
 
     /** Keep surface-prefix fixture fingerprints stable across analyzer internals. */
@@ -30,28 +24,25 @@ final class WP_FTS_Surface_Test_Analyzer
 /** @param array<int,array<string,mixed>> $occurrences @return array<string,mixed> */
 function wp_fts_surface_prepare_occurrences(array $occurrences, string $lang = 'en'): array
 {
-    $storage = new WP_FTS_Storage_Mysql(new WP_FTS_Test_WPDB());
-    $indexer = new WP_FTS_Indexer($storage, new WP_FTS_Surface_Test_Analyzer($occurrences));
+    $indexer = new WP_FTS_Indexer(new WP_FTS_Surface_Test_Analyzer($occurrences));
 
     return $indexer->prepare_document_fields(1, [['name' => 'content', 'text' => 'source']], [
-        'lang' => $lang,
-        'metadata' => [],
+        'document_lang' => $lang,
     ]);
 }
 
 /** @return array<string,mixed> */
 function wp_fts_surface_prepare_text(string $text, string $lang): array
 {
-    $storage = new WP_FTS_Storage_Mysql(new WP_FTS_Test_WPDB());
     $analyzer = new WP_FTS_Analyzer([
         'auto_detect_language' => false,
         'default_lang' => $lang,
     ]);
 
-    return (new WP_FTS_Indexer($storage, $analyzer))->prepare_document_fields(1, [[
+    return (new WP_FTS_Indexer($analyzer))->prepare_document_fields(1, [[
         'name' => 'content',
         'text' => $text,
-    ]], ['lang' => $lang, 'metadata' => []]);
+    ]], ['document_lang' => $lang]);
 }
 
 /** @return array<string,int> */
@@ -88,7 +79,7 @@ function wp_fts_surface_distinct_occurrences(int $count, int $surfaceBytes = 0):
 }
 
 /** Invoke a private storage compiler without executing SQL. */
-function wp_fts_surface_storage_method(WP_FTS_Storage_Mysql $storage, string $method, array $arguments): mixed
+function wp_fts_surface_storage_method(WP_FTS_Relational_Storage $storage, string $method, array $arguments): mixed
 {
     $reflection = new ReflectionMethod($storage, $method);
     $reflection->setAccessible(true);
@@ -137,14 +128,14 @@ test_case_with_pdo_sqlite_fixture('a filtered final token cannot turn the previo
     assert_same('', $last['term'] ?? null, 'a filtered trailing stopword must remain as a non-searchable surface marker');
     assert_same('the', $last['normalized_surface'] ?? null, 'the marker must retain the normalized final typed surface');
 
-    [, $storage] = wp_fts_v4_regression_search_fixture();
-    $searcher = WP_FTS_Searcher::for_set_oriented_storage($storage, $analyzer);
+    [, $storage] = wp_fts_relational_regression_search_fixture();
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
     $result = $searcher->search('dog the', [
         'query_lang' => 'en',
         'prefix_matching' => true,
         'prefix_min_length' => 2,
-        '_search_ready_incarnation' => wp_fts_v4_regression_ready_incarnation(),
-        '_search_ready_profile_hash' => wp_fts_v4_regression_ready_profile_hash(),
+        '_search_ready_incarnation' => wp_fts_relational_regression_ready_incarnation(),
+        '_search_ready_profile_hash' => wp_fts_relational_regression_ready_profile_hash(),
     ]);
     assert_same([], $result['results'] ?? null, 'a filtered trailing token must disable only the prefix branch without aborting exact search');
 
@@ -172,8 +163,8 @@ test_case('one document admits 4096 lexical and 4096 bounded surface rows', func
         )),
         'one document may reach the complete 4,096-surface boundary under a single typed prefix without materializing prefixes'
     );
-    assert_same(8192, WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS, 'the combined per-document posting envelope must be exactly lexical plus surface bounds');
-    assert_same(8192, WP_FTS_Storage_Mysql::MAX_BATCH_TERMS, 'one maximum document must fit the batch dictionary bound without a parallel larger surface allowance');
+    assert_same(8192, WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS, 'the combined per-document posting envelope must be exactly lexical plus surface bounds');
+    assert_same(8192, WP_FTS_Relational_Storage::MAX_BATCH_TERMS, 'one maximum document must fit the batch dictionary bound without a parallel larger surface allowance');
     assert_same(
         WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS,
         WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES,
@@ -203,9 +194,9 @@ test_case('surface rows preserve raw inflections and source-token frequency', fu
 
 test_case('surface identities preserve Unicode numeric and long lexical runs', function (): void {
     $unicode = wp_fts_surface_prepare_occurrences([
-        ['term' => 'éclair', 'normalized_surface' => 'éclair', 'lang' => 'fr', 'position' => 0],
-        ['term' => '火山石', 'normalized_surface' => '火山石', 'lang' => 'fr', 'position' => 1],
-        ['term' => '1234', 'normalized_surface' => '1234', 'lang' => 'fr', 'position' => 2],
+        ['term' => 'éclair', 'normalized_surface' => 'éclair', 'lang' => 'fr', 'position' => 0, 'weight' => 1],
+        ['term' => '火山石', 'normalized_surface' => '火山石', 'lang' => 'fr', 'position' => 1, 'weight' => 1],
+        ['term' => '1234', 'normalized_surface' => '1234', 'lang' => 'fr', 'position' => 2, 'weight' => 1],
     ], 'fr');
     assert_same([
         WP_FTS_TermNamespace::namespace_term('fr', '1234'),
@@ -215,7 +206,7 @@ test_case('surface identities preserve Unicode numeric and long lexical runs', f
 
     $longSurface = str_repeat('é', 200);
     $long = wp_fts_surface_prepare_occurrences([
-        ['term' => 'short', 'normalized_surface' => $longSurface, 'lang' => 'en', 'position' => 0],
+        ['term' => 'short', 'normalized_surface' => $longSurface, 'lang' => 'en', 'position' => 0, 'weight' => 1],
     ]);
     $storedSurface = (string) array_key_first(wp_fts_surface_frequencies($long));
     $split = WP_FTS_TermNamespace::split_term($storedSurface);
@@ -223,30 +214,26 @@ test_case('surface identities preserve Unicode numeric and long lexical runs', f
     assert_same($split['term'] ?? '', WP_FTS_Utf8::repair((string) ($split['term'] ?? '')), 'surface truncation must stop at a UTF-8 boundary');
     assert_same(substr($longSurface, 0, 252), $split['term'] ?? null, 'the stored long surface must be the exact maximum-length binary prefix');
 
-    $productionStorage = new WP_FTS_Storage_Mysql(new WP_FTS_Test_WPDB());
     $productionAnalyzer = new WP_FTS_Analyzer([
         'auto_detect_language' => false,
         'default_lang' => 'en',
         'stemmer' => static fn(string $term, string $_language): string => 'short',
     ]);
-    $productionLong = (new WP_FTS_Indexer($productionStorage, $productionAnalyzer))->prepare_document_fields(2, [[
+    $productionLong = (new WP_FTS_Indexer($productionAnalyzer))->prepare_document_fields(2, [[
         'name' => 'content',
         'text' => str_repeat('a', 300),
-    ]], ['lang' => 'en', 'metadata' => []]);
+    ]], ['document_lang' => 'en']);
     $productionSurface = WP_FTS_TermNamespace::split_term((string) array_key_first(wp_fts_surface_frequencies($productionLong)));
     assert_same('short', WP_FTS_TermNamespace::split_term((string) array_key_first($productionLong['term_frequencies'] ?? []))['term'] ?? null, 'the production analyzer fixture must really shorten its over-width raw token');
     assert_same(str_repeat('a', 252), $productionSurface['term'] ?? null, 'production analyzer surfaces must survive an over-width raw token when its exact lemma is short');
 
-    $surfaceOnly = wp_fts_surface_prepare_text(str_repeat('b', 300), 'en');
-    $surfaceOnlyIdentity = WP_FTS_TermNamespace::split_term(
-        (string) array_key_first(wp_fts_surface_frequencies($surfaceOnly))
-    );
-    assert_same([], $surfaceOnly['term_frequencies'] ?? null, 'an over-width token without a shorter lemma must not fabricate an exact lexical identity');
-    assert_same(str_repeat('b', 252), $surfaceOnlyIdentity['term'] ?? null, 'an over-width token without an exact term must still retain every representable prefix');
+    $overWidth = wp_fts_surface_prepare_text(str_repeat('b', 300), 'en');
+    assert_same([], $overWidth['term_frequencies'] ?? null, 'an over-width token without a shorter lemma must not fabricate an exact lexical identity');
+    assert_same([], wp_fts_surface_frequencies($overWidth), 'an over-width token without an exact lexical identity must not fabricate a surface posting');
 });
 
 test_case('surface SQL cost-selects one bounded AND-prefix driver', function (): void {
-    $storage = new WP_FTS_Storage_Mysql(new WP_FTS_Test_WPDB());
+    $storage = new WP_FTS_Relational_Storage(new WP_FTS_Test_WPDB());
     $prefix = ['group_id' => 1, 'lang' => 'en', 'term' => 'runn', 'doc_freq' => 100000];
     $range = wp_fts_surface_storage_method($storage, 'surface_range_sql', [$prefix]);
     $rangeSql = (string) ($range['sql'] ?? '');
@@ -259,7 +246,6 @@ test_case('surface SQL cost-selects one bounded AND-prefix driver', function ():
     $options = [
         'post_statuses' => ['publish'],
         'post_types' => [],
-        'limit' => 11,
         'page_size' => 10,
         'search_ready_incarnation' => str_repeat('a', 32),
         'search_ready_profile_hash' => str_repeat('b', 40),
@@ -338,12 +324,11 @@ test_case('surface SQL cost-selects one bounded AND-prefix driver', function ():
 });
 
 test_case('surface planning gates and costs every final-prefix range once', function (): void {
-    $storage = new WP_FTS_Storage_Mysql(new WP_FTS_Test_WPDB());
+    $storage = new WP_FTS_Relational_Storage(new WP_FTS_Test_WPDB());
     $prefix = ['group_id' => 1, 'lang' => 'en', 'term' => 'runn'];
     $options = [
         'post_statuses' => ['publish'],
         'post_types' => [],
-        'limit' => 11,
         'page_size' => 10,
         'search_ready_incarnation' => str_repeat('a', 32),
         'search_ready_profile_hash' => str_repeat('b', 40),
@@ -386,19 +371,15 @@ test_case('surface planning gates and costs every final-prefix range once', func
     );
 });
 
-test_case('surface bounds and cursors are bytewise and v6-specific', function (): void {
+test_case('surface bounds and cursors are bytewise and tied to the current index signature', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     assert_same('ac', wp_fts_surface_storage_method($storage, 'binary_successor', ["ab\xff"]), 'bytewise successor must carry over a trailing 0xff byte');
     assert_same(null, wp_fts_surface_storage_method($storage, 'binary_successor', ["\xff\xff"]), 'an all-0xff prefix must use an unbounded upper range');
 
     $componentConstant = (new ReflectionClass(WP_FTS_Indexer::class))->getReflectionConstant('INDEX_SIGNATURE_VERSION');
-    assert_true($componentConstant instanceof ReflectionClassConstant, 'surface storage must expose an explicit migration signature');
-    assert_same('wp-fts-indexer-v6', $componentConstant->getValue(), 'surface rows are incompatible with the abandoned v5 proper-prefix generation');
-    assert_same(false, $storage instanceof WP_FTS_Row_Postings_Writer_Storage, 'MySQL must expose only its bounded prepared-document writer capability');
-    assert_same(false, method_exists($storage, 'replace_doc_postings'), 'the obsolete one-document writer must not exist on production storage');
-    assert_same(true, $storage->indexes_surface_postings(), 'the production storage must explicitly request normalized analyzer surfaces');
-
+    assert_true($componentConstant instanceof ReflectionClassConstant, 'surface storage must expose an explicit format signature');
+    assert_same('wp-fts-indexer-v7', $componentConstant->getValue(), 'surface rows must remain part of the current prepared-document signature');
     $maxPrefix = str_repeat('z', 252);
     $descriptor = wp_fts_surface_storage_method($storage, 'search_prefix_descriptor', [[
         'groups' => [[['lang' => 'en']]],
@@ -441,24 +422,14 @@ test_case('surface bounds and cursors are bytewise and v6-specific', function ()
     assert_true(!hash_equals($firstFingerprint, $secondFingerprint), 'cursor authentication must bind the exact normalized typed surface');
 });
 
-test_case('point collection APIs are absent while bounded page diagnostics stay post-first', function (): void {
+test_case('point collection APIs are absent', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
-    foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'put_term', 'delete_term', 'get_meta', 'all_terms', 'all_doc_ids'] as $method) {
-        assert_true(!method_exists($storage, $method), "production storage should not expose {$method}");
+    $storage = new WP_FTS_Relational_Storage($wpdb);
+    foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'terms_for_docs', 'put_term', 'delete_term', 'get_meta', 'all_terms', 'all_doc_ids'] as $method) {
+        assert_true(!method_exists($storage, $method), "relational storage should not expose {$method}");
     }
     assert_same([], $wpdb->queries, 'capability inspection must not execute SQL');
     assert_same([], $wpdb->prepared, 'capability inspection must not prepare SQL');
-
-    $storage->terms_for_docs([1], 10);
-    $diagnosticSql = (string) ($wpdb->prepared[0]['sql'] ?? '');
-    assert_contains('wp_fts_postings p FORCE INDEX (post_term_impact)', $diagnosticSql, 'bounded page terms must drive the post-first covering index');
-    assert_contains('STRAIGHT_JOIN wp_fts_terms t FORCE INDEX (PRIMARY)', $diagnosticSql, 'bounded page terms must resolve dictionary rows by primary id');
-
-    $contract = wp_fts_surface_storage_method($storage, 'schema_contract', []);
-    $termIndexes = array_column($contract['wp_fts_terms']['indexes'] ?? [], 'name');
-    assert_true(!in_array('term_hash', $termIndexes, true), 'the unused term-hash secondary index must not amplify every lexical and surface write');
-    assert_true(!in_array('term_hash', $contract['wp_fts_terms']['columns'] ?? [], true), 'the unused term-hash payload column must not amplify every lexical and surface write');
 });
 
 test_case('bounded batch delete preflights a maximum posting frontier before opening its transaction', function (): void {
@@ -468,7 +439,7 @@ test_case('bounded batch delete preflights a maximum posting frontier before ope
         'primary_lang' => 'en',
         'content_hash' => 'maximum-frontier',
     ];
-    $wpdb->replacementFrontierPostingCounts[77] = WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS;
+    $wpdb->replacementFrontierPostingCounts[77] = WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS;
 
     $events = [];
     $wpdb->readQueryObserver = static function (string $sql) use (&$events): void {
@@ -478,7 +449,7 @@ test_case('bounded batch delete preflights a maximum posting frontier before ope
         $events[] = 'write:' . $sql;
     };
 
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     $result = $storage->replace_prepared_documents([], [77]);
     assert_same(1, $result['deleted'] ?? null, 'the bounded delete path must accept an old document at the complete 8,192-posting frontier');
 

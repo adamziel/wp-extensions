@@ -1,45 +1,111 @@
 # Full-Text Search Component
 
-`wp-php-toolkit/full-text-search` is the reusable FTS engine used by the Pure
-PHP FTS Indexer WordPress plugin. It is plain PHP and does not require
-WordPress.
+`wp-php-toolkit/full-text-search` is the framework-neutral analysis and query
+planning library used by the Pure PHP FTS Indexer WordPress plugin. It requires
+PHP 8.1 or newer and does not require WordPress.
+
+Load the Composer requirements before constructing an analyzer. The Unicode
+normalizer polyfill and `wamania/php-stemmer` are runtime dependencies; a
+missing Wamania factory stops analyzer construction instead of changing
+Catalan or Dutch terms into silent no-ops.
 
 The component owns HTML text extraction, normalization, language detection,
-stemming and lemmatizer-pack loading, term generation, document indexing,
-set-oriented search planning, snippets/highlighting helpers, storage
-interfaces, and a test-only in-memory storage oracle.
+stemming, lemmatizer-pack loading, index-payload preparation, relational query
+planning, and safe snippet generation. It deliberately does not contain a
+posting-list engine or a storage implementation.
 
-It does not own WordPress hooks, plugin activation, wp-admin UI, WP-CLI commands,
-post extraction, `$wpdb`/MySQL storage, REST integration, or Playground
-packaging. Those stay in the `indexer/` plugin adapter.
+WordPress hooks, post extraction, `$wpdb` storage, schema management, queueing,
+REST integration, WP-CLI commands, and Playground packaging live in the
+`indexer/` adapter.
 
-`tests/bootstrap.php` explicitly loads the in-memory oracle. The production
-bootstrap and release package do not expose it as an application backend.
+## Index Preparation
 
-## Retrieval Accuracy
+`WP_FTS_Indexer` analyzes input and returns a fixed payload for a relational
+batch writer. It never reads or writes storage.
 
-Search considers every matching candidate by default. This keeps ranking and
-totals exact regardless of document-id order.
+```php
+$analyzer = new WP_FTS_Analyzer([
+    'default_lang' => 'en',
+]);
+$indexer = new WP_FTS_Indexer($analyzer);
 
-The legacy `fast_top_k` and `approximate_top_k` options explicitly select a
-document-id candidate cap. That mode is not a ranking-aware top-K algorithm and
-may omit stronger documents beyond the cap. It always returns a payload with
-`retrieval_mode: candidate_capped`, `total_is_exact: false`,
-`results_may_be_incomplete: true`, and the applied `candidate_cap`, even when
-`include_total` is omitted. Incompleteness here means matching documents may be
-omitted before normal limit/offset pagination.
+$prepared = $indexer->prepare_document_fields(42, [
+    ['name' => 'title', 'text' => 'Searchable Library', 'boost' => 3.0],
+    ['name' => 'content', 'text' => 'Portable full text search.', 'boost' => 1.0],
+], [
+    'document_lang' => 'en',
+]);
+```
+
+The result contains exactly:
+
+- `doc_id`
+- `primary_lang`
+- `content_hash`
+- `snippet_text`
+- `term_frequencies`
+- `surface_frequencies`
+
+The term and surface maps use canonical `language + separator + term` keys.
+`content_hash` includes normalized fields, language, and analyzer behavior, so a
+writer can skip an unchanged document before publishing replacement rows.
+
+A framework adapter may pass an extractor as the second constructor argument
+and use `prepare_post_source()` followed by `prepare_post_from_source()`. This
+split lets a queue compare the source hash before it spends time on full text
+analysis.
+
+## Relational Search
+
+`WP_FTS_Searcher` accepts only `WP_FTS_Set_Oriented_Search_Storage`. It analyzes
+a query once, builds at most 12 logical groups with at most 12 alternatives in
+total, and makes one bounded `search_page()` call. The backend owns prefix
+resolution, visibility filters, ranking, hydration, and cursor pagination.
+
+```php
+$searcher = new WP_FTS_Searcher($storage, $analyzer);
+$payload = $searcher->search('portable search', [
+    'mode' => 'AND',
+    'query_lang' => 'en',
+    'limit' => 10,
+    'include_metadata' => true,
+    'include_snippets' => true,
+]);
+```
+
+The public result is always a cursor page:
+
+```php
+[
+    'query_lang' => 'en',
+    'has_more' => false,
+    'next_cursor' => null,
+    'previous_cursor' => null,
+    'results' => [],
+]
+```
+
+Cursor pages do not expose a total. There is no offset mode and no interactive
+full-count query. Current public options cover match mode, page size, language,
+cursor direction, prefix matching, post type/status/date filters, page-sized
+metadata and snippets, recency boost, and fixed backend explain output. Unknown
+options are rejected before storage runs.
+
+Storage rows are exact native values, not normalization inputs. Document IDs are
+positive integers, scores are finite floats, metadata type/status values contain
+at most 64 bytes, titles and snippet sources contain at most 20,000 bytes, and
+each metadata or private canonical-row page contains at most 4 MiB. A canonical
+row starts with an integer `ID` matching `doc_id`; its remaining values are
+native UTF-8 strings. Duplicate document IDs and malformed, reordered, or
+oversized rows fail at the component boundary.
 
 ## Snippet Output
 
-`include_snippets` and `snippet_for_text()` return safe HTML. The component
-extracts visible text, escapes every source byte, and inserts only its own
-`<mark>` elements when highlighting is enabled. Original tags, attributes, and
-entity-decoded markup are never copied into the result, so callers can render
-the returned snippet without maintaining a second source-markup allowlist.
-
-`index_document()` stores a bounded plain-text snippet source automatically.
-Callers may override it with `metadata.search_text`; field-oriented integrations
-can continue to use `index_document_fields()` and their own metadata.
+`include_snippets` turns the bounded `snippet_text` sidecar returned with a page
+row into safe HTML. `snippet_for_text()` does the same for caller-supplied text.
+The component extracts visible text, escapes source bytes, and inserts only its
+own `<mark>` elements when highlighting is enabled. Source tags, attributes,
+and entity-decoded markup are never copied into the result.
 
 ## Multilingual Normalization And Alternatives
 
@@ -48,20 +114,21 @@ dialect rules, and stemming. The component directly requires the pure-PHP intl
 normalizer polyfill, so canonically equivalent and compatibility forms use the
 same stored keys even when the native `intl` extension is unavailable.
 
-When one dictionary surface has several possible lemmas, every candidate keeps
-a posting for recall, but the source token contributes only once to document
-length. Search selects the best-ranked, strongest BM25 candidate inside each
-logical query-token group instead of adding every ambiguous interpretation to
-the score. A pack may contain at most 12 lemmas for one surface across all of
-its shards. Full validation, eager fixture loading, and indexed runtime lookup
-all reject candidate 13; runtime lookup never truncates an invalid pack.
+When one dictionary surface has several possible lemmas, preparation retains
+every candidate key for recall but counts the source occurrence only once in
+the weighted frequency. Query planning keeps those alternatives in one logical
+group so the relational backend can choose one match instead of adding every
+ambiguous interpretation to the score. A pack may contain at most 12 lemmas
+for one surface across all of its shards. Full streaming validation and indexed
+runtime lookup both reject candidate 13; runtime lookup never truncates an
+invalid pack.
 
 HTML is preflighted in one byte-streaming pass before either WordPress HTML
 processor or the component fallback parser runs. One document may contain at
 most 20,000 markup tokens, 256 nested elements, 16,384 bytes in one element tag,
 128 attributes on one tag, 4,096 bytes in one complete ordinary attribute,
 64 bytes in `lang`/`xml:lang`, and eight language subtags. Exceeding a boundary
-raises a typed `WP_FTS_Analysis_Limit_Exceeded` before storage is consulted.
+raises a typed `WP_FTS_Analysis_Limit_Exceeded` before analysis continues.
 Caller-provided HTML processors cross those same boundaries: their complete
 token stream is capped at 40,001 tokens, the active element-state stack at 256
 rows below the processor's implicit fragment roots, tags at 16 KiB, language
@@ -77,32 +144,28 @@ multiplicative time and storage. Provider output is measured
 before trim, uppercase, coalescing, or Unicode-normalization copies. Custom CJK tokenizers, token normalizers, and
 stemmers likewise may emit at most one 4-KiB lexical run. Custom analyzer
 arrays may return at most 20,000 occurrences (the relational production
-path retains its stricter 12-alternative limit), with scalar fields checked
+path retains its stricter 12-alternative limit). Query and document rows use
+one allowlisted occurrence schema with native strings, nonnegative integer
+positions/ranks, and finite positive document weights; unsupported fields fail
 before the array is reindexed.
 
 Analyzer construction is bounded before it resolves pack paths: 32 configured
 languages, 2,048 option nodes, 64 KiB of scalar/key data, eight array levels,
-256 entries per array, 128-byte keys, 4 KiB scalar/path values, and 32 fields in
-one pack option. Local manifests are limited to 64 KiB, 2,048 nodes, eight
-levels, 64 runtime files, 256 lookup blocks per file, and 8,192 lookup blocks
-per pack. Configured packs collectively retain at most 128 runtime files and
-16,384 lookup blocks; lookup headers stop at 64 KiB. One pack may retain at
-most 16 MiB of physical runtime-plus-lookup files; all configured packs share
-a 32 MiB physical ceiling. Distinct fixture packs that are eligible for eager
-loading also share one 50,000-declared-row and 8-MiB decoded-runtime ceiling.
-Plain-runtime bytes are checked from their manifests before any eager map is
-constructed; compressed candidates consume the same decoded budget during
-their bounded validation scan. Indexed blocks decode at most 16 KiB, namespaced
-term keys stop at 255 bytes, and runtime rows/comments stop at 4 KiB. Every
-multi-shard pack must declare complete normalized surface
+256 entries per array, 128-byte keys, and 4 KiB scalar/path values. Local
+manifests are limited to 64 KiB, 2,048 nodes, eight levels, 64 runtime files,
+256 lookup blocks per file, and 8,192 lookup blocks per pack. Configured packs
+collectively retain at most 128 runtime files and 16,384 lookup blocks; lookup
+headers stop at 64 KiB. One pack may retain at most 16 MiB of physical
+runtime-plus-lookup files; all configured packs share a 32 MiB physical
+ceiling. Indexed blocks decode at most 16 KiB, namespaced term keys stop at 255
+bytes, and runtime rows/comments stop at 4 KiB. Every multi-shard pack must
+declare complete normalized surface
 ranges that are strictly ordered and non-overlapping; validation rejects unsafe
 ranges before runtime files are read, and lookup binary-selects at most one
-shard. A single-shard pack may omit ranges. Only a `fixture_only` pack with at
-most 50,000 rows and 8 MiB of decoded runtime data may omit lookup sidecars; it
-is fully validated and loaded once into a bounded eager map. Every other shard
-must be indexed gzip with a validated lookup sidecar, and runtime lookup inflates
-only the selected bounded block.
-There is no non-fixture whole-gzip or linear-scan fallback. Over-limit arrays,
+shard. A single-shard pack may omit ranges. Every runtime shard is indexed gzip
+with a validated lookup sidecar, and runtime lookup inflates only the selected
+bounded block. There is no plain-file, whole-gzip, eager-map, or linear-scan
+runtime path. Over-limit arrays,
 language-map iterators, paths, compressed expansions, and callback captures throw
 `WP_FTS_Analyzer_Config_Limit_Exceeded`; they are not partially loaded or
 silently truncated.
@@ -110,23 +173,21 @@ silently truncated.
 The component repository commits a 329,972-byte, 11,783-range lookup index
 keyed by first Unicode codepoint. An initialized source checkout supplies the
 pinned dictionary during development. The WordPress release builder verifies
-that checkout and stages only `dict.txt`, its MIT `LICENSE`, and `dict.idx`
-under the curated runtime path; it does not ship the raw checkout. A standalone
-component copy without either the curated runtime dictionary or initialized
-source checkout makes the default Jieba option unavailable and continues with
-deterministic CJK fallback n-grams.
+that checkout and stages `manifest.json`, `dict.txt`, its MIT `LICENSE`, and
+`dict.idx` under the curated runtime path; it does not ship the raw checkout. A
+standalone component copy without either the curated runtime dictionary or
+initialized source checkout can use deterministic CJK fallback n-grams by
+leaving the Jieba entry absent or setting it to native `false`; explicit
+enablement fails when the pinned runtime cannot load.
 
-The index digest is compiled into the segmenter, its header binds the pinned
-source digest and byte size, and every range carries its own 128-bit SHA-256
-prefix. Pinned construction therefore hashes the compact index rather than
+The runtime manifest owns the upstream repository and commit plus the
+dictionary, license, and lookup identities. The lookup header binds the pinned
+dictionary digest and byte size, and every range carries its own 128-bit
+SHA-256 prefix. Construction therefore hashes the compact index rather than
 rereading all 5,071,852 dictionary bytes; each source range is verified when
-used. Source-only custom dictionaries are supported only by explicit fixture
-configuration. They retain eager complete-source hashing and build a packed
-6.38-MiB Unicode head/count state plus 12-byte range records in one complete
-scan; records spill to a temporary stream above 1 MiB. Production custom
-dictionaries are not currently supported. A future production custom-pack
-contract would need an offline-built, source-bound attested sidecar rather than
-per-request source hashing and indexing.
+used. The segmenter option has one form: `true` enables this pinned dictionary,
+while `false` disables it. Custom dictionary paths and per-request
+lookup construction are not supported.
 
 `php tools/build-jieba-lookup-index.php --check` rebuilds the v2 sidecar from
 the pinned source and compares it byte-for-byte with the committed file. Run
@@ -142,60 +203,28 @@ fit below the 350,000-row and 8-MiB complete-cache bounds. A maximum accepted
 4,095-byte Han run can cover 285,075 rows without changing segmentation or
 triggering an aggregate run rejection.
 
-Fixture dictionaries are admitted during their one dynamic-index scan only if
-their complete eligible set fits the same 350,000-row and 8-MiB cache, with at
-most 5,000 candidates per prefix. Accepted fixtures therefore have no eviction
-or alternating-prefix reread path. Rejected admission is memoized, so retrying
-the same instance is constant work. Dictionary readers accept at most one
-8-KiB row; byte 8,193 raises `jieba_dictionary_line_bytes` before an oversized
-row is materialized. Complete segment results are additionally memoized in an
-LRU of at most 256 runs, 4,096 result tokens, and 256 KiB of run/token bytes;
-that eviction changes only token recomputation because prefix ranges remain
-resident.
+Dictionary readers accept at most one 8-KiB row; byte 8,193 raises
+`jieba_dictionary_line_bytes` before an oversized row is materialized. Complete
+segment results are additionally memoized in an LRU of at most 256 runs, 4,096
+result tokens, and 256 KiB of run/token bytes; that eviction changes only token
+recomputation because prefix ranges remain resident.
 
-## Search Explain Payloads
+## Backend Explain Output
 
-`WP_FTS_Searcher::search()` keeps the legacy list return shape by default.
-Callers that already request `include_total` can add `explain` or `debug` to
-receive a bounded diagnostics payload:
-
-```php
-$payload = $searcher->search('portable search', [
-    'query_lang' => 'en',
-    'include_total' => true,
-    'explain' => true,
-]);
-```
-
-The `explain` payload reports the storage backend, query surfaces with their
-analyzed storage terms/keys, prefix expansion count, retrieval-mode decision,
-candidate/scoring shape, total accuracy, and bounded per-result match reasons
-for the returned page. Set
-`explain_result_matches` to `false` when a caller needs plan/scoring diagnostics
-but must defer document-term lookups.
-
-Bounded authorization layers can instead pass an `explain_doc_ids_filter`
-callable. It receives the ranked page's document IDs and returns the subset
-eligible for document-level explain reads. The filter does not change ranking,
-totals, pagination, or retrieval mode.
-
-## Authoritative Candidate Filtering
-
-Callers with an external visibility model can pass a
-`candidate_doc_ids_filter` callable. It receives the complete active candidate
-ID list and must return the allowed subset. The searcher intersects that result
-with the original candidates before scoring, totals, and pagination; returned
-IDs cannot inject new documents. This option forces exact candidate discovery,
-even when fast top-K was requested, because applying authorization after an
-approximate window can produce false-empty or incomplete result pages.
-Storage-specific `search_extension` callbacks own candidate discovery, ranking,
-and pagination, so they cannot be combined with this option; extensions must
-apply their own authorization model instead.
+When `explain` is true, the relational backend must return exactly these fields
+in order: `storage`, `logical_group_count`, `resolved_alternatives`,
+`anchor_group`, `prefix_range`, `prefix_strategy`, `query_statements`,
+`interactive_total`, `recency_boost`, and `canonical_page_bytes`. Storage is
+always `set_oriented`; the interactive total is always `unknown`; prefix
+strategy is `none`, `surface_range`, or `candidate_first`; and statement and
+byte counts stay inside the relational limits. `recency_boost` contains exactly
+`enabled`, `strength`, `half_life_days`, and `scoring_now_gmt` with native types.
+There are no per-result diagnostic rows. The searcher validates and passes this
+fixed map through without running posting-list reads or rebuilding a second
+query plan.
 
 The component exposes `WP_FTS_*` global class names.
 
-Field boosts currently feed integer posting frequencies rather than a BM25F
-field model. Direct callers should use positive whole-number boosts: fractional
-totals are rounded during indexing, and zero or negative field values fall back
-to `1`. Omit a field from `index_document_fields()` when it should not
-contribute to search.
+Field boosts become positive integer term frequencies in the prepared writer
+payload rather than a separate BM25F field model. Boosts must be native whole
+numbers from 1 through 100.

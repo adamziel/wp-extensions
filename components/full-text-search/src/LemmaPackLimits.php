@@ -7,14 +7,6 @@ final class WP_FTS_LemmaPackLimits
     public const MAX_LEMMAS_PER_SURFACE = 12;
     public const MAX_RUNTIME_TOKEN_BYTES = 255;
     public const MAX_RUNTIME_LINE_BYTES = 4096;
-    public const MAX_RUNTIME_LOOKUP_DECODED_BYTES = 8388608;
-    public const MAX_EAGER_FIXTURE_ROWS = 50000;
-    public const MAX_EAGER_FIXTURE_RUNTIME_BYTES = 8388608;
-    public const MAX_EAGER_FIXTURE_RUNTIME_FRAMING_BYTES = 65536;
-    /** Eager maps amplify decoded rows into PHP arrays, so both caps are shared. */
-    public const MAX_CONFIGURED_EAGER_FIXTURE_ROWS = self::MAX_EAGER_FIXTURE_ROWS;
-    public const MAX_CONFIGURED_EAGER_FIXTURE_RUNTIME_BYTES = self::MAX_EAGER_FIXTURE_RUNTIME_BYTES;
-
     /**
      * Open and hash one file while enforcing a hard physical byte ceiling.
      *
@@ -106,23 +98,21 @@ final class WP_FTS_LemmaPackLimits
     }
 
     /**
-     * Read one runtime TSV/comment line without allowing a compressed or plain
-     * malformed line to allocate the rest of a local pack in one call.
+     * Read one gzip runtime TSV/comment line without allowing a malformed line
+     * to allocate the rest of a local pack in one call.
      *
      * @param resource $handle
      */
-    public static function read_runtime_line(mixed $handle, ?string $compression): string|false
+    public static function read_runtime_line(mixed $handle): string|false
     {
-        $line = $compression === 'gzip'
-            ? @gzgets($handle, self::MAX_RUNTIME_LINE_BYTES + 3)
-            : fgets($handle, self::MAX_RUNTIME_LINE_BYTES + 3);
+        $line = @gzgets($handle, self::MAX_RUNTIME_LINE_BYTES + 3);
         if ($line === false) {
             return false;
         }
 
         $terminated = str_ends_with($line, "\n");
         $payloadBytes = strlen(rtrim($line, "\r\n"));
-        $atEnd = $compression === 'gzip' ? gzeof($handle) : feof($handle);
+        $atEnd = gzeof($handle);
         self::assert_runtime_line_bytes($payloadBytes);
         if (!$terminated && !$atEnd) {
             throw new WP_FTS_Analyzer_Config_Limit_Exceeded(

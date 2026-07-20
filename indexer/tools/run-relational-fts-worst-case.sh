@@ -7,12 +7,6 @@ PROFILE="50k"
 ENGINE="mariadb-10.11"
 OUTPUT=""
 SOURCE_REF="HEAD"
-JIEBA_GITLINK="67fa2e36e72f69d9134b8a1037b83fbb070b9775"
-JIEBA_URL="https://github.com/fxsjy/jieba"
-JIEBA_DICTIONARY_SHA256="7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8"
-JIEBA_DICTIONARY_BYTES=5071852
-JIEBA_LICENSE_SHA256="18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37"
-JIEBA_LICENSE_BYTES=1075
 ALLOW_DIRTY=0
 KEEP=0
 CONCURRENCY_SECONDS=60
@@ -228,71 +222,33 @@ initialize_and_attest_jieba_source() {
     local label="$1"
     local root="$2"
     local relative_path="$3"
-    local evidence_path="$4"
-    local indexed_entry indexed_mode indexed_gitlink indexed_stage indexed_path configured_path configured_url
-    local actual_gitlink dictionary license temporary
+    local report_path="$4"
+    local initializer manifest temporary
 
-    temporary="${evidence_path}.tmp.$$"
+    manifest="${root}/components/full-text-search/resources/runtime/jieba/manifest.json"
+    initializer="${root}/components/full-text-search/tools/initialize-jieba-source.sh"
+
+    temporary="${report_path}.tmp.$$"
     php -r '
 $data=["schema"=>"jieba-source-attestation-v1","status"=>"RUNNING","source_root_commit"=>$argv[1],"path"=>$argv[2]];
 file_put_contents($argv[3],json_encode($data,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n");
 ' "$(git -C "${root}" rev-parse HEAD)" "${relative_path}" "${temporary}"
-    mv "${temporary}" "${evidence_path}"
+    mv "${temporary}" "${report_path}"
 
-    indexed_entry="$(git -C "${root}" ls-files --stage -- "${relative_path}")"
-    if [[ -z "${indexed_entry}" || "${indexed_entry}" == *$'\n'* ]]; then
-        echo "BLOCKED: ${label} Jieba source must have one exact index entry: ${relative_path}." >&2
-        return 1
-    fi
-    read -r indexed_mode indexed_gitlink indexed_stage indexed_path <<< "${indexed_entry}"
-    configured_path="$(git -C "${root}" config -f .gitmodules --get "submodule.${relative_path}.path")"
-    configured_url="$(git -C "${root}" config -f .gitmodules --get "submodule.${relative_path}.url")"
-    if [[ "${indexed_mode}" != 160000 \
-        || "${indexed_gitlink}" != "${JIEBA_GITLINK}" \
-        || "${indexed_stage}" != 0 \
-        || "${indexed_path}" != "${relative_path}" \
-        || "${configured_path}" != "${relative_path}" \
-        || "${configured_url}" != "${JIEBA_URL}" ]]; then
-        echo "BLOCKED: ${label} Jieba gitlink/path/URL attestation failed for ${relative_path}." >&2
-        return 1
-    fi
+    timed_host "${label}-jieba-source-initialize" 900 "${initializer}"
 
-    timed_host "${label}-jieba-submodule-sync" 120 git -C "${root}" submodule sync -- "${relative_path}"
-    timed_host "${label}-jieba-submodule-update" 900 git -C "${root}" -c protocol.version=2 \
-        submodule update --init --depth 1 -- "${relative_path}"
-    actual_gitlink="$(git -C "${root}/${relative_path}" rev-parse HEAD)"
-    if [[ "${actual_gitlink}" != "${JIEBA_GITLINK}" \
-        || -n "$(git -C "${root}/${relative_path}" status --porcelain --untracked-files=all)" ]]; then
-        echo "BLOCKED: ${label} Jieba checkout is not the clean pinned gitlink ${JIEBA_GITLINK}." >&2
-        return 1
-    fi
-
-    dictionary="${root}/${relative_path}/jieba/dict.txt"
-    license="${root}/${relative_path}/LICENSE"
     php -r '
-$dictionary=$argv[1];$license=$argv[2];
-$expected=[
- "dictionary"=>["bytes"=>(int)$argv[3],"sha256"=>$argv[4]],
- "license"=>["bytes"=>(int)$argv[5],"sha256"=>$argv[6]],
-];
-foreach([$dictionary,$license] as $path){
- if(!is_file($path)||is_link($path)){fwrite(STDERR,"Pinned Jieba runtime source is missing or linked: {$path}\n");exit(1);}
-}
-$actual=[
- "dictionary"=>["bytes"=>filesize($dictionary),"sha256"=>hash_file("sha256",$dictionary)],
- "license"=>["bytes"=>filesize($license),"sha256"=>hash_file("sha256",$license)],
-];
-if($actual!==$expected){fwrite(STDERR,"Pinned Jieba runtime source bytes do not match the attested source.\n");exit(1);}
+$manifest=json_decode((string)file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
 $data=[
  "schema"=>"jieba-source-attestation-v1","status"=>"PASS",
- "source_root_commit"=>$argv[7],"path"=>$argv[8],"url"=>$argv[9],"gitlink"=>$argv[10],
- "dictionary"=>$actual["dictionary"],"license"=>$actual["license"],
+ "source_root_commit"=>$argv[2],"path"=>$argv[3],
+ "url"=>$manifest["upstream"]["repository"],"gitlink"=>$manifest["upstream"]["commit"],
+ "dictionary"=>["bytes"=>$manifest["artifacts"]["dictionary"]["bytes"],"sha256"=>$manifest["artifacts"]["dictionary"]["sha256"]],
+ "license"=>["bytes"=>$manifest["artifacts"]["license"]["bytes"],"sha256"=>$manifest["artifacts"]["license"]["sha256"]],
 ];
-file_put_contents($argv[11],json_encode($data,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n");
-' "${dictionary}" "${license}" "${JIEBA_DICTIONARY_BYTES}" "${JIEBA_DICTIONARY_SHA256}" \
-      "${JIEBA_LICENSE_BYTES}" "${JIEBA_LICENSE_SHA256}" "$(git -C "${root}" rev-parse HEAD)" \
-      "${relative_path}" "${configured_url}" "${actual_gitlink}" "${temporary}"
-    mv "${temporary}" "${evidence_path}"
+file_put_contents($argv[4],json_encode($data,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n");
+' "${manifest}" "$(git -C "${root}" rev-parse HEAD)" "${relative_path}" "${temporary}"
+    mv "${temporary}" "${report_path}"
 }
 
 capture_host() {
@@ -829,7 +785,7 @@ start_watchdog "${WHOLE_RUN_TIMEOUT_SECONDS}" "${USR1_SIGNAL}" "${WATCHDOG_CLEAN
 
 # Install failure publication before every preflight that can fail in CI. PHP
 # is the sole exception because it serializes the machine-readable envelope.
-for command in docker git composer unzip rsync tar timeout; do
+for command in docker git composer jq unzip rsync tar timeout; do
     if ! command -v "${command}" >/dev/null 2>&1; then
         echo "BLOCKED: required command is unavailable: ${command}" >&2
         exit 1
@@ -2170,12 +2126,14 @@ timed_compose wpcli-cursor-page1 300 run --rm wpcli --url=http://wordpress --use
 WPCLI_NEXT_CURSOR="$(php -r '$p=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if(!is_string($p["next_cursor"]??null)||$p["next_cursor"]===""){exit(1);} echo $p["next_cursor"];' "${EVIDENCE_DIR}/wpcli-page-1.json")"
 timed_compose wpcli-cursor-page2 300 run --rm wpcli --url=http://wordpress --user=admin fts search 'commonalpha commonbeta commongamma' \
   --mode=OR --limit=20 --lang=en --format=json --explain \
-  --after_cursor="${WPCLI_NEXT_CURSOR}" \
+  --cursor="${WPCLI_NEXT_CURSOR}" \
+  --direction=after \
   > "${EVIDENCE_DIR}/wpcli-page-2.json"
 WPCLI_PREVIOUS_CURSOR="$(php -r '$p=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if(!is_string($p["previous_cursor"]??null)||$p["previous_cursor"]===""){exit(1);} echo $p["previous_cursor"];' "${EVIDENCE_DIR}/wpcli-page-2.json")"
 timed_compose wpcli-cursor-reverse 300 run --rm wpcli --url=http://wordpress --user=admin fts search 'commonalpha commonbeta commongamma' \
   --mode=OR --limit=20 --lang=en --format=json --explain \
-  --before_cursor="${WPCLI_PREVIOUS_CURSOR}" \
+  --cursor="${WPCLI_PREVIOUS_CURSOR}" \
+  --direction=before \
   > "${EVIDENCE_DIR}/wpcli-page-reverse.json"
 php -r '
 $first=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);

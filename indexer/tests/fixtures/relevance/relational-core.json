@@ -1,0 +1,226 @@
+{
+  "schema": "wp-fts-relational-relevance-gold-v1",
+  "name": "Relational relevance core",
+  "source": "Committed deterministic regression gate for the current relational WordPress search path.",
+  "top_k": 5,
+  "expected_metrics": {
+    "recall_at_5": 1.0,
+    "precision_at_5": 0.3,
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "cross_language_false_positives": 0,
+    "hidden_false_positives": 0
+  },
+  "documents": [
+    {
+      "id": "pl-documents-target",
+      "numeric_id": 711,
+      "language": "pl",
+      "family": "polish-morphology",
+      "visibility": "public",
+      "title": "Polskie archiwum",
+      "content": "<p>Katalog z raportami raportami wspiera wyszukiwania i szukaj.</p>"
+    },
+    {
+      "id": "pl-documents-near-miss",
+      "numeric_id": 712,
+      "language": "pl",
+      "family": "polish-morphology",
+      "visibility": "public",
+      "title": "Polska notatka poboczna",
+      "content": "<p>Notatka opisuje procedury bez rzeczownika z testowaną końcówką.</p>"
+    },
+    {
+      "id": "en-polish-documents-bait",
+      "numeric_id": 713,
+      "language": "en",
+      "family": "polish-morphology",
+      "visibility": "public",
+      "title": "English raportami quotation",
+      "content": "<p>An English glossary quotes raportami and archiwum as foreign examples.</p>"
+    },
+    {
+      "id": "de-folding-target",
+      "numeric_id": 721,
+      "language": "de",
+      "family": "german-folding",
+      "visibility": "public",
+      "title": "Ärger Öl Straße",
+      "content": "<p>Ärger Öl Straße bleiben ein deutscher Faltungsfall.</p>"
+    },
+    {
+      "id": "de-folding-near-miss",
+      "numeric_id": 722,
+      "language": "de",
+      "family": "german-folding",
+      "visibility": "public",
+      "title": "Ärger ohne Öl",
+      "content": "<p>Ärger beschreibt eine Route ohne den Straßenbegriff.</p>"
+    },
+    {
+      "id": "en-german-folding-bait",
+      "numeric_id": 723,
+      "language": "en",
+      "family": "german-folding",
+      "visibility": "public",
+      "title": "English German folding bait",
+      "content": "<p>The English article quotes Ärger Öl Straße as vocabulary examples only.</p>"
+    },
+    {
+      "id": "rest-hidden-private",
+      "numeric_id": 501,
+      "language": "en",
+      "family": "wordpress-visibility",
+      "visibility": "private",
+      "post_status": "private",
+      "title": "Private shared refill",
+      "content": "<p>shared refill shared refill shared refill shared refill hidden private.</p>"
+    },
+    {
+      "id": "rest-password",
+      "numeric_id": 502,
+      "language": "en",
+      "family": "wordpress-visibility",
+      "visibility": "password",
+      "post_password": "secret",
+      "title": "Password shared refill",
+      "content": "<p>shared refill shared refill shared refill password hidden.</p>"
+    },
+    {
+      "id": "rest-excluded-type",
+      "numeric_id": 503,
+      "language": "en",
+      "family": "wordpress-visibility",
+      "visibility": "excluded_type",
+      "post_type": "secret",
+      "title": "Excluded shared refill",
+      "content": "<p>shared refill shared refill excluded hidden.</p>"
+    },
+    {
+      "id": "rest-public",
+      "numeric_id": 504,
+      "language": "en",
+      "family": "wordpress-visibility",
+      "visibility": "public",
+      "post_status": "publish",
+      "post_type": "post",
+      "title": "Public shared refill",
+      "content": "<p>shared refill visible public.</p>"
+    },
+    {
+      "id": "rest-readable-private",
+      "numeric_id": 505,
+      "language": "en",
+      "family": "wordpress-visibility",
+      "visibility": "private_readable",
+      "post_status": "private",
+      "post_type": "post",
+      "title": "Readable private shared refill",
+      "content": "<p>shared refill readable private shared refill.</p>"
+    },
+    {
+      "id": "wp-title-rank-target",
+      "numeric_id": 701,
+      "language": "en",
+      "family": "wordpress-field-ranking",
+      "visibility": "public",
+      "title": "Editorial beacon ranking",
+      "excerpt": "Concise WordPress title-field target.",
+      "content": "<p>Body text discusses import schedules without the ranking phrase.</p>"
+    },
+    {
+      "id": "wp-excerpt-rank-secondary",
+      "numeric_id": 702,
+      "language": "en",
+      "family": "wordpress-field-ranking",
+      "visibility": "public",
+      "title": "Excerpt field note",
+      "excerpt": "Editorial beacon ranking",
+      "content": "<p>Body text discusses import schedules without the ranking phrase.</p>"
+    },
+    {
+      "id": "wp-body-rank-bait",
+      "numeric_id": 703,
+      "language": "en",
+      "family": "wordpress-field-ranking",
+      "visibility": "public",
+      "title": "Body field note",
+      "excerpt": "A short unrelated excerpt.",
+      "content": "<p>Editorial beacon ranking appears only in ordinary post body text.</p>"
+    }
+  ],
+  "queries": [
+    {
+      "id": "pl-raportami-default-stem",
+      "family": "polish-morphology",
+      "query": "raport",
+      "language": "pl",
+      "mode": "OR",
+      "limit": 5,
+      "judgments": {
+        "pl-documents-target": 3
+      },
+      "cross_language_irrelevant": [
+        "en-polish-documents-bait"
+      ],
+      "expected_ranked_ids": [
+        "pl-documents-target"
+      ]
+    },
+    {
+      "id": "de-ascii-folded-query",
+      "family": "german-folding",
+      "query": "Aerger Oel Strasse",
+      "language": "de",
+      "mode": "AND",
+      "limit": 5,
+      "judgments": {
+        "de-folding-target": 3
+      },
+      "cross_language_irrelevant": [
+        "en-german-folding-bait"
+      ],
+      "expected_ranked_ids": [
+        "de-folding-target"
+      ]
+    },
+    {
+      "id": "wp-field-title-excerpt-body-ranking",
+      "family": "wordpress-field-ranking",
+      "query": "editorial beacon ranking",
+      "language": "en",
+      "mode": "AND",
+      "limit": 5,
+      "judgments": {
+        "wp-title-rank-target": 3,
+        "wp-excerpt-rank-secondary": 2,
+        "wp-body-rank-bait": 1
+      },
+      "expected_ranked_ids": [
+        "wp-title-rank-target",
+        "wp-excerpt-rank-secondary",
+        "wp-body-rank-bait"
+      ]
+    },
+    {
+      "id": "rest-refill-limit-one",
+      "family": "wordpress-visibility",
+      "query": "shared refill",
+      "language": "en",
+      "mode": "AND",
+      "limit": 1,
+      "judgments": {
+        "rest-public": 3
+      },
+      "hidden_irrelevant": [
+        "rest-hidden-private",
+        "rest-password",
+        "rest-excluded-type",
+        "rest-readable-private"
+      ],
+      "expected_ranked_ids": [
+        "rest-public"
+      ]
+    }
+  ]
+}

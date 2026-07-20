@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 test_case('explicit MySQL physical diagnostics use one bounded six-table snapshot', function (): void {
     $fake = new WP_FTS_Test_WPDB();
-    $storage = new WP_FTS_Storage_Mysql($fake);
+    $storage = new WP_FTS_Relational_Storage($fake);
     $fake->num_queries = 0;
     $fake->prepared = [];
 
@@ -41,7 +41,7 @@ test_case('set-oriented MySQL snapshot preserves every physical damage check', f
             $fake->schemaEngines['wp_fts_documents'] = 'MyISAM';
         },
         'scope index order' => static function (WP_FTS_Test_WPDB $fake): void {
-            $fake->schemaIndexes['wp_term_relationships'][WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME] = ['object_id', 'term_taxonomy_id'];
+            $fake->schemaIndexes['wp_term_relationships'][WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME] = ['object_id', 'term_taxonomy_id'];
         },
     ];
 
@@ -49,7 +49,7 @@ test_case('set-oriented MySQL snapshot preserves every physical damage check', f
         $fake = new WP_FTS_Test_WPDB();
         $damage($fake);
         $fake->num_queries = 0;
-        $verification = (new WP_FTS_Storage_Mysql($fake))->verify_schema_and_scope_keyset_indexes();
+        $verification = (new WP_FTS_Relational_Storage($fake))->verify_schema_and_scope_keyset_indexes();
         assert_same(false, $verification['valid'] ?? null, "{$name} damage should fail the exact combined contract");
         assert_same(2, $fake->num_queries, "{$name} detection should remain two fixed metadata statements");
     }
@@ -66,7 +66,7 @@ test_case('failed physical metadata reads report unavailable instead of missing 
     wp_fts_test_mark_search_takeover_ready();
     WP_FTS_Plugin::reset_request_caches();
     try {
-        $verification = (new WP_FTS_Storage_Mysql($fake))->verify_schema_and_scope_keyset_indexes();
+        $verification = (new WP_FTS_Relational_Storage($fake))->verify_schema_and_scope_keyset_indexes();
         assert_same(false, $verification['valid'] ?? null, 'a denied metadata snapshot must fail closed');
         assert_same(false, $verification['available'] ?? null, 'a denied metadata snapshot must be explicitly unavailable');
         assert_same([], $verification['missing_tables'] ?? null, 'an unavailable snapshot must not invent missing physical tables');
@@ -84,7 +84,7 @@ test_case('failed physical metadata reads report unavailable instead of missing 
 test_case('failed MySQL capability metadata reads fail closed before the snapshot', function (): void {
     $fake = new WP_FTS_Test_WPDB();
     $fake->failReadQueryPrefix = '/* wp_fts:physical-schema-capabilities */';
-    $verification = (new WP_FTS_Storage_Mysql($fake))->verify_schema_and_scope_keyset_indexes();
+    $verification = (new WP_FTS_Relational_Storage($fake))->verify_schema_and_scope_keyset_indexes();
 
     assert_same(false, $verification['valid'] ?? null, 'denied capability metadata must not silently skip visibility or expression checks');
     assert_same(false, $verification['available'] ?? null, 'denied capability metadata must make physical verification unavailable');
@@ -107,17 +107,7 @@ test_case('operator support and diagnose stay inside fixed total statement ceili
                 'name' => 'content',
                 'text' => strtolower($title),
                 'boost' => 1.0,
-            ]], [
-                'lang' => 'en',
-                'metadata' => [
-                    'post_id' => $postId,
-                    'post_type' => $postId === 1 ? 'post' : 'page',
-                    'post_status' => 'publish',
-                    'post_date_gmt' => '2026-06-' . (17 + $postId) . ' 00:00:00',
-                    'title' => $title,
-                    'search_text' => strtolower($title),
-                ],
-            ]);
+            ]], ['document_lang' => 'en']);
         }
         wp_fts_test_mark_search_takeover_ready();
         $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
@@ -152,9 +142,9 @@ test_case('operator support and diagnose stay inside fixed total statement ceili
 });
 
 test_case_with_pdo_sqlite_fixture('SQLite physical diagnostics inspect six tables in one portable statement', function (): void {
-    $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
-    wp_fts_v4_regression_create_schema($wpdb);
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
+    wp_fts_relational_regression_create_schema($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     $wpdb->queries = [];
 
     $verification = $storage->verify_schema_and_scope_keyset_indexes();

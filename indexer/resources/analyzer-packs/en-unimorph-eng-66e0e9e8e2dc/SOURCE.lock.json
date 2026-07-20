@@ -5,8 +5,7 @@
         "language": "en",
         "kind": "lemmatizer",
         "status": "production_candidate",
-        "runtime_pack_committed": true,
-        "default_enabled": false
+        "runtime_pack_committed": true
     },
     "source": {
         "name": "UniMorph eng en inflection table",
@@ -42,10 +41,10 @@
         "path": "indexer/tools/import-unimorph-lemma-pack.php",
         "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
         "commit": "recorded-in-task-result",
-        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=en --pack-id=en-unimorph-eng-66e0e9e8e2dc --version=66e0e9e8e2dc-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/eng/blob/66e0e9e8e2dcd196da081a25a48e5c1fe3d8b49b/eng --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=en --pack-id=en-unimorph-eng-66e0e9e8e2dc --version=66e0e9e8e2dc-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/eng/blob/66e0e9e8e2dcd196da081a25a48e5c1fe3d8b49b/eng --license=CC-BY-SA-3.0 --attribution=<required-attribution>"
     },
     "runtime": {
-        "manifest_sha256": "08340b3235885a3d6615cc6d4491daba6b49543c2d7c1495f08ce9ce1533020f",
+        "manifest_sha256": "af82b9d4d552c679a31f80a39477d84ae3e96751dca99c4054331a4fdf3023c6",
         "row_count": 564805,
         "file_count": 6,
         "byte_count": 2591298,
@@ -63,8 +62,7 @@
         "unsupported_language_policy": "return_original_normalized_term"
     },
     "release": {
-        "default_enabled": false,
-        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+        "claim_boundary": "Source-backed UniMorph lemmatizer. Runtime pack is bundled and activates only through plugin configuration."
     },
     "attribution": {
         "upstream": "UniMorph eng contributors; source repository https://github.com/unimorph/eng"

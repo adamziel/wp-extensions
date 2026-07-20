@@ -14,7 +14,7 @@ such as schema version and pending queue state are managed by the plugin, and
 selected custom fields can be supplied through an option or filters. More
 advanced configuration is available to PHP callers that instantiate
 `WP_FTS_Analyzer`, `WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or
-`WP_FTS_Storage_Mysql` directly.
+`WP_FTS_Relational_Storage` directly.
 
 Fresh settings index `post`, `page`, and `attachment`. That complete built-in
 scope lets an ordinary unscoped `/?s=...` query use FTS without silently
@@ -99,7 +99,8 @@ checkboxes. Neither mode overrides a provider result. Use the compatibility
 mode to choose whether `null` from an earlier provider is a safe handoff; use
 the `wp_fts_replace_frontend_search` or
 `wp_fts_replace_admin_post_search` filters to disable a replacement surface
-entirely. Request diagnostics include the effective provider compatibility mode
+entirely. Both filters must return a native boolean. Request diagnostics include
+the effective provider compatibility mode
 plus a compact known-provider summary, and record whether Language FTS accepted
 a null handoff, preserved an earlier result, or left the whole query on core.
 They also include a bounded `posts_pre_query` hook pipeline
@@ -169,10 +170,7 @@ postings, so shorter minimums can increase database work even though statement
 count and PHP memory remain bounded.
 
 `wp fts search` accepts `--prefix_matching` to enable word-beginning expansion
-for that CLI search, plus `--prefix_min_length` / `--prefix-min-length` for the
-minimum-length override. The test-only in-memory component oracle retains its
-own expansion options, but the WordPress plugin's relational backend does not
-use them.
+for that CLI search, plus `--prefix_min_length` for the minimum-length override.
 
 ## Public REST Search
 
@@ -188,8 +186,7 @@ When enabled, the route uses the same exact set-oriented page as the PHP,
 front-end, admin, and WP-CLI adapters. It rejects more than 12 logical groups or
 12 alternatives per group, and rejects more than 12 alternatives in total before
 ranking. It returns at most 50 rows plus one lookahead row, exposes cursor
-pagination with an unknown total, and compiles current WordPress visibility into
-SQL. See
+pagination without a total, and compiles current WordPress visibility into SQL. See
 [Operations](operations.md#public-rest-search) for response and deployment
 details.
 
@@ -197,20 +194,8 @@ details.
 
 The relational WordPress backend always enforces its fixed 12-group,
 12-alternative-per-group, 12-alternative-total, 50-result, and 32-KiB
-generated-SQL limits. These are structural containment checks, not semantic candidate caps.
-A `request_budget_guard` callback can stop a request between the analyzer and
-the bounded database statements by throwing or returning `false`.
-
-`WP_FTS_Searcher::search()` retains `max_query_terms`,
-`max_prefix_expansions`, and `max_candidate_rows` only for direct callers using
-the test-only in-memory storage oracle. They do not change relational result
-membership or cause the WordPress plugin to fetch posting lists into PHP.
-
-The in-memory component oracle retains the budgeted-postings contract for tests.
-Production MySQL implements only the set-oriented search contract; posting-list
-methods are not present. A
-production request therefore cannot turn one of these component limits into a
-posting list scan followed by PHP slicing.
+generated-SQL limits. These are structural containment checks, not semantic
+result caps.
 
 ## Ranking Field Weights
 
@@ -225,7 +210,6 @@ ranking:
 | Excerpt | `2.0` | The saved post excerpt. |
 | Taxonomy terms | `2.0` | Category, tag, and other taxonomy term names. |
 | Selected custom fields | `1.0` | Custom fields selected for indexing. |
-| Rendered-only content | `1.0` | Block-rendered output not already present in saved content. |
 
 The settings accept whole numbers from `1` through `100`, matching the integer
 weighted frequencies stored in postings. Fractional values are rounded,
@@ -273,13 +257,12 @@ Primary document language resolution during `wp fts reindex` follows this
 order. This primary language is stored as document metadata and participates in
 the content hash used to decide whether unchanged documents can be skipped:
 
-1. Explicit `--lang` or `--language`.
+1. Explicit `--lang`.
 2. The plugin-owned `FTS Language` post override, loaded for the whole worker
    batch with the other selected post metadata.
 3. A Polylang assignment, then a WPML assignment, each loaded for the complete
    claimed batch with at most one indexed query per active integration.
-4. The default language from `default_lang` or `locale`, then the WordPress site
-   locale, then `en`.
+4. The component `default_lang`, then the WordPress site locale, then `en`.
 
 The bounded worker deliberately does not call Polylang
 `pll_get_post_language()` or the WPML `wpml_post_language_details` filter once
@@ -321,13 +304,13 @@ The next selectable/detectable set adds Russian (`ru`), German (`de`), Japanese
 
 | Language or partition | Routing support | Analyzer tier | Fallback and boundary |
 | --- | --- | --- | --- |
-| Polish (`pl`) | Explicit routing, detector signals, multilingual metadata, and HTML scopes. | The WordPress runtime starts with the bundled Polish lemmatizer behavior: the compressed full Polish runtime pack when gzip support is available, otherwise the fixture pack. `lemma_packs_by_lang['pl']` can replace or disable that default; `polish_stemming => 'verified'` enables a fixture-backed stemmer slice when no valid pack is active. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
+| Polish (`pl`) | Explicit routing, detector signals, multilingual metadata, and HTML scopes. | The WordPress runtime loads the bundled compressed `pl-polimorf-20180722-full` pack when gzip support is available. `lemma_packs_by_lang['pl']` can replace or disable it; without a valid pack, the conservative Polish stemmer runs. | The raw CLARIN-PL source archive and extracted TSV are not bundled. The small PoliMorf contract pack lives under `tests/fixtures/` and is never a runtime fallback. |
 | English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Selectable/detectable language partitions. | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Enable bundled packs from Settings > Full-Text Search > Analyzer packs when PHP gzip support is available, or configure pack paths through `lemma_packs_by_lang`; built-in Snowball, baseline, or no-op behavior remains the fallback when no pack is configured. |
-| Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Explicit partitions and detector evidence where present. | Optional Wamania-backed Snowball paths when Composer dependencies are installed and compliance checks accept them. | Dutch now has a source-backed UniMorph pack when configured; the Wamania path is only the no-pack fallback. Other Wamania languages stay no-op until verified against the current Snowball fixtures. |
-| Chinese (`zh`) | Selectable/detectable CJK partition. | Deterministic fallback CJK tokenization plus optional Jieba dictionary segmentation from the curated pinned runtime (or initialized source checkout during development) through `segmenter_packs_by_lang`. | Jieba is MIT source data, default-disabled outside the sandbox, and is segmentation only. Source-only custom dictionaries are not a production path. Fallback n-grams remain enabled. |
+| Catalan (`ca`), Dutch Porter (`nl`) | Explicit partitions and detector signals where present. | Wamania-backed Snowball paths from the required Composer runtime. | Dutch has a source-backed UniMorph pack when configured; the Wamania path is the no-pack fallback. Other Wamania languages stay no-op until verified against the current Snowball fixtures. |
+| Chinese (`zh`) | Selectable/detectable CJK partition. | Deterministic fallback CJK tokenization plus optional Jieba dictionary segmentation from the curated pinned runtime (or initialized source checkout during development) through `segmenter_packs_by_lang`. | Jieba is MIT source data, activates only through plugin configuration, and is segmentation only. Custom dictionaries are not supported. Fallback n-grams remain enabled. |
 | Japanese (`ja`), Korean (`ko`) | Selectable/detectable CJK/Hangul partitions. | Deterministic fallback n-gram tokenization. | No Japanese or Korean runtime lemma pack is committed because the current PHP pipeline has no source-backed word segmenter for those languages. Pinned UniMorph source submodules are retained for future external-pack work. |
 | Urdu (`ur`) | Selectable/detectable partition. | Arabic-script combining mark/harakat and tatweel normalization plus deterministic light suffix baseline for common plural-oblique forms. | UniMorph Urdu is license-blocked, so no generated Urdu pack is bundled. Persian (`fa`) is a separate partition and is not merged into Urdu routing. |
-| Generic packs | Available through `lemma_packs_by_lang`. | Local manifest-backed packs whose manifest `language` matches the configured key. | Invalid, missing, disabled, or language-mismatched packs are ignored and the built-in fallback path remains available. |
+| Generic packs | Available through `lemma_packs_by_lang`. | Local manifest-backed packs whose manifest `language` matches the configured key. | An absent entry or native `false` selects the built-in analyzer. A configured invalid, missing, or language-mismatched pack stops analyzer construction. |
 
 Morphology support must come from verified algorithms, analyzers, or
 manifest-backed lemmatizer packs. Do not model product behavior with hard-coded
@@ -373,7 +356,7 @@ runtime dictionary or the exact initialized source checkout, verifies its
 attested lookup and each range as read, emits deterministic longest-match
 segments, and keeps fallback n-grams in the same token stream. If the pinned
 runtime is missing or invalid, the adapter is ignored and fallback n-grams are
-used. Production source-only custom dictionaries are not supported.
+used. Custom dictionaries are not supported.
 The plugin does not ship a Thai tokenizer, Thai dictionary, TCC/TCC+ rules, or a
 production non-space tokenizer adapter. Any future Thai adapter must pass the
 [tokenizer source-lock](tokenizer-source-locks.md) gate first.
@@ -439,13 +422,11 @@ Stemming is enabled by default. The pipeline uses:
 - deterministic Urdu (`ur`) light stemming for common feminine, masculine,
   Arabic-loan, and plural-oblique endings, with Arabic/Persian/Urdu letters
   preserved;
-- Snowball through `wamania/php-stemmer` for optional allowlisted languages that
-  pass the bundled compliance harness when Composer dependencies are installed:
+- Snowball through the required `wamania/php-stemmer` runtime for the allowlisted
+  implementations that pass the bundled compliance harness:
   Catalan (`ca`) and Dutch Porter (`nl`);
 - a small conservative Polish suffix stemmer for `pl` by default;
-- an opt-in verified Polish fixture slice with protected ambiguous rows and
-  conservative fallback;
-- no-op behavior for unsupported languages or missing optional dependencies.
+- no-op behavior for unsupported languages.
 
 Stemming can be disabled explicitly when exact normalized terms are required:
 
@@ -455,34 +436,24 @@ $analyzer = new WP_FTS_Analyzer([
 ]);
 ```
 
-For Polish, the current mode is intentionally conservative:
+For Polish, the WordPress runtime gives the bundled full lemma pack precedence
+when gzip support is available. Without a valid pack, the conservative Polish
+stemmer runs. A framework-neutral caller can select the bundled manifest
+explicitly:
 
 ```php
 $analyzer = new WP_FTS_Analyzer([
     'default_lang' => 'pl',
-    'polish_stemming' => 'conservative',
+    'lemma_packs_by_lang' => [
+        'pl' => WP_FTS_AnalyzerPackValidator::default_polish_manifest(),
+    ],
 ]);
 ```
 
-The built-in Polish path gives a valid opt-in lemma pack precedence over the
-selected `polish_stemming` mode. If no valid pack is configured, the selected
-mode runs; unknown mode values normalize to the conservative fallback.
-
-An opt-in Polish fixture pack proves the Morfologik/PoliMorf-compatible
-dictionary lemmatizer contract without shipping a full third-party dictionary:
-
-```php
-$analyzer = new WP_FTS_Analyzer([
-    'default_lang' => 'pl',
-    'lemma_packs_by_lang' => ['pl' => true],
-]);
-```
-
-The fixture pack maps only its reviewed normalized runtime rows. Ambiguous and
-missing forms remain unchanged. If the pack is disabled, missing, or invalid,
-the analyzer uses the selected `polish_stemming` mode, which defaults to the
-existing conservative Polish suffix stemmer. Validate the fixture with
-`php tools/validate-analyzer-pack.php`.
+If the pack is disabled, missing, invalid, or unreadable without gzip, the
+conservative Polish stemmer runs. The small Morfologik/PoliMorf contract pack
+lives only under `tests/fixtures/analyzer-packs/` and is not a runtime fallback.
+Pack validation always requires an explicit manifest path.
 
 A generated full PoliMorf pack can also be supplied by path after running the
 external builder outside the repository:
@@ -523,15 +494,14 @@ Manifests with more than one runtime shard must give every shard normalized
 `first_surface` and `last_surface` values in strictly increasing,
 non-overlapping order. This structural contract lets lookup binary-select zero
 or one shard; an invalid multi-shard manifest is rejected before runtime file
-resolution instead of multiplying runtime lookup work. A single-shard
-pack may omit those ranges, but every non-eager shard still requires indexed
-gzip and a validated lookup sidecar. Only `fixture_only` packs with at most
-50,000 rows and 8 MiB of decoded runtime data use the eager unindexed path.
+resolution instead of multiplying runtime lookup work. A single-shard pack may
+omit those ranges, but every runtime shard requires indexed gzip and a validated
+lookup sidecar.
 Stable file-generation attestations are cached; generations with current or
 future timestamps are rehashed because PHP timestamps may have one-second
 resolution. Candidate attestation or read failures throw instead of silently
-storing fallback terms under the healthy pack signature. Missing, structurally
-invalid, or language-mismatched packs use the existing fallback analyzer.
+storing different terms under the healthy pack signature. Missing, structurally
+invalid, or language-mismatched configured packs stop analyzer construction.
 WordPress diagnostics hash all declared files and report digest failures as
 corrupt. Enabled packs participate in the language-pipeline signature, so
 unchanged documents are rewritten when a pack changes.
@@ -555,7 +525,7 @@ add_filter(WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER, static function (array $optio
 ```
 
 Analyzer configuration has a fixed construction envelope, independent of SQL
-budgets. At most 32 languages may be configured across aliases. One option
+budgets. At most 32 language entries may be configured. One option
 graph may contain at most 2,048 nodes, 64 KiB of scalar/key data, eight nested
 array levels, and 256 entries in any array; keys are limited to 128 bytes,
 individual scalar values and local paths to 4 KiB, and one pack option to 32
@@ -565,12 +535,7 @@ pack. All packs in one analyzer share a 128-runtime-file/16,384-lookup-block
 metadata envelope. One pack may retain at most 16 MiB of physical runtime and
 lookup files, all configured packs share a 32 MiB physical ceiling, lookup
 headers stop at 64 KiB, and each independently compressed block decodes at
-most 16 KiB. Distinct fixture packs eligible for eager loading collectively
-declare at most 50,000 rows and decode at most 8 MiB of runtime data. The row
-aggregate and the plain-runtime byte aggregate are checked from bounded manifest
-metadata before any pack is validated into a retained PHP map; compressed
-candidates consume the same decoded-byte budget during their single bounded
-validation scan. Stored options, filters,
+most 16 KiB. Stored options, filters,
 direct component callers, and callback-captured signature state all use these
 limits. An over-limit value fails search readiness before FTS SQL or
 configured-file probes rather than being truncated, partially enabled, or
@@ -593,22 +558,19 @@ analyzer options, create content, run indexing, or reindex existing content; use
 the analyzer-pack controls or the documented option/filter configuration, then
 reindex when analyzer behavior changes.
 
-`lemma_packs_by_lang` is the only lemma-pack configuration map. Explicit `false`, `null`,
-`"0"`, `"false"`, `"no"`, or `"off"` disables that configured language entry.
-Invalid, missing, and language-mismatched manifests are reported as not active
-or corrupt in analyzer-pack status. Missing or structurally invalid packs fall
-back to the built-in analyzer path. A candidate digest or indexed-read failure
-after construction fails closed so indexing cannot persist different terms
-under the configured pack's healthy signature.
+`lemma_packs_by_lang` is the only lemma-pack configuration map. A local manifest
+path enables a language entry; native `false` disables it. Invalid, missing, and
+language-mismatched manifests are reported as not active or corrupt in
+analyzer-pack status and stop analyzer construction. An absent entry or native
+`false` selects the built-in analyzer path. A candidate digest or indexed-read failure after
+construction fails closed so indexing cannot persist different terms under the
+configured pack's healthy signature.
 
-The Playground/admin sandbox preserves the bundled Polish runtime default and
-also auto-loads all bundled source-backed UniMorph packs when compressed shards
-can be read. It also tries the pinned Jieba Chinese segmenter source when the
-submodule is initialized and hash-valid. Outside the sandbox, those non-Polish
-UniMorph packs and the Jieba segmenter remain opt-in/default-disabled. `zh` is
-tokenizer/segmentation-only, `ja` and `ko` use fallback tokenizer lanes with no
-committed runtime lemma packs, and the synthetic Bengali pack remains a
-default-disabled test fixture, not product data.
+The Playground/admin sandbox uses the same runtime analyzer configuration as
+the rest of the plugin. It does not auto-enable bundled UniMorph packs or the
+Jieba segmenter. `zh` is tokenizer/segmentation-only, `ja` and `ko` use fallback
+tokenizer lanes with no committed runtime lemma packs, and the synthetic Bengali
+pack lives only under `tests/fixtures/`; it is not runtime product data.
 
 ### Optional Chinese Jieba Segmenter
 
@@ -617,18 +579,18 @@ the verified pinned dictionary, MIT license, and attested lookup. When running
 from a source checkout, initialize the pinned Jieba submodule:
 
 ```sh
-git submodule update --init --recursive components/full-text-search/resources/sources/jieba
+components/full-text-search/tools/initialize-jieba-source.sh
 ```
 
-The expected source is `https://github.com/fxsjy/jieba` at commit
-`67fa2e36e72f69d9134b8a1037b83fbb070b9775`, file `jieba/dict.txt`, SHA-256
-`7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`, byte size
-`5071852`, under the upstream MIT license. README evidence for that commit
-documents the `word frequency tag` dictionary format, default `dict.txt`
-distribution, and `cut_for_search` search-engine segmentation mode.
-The compact lookup makes pinned construction hash 329,972 bytes rather than the
-5,071,852-byte dictionary. Every requested first-codepoint range is verified and
-read at most once per segmenter instance. The complete cache retains all 337,399
+The
+[Jieba runtime manifest](../../components/full-text-search/resources/runtime/jieba/manifest.json)
+owns the upstream repository/commit and the dictionary, license, and lookup
+paths, digests, and byte sizes. The upstream README for that commit documents
+the `word frequency tag` dictionary format, default `dict.txt` distribution,
+and `cut_for_search` search-engine segmentation mode. Pinned construction
+verifies the compact lookup rather than hashing the complete dictionary. Every
+requested first-codepoint range is verified and read at most once per segmenter
+instance. The complete cache retains all 337,399
 LanguagePipeline-reachable rows across 5,628 Han prefixes and 3,013,489 word
 bytes, below its 350,000-row/8-MiB bounds. It has no prefix eviction path. One
 prefix may contain at most 5,000 candidates and one row at most 8 KiB.
@@ -651,13 +613,10 @@ update_option(WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION, [
 ```
 
 `true` means the curated pinned runtime source, or the exact initialized source
-checkout during development. Source-only custom option arrays are supported only
-for explicit component fixtures and are omitted by the WordPress runtime, so an
-ordinary request never hashes or indexes a local custom dictionary. Production
-custom dictionaries are not currently supported; adding them requires a future
-offline-built, source-bound attested sidecar contract. Reindex after enabling or
-changing the pinned segmenter because its verified source hash participates in
-the analyzer/index signature.
+checkout during development. Native `false` disables it. Custom
+dictionaries are not supported. Reindex after enabling or changing the pinned
+segmenter because its verified source hash participates in the analyzer/index
+signature.
 
 ### Importing Normalized Lemma TSV Packs
 
@@ -667,18 +626,11 @@ normalized for the target language. Each non-comment row uses
 `surface<TAB>lemma`; optional third and fourth columns may carry source tags or
 notes. The importer sorts and deduplicates rows, writes runtime shards, and
 emits `manifest.json` plus `NOTICE.txt` with source, license, attribution, and
-provenance metadata. Non-fixture imports default to and require
-`--runtime-compression=gzip`. That mode writes the runtime as independent
-concatenated gzip members plus a digest-attested offset sidecar. The sidecar
+provenance metadata. The importer always writes independent concatenated gzip
+members plus a digest-attested offset sidecar. The sidecar
 contains ranges and offsets, not a second dictionary copy. Runtime lookup
 inflates one bounded member instead of repeatedly scanning or materializing a
-whole gzip shard. `--runtime-compression=none` is available only for a
-`fixture_only` pack with at most 50,000 rows and 8 MiB of decoded runtime data;
-those rows are fully validated and loaded once into a bounded eager map. The
-importer refuses to publish a larger unindexed fixture and directs the operator
-to indexed gzip instead. One analyzer may retain at most 50,000 such eager rows
-totaling at most 8 MiB decoded across all distinct configured fixture manifests.
-Generated indexed packs are split before a shard would
+whole gzip shard. Generated packs are split before a shard would
 exceed 256 lookup blocks or its 64 KiB sidecar header. Publication also stops
 at 64 runtime files, 8,192 lookup blocks, or 16 MiB of physical runtime plus
 lookup data. Import summaries distinguish decoded runtime, encoded runtime,
@@ -735,8 +687,7 @@ php tools/import-lemma-tsv-pack.php \
   --source-url="https://example.test/source-artifact" \
   --license=CC-BY-4.0 \
   --license-url="https://creativecommons.org/licenses/by/4.0/" \
-  --attribution="Required upstream attribution text" \
-  --runtime-compression=gzip
+  --attribution="Required upstream attribution text"
 ```
 
 Validate the generated pack before configuring it:
@@ -745,25 +696,14 @@ Validate the generated pack before configuring it:
 php tools/validate-analyzer-pack.php /srv/wp-fts-packs/example-lemma-pack/manifest.json
 ```
 
-Existing gzip packs created by an older importer can add the same sidecars and
-manifest entries before validation. The retrofit rewrites gzip shards into
-independent members and updates their digests, so run it on the controlled pack
-copy that will be published. Older plain non-fixture packs must instead be
-reimported as indexed gzip; they are not activatable through a runtime scan:
-
-```sh
-php tools/build-lemma-pack-lookup-index.php \
-  --manifest=/srv/wp-fts-packs/example-lemma-pack/manifest.json
-```
-
 Real dictionary imports require source approval, license compatibility review,
 an exact source artifact URL/digest, and required attribution before running the
 importer. The repository does not vendor raw upstream source artifacts, and
-generated packs stay opt-in and default-disabled.
+generated packs activate only through plugin configuration.
 
 The repository also includes bundled source-backed UniMorph packs for `en`,
 `es`, `fr`, `hi`, `ar`, `bn`, `pt`, `id`, `ru`, `de`, `te`, `tr`, `it`,
-`fa`, `uk`, and `nl`; they remain opt-in and default-disabled. The tiny
+`fa`, `uk`, and `nl`; they activate only through plugin configuration. The tiny
 synthetic `bn` fixture remains only a project-owned runtime contract test, not
 product Bengali morphology. `zh` remains tokenizer/segmentation-only, backed by
 optional pinned Jieba source instead of copied dictionary rows; `ja` and `ko`
@@ -800,8 +740,7 @@ php tools/import-conllu-lemma-pack.php \
   --license=CC-BY-SA-4.0 \
   --license-url="https://creativecommons.org/licenses/by-sa/4.0/" \
   --source-version=2026.06 \
-  --attribution="Required upstream attribution text" \
-  --runtime-compression=gzip
+  --attribution="Required upstream attribution text"
 ```
 
 The same path is available in WordPress through WP-CLI:
@@ -816,13 +755,11 @@ wp fts import-conllu-lemma-pack \
   --source-url="https://example.test/source-artifact" \
   --license=CC-BY-SA-4.0 \
   --attribution="Required upstream attribution text" \
-  --runtime-compression=gzip \
   --enable
 ```
 
-`--source` may point to one file or a directory. WP-CLI forwards
-`--runtime-compression` to the same importer, so its generated pack has the same
-activation boundary. Directory imports recursively
+`--source` may point to one file or a directory. WP-CLI delegates to the same
+indexed-gzip compiler. Directory imports recursively
 read stable-sorted `.conllu` files. `--enable` stores the generated manifest in
 the runtime analyzer options; reindex existing content after enabling a new pack
 so stored index terms use the new lemmatizer.
@@ -853,8 +790,7 @@ php tools/import-unimorph-lemma-pack.php \
   --license=CC-BY-SA-4.0 \
   --license-url="https://creativecommons.org/licenses/by-sa/4.0/" \
   --source-version=2026.06 \
-  --attribution="Required upstream attribution text" \
-  --runtime-compression=gzip
+  --attribution="Required upstream attribution text"
 ```
 
 The same path is available in WordPress through WP-CLI:
@@ -869,46 +805,19 @@ wp fts import-unimorph-lemma-pack \
   --source-url="https://example.test/source-artifact" \
   --license=CC-BY-SA-4.0 \
   --attribution="Required upstream attribution text" \
-  --runtime-compression=gzip \
   --enable
 ```
 
-`--source` may point to one file or a directory. WP-CLI forwards
-`--runtime-compression` to the same importer, so its generated pack has the same
-activation boundary. Directory imports recursively
+`--source` may point to one file or a directory. WP-CLI delegates to the same
+indexed-gzip compiler. Directory imports recursively
 read stable-sorted `.txt`, `.tsv`, and `.unimorph` files. `--enable` stores the
 generated manifest in the runtime analyzer options; reindex existing content
 after enabling a new pack so stored index terms use the new lemmatizer.
 
-Externally generated packs stay opt-in and default-disabled. The full CLARIN-PL
+Externally generated packs activate only through plugin configuration. The full CLARIN-PL
 source archive and extracted TSV are not bundled in this repository or plugin
 package. Users or build systems that need their own external pack must generate
 and install it before assigning that external manifest to `lemma_packs_by_lang['pl']`.
-
-Enable the verified Polish stemmer slice when fixture-backed stemming is more
-important than preserving the exact default suffix-only behavior:
-
-```php
-$analyzer = new WP_FTS_Analyzer([
-    'default_lang' => 'pl',
-    'polish_stemming' => 'verified',
-]);
-```
-
-The verified mode is still a stemmer. It maps a compact set of reviewed Polish
-inflection forms to stems, protects ambiguous rows, and then falls back to the
-conservative suffix stemmer for unknown terms. It is separate from a
-Morfologik/PoliMorf lemmatizer pack, and it does not vendor a full dictionary.
-
-Disable the Polish suffix stemmer while keeping other analyzer behavior:
-
-```php
-$analyzer = new WP_FTS_Analyzer([
-    'default_lang' => 'pl',
-    'enable_stemming' => true,
-    'polish_stemming' => 'none',
-]);
-```
 
 Use a custom stemmer callback when the built-in adapters are not enough:
 
@@ -946,16 +855,16 @@ The WordPress runtime analyzer does not configure stopwords by default.
 Bulk reindexing and runtime post-save indexing both use
 `WP_FTS_PostContentExtractor`. The extractor builds weighted fields for title,
 static content, excerpt, authoritative batch-preloaded taxonomy terms and
-selected custom fields, plus product metadata used by filters, snippets, and
-CLI/REST enrichment. The production relational path does not render blocks or
-shortcodes.
+selected custom fields. It also derives a bounded plain-text snippet source from
+saved `post_content`. Result post metadata is read from canonical WordPress rows
+during page hydration.
 
 Custom fields can be selected per post without reading metadata in the filter:
 
 ```php
 add_filter(WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER, static function (array $options, object $post): array {
     if ($post->post_type === 'product') {
-        $options['custom_fields'] = ['subtitle', 'sku'];
+        $options['custom_field_keys'] = ['subtitle', 'sku'];
     }
 
     return $options;
@@ -977,8 +886,7 @@ accepted. Per-post behavior supplied by `wp_fts_post_custom_fields` or
 snapshot; when the code or external configuration behind either filter changes,
 run `wp fts reindex` or explicitly invalidate every affected post.
 
-Filters can adjust selected fields, metadata, terms, custom field values, and
-boosts:
+Filters can adjust selected fields, terms, custom-field values, and boosts:
 
 ```php
 add_filter('wp_fts_post_field_boosts', static function (array $boosts, object $post): array {
@@ -1002,36 +910,44 @@ posts when a custom-field key selected by `wp_fts_index_custom_fields`,
 a term relationship, or a term label changes. Repeated events for one post are
 coalesced in the pending queue. Custom fields supplied only to a direct
 extractor/indexer call need explicit invalidation. Direct database writes bypass
-WordPress hooks and must call
-`WP_FTS_Plugin::invalidate_post_content_dependencies()` with the affected post
-IDs after clearing the corresponding WordPress object/meta/term caches, or run a
-scoped reindex.
+WordPress hooks and must call `WP_FTS_Plugin::enqueue_posts_for_reindex()` with
+the affected post IDs after clearing the corresponding WordPress
+object/meta/term caches, or run a scoped reindex.
 
-Static block text already lives in `post_content` and is indexed without
-executing block callbacks. The bounded relational worker rejects
-`render_blocks`, `render_shortcodes`, and `render_content_callback` before any
-renderer or extractor executes. It records the typed
-`dynamic_rendering_not_set_oriented` permanent rejection and removes a stale
-derived row instead of retrying arbitrary application code.
+Static block text already present in `post_content` is indexed as persisted
+text. Index preparation does not execute block callbacks, shortcodes, or custom
+renderers. Sites that need a computed value must save bounded static text in
+`post_content` or in a selected custom field before enqueueing the post.
 
-After upgrading from a build that rendered blocks by default, run
-`wp fts reindex` for every affected post type and status to remove previously
-derived dynamic terms from unchanged documents.
+The reusable indexer prepares storage payloads; it does not mutate storage. A
+framework-neutral caller can analyze explicit weighted fields with the current
+document-language key:
 
-Sites that need a computed value should save bounded static text in
-`post_content` or in a selected custom field before enqueueing the post. The
-test-only component path keeps its explicit rendering options, but that path
-has no production relational
-query/load guarantee.
+```php
+$fields = [
+    ['name' => 'title', 'text' => 'Example', 'boost' => 5.0],
+    ['name' => 'content', 'text' => 'Searchable text', 'boost' => 1.0],
+];
+$indexer = new WP_FTS_Indexer($analyzer);
+$prepared = $indexer->prepare_document_fields(123, $fields, [
+    'document_lang' => 'en',
+]);
+```
+
+The WordPress worker owns the bounded replacement plan and relational write for
+prepared post payloads.
 
 Production relational search is deliberately limited to canonical WordPress
 posts. Its visibility SQL joins `wp_posts`, so arbitrary non-post document IDs
-are not a supported production shape. `WP_FTS_Plugin::storage()` may be used for
-reads, but mutations fail unless the plugin's shared worker lease is active.
+are not a supported production shape. The relational backend is private to the
+plugin; programmatic reads use `WP_FTS_Plugin::search_page()`.
 Programmatic integrations should add post fields through the extractor filters
-above, then call `WP_FTS_Plugin::invalidate_post_content_dependencies()` with
-at most 1,000 affected post IDs. That API publishes one bounded durable UPSERT;
-the set-oriented worker performs the serialized index replacement later.
+above, then call `WP_FTS_Plugin::enqueue_posts_for_reindex()` with at most 1,000
+affected post IDs. That API publishes one bounded durable UPSERT; the
+set-oriented worker performs the serialized index replacement later.
+Post IDs must be a list of positive native integers. The optional second
+argument accepts only `document_lang`, as an unpadded nonempty string of at most
+64 bytes; unsupported keys and scalar aliases are rejected before SQL.
 
 ## Relational Ranking And Search Options
 
@@ -1040,37 +956,32 @@ WP-CLI exposes the supported search options:
 ```sh
 wp fts search "query text" --mode=OR --limit=10 --lang=en
 wp fts search "query text" --mode=AND --limit=10 --lang=en
-wp fts search "query text" --recency_boost=0.3 --recency_boost_half_life_days=30
+wp fts search "query text" --recency_boost_strength=0.3 --recency_boost_half_life_days=30
 ```
 
 `OR` is the default and returns documents matching any query term. `AND` requires
-every query term to be present. `limit` is clamped to the supported 1–50 page
-size. The optional recency boost flags apply only to that CLI query and use the
+every query term to be present. `limit` must be an integer in the supported 1–50
+range. The optional recency boost flags apply only to that CLI query and use the
 current canonical `wp_posts.post_date_gmt` value inside the ranking statement.
 
-The WordPress plugin uses relational retrieval for every query and rejects
-legacy candidate-capping, exact-total, deep-offset, multi-language fanout, and
-arbitrary candidate-callback options before SQL. They are not accepted by
-`WP_FTS_Plugin::search()`, REST, or WP-CLI, and none of their fields appear in a
-relational explain payload.
+The WordPress plugin uses relational retrieval for every query. Its public PHP
+helpers accept one option vocabulary: `mode`, `limit`, `lang`, `cursor`,
+`direction`, `prefix_matching`, `prefix_min_length`, `post_types`,
+`post_statuses`, `date_after`,
+`date_before`, `include_metadata`, `include_snippets`, `highlight`,
+`snippet_length`, `recency_boost_strength`,
+and `recency_boost_half_life_days`. Unsupported keys are rejected
+before analysis or SQL. Direct `WP_FTS_Searcher` calls use `query_lang` in place
+of the plugin boundary's `lang` key.
 
-The test-only in-memory component oracle retains these options for component
-tests. A caller that directly constructs `WP_FTS_Searcher` with that oracle can opt into
-document-ID capping with `fast_top_k` or `approximate_top_k` plus
-`candidate_cap`/`max_candidates`. That compatibility path can omit a stronger
-document beyond the cap. Its payload therefore reports `retrieval_mode`,
-`total_is_exact`, `results_may_be_incomplete`, and `candidate_cap`, and its
-component-only explain includes `fast_mode.reason`. Those fields describe the
-test-only path; they are not WordPress production search options or
-diagnostics.
-
-The `wp_fts_search_results` filter receives only the already ranked, visible,
-page-sized rows. It may decorate a row only when it returns the same IDs in the
-same order. A return value that removes, inserts, duplicates, or reorders IDs is
-ignored as a whole. `doc_id`, score, page membership, ordering, and cursors
-therefore remain owned by the relational query. The filter cannot widen or
-narrow visibility, refill a page, request another candidate window, or trigger
-result-by-result SQL.
+```php
+$searcher = new WP_FTS_Searcher($storage, $analyzer);
+$page = $searcher->search('query text', [
+    'mode' => 'AND',
+    'query_lang' => 'en',
+    'limit' => 10,
+]);
+```
 
 ## Search Performance Budget Diagnostics
 
@@ -1081,7 +992,8 @@ values and reports whether the total search timing and the `storage/search`
 phase were within budget, over budget, disabled, or unavailable.
 
 Request diagnostics are enabled for `manage_options` users, `WP_FTS_DEBUG`,
-standard `WP_DEBUG`, or the `wp_fts_debug_enabled` filter. The plugin does not
+standard `WP_DEBUG`, or the `wp_fts_debug_enabled` filter. That filter must
+return a native boolean. The plugin does not
 enable `SAVEQUERIES`; SQL summaries appear only when the environment already
 provides `$wpdb->queries`.
 
@@ -1102,8 +1014,8 @@ Advanced operators can also filter both values:
 
 ```php
 add_filter('wp_fts_search_performance_budget', static function (array $budgets, array $trace): array {
-    $budgets['total_ms'] = 150;
-    $budgets['storage_search_ms'] = 75;
+    $budgets['total_ms'] = 150.0;
+    $budgets['storage_search_ms'] = 75.0;
 
     return $budgets;
 }, 10, 2);
@@ -1111,24 +1023,11 @@ add_filter('wp_fts_search_performance_budget', static function (array $budgets, 
 
 Values are clamped to a bounded positive millisecond range. Set either value to
 zero or a negative number to disable that specific budget without reporting a
-false over-budget status.
+false over-budget status. The filter must return exactly the two shown keys as
+finite native floats.
 
-The `k1`/`b` constructor arguments below belong only to the test-only in-memory
-component oracle. WordPress production code must use
-`WP_FTS_Searcher::for_set_oriented_storage()` and cannot select PHP BM25:
-
-```php
-$searcher = new WP_FTS_Searcher(
-    $storage,
-    $analyzer,
-    1.2, // k1: term-frequency saturation
-    0.75 // b: document-length normalization
-);
-```
-
-Snippet generation uses bounded extracted metadata stored at index time. Plain
-text is always stored, while bounded field HTML remains available for fallback
-text extraction and diagnostics. When highlighting is enabled, snippet tokens
+Snippet generation uses bounded plain text derived from saved `post_content` at
+index time. When highlighting is enabled, snippet tokens
 are analyzed before comparison, so a snippet can highlight a different
 inflected surface form when the query and candidate token normalize to the same
 analyzed key. Returned snippets contain escaped visible text and generated
@@ -1146,6 +1045,6 @@ as `wp_fts_terms` and `wp_fts_documents`. Programmatic callers can pass a custom
 prefix:
 
 ```php
-$storage = new WP_FTS_Storage_Mysql($wpdb, 'custom_');
+$storage = new WP_FTS_Relational_Storage($wpdb, 'custom_');
 $storage->create_tables();
 ```

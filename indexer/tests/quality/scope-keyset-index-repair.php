@@ -2,15 +2,15 @@
 declare(strict_types=1);
 
 test_case_with_pdo_sqlite_fixture('current-v9 dropped scope keyset schedules maintenance, repairs, and resumes the scope', function (): void {
-    $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
-    wp_fts_v4_regression_create_schema($wpdb);
-    wp_fts_v4_regression_add_source_post($wpdb, 42, '<p>repaired exact target</p>', '');
+    $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
+    wp_fts_relational_regression_create_schema($wpdb);
+    wp_fts_relational_regression_add_source_post($wpdb, 42, '<p>repaired exact target</p>', '');
     $wpdb->execute(
         'INSERT INTO wp_term_relationships (object_id,term_taxonomy_id) VALUES (?,?)',
         [42, 777]
     );
 
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     assert_same(true, $storage->verify_schema()['valid'] ?? null, 'the fixture should isolate support-index damage from the FTS tables');
     $hint = $storage->validated_targeted_scope_index_hint();
     preg_match('/INDEXED BY `([^`]+)`/', $hint, $match);
@@ -119,14 +119,14 @@ WHERE kind = 'scope'"
 });
 
 test_case_with_pdo_sqlite_fixture('current-v9 malformed scope keyset fails before selective SQL and schedules maintenance', function (): void {
-    $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
-    wp_fts_v4_regression_create_schema($wpdb);
-    wp_fts_v4_regression_add_source_post($wpdb, 52, '<p>malformed keyset target</p>', '');
+    $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
+    wp_fts_relational_regression_create_schema($wpdb);
+    wp_fts_relational_regression_add_source_post($wpdb, 52, '<p>malformed keyset target</p>', '');
     $wpdb->execute(
         'INSERT INTO wp_term_relationships (object_id,term_taxonomy_id) VALUES (?,?)',
         [52, 888]
     );
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     preg_match('/INDEXED BY `([^`]+)`/', $storage->validated_targeted_scope_index_hint(), $match);
     $targetedIndex = (string) ($match[1] ?? '');
     assert_true($targetedIndex !== '', 'the malformed-keyset fixture should resolve its targeted SQLite index');
@@ -177,9 +177,9 @@ test_case_with_pdo_sqlite_fixture('current-v9 malformed scope keyset fails befor
 });
 
 test_case_with_pdo_sqlite_fixture('current-v9 malformed filtered keyset fails in one narrow SQLite metadata read', function (): void {
-    $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
-    wp_fts_v4_regression_create_schema($wpdb);
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
+    wp_fts_relational_regression_create_schema($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     preg_match('/INDEXED BY `([^`]+)`/', $storage->validated_filtered_scope_index_hint(), $match);
     $filteredIndex = (string) ($match[1] ?? '');
     assert_true($filteredIndex !== '', 'the malformed-keyset fixture should resolve its filtered SQLite index');

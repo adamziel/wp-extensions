@@ -46,7 +46,6 @@ test_case('analyzer source-lock fixture manifest validates schema, paths, and di
     $manifest = $result['manifest'] ?? [];
     wp_fts_analyzer_source_lock_quality_assert_same('fixture-noop-en', $manifest['pack']['id'] ?? null, 'fixture pack id should remain stable');
     wp_fts_analyzer_source_lock_quality_assert_same(false, $manifest['runtime']['contains_third_party_data'] ?? null, 'fixture must not contain third-party lexical data');
-    wp_fts_analyzer_source_lock_quality_assert_same(false, $manifest['release']['default_enabled'] ?? null, 'fixture must not be default-enabled');
 });
 
 test_case('analyzer source-lock verifier rejects unsafe no-op metadata', function (): void {
@@ -57,7 +56,6 @@ test_case('analyzer source-lock verifier rejects unsafe no-op metadata', functio
     }
 
     $manifest['runtime']['contains_third_party_data'] = true;
-    $manifest['release']['default_enabled'] = true;
     $manifest['pack']['status'] = 'fixture';
     $tempPath = tempnam(sys_get_temp_dir(), 'wp-fts-source-lock-');
     if ($tempPath === false) {
@@ -83,5 +81,4 @@ test_case('analyzer source-lock verifier rejects unsafe no-op metadata', functio
     wp_fts_analyzer_source_lock_quality_assert_true(!$result['ok'], 'unsafe no-op metadata should fail validation');
     $errors = implode("\n", $result['errors']);
     wp_fts_analyzer_source_lock_quality_assert_true(str_contains($errors, 'runtime.contains_third_party_data as false'), 'unsafe no-op metadata should reject third-party data');
-    wp_fts_analyzer_source_lock_quality_assert_true(str_contains($errors, 'Only production_candidate packs may be default-enabled'), 'fixture metadata should reject default enablement');
 });

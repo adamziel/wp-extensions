@@ -2,19 +2,19 @@
 declare(strict_types=1);
 
 test_case_with_pdo_sqlite_fixture('relational cursor scores remain exact above the 32-bit PHP integer ceiling', function (): void {
-    [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
+    [$wpdb, $storage] = wp_fts_relational_regression_search_fixture();
     $groups = [];
     for ($postId = 1; $postId <= 4; $postId++) {
-        wp_fts_v4_regression_add_post($wpdb, $postId, '2026-07-19 00:00:00');
+        wp_fts_relational_regression_add_post($wpdb, $postId, '2026-07-19 00:00:00');
         $term = "rare{$postId}";
-        wp_fts_v4_regression_add_term($wpdb, $term, [$postId => 4096.0]);
+        wp_fts_relational_regression_add_term($wpdb, $term, [$postId => 4096.0]);
         $groups[] = [[
             'key' => WP_FTS_TermNamespace::namespace_term('en', $term),
             'rank' => 0,
         ]];
     }
 
-    $options = wp_fts_v4_regression_search_options(2);
+    $options = wp_fts_relational_regression_search_options(2);
     $first = $storage->search_page($groups, $options);
     assert_same([4, 3], array_column($first['results'], 'doc_id'), 'the first equal-score page should use the date/id tiebreakers');
     assert_true(is_string($first['next_cursor'] ?? null), 'the first rare-term page should issue a continuation cursor');
@@ -28,12 +28,12 @@ test_case_with_pdo_sqlite_fixture('relational cursor scores remain exact above t
     ]));
     assert_same([2, 1], array_column($second['results'], 'doc_id'), 'an above-INT32 cursor must not skip the remaining equal-score rows');
     assert_same(false, $second['has_more'], 'the second rare-term page should exhaust the four-row fixture');
-    $rankSql = wp_fts_v4_regression_last_rank_sql($wpdb);
+    $rankSql = wp_fts_relational_regression_last_rank_sql($wpdb);
     assert_contains("CAST('4096000000' AS INTEGER)", $rankSql, 'SQLite must compare the authenticated decimal boundary as an exact SQL integer');
     assert_true(!str_contains($rankSql, '2147483647'), 'cursor preparation must never clamp a SQL score to the 32-bit PHP integer ceiling');
 
-    $mysqlStorage = new WP_FTS_Storage_Mysql(new WP_FTS_Test_WPDB());
-    $buildRankQuery = new ReflectionMethod(WP_FTS_Storage_Mysql::class, 'build_rank_query');
+    $mysqlStorage = new WP_FTS_Relational_Storage(new WP_FTS_Test_WPDB());
+    $buildRankQuery = new ReflectionMethod(WP_FTS_Relational_Storage::class, 'build_rank_query');
     $rank = $buildRankQuery->invoke(
         $mysqlStorage,
         [[['term_id' => 1, 'weight' => 1000000, 'doc_freq' => 1]]],
@@ -41,9 +41,9 @@ test_case_with_pdo_sqlite_fixture('relational cursor scores remain exact above t
         null,
         'OR',
         array_replace($options, [
-            'limit' => 3,
+            'page_size' => 2,
             '_search_epoch_generation' => 1,
-            '_search_epoch_incarnation' => wp_fts_v4_regression_epoch_incarnation(),
+            '_search_epoch_incarnation' => wp_fts_relational_regression_epoch_incarnation(),
         ]),
         [
             'score' => '4096000000',
@@ -58,11 +58,11 @@ test_case_with_pdo_sqlite_fixture('relational cursor scores remain exact above t
 });
 
 test_case('relational cursor score payloads reject malformed and out-of-range decimals', function (): void {
-    $storage = new WP_FTS_Storage_Mysql(new WP_FTS_Test_WPDB());
-    $decode = new ReflectionMethod(WP_FTS_Storage_Mysql::class, 'decode_cursor');
+    $storage = new WP_FTS_Relational_Storage(new WP_FTS_Test_WPDB());
+    $decode = new ReflectionMethod(WP_FTS_Relational_Storage::class, 'decode_cursor');
     $fingerprint = str_repeat('f', 64);
 
-    foreach (['', '-1', '+1', '01', '1.0', '1e3', '2359260000001', '99999999999999'] as $score) {
+    foreach (['', '-1', '+1', '01', '1.0', '1e3', '9007199254740992', '9999999999999999'] as $score) {
         $cursor = wp_fts_cursor_score_signed_cursor($storage, $score, $fingerprint);
         $error = null;
         try {
@@ -83,18 +83,15 @@ test_case('relational cursor score payloads reject malformed and out-of-range de
     }
     assert_true($fractionalError instanceof InvalidArgumentException, 'signed JSON numbers with fractional score semantics must fail closed');
 
-    $maximum = wp_fts_cursor_score_signed_cursor($storage, '2359260000000', $fingerprint);
+    $maximum = wp_fts_cursor_score_signed_cursor($storage, '9007199254740991', $fingerprint);
     $decodedMaximum = $decode->invoke($storage, $maximum, $fingerprint);
-    assert_same('2359260000000', $decodedMaximum['score'] ?? null, 'the documented maximum SQL score must remain a portable decimal string');
+    assert_same('9007199254740991', $decodedMaximum['score'] ?? null, 'the cross-driver exact-integer ceiling must remain a portable decimal string');
 
-    $legacy = wp_fts_cursor_score_signed_cursor($storage, 123, $fingerprint);
-    $decodedLegacy = $decode->invoke($storage, $legacy, $fingerprint);
-    assert_same('123', $decodedLegacy['score'] ?? null, 'existing small JSON-integer cursors should remain usable after the portable encoding change');
 });
 
-test_case('relational cursor score ceiling follows the physical and scoring envelopes', function (): void {
-    $storage = new WP_FTS_Storage_Mysql(new WP_FTS_Test_WPDB());
-    $reflection = new ReflectionClass(WP_FTS_Storage_Mysql::class);
+test_case('relational cursor score ceiling stays exact across supported database drivers', function (): void {
+    $storage = new WP_FTS_Relational_Storage(new WP_FTS_Test_WPDB());
+    $reflection = new ReflectionClass(WP_FTS_Relational_Storage::class);
     $constant = static function (ReflectionClass $class, string $name): mixed {
         $value = $class->getReflectionConstant($name);
         if (!$value instanceof ReflectionClassConstant) {
@@ -122,9 +119,10 @@ test_case('relational cursor score ceiling follows the physical and scoring enve
             * WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_GROUPS
             * (1.0 + $maximumRecencyStrength)
     );
-    assert_same($calculatedMaximum, $cursorMaximum, 'the portable cursor ceiling must equal the maximum score the current SQL arithmetic can emit');
+    assert_same('2359260000000', $calculatedMaximum, 'the current physical and scoring envelopes must retain their measured maximum');
+    assert_same('9007199254740991', $cursorMaximum, 'the cursor ceiling must remain the largest integer every supported driver carries exactly');
 
-    $schemaContract = new ReflectionMethod(WP_FTS_Storage_Mysql::class, 'schema_contract');
+    $schemaContract = new ReflectionMethod(WP_FTS_Relational_Storage::class, 'schema_contract');
     $schema = $schemaContract->invoke($storage);
     assert_same('smallint unsigned', $schema['wp_fts_postings']['mysql_definitions']['impact']['type'] ?? null, 'the physical impact type must retain the range used by the cursor ceiling');
 });
@@ -144,11 +142,11 @@ function wp_fts_cursor_score_payload(string $cursor): array
 
 /** Build a valid cursor whose score encoding can exercise portability boundaries. */
 function wp_fts_cursor_score_signed_cursor(
-    WP_FTS_Storage_Mysql $storage,
+    WP_FTS_Relational_Storage $storage,
     mixed $score,
     string $fingerprint
 ): string {
-    $secretMethod = new ReflectionMethod(WP_FTS_Storage_Mysql::class, 'cursor_secret');
+    $secretMethod = new ReflectionMethod(WP_FTS_Relational_Storage::class, 'cursor_secret');
     $secret = (string) $secretMethod->invoke($storage);
     $json = json_encode([
         's' => $score,

@@ -15,26 +15,27 @@ foreach ($args as $arg) {
         $manifest = $arg;
         continue;
     }
-    fwrite(STDERR, "Usage: php tools/validate-analyzer-pack.php [manifest.json] [--metadata-only]\n");
+    fwrite(STDERR, "Usage: php tools/validate-analyzer-pack.php <manifest.json> [--metadata-only]\n");
     exit(1);
 }
-$manifest ??= WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest();
+if ($manifest === null) {
+    fwrite(STDERR, "Usage: php tools/validate-analyzer-pack.php <manifest.json> [--metadata-only]\n");
+    exit(1);
+}
 
 try {
     $validator = new WP_FTS_AnalyzerPackValidator();
     $result = $metadataOnly
         ? $validator->validate_metadata((string) $manifest)
-        : $validator->validate((string) $manifest, false);
+        : $validator->validate((string) $manifest);
     $summary = [
         'status' => 'ok',
         'pack_id' => $result['manifest']['pack_id'],
         'language' => $result['manifest']['language'],
         'version' => $result['manifest']['version'],
-        'fixture_only' => $result['manifest']['fixture_only'],
         'metadata_only' => $metadataOnly,
         'manifest_sha256' => $result['manifest_sha256'],
         'runtime_rows' => $result['runtime_rows'],
-        'rows_collected' => $result['rows_collected'],
         'runtime_files' => array_map(
             static fn(array $file): array => [
                 'sha256' => $file['sha256'],

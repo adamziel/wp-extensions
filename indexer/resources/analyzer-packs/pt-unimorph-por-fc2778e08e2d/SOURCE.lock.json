@@ -5,8 +5,7 @@
         "language": "pt",
         "kind": "lemmatizer",
         "status": "production_candidate",
-        "runtime_pack_committed": true,
-        "default_enabled": false
+        "runtime_pack_committed": true
     },
     "source": {
         "name": "UniMorph por pt inflection table",
@@ -42,10 +41,10 @@
         "path": "indexer/tools/import-unimorph-lemma-pack.php",
         "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
         "commit": "recorded-in-task-result",
-        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=pt --pack-id=pt-unimorph-por-fc2778e08e2d --version=fc2778e08e2d-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/por/blob/fc2778e08e2da476d9d2f27f15f218b1cbb25ad5/por --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=pt --pack-id=pt-unimorph-por-fc2778e08e2d --version=fc2778e08e2d-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/por/blob/fc2778e08e2da476d9d2f27f15f218b1cbb25ad5/por --license=CC-BY-SA-3.0 --attribution=<required-attribution>"
     },
     "runtime": {
-        "manifest_sha256": "36665ec8aa516c9adfdb8dd88596f382116962b0d0cca69f3ff8f124df21d4e7",
+        "manifest_sha256": "610a684aa602fee9f0b080a26e47871cdfb1e10bfa69a84de06767e925f1b08e",
         "row_count": 195342,
         "file_count": 2,
         "byte_count": 434842,
@@ -63,8 +62,7 @@
         "unsupported_language_policy": "return_original_normalized_term"
     },
     "release": {
-        "default_enabled": false,
-        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+        "claim_boundary": "Source-backed UniMorph lemmatizer. Runtime pack is bundled and activates only through plugin configuration."
     },
     "attribution": {
         "upstream": "UniMorph por contributors; source repository https://github.com/unimorph/por"

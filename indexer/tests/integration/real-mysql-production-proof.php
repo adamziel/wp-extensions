@@ -77,7 +77,7 @@ function wp_fts_mysql_proof_run_from_shell(): int
     return $result['exit'];
 }
 
-/** Run the production storage proof only inside the explicitly disposable site. */
+/** Run the relational storage proof only inside the explicitly disposable site. */
 function wp_fts_mysql_proof_run_inside_wordpress(): void
 {
     if (getenv(WP_FTS_MYSQL_PROOF_ALLOW_ENV) !== '1') {
@@ -102,7 +102,7 @@ function wp_fts_mysql_proof_run_inside_wordpress(): void
     $tables = wp_fts_mysql_proof_tables($prefix);
     wp_fts_mysql_proof_assert_tables($wpdb, $tables);
     wp_fts_mysql_proof_assert_schema($wpdb, $tables);
-    wp_fts_mysql_proof_assert_same(true, WP_FTS_Plugin::storage(false)->verify_schema()['valid'] ?? null, 'production schema verifier should accept the exact current relations.');
+    wp_fts_mysql_proof_assert_same(true, wp_fts_mysql_proof_storage_fixture(false)->verify_schema()['valid'] ?? null, 'production schema verifier should accept the exact current relations.');
     $tableEngines = wp_fts_mysql_proof_table_engines($wpdb, $tables);
 
     $token = wp_fts_mysql_proof_token();
@@ -153,9 +153,10 @@ function wp_fts_mysql_proof_run_inside_wordpress(): void
             '<p lang="en">queuepath ' . $token . ' queued public content</p>'
         );
         $postIds[] = $queueId;
-        (new WP_FTS_Index_Queue($wpdb))->enqueue($queueId);
-        $processed = WP_FTS_Plugin::process_queue(1);
-        wp_fts_mysql_proof_assert_same(1, $processed, 'process_queue() should process the generated queued post.');
+        (new WP_FTS_Index_Queue($wpdb))->enqueue_many([$queueId]);
+        $batch = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        $processed = (int) ($batch['queue_processed'] ?? 0);
+        wp_fts_mysql_proof_assert_same(1, $processed, 'the manual batch should process the generated queued post.');
         $fixture['queue_id'] = $queueId;
         $evidence['queue'] = ['processed' => $processed, 'post_id' => $queueId];
 
@@ -324,7 +325,7 @@ function wp_fts_mysql_proof_wpcli_probes(string $token, array $fixture): array
             (int) $fixture['visible_id'],
             'AND snippet CLI search should include the visible English post.',
         ],
-        'polish_stemming' => [
+        'polish_fallback' => [
             ['fts', 'search', 'kot', '--lang=pl', '--limit=5'],
             (int) $fixture['polish_id'],
             'Polish default stemming should match kotami for query kot.',
@@ -357,7 +358,7 @@ function wp_fts_mysql_proof_wpcli_probes(string $token, array $fixture): array
         'queued_post' => [
             ['fts', 'search', 'queuepath', '--lang=en', '--limit=5'],
             (int) $fixture['queue_id'],
-            'process_queue() indexed post should be searchable through WP-CLI.',
+            'the manually indexed post should be searchable through WP-CLI.',
         ],
     ];
 
@@ -387,30 +388,25 @@ function wp_fts_mysql_proof_rest_probes(string $token, array $fixture): array
     $expectedVisible = (int) $fixture['visible_id'];
 
     $probes = [];
-    foreach ([
-        'q_alias' => ['q' => $query],
-        'query_alias' => ['query' => $query],
-        'empty_q_uses_query' => ['q' => ' ', 'query' => $query],
-    ] as $name => $params) {
-        $response = wp_fts_mysql_proof_rest_get($base, array_merge($params, [
-            'lang' => 'en',
-            'mode' => 'AND',
-            'limit' => 1,
-        ]));
-        wp_fts_mysql_proof_assert_same(200, $response['status'], "{$name} REST probe should return HTTP 200.");
-        $docId = (int) ($response['json']['results'][0]['doc_id'] ?? 0);
-        wp_fts_mysql_proof_assert_same($expectedVisible, $docId, "{$name} REST probe should apply canonical visibility before LIMIT.");
-        $probes[$name] = ['status' => $response['status'], 'doc_id' => $docId];
-    }
+    $response = wp_fts_mysql_proof_rest_get($base, [
+        'q' => $query,
+        'lang' => 'en',
+        'mode' => 'AND',
+        'limit' => 1,
+    ]);
+    wp_fts_mysql_proof_assert_same(200, $response['status'], 'REST search should return HTTP 200.');
+    $docId = (int) ($response['json']['results'][0]['doc_id'] ?? 0);
+    wp_fts_mysql_proof_assert_same($expectedVisible, $docId, 'REST search should apply canonical visibility before LIMIT.');
+    $probes['search'] = ['status' => $response['status'], 'doc_id' => $docId];
 
-    $invalid = wp_fts_mysql_proof_rest_get($base, ['query' => 'shared', 'mode' => 'xor']);
+    $invalid = wp_fts_mysql_proof_rest_get($base, ['q' => 'shared', 'mode' => 'xor']);
     wp_fts_mysql_proof_assert_same(400, $invalid['status'], 'Invalid REST search mode should return HTTP 400.');
     wp_fts_mysql_proof_assert_same('wp_fts_invalid_mode', (string) ($invalid['json']['code'] ?? ''), 'Invalid REST mode should return wp_fts_invalid_mode.');
     $probes['invalid_mode'] = ['status' => $invalid['status'], 'code' => $invalid['json']['code'] ?? null];
 
     $start = microtime(true);
     $traffic = wp_fts_mysql_proof_rest_traffic($base, [
-        'query' => $query,
+        'q' => $query,
         'lang' => 'en',
         'mode' => 'AND',
         'limit' => 3,
@@ -638,11 +634,17 @@ function wp_fts_mysql_proof_cleanup(array $postIds): void
     if (function_exists('delete_option') && class_exists('WP_FTS_Plugin')) {
     }
     if (class_exists('WP_FTS_Plugin')) {
-        $cleanup = WP_FTS_Plugin::run_index_writer_with_lock(
+        $runWriter = new ReflectionMethod(WP_FTS_Plugin::class, 'run_index_writer_with_lock');
+        $runWriter->setAccessible(true);
+        $cleanup = $runWriter->invoke(
+            null,
             'mysql-proof-cleanup',
             static function () use ($postIds): int {
-                (new WP_FTS_Index_Queue($GLOBALS['wpdb']))->clear();
-                $storage = WP_FTS_Plugin::storage(false);
+                $workTable = wp_fts_mysql_proof_identifier($GLOBALS['wpdb']->prefix . 'fts_work');
+                if ($GLOBALS['wpdb']->query("DELETE FROM {$workTable}") === false) {
+                    throw new RuntimeException('Could not clear MySQL proof work rows.');
+                }
+                $storage = wp_fts_mysql_proof_storage_fixture(false);
                 $storage->replace_prepared_documents([], $postIds);
                 $storage->optimize();
 
@@ -1068,4 +1070,13 @@ function wp_fts_mysql_proof_skip(string $reason): int
 function wp_fts_mysql_proof_command_string(array $command): string
 {
     return implode(' ', array_map(static fn(string $arg): string => escapeshellarg($arg), $command));
+}
+
+/** Reach the private production storage factory only from this fixture. */
+function wp_fts_mysql_proof_storage_fixture(bool $ensureSchema = false): WP_FTS_Relational_Storage
+{
+    $method = new ReflectionMethod(WP_FTS_Plugin::class, 'storage');
+    $method->setAccessible(true);
+
+    return $method->invoke(null, $ensureSchema);
 }

@@ -44,8 +44,6 @@ try {
     wp_fts_arabic_fixture_true($outputPath !== null, 'Arabic output.txt or output.txt.gz fixture should exist');
 
     $stemmer = new WP_FTS_SnowballStemmer();
-    wp_fts_arabic_fixture_true($stemmer->supports_language('ar-EG'), 'Arabic locale should be advertised');
-    wp_fts_arabic_fixture_true($stemmer->is_language_available('ar'), 'Arabic should not require optional Wamania classes');
     wp_fts_arabic_fixture_true(
         str_contains($stemmer->source_identity('ar'), 'Snowball Arabic'),
         'Arabic source identity should name the Snowball variant'
@@ -91,18 +89,22 @@ try {
     );
 
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'ar']);
-    $storage = new WP_FTS_Storage_InMemory();
-    $indexer = new WP_FTS_Indexer($storage, $analyzer);
-    $indexer->index_document(969, '<p>أأباحتاهم مفيدة للبحث أأوقفتموهما بصنوكم ييئسن.</p>', ['lang' => 'ar']);
-    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $documentTerms = array_column(
+        $analyzer->analyze_content(
+            '<p>أأباحتاهم مفيدة للبحث أأوقفتموهما بصنوكم ييئسن.</p>',
+            ['document_lang' => 'ar']
+        ),
+        'term'
+    );
+    $queryTerms = $analyzer->analyze_query('اباح اقف بصن يييس بحث', ['query_lang' => 'ar']);
 
     wp_fts_arabic_fixture_same(
-        [969],
-        array_column($searcher->search('اباح اقف بصن يييس بحث', ['query_lang' => 'ar', 'mode' => 'AND']), 'doc_id'),
-        'Arabic query and document inflections should meet through the same Snowball stems'
+        [],
+        array_values(array_diff($queryTerms, $documentTerms)),
+        'Arabic document and query analysis should produce the same Snowball identities'
     );
 
-    fwrite(STDOUT, '[PASS] Arabic Snowball fixtures: ' . $lineCount . " official compressed line pairs plus analyzer/search parity\n");
+    fwrite(STDOUT, '[PASS] Arabic Snowball fixtures: ' . $lineCount . " official compressed line pairs plus document/query parity\n");
 } catch (Throwable $e) {
     fwrite(STDERR, '[FAIL] Arabic Snowball fixtures: ' . $e->getMessage() . "\n");
     exit(1);

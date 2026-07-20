@@ -13,62 +13,6 @@ an optional batch count. On this integrated branch, the standard harness and
 Composer test entry points default to a minimum of 1500 executed checks/scenarios.
 Set `WP_FTS_MIN_CHECKS` only when a local or CI lane needs an explicit override.
 
-Run the native production-scale generated-corpus benchmark directly when you need
-its counters:
-
-```sh
-php tests/production-scale-benchmark.php
-php tests/production-scale-benchmark.php --profile=expanded
-php tests/production-scale-benchmark.php --json
-php -n tests/production-scale-benchmark.php
-```
-
-The default `pr-safe` profile is small enough for the normal PHP harness, and
-the optional `expanded` profile uses a larger deterministic generated corpus.
-The output is pure-PHP generated evidence over WordPress-shaped title, body,
-excerpt, and content fields. It is not live MySQL proof, does not replay
-production traffic, and does not generate or require committed corpora, caches,
-logs, or archives.
-
-Run the deterministic native BM25 reference gate:
-
-```sh
-php tests/bm25-reference-gate.php --json
-php -n tests/bm25-reference-gate.php --json
-composer test:bm25-reference
-```
-
-The gate is also loaded by `tests/run.php`. It has no optional dependencies and
-compares a field-boosted four-document fixture against a local Lucene-style BM25
-oracle, including weighted postings, OR rankings, AND narrowing, and score
-deltas.
-
-Run the Cranfield relevance-quality gate against an operator-provided local
-corpus:
-
-```sh
-WP_FTS_CRANFIELD_DIR=/path/to/cranfield php tests/cranfield-relevance-gate.php
-php tools/build-cranfield-relevance-suite.php \
-  --cranfield-dir=/path/to/cranfield \
-  --out=/tmp/wp-fts-cranfield-suite.json
-php tests/cranfield-relevance-gate.php --suite=/tmp/wp-fts-cranfield-suite.json --json
-```
-
-No full Cranfield data is committed or downloaded by the tests. Without
-`WP_FTS_CRANFIELD_DIR`, the full-data lane is reported as pending/NO-GO while
-the synthetic parser, importer, metric, and mini-gate checks still hard-fail on
-regression.
-
-The official Cranfield document file includes a small number of records whose
-`.T`, `.A`, `.B`, and `.W` sections are all present and empty. The importer
-omits those fully empty records and also omits qrel judgments targeting them;
-partially populated records without `.W` text still fail as malformed local
-data. Numeric Cranfield ids are canonicalized before record and qrel matching,
-so official padded query ids such as `.I 001` match qrel ids such as `1`.
-When qrel query ids use the official ordinal numbering rather than the
-non-contiguous `cran.qry` record ids, the importer maps them to query record
-order only if every qrel query id is a valid ordinal.
-
 The analyzer source-lock quality test validates the synthetic no-op manifest in
 `tests/fixtures/analyzer-source-locks/` and proves unsafe no-op metadata is
 rejected. Run the verifier directly when changing manifests:
@@ -76,15 +20,6 @@ rejected. Run the verifier directly when changing manifests:
 ```sh
 php tools/validate-analyzer-source-lock.php
 ```
-
-Run the optional external BM25 reference harness:
-
-```sh
-python3 tests/bm25_lucene_reference.py
-```
-
-The reference harness requires `bm25s` in the active Python environment. It exits with
-status 2 when `bm25s` is not installed so CI can keep it as an explicit opt-in job.
 
 Run the optional real WordPress/MySQL integration harness:
 
@@ -101,7 +36,7 @@ is unavailable the command exits successfully with a `SKIP:` line so the normal
 suite remains dependency-light.
 
 The real harness creates generated temporary FTS tables, exercises `dbDelta()`
-creation/migration, binary `VARBINARY` terms and row postings through
+creation, binary `VARBINARY` terms and row postings through
 `$wpdb->prepare()`, MySQL commit/rollback behavior, a simulated activation
 schema-version write for the current baseline, and a real `wp fts reindex`
 process using `--require=tests/integration/wpcli-require.php`. It deletes its

@@ -1,7 +1,6 @@
 .git
 .gitignore
 .distignore
-.cao
 review-artifacts
 .phpunit.result.cache
 .DS_Store
@@ -19,7 +18,6 @@ tests
 + /tools/import-polish-polimorf-lemmatizer.php
 + /tools/validate-analyzer-pack.php
 + /tools/audit-top-language-lemma-packs.php
-+ /tools/build-lemma-pack-lookup-index.php
 + /tools/build-polish-polimorf-external-pack.php
 + /tools/lemma-source-import-limits.php
 + /tools/lemma-chunk-merge.php

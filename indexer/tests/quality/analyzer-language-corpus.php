@@ -396,7 +396,7 @@ test_case('quality corpus tokenizes mixed scripts punctuation numbers emoji and 
     }
 });
 
-test_case('quality corpus canonicalizes locale dialect script and malformed languages', function (): void {
+test_case('quality corpus canonicalizes locale dialect scripts and rejects malformed analyzer options', function (): void {
     $normalizer = new WP_FTS_Normalizer();
     $canonicalCases = [
         'en-us' => 'en-US',
@@ -419,9 +419,14 @@ test_case('quality corpus canonicalizes locale dialect script and malformed lang
 
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'de-DE']);
     foreach (['', 'C.UTF-8', 'POSIX', '@@@', '123', 'toolongprimary'] as $language) {
-        record_check('malformed analyzer language fallback: ' . ($language === '' ? 'empty' : $language));
-        $occurrences = $analyzer->analyze_content('<p>fallbackterm</p>', ['document_lang' => $language]);
-        assert_same(['de-DE'], wp_fts_alc_langs_by_term($occurrences)['fallbackterm'] ?? [], "fallback {$language}");
+        record_check('malformed analyzer language rejection: ' . ($language === '' ? 'empty' : $language));
+        $error = null;
+        try {
+            $analyzer->analyze_content('<p>fallbackterm</p>', ['document_lang' => $language]);
+        } catch (Throwable $caught) {
+            $error = $caught;
+        }
+        assert_true($error instanceof InvalidArgumentException, "reject malformed language {$language}");
     }
 });
 
@@ -469,9 +474,6 @@ test_case('quality corpus applies language-specific folding including no-mbstrin
 
 test_case('quality corpus exposes query occurrence output while preserving plain terms', function (): void {
     $analyzer = new WP_FTS_Analyzer();
-    // Raw source-tree bootstraps preserve the Bengali precomposed letter until
-    // Composer supplies the required Unicode normalization backend.
-    $bengaliSchoolTerm = class_exists('Normalizer') ? 'বিদ্যালয়' : 'বিদ্যালয়';
     $cases = [
         ['en-US', 'colour apple', ['color', 'appl']],
         ['en-GB', 'organise colour', ['organiz', 'color']],
@@ -479,7 +481,7 @@ test_case('quality corpus exposes query occurrence output while preserving plain
         ['de-DE', 'Straße Öl', ['strasse', 'oel']],
         ['tr-TR', 'İstanbul Iğdır', ['istanbul', 'ıgdır']],
         ['ar', 'الات الكم مفيدة للبحث', ['الات', 'الكم', 'مفيد', 'بحث']],
-        ['bn', 'বইটিকে শিক্ষকদেরকে বিদ্যালয়ের সূচিতে', ['বই', 'শিক্ষক', $bengaliSchoolTerm, 'সূচি']],
+        ['bn', 'বইটিকে শিক্ষকদেরকে বিদ্যালয়ের সূচিতে', ['বই', 'শিক্ষক', 'বিদ্যালয়', 'সূচি']],
         ['ur', 'دلوں لڑکیوں لڑکیاں لڑکے حالات معلومات', ['دلوں', 'لڑکی', 'لڑکی', 'لڑک', 'حال', 'معلوم']],
         ['zh-Hans', '中文搜索', ['中', '文', '中文', '搜', '文搜', '中文搜', '索', '搜索', '文搜索', '中文搜索']],
         ['zh-Hant', '繁體搜索', ['繁', '體', '繁體', '搜', '體搜', '繁體搜', '索', '搜索', '體搜索', '繁體搜索']],

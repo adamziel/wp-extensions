@@ -13,8 +13,9 @@ third-party lexical dataset.
 Runtime lemma packs use the local analyzer-pack manifest plus normalized
 surface-to-lemma TSV rows. New source-approved packs should use the neutral
 `wp-fts-lemma-tsv-v1` runtime format and declare the manifest `language` they
-serve. The committed synthetic Bengali fixture only proves that runtime
-contract; it is not a source lock for real Bengali lexical data.
+serve. The synthetic Bengali fixture under `tests/fixtures/analyzer-packs/`
+only proves that runtime contract; it is not shipped data or a source lock for
+real Bengali lexical data.
 
 ## Required Manifest Fields
 
@@ -46,8 +47,7 @@ fields:
   explicit behavior for unsupported, OOV, and ambiguous forms.
 - `compliance.fixture_path`: expected compliance fixture used by the review
   gate.
-- `release.default_enabled` and `release.claim_boundary`: whether the pack may
-  be enabled automatically and the exact public claim allowed by the evidence.
+- `release.claim_boundary`: the exact public claim allowed by the review record.
 
 ## Verification
 
@@ -64,8 +64,8 @@ php tools/validate-analyzer-source-lock.php tests/fixtures/analyzer-source-locks
 ```
 
 The verifier checks JSON shape, required fields, digest syntax, local fixture
-paths, committed artifact hashes, no-op row-count boundaries, default-enable
-rules, and compliance fixture shape. `tests/run.php` also loads a quality test
+paths, committed artifact hashes, no-op row-count boundaries, and compliance
+fixture shape. `tests/run.php` also loads a quality test
 that exercises the valid fixture and unsafe no-op metadata.
 
 ## Import Boundary
@@ -81,8 +81,7 @@ canonical source artifact and the review has approved:
   ambiguity policy cases, case/diacritic normalization cases, and
   query/document/search parity where applicable;
 - a release claim boundary that lists only behavior proven by the fixture gate;
-- default-enable status left false until a separate production gate approves
-  source, legal, performance, and regression evidence.
+- plugin configuration kept as the sole activation source.
 
 Unsupported languages and packs with missing source locks must keep the current
 no-op behavior and must not expand documentation or release claims.

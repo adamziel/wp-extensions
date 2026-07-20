@@ -168,7 +168,7 @@ function wp_fts_support_snapshot_seed_state(WP_FTS_Test_WPDB $fake): void
             'schema_status' => 'current',
             'schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
             'expected_schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
-            'storage_backend' => 'mysql',
+            'storage_backend' => 'relational',
         ],
     ];
 

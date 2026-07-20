@@ -4,7 +4,7 @@ declare(strict_types=1);
 /**
  * WP-CLI command surface for managing the custom FTS index.
  *
- * The command creates MySQL tables on demand, reindexes WordPress posts,
+ * The command creates relational index tables on demand, reindexes WordPress posts,
  * searches the index, schedules background queue recovery, reconciles missing
  * documents, and prunes bounded pages of empty dictionary rows.
  */
@@ -15,9 +15,7 @@ final class WP_FTS_WPCLI_Command
     private const DIAGNOSTIC_BUNDLE_SCHEMA = 'wp-fts-query-diagnostic-bundle-v2';
     private const DIAGNOSTIC_QUERY_MAX_BYTES = 512;
     private const DIAGNOSTIC_SUMMARY_MAX_BYTES = 240;
-    private const SEARCH_LANGUAGE_MAX_BYTES = 64;
     private const SEARCH_CURSOR_MAX_BYTES = 2048;
-    private const SEARCH_DIRECTION_MAX_BYTES = 8;
     private const SEARCH_FILTER_MAX_BYTES = 4096;
     private const SEARCH_FILTER_MAX_VALUES = 32;
     private const SEARCH_FILTER_VALUE_MAX_BYTES = 64;
@@ -60,19 +58,18 @@ final class WP_FTS_WPCLI_Command
      */
     public function reindex(array $args, array $assoc_args): void
     {
-        $langArg = $this->assoc_arg($assoc_args, 'lang', null);
-        $lang = $langArg !== null ? $this->language_arg($langArg) : null;
-        $postStatuses = $this->csv_arg(
-            (string) $this->assoc_arg($assoc_args, 'post_status', implode(',', self::DEFAULT_REINDEX_POST_STATUSES)),
-            self::DEFAULT_REINDEX_POST_STATUSES
-        );
-        $postTypes = $this->csv_arg(
-            (string) $this->assoc_arg($assoc_args, 'post_type', 'post'),
-            'post'
-        );
+        $lang = array_key_exists('lang', $assoc_args)
+            ? $this->language_arg($assoc_args['lang'])
+            : null;
+        $postStatuses = array_key_exists('post_status', $assoc_args)
+            ? $this->csv_arg($assoc_args['post_status'], 'post status')
+            : self::DEFAULT_REINDEX_POST_STATUSES;
+        $postTypes = array_key_exists('post_type', $assoc_args)
+            ? $this->csv_arg($assoc_args['post_type'], 'post type')
+            : ['post'];
         sort($postStatuses, SORT_STRING);
         sort($postTypes, SORT_STRING);
-        $requestedLimit = $this->non_negative_int_arg($this->assoc_arg($assoc_args, 'limit', 0), 0);
+        $requestedLimit = $this->non_negative_int_arg($this->assoc_arg($assoc_args, 'limit', 0), '--limit');
         $options = [
             'post_status' => $postStatuses,
             'post_type' => $postTypes,
@@ -159,12 +156,12 @@ final class WP_FTS_WPCLI_Command
      */
     public function search(array $args, array $assoc_args): void
     {
-        $query = (string) ($args[0] ?? '');
+        $query = $this->query_arg($args);
         $format = (string) $this->assoc_arg($assoc_args, 'format', 'table');
         $searchOptions = $this->search_options_from_cli_args($assoc_args);
         $explain = $this->bool_flag_arg($assoc_args, 'explain', false);
 
-        /** @var array{total:null,total_relation:string,has_more:bool,next_cursor:?string,previous_cursor:?string,results:array<int,array<string,mixed>>} $payload */
+        /** @var array{has_more:bool,next_cursor:?string,previous_cursor:?string,results:array<int,array<string,mixed>>} $payload */
         $payload = $explain
             ? WP_FTS_Plugin::search_with_explain($query, $searchOptions)
             : WP_FTS_Plugin::search_page($query, $searchOptions);
@@ -175,7 +172,6 @@ final class WP_FTS_WPCLI_Command
 
         $results = $payload['results'];
         foreach ($results as &$row) {
-            $row['total_relation'] = (string) ($payload['total_relation'] ?? 'unknown');
             $row['has_more'] = !empty($payload['has_more']) ? 'yes' : 'no';
             $row['next_cursor'] = is_scalar($payload['next_cursor'] ?? null) ? (string) $payload['next_cursor'] : '';
             $row['previous_cursor'] = is_scalar($payload['previous_cursor'] ?? null) ? (string) $payload['previous_cursor'] : '';
@@ -188,7 +184,7 @@ final class WP_FTS_WPCLI_Command
         }
         unset($row);
 
-        $fields = ['doc_id', 'score', 'post_id', 'post_type', 'post_status', 'post_date_gmt', 'title', 'total_relation', 'has_more', 'next_cursor', 'previous_cursor'];
+        $fields = ['doc_id', 'score', 'post_id', 'post_type', 'post_status', 'post_date_gmt', 'title', 'has_more', 'next_cursor', 'previous_cursor'];
         if ($searchOptions['include_snippets']) {
             $fields[] = 'snippet';
         }
@@ -268,7 +264,7 @@ final class WP_FTS_WPCLI_Command
      */
     public function diagnose(array $args, array $assoc_args): void
     {
-        $rawQuery = (string) ($args[0] ?? '');
+        $rawQuery = $this->query_arg($args);
         $normalizedQuery = $this->bounded_cli_text($rawQuery, 0);
         $query = $this->bounded_diagnostic_query($normalizedQuery);
         $format = (string) $this->assoc_arg($assoc_args, 'format', 'json');
@@ -284,7 +280,7 @@ final class WP_FTS_WPCLI_Command
                     'Full-text search was not run because physical schema verification did not pass.'
                 );
             }
-            /** @var array{total:null,total_relation:string,has_more:bool,next_cursor:?string,previous_cursor:?string,query_lang:string,results:array<int,array<string,mixed>>} $searchPayload */
+            /** @var array{has_more:bool,next_cursor:?string,previous_cursor:?string,query_lang:string,results:array<int,array<string,mixed>>} $searchPayload */
             $searchPayload = WP_FTS_Plugin::search_with_explain($query, $searchOptions);
         } catch (WP_FTS_Search_Budget_Exceeded $error) {
             // A diagnostic command must still describe an input that the
@@ -292,8 +288,6 @@ final class WP_FTS_WPCLI_Command
             // over-wide query reaches storage, and the bundle records the
             // stable bound instead of silently searching a different query.
             $searchPayload = [
-                'total' => null,
-                'total_relation' => 'unknown',
                 'has_more' => false,
                 'next_cursor' => null,
                 'previous_cursor' => null,
@@ -306,8 +300,6 @@ final class WP_FTS_WPCLI_Command
             // A damaged schema must remain a read-only diagnostic. Do not let
             // the search adapter discover a missing table and schedule repair.
             $searchPayload = [
-                'total' => null,
-                'total_relation' => 'unknown',
                 'has_more' => false,
                 'next_cursor' => null,
                 'previous_cursor' => null,
@@ -376,8 +368,8 @@ final class WP_FTS_WPCLI_Command
      */
     public function failed_items(array $args, array $assoc_args): void
     {
-        $postId = $this->non_negative_int_arg($this->assoc_arg($assoc_args, 'post_id', 0), 0);
-        $limit = $this->positive_int_arg($this->assoc_arg($assoc_args, 'limit', 10), 10);
+        $postId = $this->non_negative_int_arg($this->assoc_arg($assoc_args, 'post_id', 0), '--post_id');
+        $limit = $this->positive_int_arg($this->assoc_arg($assoc_args, 'limit', 10), '--limit');
 
         $this->output_assoc(WP_FTS_Plugin::failure_recovery_status($limit, $postId), $assoc_args);
     }
@@ -405,9 +397,9 @@ final class WP_FTS_WPCLI_Command
      */
     public function retry_failed_item(array $args, array $assoc_args): void
     {
-        $postId = isset($args[0]) ? $this->non_negative_int_arg($args[0], 0) : 0;
+        $postId = array_key_exists(0, $args) ? $this->non_negative_int_arg($args[0], 'post_id') : 0;
         $all = $this->bool_flag_arg($assoc_args, 'all', false);
-        $limit = $all ? $this->positive_int_arg($this->assoc_arg($assoc_args, 'limit', 10), 10) : 1;
+        $limit = $all ? $this->positive_int_arg($this->assoc_arg($assoc_args, 'limit', 10), '--limit') : 1;
         if ($postId <= 0 && !$all) {
             $this->output_assoc([
                 'schema' => 'wp-fts-failure-recovery-v1',
@@ -448,9 +440,9 @@ final class WP_FTS_WPCLI_Command
      */
     public function clear_failed_item(array $args, array $assoc_args): void
     {
-        $postId = isset($args[0]) ? $this->non_negative_int_arg($args[0], 0) : 0;
+        $postId = array_key_exists(0, $args) ? $this->non_negative_int_arg($args[0], 'post_id') : 0;
         $all = $this->bool_flag_arg($assoc_args, 'all', false);
-        $limit = $all ? $this->positive_int_arg($this->assoc_arg($assoc_args, 'limit', 10), 10) : 1;
+        $limit = $all ? $this->positive_int_arg($this->assoc_arg($assoc_args, 'limit', 10), '--limit') : 1;
         if ($postId <= 0 && !$all) {
             $this->output_assoc([
                 'schema' => 'wp-fts-failure-recovery-v1',
@@ -517,15 +509,7 @@ final class WP_FTS_WPCLI_Command
             return;
         }
 
-        $locked = WP_FTS_Plugin::run_index_writer_with_lock(
-            'wp-cli-reset-index',
-            static fn(): array => WP_FTS_Plugin::reset_index(),
-            [
-                'batch_size' => 0,
-                'indexed' => 0,
-                'record_skip' => false,
-            ]
-        );
+        $locked = WP_FTS_Plugin::reset_index_for_operator();
         if (empty($locked['acquired'])) {
             $this->warn_index_writer_locked('reset-index');
             $this->output_assoc([
@@ -573,10 +557,10 @@ final class WP_FTS_WPCLI_Command
      * ## OPTIONS
      *
      * [--batch_size=<n>]
-     * : Maximum posts to process in this command. Default: plugin manual batch setting.
+     * : Maximum posts to process in this command. Default: 100. Maximum: 1000.
      *
      * [--time_budget=<seconds>]
-     * : Time budget for this batch. Default: plugin manual time-budget setting.
+     * : Optional positive wall-clock budget. Maximum: 300. Omit it to supply no CLI deadline.
      *
      * [--format=<format>]
      * : Output format. Default: table. Supports json for automation.
@@ -588,14 +572,20 @@ final class WP_FTS_WPCLI_Command
     public function process_batch(array $args, array $assoc_args): void
     {
         $options = ['source' => 'wp-cli'];
-        $batchSize = $this->assoc_arg($assoc_args, 'batch_size', null);
-        if ($batchSize !== null) {
-            $options['batch_size'] = $this->positive_int_arg($batchSize, WP_FTS_Plugin::DEFAULT_MANUAL_INDEX_BATCH_SIZE);
+        if (array_key_exists('batch_size', $assoc_args)) {
+            $batchSize = $this->positive_int_arg($assoc_args['batch_size'], '--batch_size');
+            if ($batchSize > WP_FTS_Plugin::MAX_MANUAL_INDEX_BATCH_SIZE) {
+                throw new InvalidArgumentException('--batch_size must be at most 1000.');
+            }
+            $options['batch_size'] = $batchSize;
         }
 
-        $timeBudget = $this->assoc_arg($assoc_args, 'time_budget', null);
-        if ($timeBudget !== null) {
-            $options['time_budget'] = $this->non_negative_float_arg($timeBudget, 0.0);
+        if (array_key_exists('time_budget', $assoc_args)) {
+            $timeBudget = $this->positive_float_arg($assoc_args['time_budget'], '--time_budget');
+            if ($timeBudget > WP_FTS_Plugin::MAX_MANUAL_INDEX_TIME_BUDGET_SECONDS) {
+                throw new InvalidArgumentException('--time_budget must be at most 300 seconds.');
+            }
+            $options['time_budget'] = $timeBudget;
         }
 
         $summary = WP_FTS_Plugin::process_manual_index_batch($options);
@@ -653,7 +643,7 @@ final class WP_FTS_WPCLI_Command
      */
     public function delete(array $args, array $assoc_args): void
     {
-        $docId = (int) ($args[0] ?? 0);
+        $docId = array_key_exists(0, $args) ? $this->positive_int_arg($args[0], 'doc_id') : 0;
         $result = WP_FTS_Plugin::reconcile_cli_delete($docId);
         if (($result['status'] ?? '') === 'rejected_eligible') {
             WP_CLI::warning(
@@ -677,15 +667,7 @@ final class WP_FTS_WPCLI_Command
      */
     public function optimize(array $args, array $assoc_args): void
     {
-        $locked = WP_FTS_Plugin::run_index_writer_with_lock(
-            'wp-cli-optimize',
-            function (): int {
-                $this->storage()->optimize();
-
-                return 1;
-            },
-            ['batch_size' => 1]
-        );
+        $locked = WP_FTS_Plugin::optimize_for_operator();
         if (empty($locked['acquired'])) {
             $this->warn_index_writer_locked('optimize');
             return;
@@ -738,12 +720,6 @@ final class WP_FTS_WPCLI_Command
      * [--chunk-rows=<n>]
      * : Number of deduplicated source pairs to sort per temporary chunk.
      *
-     * [--runtime-compression=<compression>]
-     * : Runtime storage (`gzip` or `none`). Non-fixture packs default to and require indexed gzip; `none` is limited to fixtures with at most 50,000 rows and 8 MiB decoded.
-     *
-     * [--fixture-only]
-     * : Mark the generated pack as a test fixture only.
-     *
      * [--out=<path>]
      * : Output pack directory. Defaults under uploads/wp-fts-lemma-packs/<pack-id>.
      *
@@ -768,10 +744,10 @@ final class WP_FTS_WPCLI_Command
             throw new RuntimeException('Lemma pack importer did not return a manifest path.');
         }
 
-        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath, false);
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath);
         $manifest = $validation['manifest'];
-        $language = (string) ($manifest['language'] ?? $summary['language'] ?? $options['language']);
-        $packId = (string) ($manifest['pack_id'] ?? $summary['pack_id'] ?? $options['pack_id']);
+        $language = (string) $manifest['language'];
+        $packId = (string) $manifest['pack_id'];
 
         if ($enable) {
             WP_FTS_Plugin::set_runtime_lemma_pack_option($language, $manifestPath);
@@ -826,12 +802,6 @@ final class WP_FTS_WPCLI_Command
      * [--chunk-rows=<n>]
      * : Number of deduplicated source pairs to sort per temporary chunk.
      *
-     * [--runtime-compression=<compression>]
-     * : Runtime storage (`gzip` or `none`). Non-fixture packs default to and require indexed gzip; `none` is limited to fixtures with at most 50,000 rows and 8 MiB decoded.
-     *
-     * [--fixture-only]
-     * : Mark the generated pack as a test fixture only.
-     *
      * [--out=<path>]
      * : Output pack directory. Defaults under uploads/wp-fts-lemma-packs/<pack-id>.
      *
@@ -856,10 +826,10 @@ final class WP_FTS_WPCLI_Command
             throw new RuntimeException('CoNLL-U lemma pack importer did not return a manifest path.');
         }
 
-        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath, false);
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath);
         $manifest = $validation['manifest'];
-        $language = (string) ($manifest['language'] ?? $summary['language'] ?? $options['language']);
-        $packId = (string) ($manifest['pack_id'] ?? $summary['pack_id'] ?? $options['pack_id']);
+        $language = (string) $manifest['language'];
+        $packId = (string) $manifest['pack_id'];
 
         if ($enable) {
             WP_FTS_Plugin::set_runtime_lemma_pack_option($language, $manifestPath);
@@ -914,12 +884,6 @@ final class WP_FTS_WPCLI_Command
      * [--chunk-rows=<n>]
      * : Number of deduplicated source pairs to sort per temporary chunk.
      *
-     * [--runtime-compression=<compression>]
-     * : Runtime storage (`gzip` or `none`). Non-fixture packs default to and require indexed gzip; `none` is limited to fixtures with at most 50,000 rows and 8 MiB decoded.
-     *
-     * [--fixture-only]
-     * : Mark the generated pack as a test fixture only.
-     *
      * [--out=<path>]
      * : Output pack directory. Defaults under uploads/wp-fts-lemma-packs/<pack-id>.
      *
@@ -944,10 +908,10 @@ final class WP_FTS_WPCLI_Command
             throw new RuntimeException('UniMorph lemma pack importer did not return a manifest path.');
         }
 
-        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath, false);
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath);
         $manifest = $validation['manifest'];
-        $language = (string) ($manifest['language'] ?? $summary['language'] ?? $options['language']);
-        $packId = (string) ($manifest['pack_id'] ?? $summary['pack_id'] ?? $options['pack_id']);
+        $language = (string) $manifest['language'];
+        $packId = (string) $manifest['pack_id'];
 
         if ($enable) {
             WP_FTS_Plugin::set_runtime_lemma_pack_option($language, $manifestPath);
@@ -974,6 +938,12 @@ final class WP_FTS_WPCLI_Command
 
         $rows = [];
         foreach ($data as $field => $value) {
+            if (
+                is_array($value)
+                && in_array($field, ['search_provider_compatibility', 'language_pack_status'], true)
+            ) {
+                continue;
+            }
             $rows[] = [
                 'field' => (string) $field,
                 'value' => $this->format_cli_value($value),
@@ -986,8 +956,7 @@ final class WP_FTS_WPCLI_Command
     }
 
     /**
-     * Add concise human-table rows for the nested status block while preserving
-     * the original nested key for JSON and existing table consumers.
+     * Add concise human-table rows for the nested provider status block.
      *
      * @param array<string,mixed> $data
      * @return array<int,array{field:string,value:string}>
@@ -1013,8 +982,8 @@ final class WP_FTS_WPCLI_Command
             'search_provider_compatibility_mode' => $compatibility['mode'] ?? '',
             'search_provider_compatibility_label' => $compatibility['mode_label'] ?? '',
             'search_provider_compatibility_debug_value' => $compatibility['mode_debug_value'] ?? '',
-            'search_provider_compatibility_public_site_replacement' => $compatibility['public_site_replacement'] ?? '',
-            'search_provider_compatibility_admin_posts_replacement' => $compatibility['admin_posts_replacement'] ?? '',
+            'search_provider_compatibility_public_site_replacement' => !empty($compatibility['public_site_replacement_enabled']) ? 'enabled' : 'disabled',
+            'search_provider_compatibility_admin_posts_replacement' => !empty($compatibility['admin_posts_replacement_enabled']) ? 'enabled' : 'disabled',
             'search_provider_compatibility_known_provider_count' => $compatibility['known_provider_count'] ?? 0,
             'search_provider_compatibility_known_provider_names' => implode(', ', $providerNames),
             'search_provider_compatibility_recommendation' => $compatibility['recommendation'] ?? '',
@@ -1032,8 +1001,7 @@ final class WP_FTS_WPCLI_Command
     }
 
     /**
-     * Add concise human-table rows for the nested language-pack status block
-     * while preserving the original nested row for JSON and existing consumers.
+     * Add concise human-table rows for the nested language-pack status block.
      *
      * @param array<string,mixed> $data
      * @return array<int,array{field:string,value:string}>
@@ -1055,8 +1023,9 @@ final class WP_FTS_WPCLI_Command
             }
         }
 
-        $runtimeSupport = $this->bounded_cli_text($status['runtime_support_label'] ?? '', 120);
-        $matchedLanguage = $this->bounded_cli_text($status['matched_runtime_language_label'] ?? '', 80);
+        $runtime = is_array($status['runtime_support'] ?? null) ? $status['runtime_support'] : [];
+        $runtimeSupport = $this->bounded_cli_text($runtime['label'] ?? '', 120);
+        $matchedLanguage = $this->bounded_cli_text($runtime['matched_language_label'] ?? '', 80);
         if ($matchedLanguage !== '') {
             $runtimeSupport = trim($runtimeSupport . ' via ' . $matchedLanguage);
         }
@@ -1068,7 +1037,7 @@ final class WP_FTS_WPCLI_Command
         }
 
         $fields = [
-            'language_pack_site_language' => $status['site_language_label'] ?? $status['site_language'] ?? '',
+            'language_pack_site_language' => $status['site_language_label'] ?? '',
             'language_pack_runtime_support' => $runtimeSupport,
             'language_pack_active_runtime_pack_count' => $status['active_runtime_pack_count'] ?? 0,
             'language_pack_active_runtime_languages' => implode(', ', $activeLanguages),
@@ -1207,101 +1176,85 @@ final class WP_FTS_WPCLI_Command
     private function search_options_from_cli_args(array $assoc_args): array
     {
         $modeArg = $this->assoc_arg($assoc_args, 'mode', 'OR');
-        if (!is_scalar($modeArg) || strlen((string) $modeArg) > self::SEARCH_DIRECTION_MAX_BYTES) {
-            throw new InvalidArgumentException('Search mode may contain at most 8 bytes.');
-        }
-        $limitArg = $this->assoc_arg($assoc_args, 'limit', 10);
-        if (!is_scalar($limitArg) || (is_string($limitArg) && strlen($limitArg) > 64)) {
-            throw new InvalidArgumentException('Search limit must be a bounded scalar value.');
+        if (!is_string($modeArg) || !in_array($modeArg, ['OR', 'AND'], true)) {
+            throw new InvalidArgumentException('Search mode must be exactly OR or AND.');
         }
         $searchOptions = [
-            'mode' => (string) $modeArg,
-            'limit' => min(
-                WP_FTS_Plugin::MAX_SEARCH_LIMIT,
-                $this->positive_int_arg($limitArg, 10)
+            'mode' => $modeArg,
+            'limit' => $this->search_integer_arg(
+                $this->assoc_arg($assoc_args, 'limit', 10),
+                'limit',
+                1,
+                WP_FTS_Plugin::MAX_SEARCH_LIMIT
             ),
             'include_metadata' => true,
-            'include_snippets' => array_key_exists('snippet', $assoc_args),
+            'include_snippets' => $this->bool_flag_arg($assoc_args, 'snippet', false),
         ];
-        foreach (['explain'] as $switchKey) {
-            if (!array_key_exists($switchKey, $assoc_args)) {
-                continue;
-            }
-            $switchValue = $assoc_args[$switchKey];
-            if (!is_scalar($switchValue) || (is_string($switchValue) && strlen($switchValue) > 16)) {
-                throw new InvalidArgumentException("Search {$switchKey} options must be bounded scalar values.");
-            }
-        }
-        $langArg = $this->assoc_arg($assoc_args, 'lang', null);
-        if ($langArg !== null) {
-            $searchOptions['lang'] = $this->language_arg($langArg);
+        $this->bool_flag_arg($assoc_args, 'explain', false);
+        if (array_key_exists('lang', $assoc_args)) {
+            $searchOptions['lang'] = $this->language_arg($assoc_args['lang']);
         }
 
-        $postStatus = $this->assoc_arg($assoc_args, 'post_status', null);
-        if ($postStatus !== null) {
-            $searchOptions['post_statuses'] = $this->search_csv_arg($postStatus, 'post status');
+        if (array_key_exists('post_status', $assoc_args)) {
+            $searchOptions['post_statuses'] = $this->search_csv_arg($assoc_args['post_status'], 'post status');
         }
-        $postType = $this->assoc_arg($assoc_args, 'post_type', null);
-        if ($postType !== null) {
-            $searchOptions['post_types'] = $this->search_csv_arg($postType, 'post type');
+        if (array_key_exists('post_type', $assoc_args)) {
+            $searchOptions['post_types'] = $this->search_csv_arg($assoc_args['post_type'], 'post type');
         }
-        $after = $this->assoc_arg($assoc_args, 'after', null);
-        if ($after !== null) {
-            if (!is_scalar($after) || strlen((string) $after) > self::SEARCH_FILTER_VALUE_MAX_BYTES) {
-                throw new InvalidArgumentException('Search after dates may contain at most 64 bytes.');
+        if (array_key_exists('after', $assoc_args)) {
+            $after = $assoc_args['after'];
+            if (!is_string($after) || trim($after) === '' || trim($after) !== $after || strlen($after) > self::SEARCH_FILTER_VALUE_MAX_BYTES) {
+                throw new InvalidArgumentException('Search after dates must be non-empty strings containing at most 64 bytes.');
             }
-            $searchOptions['date_after'] = (string) $after;
+            $searchOptions['date_after'] = $after;
         }
-        $before = $this->assoc_arg($assoc_args, 'before', null);
-        if ($before !== null) {
-            if (!is_scalar($before) || strlen((string) $before) > self::SEARCH_FILTER_VALUE_MAX_BYTES) {
-                throw new InvalidArgumentException('Search before dates may contain at most 64 bytes.');
+        if (array_key_exists('before', $assoc_args)) {
+            $before = $assoc_args['before'];
+            if (!is_string($before) || trim($before) === '' || trim($before) !== $before || strlen($before) > self::SEARCH_FILTER_VALUE_MAX_BYTES) {
+                throw new InvalidArgumentException('Search before dates must be non-empty strings containing at most 64 bytes.');
             }
-            $searchOptions['date_before'] = (string) $before;
+            $searchOptions['date_before'] = $before;
         }
-        $recencyStrength = $this->assoc_arg($assoc_args, 'recency_boost_strength', null);
-        if ($recencyStrength !== null) {
-            $searchOptions['recency_boost_strength'] = $recencyStrength;
+        if (array_key_exists('recency_boost_strength', $assoc_args)) {
+            $searchOptions['recency_boost_strength'] = $this->search_float_arg($assoc_args['recency_boost_strength'], 'recency boost strength');
         }
-        $recencyHalfLife = $this->assoc_arg($assoc_args, 'recency_boost_half_life_days', null);
-        if ($recencyHalfLife !== null) {
-            $searchOptions['recency_boost_half_life_days'] = $recencyHalfLife;
+        if (array_key_exists('recency_boost_half_life_days', $assoc_args)) {
+            $searchOptions['recency_boost_half_life_days'] = $this->search_float_arg($assoc_args['recency_boost_half_life_days'], 'recency boost half-life');
         }
-        $prefixMatching = $this->assoc_arg($assoc_args, 'prefix_matching', null);
-        if ($prefixMatching !== null) {
-            if (!is_scalar($prefixMatching) || (is_string($prefixMatching) && strlen($prefixMatching) > 16)) {
-                throw new InvalidArgumentException('Search prefix matching options must be bounded scalar values.');
+        if (array_key_exists('prefix_matching', $assoc_args)) {
+            $searchOptions['prefix_matching'] = $this->explicit_cli_boolean($assoc_args['prefix_matching'], 'Search prefix matching');
+        }
+        if (array_key_exists('prefix_min_length', $assoc_args)) {
+            $prefixMinLength = $assoc_args['prefix_min_length'];
+            $prefixMinLength = $this->search_integer_arg(
+                $prefixMinLength,
+                'prefix minimum length',
+                1,
+                PHP_INT_MAX
+            );
+            if (WP_FTS_Plugin::sanitize_prefix_min_length($prefixMinLength) !== $prefixMinLength) {
+                throw new InvalidArgumentException('Search prefix minimum length is outside the supported range.');
             }
-            $searchOptions['prefix_matching'] = $this->truthy_cli_value($prefixMatching);
+            $searchOptions['prefix_min_length'] = $prefixMinLength;
         }
-        $prefixMinLength = $this->assoc_arg($assoc_args, 'prefix_min_length', null);
-        if ($prefixMinLength !== null) {
-            if (!is_scalar($prefixMinLength) || (is_string($prefixMinLength) && strlen($prefixMinLength) > 64)) {
-                throw new InvalidArgumentException('Search prefix minimum options must be bounded scalar values.');
-            }
-            $searchOptions['prefix_min_length'] = WP_FTS_Plugin::sanitize_prefix_min_length($prefixMinLength);
-        }
-        $cursor = $this->assoc_arg($assoc_args, 'cursor', null);
-        if ($cursor !== null) {
-            if (!is_scalar($cursor) || strlen((string) $cursor) > self::SEARCH_CURSOR_MAX_BYTES) {
-                throw new InvalidArgumentException('Search cursor must be a scalar value containing at most 2,048 bytes.');
-            }
-            $cursor = trim((string) $cursor);
-            if ($cursor === '') {
-                throw new InvalidArgumentException('Search cursor must be non-empty.');
+        if (array_key_exists('cursor', $assoc_args)) {
+            $cursor = $assoc_args['cursor'];
+            if (!is_string($cursor)
+                || trim($cursor) === ''
+                || trim($cursor) !== $cursor
+                || strlen($cursor) > self::SEARCH_CURSOR_MAX_BYTES
+            ) {
+                throw new InvalidArgumentException('Search cursor must be an unpadded non-empty string containing at most 2,048 bytes.');
             }
             $searchOptions['cursor'] = $cursor;
         }
-        $directionArg = $this->assoc_arg($assoc_args, 'direction', null);
-        if (!is_scalar($directionArg ?? 'after') || strlen((string) ($directionArg ?? 'after')) > self::SEARCH_DIRECTION_MAX_BYTES) {
-            throw new InvalidArgumentException('Search cursor direction may contain at most 8 bytes.');
-        }
-        $direction = strtolower(trim((string) ($directionArg ?? 'after')));
-        if (!in_array($direction, ['after', 'before'], true)) {
-            throw new InvalidArgumentException('Search cursor direction must be after or before.');
-        }
-        if ($directionArg !== null && !isset($searchOptions['cursor'])) {
+        $directionSupplied = array_key_exists('direction', $assoc_args);
+        if ($directionSupplied && !isset($searchOptions['cursor'])) {
             throw new InvalidArgumentException('--direction requires --cursor.');
+        }
+        $direction = $directionSupplied ? $assoc_args['direction'] : 'after';
+        if (!is_string($direction) || !in_array($direction, ['after', 'before'], true)) {
+            throw new InvalidArgumentException('Search cursor direction must be exactly after or before.');
         }
         if (isset($searchOptions['cursor'])) {
             $searchOptions['direction'] = $direction;
@@ -1365,19 +1318,22 @@ final class WP_FTS_WPCLI_Command
         $runtimeSupport = is_array($languagePack['runtime_support'] ?? null)
             ? $languagePack['runtime_support']
             : [];
+        $lock = is_array($operatorStatus['lock'] ?? null) ? $operatorStatus['lock'] : [];
         $schedule = is_array($operatorStatus['queue_processor_schedule'] ?? null)
             ? $operatorStatus['queue_processor_schedule']
             : [];
         $explainStorage = is_scalar($explain['storage'] ?? null) ? (string) $explain['storage'] : '';
         $pendingWork = !empty($operatorStatus['has_more'])
             || max(0, (int) ($operatorStatus['pending_queue_count'] ?? 0)) > 0
-            || max(0, (int) ($operatorStatus['remaining_count'] ?? 0)) > 0
+            || max(0, (int) ($operatorStatus['pending_post_work_count'] ?? 0)) > 0
+            || max(0, (int) ($operatorStatus['pending_scope_work_count'] ?? 0)) > 0
+            || !empty($operatorStatus['reconciliation_active'])
+            || !empty($operatorStatus['profile_reconciliation_pending'])
             || !empty($schedule['pending_work']);
         $schemaStatus = is_scalar($operatorStatus['schema_status'] ?? null) ? (string) $operatorStatus['schema_status'] : '';
 
         return [
             'returned_count' => count($results),
-            'total_relation' => $this->bounded_cli_text($searchPayload['total_relation'] ?? 'unknown', 40),
             'has_more' => !empty($searchPayload['has_more']),
             'next_cursor_available' => is_scalar($searchPayload['next_cursor'] ?? null) && (string) $searchPayload['next_cursor'] !== '',
             'previous_cursor_available' => is_scalar($searchPayload['previous_cursor'] ?? null) && (string) $searchPayload['previous_cursor'] !== '',
@@ -1394,19 +1350,18 @@ final class WP_FTS_WPCLI_Command
                 'known_provider_summary' => $this->bounded_cli_text($compatibility['known_provider_summary'] ?? '', self::DIAGNOSTIC_SUMMARY_MAX_BYTES),
             ],
             'runtime_language_pack_support' => [
-                'status' => $this->bounded_cli_text($runtimeSupport['status'] ?? ($languagePack['runtime_support_status'] ?? ''), 80),
-                'label' => $this->bounded_cli_text($runtimeSupport['label'] ?? ($languagePack['runtime_support_label'] ?? ''), 120),
-                'full' => (bool) ($runtimeSupport['full'] ?? ($languagePack['runtime_support_full'] ?? false)),
-                'reason' => $this->bounded_cli_text($runtimeSupport['reason'] ?? ($languagePack['runtime_support_reason'] ?? ''), self::DIAGNOSTIC_SUMMARY_MAX_BYTES),
-                'matched_language' => $this->bounded_cli_text($runtimeSupport['matched_language'] ?? ($languagePack['matched_runtime_language'] ?? ''), 40),
+                'status' => $this->bounded_cli_text($runtimeSupport['status'] ?? '', 80),
+                'label' => $this->bounded_cli_text($runtimeSupport['label'] ?? '', 120),
+                'full' => (bool) ($runtimeSupport['full'] ?? false),
+                'reason' => $this->bounded_cli_text($runtimeSupport['reason'] ?? '', self::DIAGNOSTIC_SUMMARY_MAX_BYTES),
+                'matched_language' => $this->bounded_cli_text($runtimeSupport['matched_language'] ?? '', 40),
             ],
-            'lock_state' => $this->bounded_cli_text($operatorStatus['lock_state'] ?? '', 40),
-            'lock_active' => (bool) ($operatorStatus['lock_active'] ?? false),
+            'lock_state' => $this->bounded_cli_text($lock['state'] ?? '', 40),
+            'lock_active' => (bool) ($lock['active'] ?? false),
             'index_stale' => $schemaStatus !== 'current' || !empty($operatorStatus['reconciliation_active']),
             'pending_work' => $pendingWork,
             'pending_queue_count' => max(0, (int) ($operatorStatus['pending_queue_count'] ?? 0)),
             'pending_queue_count_relation' => $this->bounded_cli_text($operatorStatus['pending_queue_count_relation'] ?? 'exact', 20),
-            'remaining_count' => null,
             'reconciliation_active' => (bool) ($operatorStatus['reconciliation_active'] ?? false),
             'profile_reconciliation_pending' => (bool) ($operatorStatus['profile_reconciliation_pending'] ?? false),
             'pending_post_work_count' => max(0, (int) ($operatorStatus['pending_post_work_count'] ?? 0)),
@@ -1493,7 +1448,6 @@ final class WP_FTS_WPCLI_Command
 
         $rows = [
             'returned_count' => $summary['returned_count'] ?? 0,
-            'total_relation' => $summary['total_relation'] ?? 'unknown',
             'has_more' => $summary['has_more'] ?? false,
             'next_cursor_available' => $summary['next_cursor_available'] ?? false,
             'previous_cursor_available' => $summary['previous_cursor_available'] ?? false,
@@ -1521,7 +1475,6 @@ final class WP_FTS_WPCLI_Command
             'pending_work' => $summary['pending_work'] ?? false,
             'pending_queue_count' => $summary['pending_queue_count'] ?? 0,
             'pending_queue_count_relation' => $summary['pending_queue_count_relation'] ?? 'exact',
-            'remaining_count' => $summary['remaining_count'] ?? 0,
             'reconciliation_active' => $summary['reconciliation_active'] ?? false,
             'profile_reconciliation_pending' => $summary['profile_reconciliation_pending'] ?? false,
             'pending_post_work_count' => $summary['pending_post_work_count'] ?? 0,
@@ -1570,18 +1523,14 @@ final class WP_FTS_WPCLI_Command
             $text = $this->json_payload(is_array($value) ? $value : []);
         }
 
-        $text = class_exists('WP_FTS_Utf8') ? WP_FTS_Utf8::repair($text) : $text;
+        $text = WP_FTS_Utf8::repair($text);
         $text = trim(str_replace(["\r", "\n", "\t"], ' ', $text));
         $text = preg_replace('/\s+/', ' ', $text) ?? $text;
         if ($maxBytes <= 0 || strlen($text) <= $maxBytes) {
             return $text;
         }
 
-        if (class_exists('WP_FTS_Utf8')) {
-            return rtrim(WP_FTS_Utf8::truncate_bytes($text, max(0, $maxBytes - 3))) . '...';
-        }
-
-        return rtrim(substr($text, 0, max(0, $maxBytes - 3))) . '...';
+        return rtrim(WP_FTS_Utf8::truncate_bytes($text, max(0, $maxBytes - 3))) . '...';
     }
 
     /** Trim ordinary support queries before analyzer-level limits run. */
@@ -1612,32 +1561,12 @@ final class WP_FTS_WPCLI_Command
         return $query;
     }
 
-    /**
-     * Create MySQL storage, optionally ensuring required tables exist.
-     *
-     * @return WP_FTS_Storage_Mysql Ready-to-use storage backend.
-     * @throws RuntimeException When `$wpdb` is unavailable.
-     */
-    private function storage(bool $ensureSchema = true): WP_FTS_Storage_Mysql
+    /** Parse a supplied comma-separated reindex filter into a non-empty list. */
+    private function csv_arg(mixed $value, string $name): array
     {
-        global $wpdb;
-
-        if (!isset($wpdb) || !is_object($wpdb)) {
-            throw new RuntimeException('WP-CLI command requires $wpdb.');
+        if (!is_string($value) || trim($value) === '') {
+            throw new InvalidArgumentException("Reindex {$name} filters must be a non-empty string.");
         }
-
-        return WP_FTS_Plugin::storage($ensureSchema);
-    }
-
-    /**
-     * Parse a comma-separated WP-CLI option into a non-empty list.
-     *
-     * Empty input falls back to a single default item.
-     *
-     * @return string[]
-     */
-    private function csv_arg(string $value, string|array $fallback): array
-    {
         if (strlen($value) > self::REINDEX_FILTER_MAX_BYTES) {
             throw new InvalidArgumentException('Reindex filters may contain at most 4,096 bytes.');
         }
@@ -1648,7 +1577,7 @@ final class WP_FTS_WPCLI_Command
             }
             $item = trim($item);
             if ($item === '') {
-                continue;
+                throw new InvalidArgumentException("Reindex {$name} filters must not contain empty values.");
             }
             $items[$item] = true;
             if (count($items) > self::REINDEX_FILTER_MAX_VALUES) {
@@ -1656,24 +1585,24 @@ final class WP_FTS_WPCLI_Command
             }
         }
 
-        return $items === [] ? (is_array($fallback) ? $fallback : [$fallback]) : array_keys($items);
+        return array_keys($items);
     }
 
     /** Parse a public search filter without first expanding an unbounded CSV. */
     private function search_csv_arg(mixed $value, string $name): array
     {
-        if (!is_scalar($value) || strlen((string) $value) > self::SEARCH_FILTER_MAX_BYTES) {
+        if (!is_string($value) || trim($value) === '' || strlen($value) > self::SEARCH_FILTER_MAX_BYTES) {
             throw new InvalidArgumentException("Search {$name} filters may contain at most 4,096 bytes.");
         }
 
         $items = [];
-        foreach (explode(',', (string) $value) as $item) {
+        foreach (explode(',', $value) as $item) {
             if (strlen($item) > self::SEARCH_FILTER_VALUE_MAX_BYTES) {
                 throw new InvalidArgumentException("Each search {$name} filter may contain at most 64 bytes.");
             }
             $item = trim($item);
             if ($item === '') {
-                continue;
+                throw new InvalidArgumentException("Search {$name} filters must not contain empty values.");
             }
             $items[$item] = true;
             if (count($items) > self::SEARCH_FILTER_MAX_VALUES) {
@@ -1681,13 +1610,96 @@ final class WP_FTS_WPCLI_Command
             }
         }
 
-        return $items === [] ? [''] : array_keys($items);
+        return array_keys($items);
+    }
+
+    /** Parse a finite numeric WP-CLI search option before entering the PHP facade. */
+    private function search_float_arg(mixed $value, string $name): float
+    {
+        if (is_string($value)) {
+            if (strlen($value) > 64 || !$this->is_canonical_decimal($value)) {
+                throw new InvalidArgumentException("Search {$name} must be a finite number.");
+            }
+            $number = (float) $value;
+        } elseif (is_int($value) || is_float($value)) {
+            $number = (float) $value;
+        } else {
+            throw new InvalidArgumentException("Search {$name} must be a finite number.");
+        }
+        if (!is_finite($number)) {
+            throw new InvalidArgumentException("Search {$name} must be a finite number.");
+        }
+
+        return $number;
+    }
+
+    /** Parse one exact integer for the strict PHP search facade. */
+    private function search_integer_arg(mixed $value, string $name, int $minimum, int $maximum): int
+    {
+        if (is_string($value)) {
+            if (
+                $value === ''
+                || strlen($value) > 64
+                || strspn($value, '0123456789') !== strlen($value)
+                || (strlen($value) > 1 && $value[0] === '0')
+            ) {
+                throw new InvalidArgumentException("Search {$name} must be a canonical decimal integer.");
+            }
+            $value = (int) $value;
+        }
+        if (!is_int($value) || $value < $minimum || $value > $maximum) {
+            throw new InvalidArgumentException("Search {$name} must be an integer from {$minimum} through {$maximum}.");
+        }
+
+        return $value;
+    }
+
+    /** @param array<string,mixed> $assoc_args */
+    private function bool_flag_arg(array $assoc_args, string $name, bool $default): bool
+    {
+        if (!array_key_exists($name, $assoc_args)) {
+            return $default;
+        }
+
+        return $this->explicit_cli_boolean($assoc_args[$name], "--{$name}");
+    }
+
+    /** Parse only explicit boolean spellings accepted by WP-CLI. */
+    private function explicit_cli_boolean(mixed $value, string $name): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value) && ($value === 0 || $value === 1)) {
+            return $value === 1;
+        }
+        if (is_string($value) && strlen($value) <= 16) {
+            $value = strtolower($value);
+            if (in_array($value, ['1', 'true', 'yes', 'on'], true)) {
+                return true;
+            }
+            if (in_array($value, ['0', 'false', 'no', 'off'], true)) {
+                return false;
+            }
+        }
+
+        throw new InvalidArgumentException("{$name} must be an explicit boolean.");
     }
 
     /** Return one associated argument or its default. */
     private function assoc_arg(array $assoc_args, string $name, mixed $default): mixed
     {
         return array_key_exists($name, $assoc_args) ? $assoc_args[$name] : $default;
+    }
+
+    /** Require exactly one native-string query positional argument. */
+    private function query_arg(array $args): string
+    {
+        if (array_keys($args) !== [0] || !is_string($args[0])) {
+            throw new InvalidArgumentException('Search commands require exactly one string query argument.');
+        }
+
+        return $args[0];
     }
 
     /**
@@ -1713,23 +1725,25 @@ final class WP_FTS_WPCLI_Command
             'attribution' => $this->optional_assoc_string($assoc_args, 'attribution', $sourceName),
         ];
 
-        $out = $this->assoc_arg($assoc_args, 'out', null);
-        $options['out'] = $out !== null && is_scalar($out) && trim((string) $out) !== ''
-            ? (string) $out
+        $options['out'] = array_key_exists('out', $assoc_args)
+            ? $this->optional_assoc_string($assoc_args, 'out', '')
             : $this->default_lemma_pack_output_dir($packId);
 
         foreach ([
             'license_url' => 'license-url',
             'source_version' => 'source-version',
             'tmp_dir' => 'tmp-dir',
+        ] as $importerKey => $cliName) {
+            if (array_key_exists($cliName, $assoc_args)) {
+                $options[$importerKey] = $this->optional_assoc_string($assoc_args, $cliName, '');
+            }
+        }
+        foreach ([
             'max_rows_per_file' => 'max-rows-per-file',
             'chunk_rows' => 'chunk-rows',
-            'runtime_compression' => 'runtime-compression',
-            'fixture_only' => 'fixture-only',
         ] as $importerKey => $cliName) {
-            $value = $this->assoc_arg($assoc_args, $cliName, null);
-            if ($value !== null) {
-                $options[$importerKey] = $value;
+            if (array_key_exists($cliName, $assoc_args)) {
+                $options[$importerKey] = $this->positive_int_arg($assoc_args[$cliName], "--{$cliName}");
             }
         }
 
@@ -1742,11 +1756,11 @@ final class WP_FTS_WPCLI_Command
     private function required_assoc_string(array $assoc_args, string $name, string $displayName): string
     {
         $value = $this->assoc_arg($assoc_args, $name, null);
-        if (!is_scalar($value) || trim((string) $value) === '') {
+        if (!is_string($value) || trim($value) === '') {
             throw new RuntimeException("Missing required option --{$displayName}.");
         }
 
-        return (string) $value;
+        return $value;
     }
 
     /**
@@ -1754,45 +1768,15 @@ final class WP_FTS_WPCLI_Command
      */
     private function optional_assoc_string(array $assoc_args, string $name, string $default): string
     {
-        $value = $this->assoc_arg($assoc_args, $name, null);
-        if (!is_scalar($value) || trim((string) $value) === '') {
+        if (!array_key_exists($name, $assoc_args)) {
             return $default;
         }
-
-        return (string) $value;
-    }
-
-    /**
-     * Resolve a boolean WP-CLI flag, accepting explicit false-like values for tests.
-     *
-     * @param array<string,mixed> $assoc_args
-     */
-    private function bool_flag_arg(array $assoc_args, string $name, bool $default): bool
-    {
-        $value = $this->assoc_arg($assoc_args, $name, null);
-        if ($value === null) {
-            return $default;
-        }
-        if (is_bool($value)) {
-            return $value;
-        }
-        if (is_scalar($value)) {
-            return $this->truthy_cli_value($value);
+        $value = $assoc_args[$name];
+        if (!is_string($value) || trim($value) === '') {
+            throw new InvalidArgumentException("--{$name} must be a non-empty string.");
         }
 
-        return $default;
-    }
-
-    private function truthy_cli_value(mixed $value): bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-        if (!is_scalar($value)) {
-            return false;
-        }
-
-        return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
+        return $value;
     }
 
     private function default_lemma_pack_output_dir(string $packId): string
@@ -1831,66 +1815,96 @@ final class WP_FTS_WPCLI_Command
     /**
      * Resolve and canonicalize a CLI language option.
      *
-     * A scalar non-empty option wins. Otherwise the command falls back to
-     * WordPress site language and finally the storage default `und`.
-     *
      * @param mixed $value Raw WP-CLI option value.
      * @return string Canonical language partition.
      */
     private function language_arg(mixed $value): string
     {
-        if (!is_scalar($value)) {
-            throw new InvalidArgumentException('Language options must be scalar values.');
-        }
-        $language = (string) $value;
-        if (strlen($language) > self::SEARCH_LANGUAGE_MAX_BYTES) {
-            throw new InvalidArgumentException('Language options may contain at most 64 bytes.');
-        }
-        if (trim($language) !== '') {
-            return WP_FTS_TermNamespace::canonicalize_lang($language);
-        }
+        return WP_FTS_TermNamespace::parse_language_tag($value);
+    }
 
-        if (function_exists('get_locale')) {
-            $locale = get_locale();
-            if (is_string($locale) && $locale !== '') {
-                return WP_FTS_TermNamespace::canonicalize_lang($locale);
+    /** Parse a canonical positive WP-CLI integer. */
+    private function positive_int_arg(mixed $value, string $name): int
+    {
+        return $this->unsigned_int_arg($value, $name, 1);
+    }
+
+    /** Parse a canonical nonnegative WP-CLI integer. */
+    private function non_negative_int_arg(mixed $value, string $name): int
+    {
+        return $this->unsigned_int_arg($value, $name, 0);
+    }
+
+    /** Parse only a finite positive WP-CLI decimal. */
+    private function positive_float_arg(mixed $value, string $name): float
+    {
+        if (is_string($value)) {
+            if (strlen($value) > 64 || !$this->is_canonical_decimal($value)) {
+                throw new InvalidArgumentException("{$name} must be a canonical positive decimal.");
             }
+            $number = (float) $value;
+        } elseif (is_int($value) || is_float($value)) {
+            $number = (float) $value;
+        } else {
+            throw new InvalidArgumentException("{$name} must be a canonical positive decimal.");
+        }
+        if (!is_finite($number) || $number <= 0.0) {
+            throw new InvalidArgumentException("{$name} must be a canonical positive decimal.");
         }
 
-        if (function_exists('get_bloginfo')) {
-            $siteLang = get_bloginfo('language');
-            if (is_string($siteLang) && $siteLang !== '') {
-                return WP_FTS_TermNamespace::canonicalize_lang($siteLang);
+        return $number;
+    }
+
+    /** Accept unsigned decimal notation without signs, exponents, or padding. */
+    private function is_canonical_decimal(string $value): bool
+    {
+        if ($value === '') {
+            return false;
+        }
+        $dot = strpos($value, '.');
+        if ($dot === false) {
+            $integer = $value;
+            $fraction = null;
+        } else {
+            if ($dot === 0 || $dot === strlen($value) - 1 || strpos($value, '.', $dot + 1) !== false) {
+                return false;
             }
+            $integer = substr($value, 0, $dot);
+            $fraction = substr($value, $dot + 1);
+        }
+        if (strspn($integer, '0123456789') !== strlen($integer)
+            || ($fraction !== null && strspn($fraction, '0123456789') !== strlen($fraction))
+        ) {
+            return false;
         }
 
-        return WP_FTS_TermNamespace::DEFAULT_LANG;
+        return strlen($integer) === 1 || $integer[0] !== '0';
     }
 
-    /**
-     * Parse an integer option and clamp it to at least one.
-     */
-    private function positive_int_arg(mixed $value, int $fallback): int
+    /** Parse a canonical unsigned decimal string or native integer. */
+    private function unsigned_int_arg(mixed $value, string $name, int $minimum): int
     {
-        $number = is_numeric($value) ? (int) $value : $fallback;
-        return max(1, $number);
-    }
+        if (is_string($value)) {
+            if ($value === ''
+                || strlen($value) > 20
+                || strspn($value, '0123456789') !== strlen($value)
+                || (strlen($value) > 1 && $value[0] === '0')
+            ) {
+                throw new InvalidArgumentException("{$name} must be a canonical unsigned decimal integer.");
+            }
+            $number = (int) $value;
+            if ((string) $number !== $value) {
+                throw new InvalidArgumentException("{$name} exceeds the supported integer range.");
+            }
+        } elseif (is_int($value)) {
+            $number = $value;
+        } else {
+            throw new InvalidArgumentException("{$name} must be a canonical unsigned decimal integer.");
+        }
+        if ($number < $minimum) {
+            throw new InvalidArgumentException("{$name} must be at least {$minimum}.");
+        }
 
-    /**
-     * Parse an integer option and clamp it to zero or greater.
-     */
-    private function non_negative_int_arg(mixed $value, int $fallback): int
-    {
-        $number = is_numeric($value) ? (int) $value : $fallback;
-        return max(0, $number);
-    }
-
-    /**
-     * Parse a floating-point option and clamp it to zero or greater.
-     */
-    private function non_negative_float_arg(mixed $value, float $fallback): float
-    {
-        $number = is_numeric($value) ? (float) $value : $fallback;
-        return max(0.0, $number);
+        return $number;
     }
 }

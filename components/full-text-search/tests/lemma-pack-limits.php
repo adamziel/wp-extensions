@@ -51,12 +51,11 @@ function wp_fts_lemma_limit_analysis_terms(
 }
 
 /**
- * @param array<int,array{path:string,contents:string,compression?:string,lookup?:bool,block_rows?:int}> $files
+ * @param array<int,array{path:string,contents:string,block_rows?:int}> $files
  */
 function wp_fts_lemma_limit_write_pack(
     string $directory,
     array $files,
-    bool $fixtureOnly,
     string $language = 'qaa'
 ): string
 {
@@ -66,7 +65,7 @@ function wp_fts_lemma_limit_write_pack(
     $totalDigest = hash_init('sha256');
     $totalRows = 0;
 
-    foreach ($files as $number => $file) {
+    foreach ($files as $file) {
         $relativePath = 'runtime/' . $file['path'];
         $path = $directory . '/' . $relativePath;
         $contents = $file['contents'];
@@ -76,42 +75,36 @@ function wp_fts_lemma_limit_write_pack(
         }
         $totalRows += count($rows);
 
-        if (($file['compression'] ?? null) === 'gzip') {
-            $encoded = gzencode($contents, 9, ZLIB_ENCODING_GZIP);
-            if (!is_string($encoded)) {
-                throw new RuntimeException('Could not encode a lemma-cap gzip fixture.');
-            }
-            file_put_contents($path, $encoded);
-        } else {
-            file_put_contents($path, $contents);
+        $encoded = gzencode($contents, 9, ZLIB_ENCODING_GZIP);
+        if (!is_string($encoded)) {
+            throw new RuntimeException('Could not encode a lemma-cap gzip fixture.');
         }
+        file_put_contents($path, $encoded);
+        $runtimeSha256 = hash_file('sha256', $path);
+        if (!is_string($runtimeSha256)) {
+            throw new RuntimeException('Could not hash a lemma-cap gzip fixture.');
+        }
+        $lookupPath = $path . '.lookup';
+        $lookup = WP_FTS_LemmaPackLookupIndex::build(
+            $path,
+            $runtimeSha256,
+            $lookupPath,
+            (int) ($file['block_rows'] ?? 2)
+        );
         $entry = [
             'path' => $relativePath,
-            'sha256' => hash_file('sha256', $path),
+            'sha256' => $lookup['runtime_sha256'],
             'rows' => count($rows),
             'first_surface' => explode("\t", $rows[0], 2)[0],
             'last_surface' => explode("\t", $rows[count($rows) - 1], 2)[0],
-        ];
-        if (($file['compression'] ?? null) === 'gzip') {
-            $entry['compression'] = 'gzip';
-        }
-        if (($file['lookup'] ?? false) === true) {
-            $lookupPath = $path . '.lookup';
-            $lookup = WP_FTS_LemmaPackLookupIndex::build(
-                $path,
-                'gzip',
-                (string) $entry['sha256'],
-                $lookupPath,
-                (int) ($file['block_rows'] ?? 2)
-            );
-            $entry['sha256'] = $lookup['runtime_sha256'];
-            $entry['lookup'] = [
+            'compression' => 'gzip',
+            'lookup' => [
                 'format' => $lookup['format'],
                 'path' => $relativePath . '.lookup',
                 'sha256' => $lookup['sha256'],
                 'blocks' => $lookup['blocks'],
-            ];
-        }
+            ],
+        ];
         $runtimeFiles[] = $entry;
     }
 
@@ -120,8 +113,6 @@ function wp_fts_lemma_limit_write_pack(
         'pack_id' => 'qaa-lemma-cap-' . basename($directory),
         'language' => $language,
         'version' => 'test-v1',
-        'fixture_only' => $fixtureOnly,
-        'default_enabled' => false,
         'capabilities' => ['dictionary-lemmatizer', 'ambiguous-form-noop', 'normalized-runtime-rows'],
         'runtime' => [
             'format' => WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV,
@@ -142,7 +133,7 @@ function wp_fts_lemma_limit_write_pack(
         'attribution' => ['notice_path' => 'NOTICE.txt'],
         'provenance' => [
             'no_runtime_network_access' => true,
-            'no_full_third_party_dictionary_dump' => $fixtureOnly,
+            'no_full_third_party_dictionary_dump' => true,
         ],
     ];
     $path = $directory . '/manifest.json';
@@ -226,33 +217,304 @@ try {
     $twelveRows = $runtimeRows($twelveLemmas);
     $thirteenRows = $runtimeRows($thirteenLemmas);
 
-    $eagerManifest = wp_fts_lemma_limit_write_pack($root . '/eager', [
-        ['path' => '0001.tsv', 'contents' => $twelveRows],
-    ], true);
-    $eagerPack = WP_FTS_LanguageLemmaPack::from_manifest_file($eagerManifest);
+    $indexedManifest = wp_fts_lemma_limit_write_pack($root . '/indexed', [
+        ['path' => '0001.tsv.gz', 'contents' => $twelveRows],
+    ]);
+    $indexedManifestData = json_decode(
+        (string) file_get_contents($indexedManifest),
+        true,
+        512,
+        JSON_THROW_ON_ERROR
+    );
+
+    $discovery = new ReflectionMethod(
+        WP_FTS_AnalyzerPackValidator::class,
+        'validated_manifest_paths_by_language'
+    );
+    $discovery->setAccessible(true);
     wp_fts_lemma_limit_check(
-        wp_fts_lemma_limit_analysis_terms($eagerPack, 'qaasurface', 'qab') === ['qaasurface'],
+        $discovery->invoke(null, [$indexedManifest]) === ['qaa' => $indexedManifest],
+        'bundled-pack discovery must retain a manifest only after strict shared validation'
+    );
+
+    mkdir($root . '/malformed-discovery', 0777, true);
+    $malformedDiscoveryManifest = $root . '/malformed-discovery/manifest.json';
+    file_put_contents($malformedDiscoveryManifest, "{\n");
+    $malformedDiscoveryError = wp_fts_lemma_limit_caught(
+        static fn(): array => $discovery->invoke(null, [$malformedDiscoveryManifest])
+    );
+    wp_fts_lemma_limit_check(
+        $malformedDiscoveryError instanceof RuntimeException,
+        'bundled-pack discovery must fail instead of hiding malformed manifest JSON'
+    );
+
+    $duplicateManifest = wp_fts_lemma_limit_write_pack($root . '/duplicate-language', [
+        ['path' => '0001.tsv.gz', 'contents' => "qaasurface\tqaasurface\n"],
+    ]);
+    $duplicateDiscoveryError = wp_fts_lemma_limit_caught(
+        static fn(): array => $discovery->invoke(null, [$indexedManifest, $duplicateManifest])
+    );
+    wp_fts_lemma_limit_check(
+        $duplicateDiscoveryError instanceof RuntimeException
+            && str_contains($duplicateDiscoveryError->getMessage(), 'duplicate language qaa'),
+        'bundled-pack discovery must reject duplicate canonical languages instead of keeping the last path'
+    );
+
+    $shapeCases = [];
+    $candidate = $indexedManifestData;
+    $candidate['unsupported'] = true;
+    $shapeCases['root object'] = [$candidate, 'unsupported field'];
+    $candidate = $indexedManifestData;
+    $candidate['pack_id'] = ' qaa-indexed-limit';
+    $shapeCases['padded pack id'] = [$candidate, 'unpadded non-empty string'];
+    $candidate = $indexedManifestData;
+    $candidate['version'] = "fixture-v1\n";
+    $shapeCases['padded version'] = [$candidate, 'unpadded non-empty string'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['unsupported'] = true;
+    $shapeCases['runtime object'] = [$candidate, 'unsupported field'];
+    $candidate = $indexedManifestData;
+    $candidate['source']['unsupported'] = true;
+    $shapeCases['source object'] = [$candidate, 'unsupported field'];
+    $candidate = $indexedManifestData;
+    $candidate['license']['unsupported'] = true;
+    $shapeCases['license object'] = [$candidate, 'unsupported field'];
+    $candidate = $indexedManifestData;
+    $candidate['attribution']['unsupported'] = true;
+    $shapeCases['attribution object'] = [$candidate, 'unsupported field'];
+    $candidate = $indexedManifestData;
+    $candidate['provenance']['unsupported'] = true;
+    $shapeCases['provenance object'] = [$candidate, 'unsupported field'];
+    $candidate = $indexedManifestData;
+    $candidate['source']['file'] = 1;
+    $shapeCases['source optional string'] = [$candidate, 'source file must be an unpadded nonempty string'];
+    $candidate = $indexedManifestData;
+    $candidate['license']['notice_required'] = 1;
+    $shapeCases['license optional boolean'] = [$candidate, 'notice_required must be a boolean'];
+    $candidate = $indexedManifestData;
+    $candidate['attribution']['upstream'] = 1;
+    $shapeCases['attribution sibling type'] = [$candidate, 'attribution upstream must be an unpadded nonempty string'];
+    $candidate = $indexedManifestData;
+    $candidate['provenance']['importer'] = 1;
+    $shapeCases['provenance optional string'] = [$candidate, 'provenance importer must be an unpadded nonempty string'];
+    $candidate = $indexedManifestData;
+    $candidate['source']['files'] = [[
+        'path' => 'source.tsv',
+        'sha256' => str_repeat('a', 64),
+        'byte_count' => 1,
+        'unsupported' => true,
+    ]];
+    $shapeCases['source file object'] = [$candidate, 'unsupported field'];
+    $candidate = $indexedManifestData;
+    $candidate['source']['column_model'] = [
+        'format' => 'normalized-lemma-tsv-v1',
+        'surface_column' => 0,
+        'lemma_column' => 1,
+        'tag_column' => 2,
+        'source_note_column' => 3,
+        'unsupported' => 4,
+    ];
+    $shapeCases['source column model'] = [$candidate, 'unsupported field'];
+    $candidate = $indexedManifestData;
+    $candidate['source']['parse_stats'] = ['unsupported' => 1];
+    $shapeCases['source parse stats'] = [$candidate, 'unsupported field'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['normalization'] = 'some normalizer';
+    $shapeCases['mismatched normalization contract'] = [$candidate, 'WP_FTS_Normalizer qaa with fold_diacritics=true'];
+    $candidate = $indexedManifestData;
+    $candidate['source']['artifact_sha256'] = strtoupper($candidate['source']['artifact_sha256']);
+    $shapeCases['uppercase source digest'] = [$candidate, 'lowercase 64-character hex digest'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['total_sha256'] = strtoupper($candidate['runtime']['total_sha256']);
+    $shapeCases['uppercase aggregate digest'] = [$candidate, 'lowercase 64-character hex digest'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['files'][0]['sha256'] = strtoupper($candidate['runtime']['files'][0]['sha256']);
+    $shapeCases['uppercase runtime digest'] = [$candidate, 'lowercase 64-character hex digest'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['files'][0]['lookup']['sha256'] = strtoupper(
+        $candidate['runtime']['files'][0]['lookup']['sha256']
+    );
+    $shapeCases['uppercase lookup digest'] = [$candidate, 'lowercase 64-character hex digest'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['files'][0]['unsupported'] = true;
+    $shapeCases['runtime file object'] = [$candidate, 'unsupported field'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['files'][0]['path'] .= ' ';
+    $shapeCases['padded runtime path'] = [$candidate, 'relative unpadded non-empty string'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['files'][0]['first_surface'] = null;
+    $shapeCases['nonnative first surface'] = [$candidate, 'unpadded non-empty string'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['files'][0]['last_surface'] = null;
+    $shapeCases['nonnative last surface'] = [$candidate, 'unpadded non-empty string'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['files'][0]['lookup']['unsupported'] = true;
+    $shapeCases['lookup object'] = [$candidate, 'unsupported field'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['files'][0]['lookup']['path'] .= "\n";
+    $shapeCases['padded lookup path'] = [$candidate, 'relative unpadded non-empty string'];
+    $candidate = $indexedManifestData;
+    unset($candidate['runtime']['total_rows']);
+    $shapeCases['missing aggregate row count'] = [$candidate, 'total_rows is required'];
+    $candidate = $indexedManifestData;
+    unset($candidate['runtime']['total_sha256']);
+    $shapeCases['missing aggregate digest'] = [$candidate, 'total_sha256 is required'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['total_rows']++;
+    $shapeCases['mismatched aggregate row count'] = [$candidate, 'total_rows mismatch'];
+    $candidate = $indexedManifestData;
+    $candidate['runtime']['files'] = ['primary' => $candidate['runtime']['files'][0]];
+    $shapeCases['associative runtime file collection'] = [$candidate, 'must list runtime files'];
+    $candidate = $indexedManifestData;
+    $candidate['language'] = 'QAA';
+    $shapeCases['noncanonical language'] = [$candidate, 'must already be canonical'];
+    $candidate = $indexedManifestData;
+    $candidate['language'] = 'qaa ';
+    $shapeCases['padded language'] = [$candidate, 'must be a valid language tag'];
+    $candidate = $indexedManifestData;
+    $candidate['language'] = 'en-a';
+    $shapeCases['malformed language'] = [$candidate, 'must be a valid language tag'];
+    $candidate = $indexedManifestData;
+    $candidate['capabilities'] = ['primary' => 'dictionary-lemmatizer'];
+    $shapeCases['associative capabilities'] = [$candidate, 'must be a string list'];
+    $candidate = $indexedManifestData;
+    $candidate['capabilities'][] = 1;
+    $shapeCases['nonnative capability'] = [$candidate, 'unpadded nonempty strings'];
+    $candidate = $indexedManifestData;
+    $candidate['capabilities'][] = ' padded-capability';
+    $shapeCases['padded capability'] = [$candidate, 'unpadded nonempty strings'];
+    $candidate = $indexedManifestData;
+    $candidate['capabilities'][] = 'dictionary-lemmatizer';
+    $shapeCases['duplicate capability'] = [$candidate, 'must not contain duplicates'];
+    $candidate = $indexedManifestData;
+    $candidate['provenance']['no_runtime_network_access'] = 1;
+    $shapeCases['coercible network-access declaration'] = [$candidate, 'must declare no runtime network access'];
+    foreach ($shapeCases as $description => [$candidate, $message]) {
+        $candidatePath = dirname($indexedManifest) . '/invalid-' . count($shapeCases) . '-' . sha1($description) . '.json';
+        file_put_contents(
+            $candidatePath,
+            json_encode($candidate, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n"
+        );
+        $candidateValidator = new WP_FTS_AnalyzerPackValidator();
+        $candidateError = wp_fts_lemma_limit_caught(
+            static fn(): array => $candidateValidator->resource_envelope($candidatePath)
+        );
+        wp_fts_lemma_limit_check(
+            $candidateError instanceof RuntimeException
+                && str_contains($candidateError->getMessage(), $message),
+            "a v1 analyzer-pack {$description} must reject before resource inspection"
+        );
+        wp_fts_lemma_limit_check(
+            $candidateValidator->digest_attestation_stats() === ['files_hashed' => 0, 'bytes_hashed' => 0],
+            "a v1 analyzer-pack {$description} must not hash a runtime file"
+        );
+        unlink($candidatePath);
+    }
+
+    foreach ([
+        'surface' => " qaaform\tqaalemma\n",
+        'lemma' => "qaaform\tqaalemma \n",
+    ] as $column => $runtimeContents) {
+        $paddedManifest = wp_fts_lemma_limit_write_pack(
+            $root . '/padded-' . $column,
+            [['path' => '0001.tsv.gz', 'contents' => $runtimeContents]]
+        );
+        $paddedManifestData = json_decode(
+            (string) file_get_contents($paddedManifest),
+            true,
+            512,
+            JSON_THROW_ON_ERROR
+        );
+        $paddedManifestData['runtime']['files'][0]['first_surface'] = 'qaaform';
+        $paddedManifestData['runtime']['files'][0]['last_surface'] = 'qaaform';
+        file_put_contents(
+            $paddedManifest,
+            json_encode($paddedManifestData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n"
+        );
+        $paddedError = wp_fts_lemma_limit_caught(
+            static fn(): array => (new WP_FTS_AnalyzerPackValidator())->validate($paddedManifest)
+        );
+        wp_fts_lemma_limit_check(
+            $paddedError instanceof RuntimeException
+                && str_contains($paddedError->getMessage(), "Runtime {$column}")
+                && str_contains($paddedError->getMessage(), 'must be one normalized token'),
+            "a padded runtime {$column} must reject without trimming"
+        );
+    }
+
+    $indexedPack = WP_FTS_LanguageLemmaPack::from_manifest_file($indexedManifest);
+    wp_fts_lemma_limit_check(
+        wp_fts_lemma_limit_analysis_terms($indexedPack, 'qaasurface', 'qab') === ['qaasurface'],
         'a pack must not expand a surface from another language partition'
     );
     wp_fts_lemma_limit_check(
-        wp_fts_lemma_limit_analysis_terms($eagerPack, 'qaasurface') === $expectedTwelve,
-        'eager lookup should preserve exact-first order at the twelve-candidate boundary'
-    );
-    $eagerOverCapManifest = wp_fts_lemma_limit_write_pack($root . '/eager-over-cap', [
-        ['path' => '0001.tsv', 'contents' => $thirteenRows],
-    ], true);
-    $eagerOverCapError = wp_fts_lemma_limit_caught(
-        static fn(): WP_FTS_LanguageLemmaPack => WP_FTS_LanguageLemmaPack::from_manifest_file($eagerOverCapManifest)
+        wp_fts_lemma_limit_analysis_terms($indexedPack, 'qaasurface') === $expectedTwelve,
+        'indexed gzip lookup should preserve exact-first order at the twelve-candidate boundary'
     );
     wp_fts_lemma_limit_check(
-        $eagerOverCapError instanceof RuntimeException
-            && str_contains($eagerOverCapError->getMessage(), '12-lemma ambiguity limit'),
-        'full eager-pack validation should reject the thirteenth lemma before building an in-memory lookup'
+        in_array('block-index', $indexedPack->last_lookup_stats()['modes'], true),
+        'the synthetic pack should exercise the block-index path'
+    );
+    wp_fts_lemma_limit_check(
+        WP_FTS_LanguageLemmaPack::manifest_path_from_option($indexedManifest) === $indexedManifest
+            && WP_FTS_LanguageLemmaPack::manifest_path_from_option(false) === null,
+        'lemma-pack options should be an exact manifest path or false'
+    );
+    $invalidPackOptionError = wp_fts_lemma_limit_caught(
+        static fn(): ?string => WP_FTS_LanguageLemmaPack::manifest_path_from_option([
+            'manifest_path' => $indexedManifest,
+        ])
+    );
+    $booleanPackOptionError = wp_fts_lemma_limit_caught(
+        static fn(): ?string => WP_FTS_LanguageLemmaPack::manifest_path_from_option(true)
+    );
+    $nullPackOptionError = wp_fts_lemma_limit_caught(
+        static fn(): ?string => WP_FTS_LanguageLemmaPack::manifest_path_from_option(null)
+    );
+    wp_fts_lemma_limit_check(
+        $invalidPackOptionError instanceof InvalidArgumentException
+            && $booleanPackOptionError instanceof InvalidArgumentException
+            && $nullPackOptionError instanceof InvalidArgumentException,
+        'lemma-pack options should reject path aliases, enable flags, and null'
     );
 
-    $corruptRuntimeManifest = wp_fts_lemma_limit_write_pack($root . '/eager-corrupt-runtime', [
-        ['path' => '0001.tsv', 'contents' => "qaacorrupt\tqaapacklemma\n"],
-    ], true);
+    foreach ([' qaa', 'q!a'] as $invalidLanguage) {
+        foreach ([
+            static fn(): string => $indexedPack->stem('qaasurface', $invalidLanguage),
+            static fn(): array => $indexedPack->analyze('qaasurface', $invalidLanguage),
+            static fn(): array => $indexedPack->analyze_many(['qaasurface'], $invalidLanguage),
+            static fn(): array => $indexedPack->analyze_many_for_pipeline(
+                ['qaasurface'],
+                $invalidLanguage,
+                1,
+                static fn(string $_surface, string $_lemma): bool => true,
+                static fn(string $_surface, int $_count): bool => false
+            ),
+        ] as $call) {
+            wp_fts_lemma_limit_check(
+                wp_fts_lemma_limit_caught($call) instanceof InvalidArgumentException,
+                'direct lemma-pack analysis should reject malformed or noncanonical languages'
+            );
+        }
+    }
+
+    $admission = new WP_FTS_ConfiguredLemmaPackAdmission();
+    wp_fts_lemma_limit_check(
+        wp_fts_lemma_limit_caught(
+            static fn(): array => $admission->preflight_manifest($indexedManifest, ' qaa')
+        ) instanceof InvalidArgumentException,
+        'configured pack admission should reject a padded language before manifest work'
+    );
+    wp_fts_lemma_limit_check(
+        wp_fts_lemma_limit_caught(
+            static fn(): array => $admission->preflight_manifest(' ' . $indexedManifest, 'qaa')
+        ) instanceof InvalidArgumentException,
+        'configured pack admission should reject a padded manifest path before resolution'
+    );
+
+    $corruptRuntimeManifest = wp_fts_lemma_limit_write_pack($root . '/corrupt-runtime', [
+        ['path' => '0001.tsv.gz', 'contents' => "qaacorrupt\tqaapacklemma\n"],
+    ]);
     $corruptRuntimeMetadata = json_decode(
         (string) file_get_contents($corruptRuntimeManifest),
         true,
@@ -261,7 +523,12 @@ try {
     );
     $corruptRuntimePath = dirname($corruptRuntimeManifest)
         . '/' . (string) $corruptRuntimeMetadata['runtime']['files'][0]['path'];
-    file_put_contents($corruptRuntimePath, "qaacorrupt\tqaapacklemmb\n");
+    $corruptRuntimeBytes = file_get_contents($corruptRuntimePath);
+    if (!is_string($corruptRuntimeBytes) || strlen($corruptRuntimeBytes) < 16) {
+        throw new RuntimeException('Could not read the indexed corruption fixture.');
+    }
+    $corruptRuntimeBytes[15] = chr(ord($corruptRuntimeBytes[15]) ^ 1);
+    file_put_contents($corruptRuntimePath, $corruptRuntimeBytes);
     $corruptPipeline = null;
     $corruptPipelineError = wp_fts_lemma_limit_caught(
         static function () use ($corruptRuntimeManifest, &$corruptPipeline): void {
@@ -272,15 +539,18 @@ try {
     );
     wp_fts_lemma_limit_check(
         $corruptPipelineError === null && $corruptPipeline instanceof WP_FTS_LanguagePipeline,
-        'a preflight-valid pack with corrupt runtime bytes should fall back instead of aborting pipeline construction'
+        'a preflight-valid pack with corrupt runtime bytes should construct before its first payload read'
+    );
+    $corruptLookupError = wp_fts_lemma_limit_caught(
+        static fn(): array => $corruptPipeline->analyze_detailed('qaacorrupt', 'qaa')
     );
     wp_fts_lemma_limit_check(
-        array_column($corruptPipeline->analyze_detailed('qaacorrupt', 'qaa'), 'term') === ['qaacorrupt'],
-        'a corrupt configured pack should preserve the built-in analyzer result rather than expose unverified morphology'
+        wp_fts_lemma_limit_error_contains($corruptLookupError, 'integrity verification failed'),
+        'a corrupt configured pack should stop analysis at its first payload read'
     );
 
     $detectionPipeline = new WP_FTS_LanguagePipeline([
-        'lemma_packs_by_lang' => ['qaa' => $eagerManifest],
+        'lemma_packs_by_lang' => ['qaa' => $indexedManifest],
     ]);
     $detectionAnalyzer = new WP_FTS_Analyzer([
         'default_lang' => 'en',
@@ -300,11 +570,11 @@ try {
         'lemma-pack limits should be represented in the pipeline signature'
     );
     $splitOverCapManifest = wp_fts_lemma_limit_write_pack($root . '/split-over-cap', [
-        ['path' => '0001.tsv', 'contents' => $runtimeRows(array_slice($thirteenLemmas, 0, 6), false)],
-        ['path' => '0002.tsv', 'contents' => $runtimeRows(array_slice($thirteenLemmas, 6), false)],
-    ], false);
+        ['path' => '0001.tsv.gz', 'contents' => $runtimeRows(array_slice($thirteenLemmas, 0, 6), false)],
+        ['path' => '0002.tsv.gz', 'contents' => $runtimeRows(array_slice($thirteenLemmas, 6), false)],
+    ]);
     $splitValidationError = wp_fts_lemma_limit_caught(
-        static fn(): array => (new WP_FTS_AnalyzerPackValidator())->validate($splitOverCapManifest, false)
+        static fn(): array => (new WP_FTS_AnalyzerPackValidator())->validate($splitOverCapManifest)
     );
     wp_fts_lemma_limit_check(
         $splitValidationError instanceof RuntimeException
@@ -317,76 +587,7 @@ try {
     wp_fts_lemma_limit_check(
         $splitConstructionError instanceof RuntimeException
             && str_contains($splitConstructionError->getMessage(), 'strictly ordered and non-overlapping'),
-        'lazy pack construction should reject a split surface instead of scanning both shards'
-    );
-
-    $streamManifest = wp_fts_lemma_limit_write_pack($root . '/stream', [
-        ['path' => '0001.tsv', 'contents' => $twelveRows],
-    ], false);
-    $streamConstructionError = wp_fts_lemma_limit_caught(
-        static fn(): WP_FTS_LanguageLemmaPack => WP_FTS_LanguageLemmaPack::from_manifest_file($streamManifest)
-    );
-    wp_fts_lemma_limit_check(
-        $streamConstructionError instanceof RuntimeException
-            && str_contains($streamConstructionError->getMessage(), 'requires a validated lookup sidecar'),
-        'a non-eager plain runtime must be rejected at construction instead of enabling per-token scans'
-    );
-    wp_fts_lemma_limit_check(
-        WP_FTS_LanguageLemmaPack::from_pack_option($streamManifest, 'qaa') === null,
-        'the public custom-pack option must not bypass the non-eager sidecar requirement'
-    );
-
-    $fixtureStreamManifest = wp_fts_lemma_limit_write_pack($root . '/fixture-stream', [
-        ['path' => '0001.tsv', 'contents' => $twelveRows],
-    ], true);
-    $fixtureStreamPack = WP_FTS_LanguageLemmaPack::from_manifest_file($fixtureStreamManifest);
-    wp_fts_lemma_limit_check(
-        wp_fts_lemma_limit_analysis_terms($fixtureStreamPack, 'qaasurface') === $expectedTwelve,
-        'a small fixture-only plain runtime should retain eager morphology without a sidecar'
-    );
-    $fixtureStreamOverCapManifest = wp_fts_lemma_limit_write_pack($root . '/fixture-stream-over-cap', [
-        ['path' => '0001.tsv', 'contents' => $thirteenRows],
-    ], true);
-    $fixtureStreamError = wp_fts_lemma_limit_caught(
-        static fn(): WP_FTS_LanguageLemmaPack => WP_FTS_LanguageLemmaPack::from_manifest_file($fixtureStreamOverCapManifest)
-    );
-    wp_fts_lemma_limit_check(
-        $fixtureStreamError instanceof RuntimeException
-            && str_contains($fixtureStreamError->getMessage(), '12-lemma ambiguity limit'),
-        'small fixture-only eager validation should still reject the thirteenth source lemma'
-    );
-
-    $gzipManifest = wp_fts_lemma_limit_write_pack($root . '/gzip', [
-        ['path' => '0001.tsv.gz', 'contents' => $twelveRows, 'compression' => 'gzip'],
-    ], true);
-    $gzipPack = WP_FTS_LanguageLemmaPack::from_manifest_file($gzipManifest);
-    wp_fts_lemma_limit_check(
-        wp_fts_lemma_limit_analysis_terms($gzipPack, 'qaasurface') === $expectedTwelve,
-        'small fixture-only gzip validation should preserve all twelve candidates eagerly'
-    );
-    $gzipOverCapManifest = wp_fts_lemma_limit_write_pack($root . '/gzip-over-cap', [
-        ['path' => '0001.tsv.gz', 'contents' => $thirteenRows, 'compression' => 'gzip'],
-    ], true);
-    $gzipRuntimeError = wp_fts_lemma_limit_caught(
-        static fn(): WP_FTS_LanguageLemmaPack => WP_FTS_LanguageLemmaPack::from_manifest_file($gzipOverCapManifest)
-    );
-    wp_fts_lemma_limit_check(
-        $gzipRuntimeError instanceof RuntimeException
-            && str_contains($gzipRuntimeError->getMessage(), '12-lemma ambiguity limit'),
-        'small fixture-only gzip validation should reject the thirteenth source lemma eagerly'
-    );
-
-    $indexedManifest = wp_fts_lemma_limit_write_pack($root . '/indexed', [
-        ['path' => '0001.tsv.gz', 'contents' => $twelveRows, 'compression' => 'gzip', 'lookup' => true],
-    ], false);
-    $indexedPack = WP_FTS_LanguageLemmaPack::from_manifest_file($indexedManifest);
-    wp_fts_lemma_limit_check(
-        wp_fts_lemma_limit_analysis_terms($indexedPack, 'qaasurface') === $expectedTwelve,
-        'indexed gzip lookup should preserve the twelve-candidate boundary'
-    );
-    wp_fts_lemma_limit_check(
-        in_array('block-index', $indexedPack->last_lookup_stats()['modes'], true),
-        'indexed fixture should exercise the block-index path'
+        'pack construction should reject a surface split across shards'
     );
     $largeBlockRows = [];
     for ($index = 0; $index < WP_FTS_LemmaPackLookupIndex::DEFAULT_BLOCK_ROWS; $index++) {
@@ -397,11 +598,9 @@ try {
         [
             'path' => '0001.tsv.gz',
             'contents' => implode("\n", $largeBlockRows) . "\n",
-            'compression' => 'gzip',
-            'lookup' => true,
             'block_rows' => WP_FTS_LemmaPackLookupIndex::DEFAULT_BLOCK_ROWS,
         ],
-    ], false);
+    ]);
     $largeBlockPack = WP_FTS_LanguageLemmaPack::from_manifest_file($largeBlockManifest);
     wp_fts_lemma_limit_check(
         wp_fts_lemma_limit_analysis_terms($largeBlockPack, 'qaakey1937') === ['qaakey1937'],
@@ -467,8 +666,7 @@ try {
 
     $indexedOverCapBuildError = wp_fts_lemma_limit_caught(static fn(): string => wp_fts_lemma_limit_write_pack(
         $root . '/indexed-over-cap',
-        [['path' => '0001.tsv.gz', 'contents' => $thirteenRows, 'compression' => 'gzip', 'lookup' => true]],
-        false
+        [['path' => '0001.tsv.gz', 'contents' => $thirteenRows]]
     ));
     wp_fts_lemma_limit_check(
         $indexedOverCapBuildError instanceof RuntimeException

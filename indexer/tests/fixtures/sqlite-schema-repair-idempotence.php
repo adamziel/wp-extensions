@@ -105,7 +105,7 @@ function wp_fts_schema_repair_seed(WP_FTS_Schema_Repair_SQLite_WPDB $wpdb): void
     $wpdb->dbh->exec("INSERT INTO wp_fts_work(job_key,kind,post_id,generation,state,available_at) VALUES('post:42','post',42,3,'ready',1)");
 }
 
-/** @return array{wpdb:WP_FTS_Schema_Repair_SQLite_WPDB,storage:WP_FTS_Storage_Mysql} */
+/** @return array{wpdb:WP_FTS_Schema_Repair_SQLite_WPDB,storage:WP_FTS_Relational_Storage} */
 function wp_fts_schema_repair_fixture(bool $seed = true): array
 {
     global $wpdb;
@@ -116,11 +116,11 @@ function wp_fts_schema_repair_fixture(bool $seed = true): array
         wp_fts_schema_repair_seed($wpdb);
     }
 
-    return ['wpdb' => $wpdb, 'storage' => new WP_FTS_Storage_Mysql($wpdb)];
+    return ['wpdb' => $wpdb, 'storage' => new WP_FTS_Relational_Storage($wpdb)];
 }
 
 /** @return array{valid:bool,drops:int,terms:int,postings:int,documents:int,work:int} */
-function wp_fts_schema_repair_result(WP_FTS_Schema_Repair_SQLite_WPDB $wpdb, WP_FTS_Storage_Mysql $storage): array
+function wp_fts_schema_repair_result(WP_FTS_Schema_Repair_SQLite_WPDB $wpdb, WP_FTS_Relational_Storage $storage): array
 {
     return [
         'valid' => !empty($storage->verify_schema()['valid']),
@@ -138,7 +138,7 @@ function wp_fts_schema_repair_result(WP_FTS_Schema_Repair_SQLite_WPDB $wpdb, WP_
 try {
     ['wpdb' => $wpdb, 'storage' => $storage] = wp_fts_schema_repair_fixture();
 
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     $before = $storage->verify_schema();
     $wpdb->queries = [];
     $storage->create_tables();
@@ -191,29 +191,6 @@ try {
         $invalidDocumentDefinitions['storage']
     );
 
-    // Model the immediately preceding dictionary contract. Removing the
-    // redundant hash is a search-generation change: terms, postings, and
-    // documents must be rebuilt together while queue work and the cursor epoch
-    // survive independently.
-    $legacyTermHash = wp_fts_schema_repair_fixture();
-    $legacyTermHash['wpdb']->dbh->exec('DROP TABLE wp_fts_terms');
-    $legacyTermHash['wpdb']->dbh->exec(
-        'CREATE TABLE wp_fts_terms ('
-        . 'term_id INTEGER PRIMARY KEY AUTOINCREMENT, term_hash BLOB NOT NULL, '
-        . 'lang BLOB NOT NULL, kind INTEGER NOT NULL DEFAULT 0, term BLOB NOT NULL, '
-        . 'doc_freq INTEGER NOT NULL DEFAULT 0)'
-    );
-    $legacyTermHash['wpdb']->dbh->exec('CREATE UNIQUE INDEX wp_fts_term_identity ON wp_fts_terms(lang,kind,term)');
-    $legacyTermHash['wpdb']->dbh->exec('CREATE INDEX wp_fts_term_hash ON wp_fts_terms(term_hash)');
-    $legacyTermHash['wpdb']->dbh->exec('CREATE INDEX wp_fts_empty_terms ON wp_fts_terms(doc_freq)');
-    $legacyTermHash['wpdb']->dbh->exec(
-        "INSERT INTO wp_fts_terms(term_id,term_hash,lang,kind,term,doc_freq) "
-        . "VALUES(1,X'00000000000000000000000000000000','en',0,'legacy',1)"
-    );
-    $legacyTermHash['wpdb']->queries = [];
-    $legacyTermHash['storage']->create_tables();
-    $legacyTermHashResult = wp_fts_schema_repair_result($legacyTermHash['wpdb'], $legacyTermHash['storage']);
-
     $missingWork = wp_fts_schema_repair_fixture();
     $missingWork['wpdb']->dbh->exec('DROP TABLE wp_fts_work');
     $missingWork['wpdb']->queries = [];
@@ -252,7 +229,6 @@ try {
         'mismatched_document' => $mismatchedDocumentResult,
         'invalid_document_definitions_before' => $invalidDocumentDefinitionsBefore,
         'invalid_document_definitions' => $invalidDocumentDefinitionsResult,
-        'legacy_term_hash' => $legacyTermHashResult,
         'missing_work' => $missingWorkResult,
         'mismatched_work' => $mismatchedWorkResult,
         'mixed_damage' => $mixedDamageResult,

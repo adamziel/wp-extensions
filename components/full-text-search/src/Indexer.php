@@ -9,15 +9,11 @@ declare(strict_types=1);
  */
 final class WP_FTS_Indexer
 {
-    private const INDEX_SIGNATURE_VERSION = 'wp-fts-indexer-v7';
+    public const INDEX_SIGNATURE_VERSION = 'wp-fts-indexer-v7';
     private const MAX_INDEX_FIELDS = 32;
     private const MAX_FIELD_NAME_BYTES = 191;
     private const MAX_OPTION_SCALAR_BYTES = 64;
-    private const MAX_OPTION_KEYS = 64;
-    private const MAX_OPTION_NODES = 4096;
-    private const MAX_OPTION_SOURCE_BYTES = 524288;
     private const MAX_OCCURRENCE_SOURCE_BYTES = 256;
-    private const MAX_SNIPPET_TEXT_BYTES = 20000;
 
     /**
      * @param object $analyzer Analyzer object exposing
@@ -49,6 +45,8 @@ final class WP_FTS_Indexer
         if ($doc_id <= 0) {
             throw new InvalidArgumentException('Document id must be positive.');
         }
+        $this->assert_option_keys($opts, ['document_lang', 'default_lang'], 'FTS document analysis');
+        $this->assert_language_options($opts);
 
         return $this->analyze_index_source($this->prepare_index_source($doc_id, $fields, $opts));
     }
@@ -59,8 +57,8 @@ final class WP_FTS_Indexer
      * The returned payload is suitable for the bounded batch storage writer.
      *
      * @param object $post Object with `ID` and WordPress post-like properties.
-     * @param array<string,mixed> $opts Optional language, extraction, field
-     *        boost, and extractor callbacks.
+     * @param array<string,mixed> $opts Optional language, custom-field, and
+     *        field-boost options.
      * @return array{doc_id:int,primary_lang:string,content_hash:string,snippet_text:string,term_frequencies:array<string,int>,surface_frequencies:array<string,int>}
      */
     public function prepare_post(object $post, array $opts = []): array
@@ -79,8 +77,8 @@ final class WP_FTS_Indexer
      * not invoke either content-analysis method.
      *
      * @param object $post Object with `ID` and WordPress post-like properties.
-     * @param array<string,mixed> $opts Optional language, extraction, field
-     *        boost, and extractor callbacks.
+     * @param array<string,mixed> $opts Optional language, custom-field, and
+     *        field-boost options.
      * @return array{doc_id:int,primary_lang:string,content_hash:string,fields:array<int,array{name:string,text:string,html?:string,boost:float}>,analysis_options:array<string,mixed>,snippet_text:string}
      */
     public function prepare_post_source(object $post, array $opts = []): array
@@ -94,35 +92,55 @@ final class WP_FTS_Indexer
             throw new LogicException('Set-oriented post preparation requires authoritative terms and custom_fields arrays.');
         }
         $postProperties = get_object_vars($post);
-        $rawPostId = $postProperties['ID'] ?? null;
-        if (!is_scalar($rawPostId) || (is_string($rawPostId) && strlen($rawPostId) > self::MAX_OPTION_SCALAR_BYTES)) {
-            throw new InvalidArgumentException('Post object IDs must be bounded scalar values.');
-        }
-        $postId = (int) $rawPostId;
-        if ($postId <= 0) {
+        $postId = $postProperties['ID'] ?? null;
+        if (!is_int($postId) || $postId <= 0) {
             throw new InvalidArgumentException('Post object must provide a positive ID.');
         }
-        $this->assert_recognized_option_bounds($opts);
-
-        $indexOptions = $opts;
-        if (!array_key_exists('custom_field_keys', $indexOptions)) {
-            $indexOptions['custom_field_keys'] = array_keys($post->custom_fields);
+        foreach (['post_title', 'post_content', 'post_excerpt'] as $property) {
+            if (!array_key_exists($property, $postProperties) || !is_string($postProperties[$property])) {
+                throw new InvalidArgumentException(
+                    "Post object must provide {$property} as a native string."
+                );
+            }
         }
-        $indexOptions['post_id'] = $postId;
+        $this->assert_option_keys(
+            $opts,
+            ['document_lang', 'default_lang', 'custom_field_keys', 'field_boosts'],
+            'FTS post preparation'
+        );
+        $this->assert_language_options($opts);
+
+        $extractionOptions = array_intersect_key($opts, [
+            'custom_field_keys' => true,
+            'field_boosts' => true,
+        ]);
+        if (!array_key_exists('custom_field_keys', $extractionOptions)) {
+            $extractionOptions['custom_field_keys'] = array_keys($post->custom_fields);
+        }
 
         if ($this->postContentExtractor === null || !method_exists($this->postContentExtractor, 'extract')) {
             throw new LogicException('Post content extractor must expose extract(object $post, array $opts).');
         }
 
-        $extracted = $this->postContentExtractor->extract($post, $indexOptions);
-        if (!is_string($extracted['snippet_text'] ?? null)) {
-            throw new InvalidArgumentException('Post content extractor must return bounded snippet_text.');
+        $extracted = $this->postContentExtractor->extract($post, $extractionOptions);
+        if (!is_array($extracted)
+            || array_keys($extracted) !== ['fields', 'snippet_text']
+            || !is_array($extracted['fields'])
+            || !array_is_list($extracted['fields'])
+            || !is_string($extracted['snippet_text'])
+        ) {
+            throw new InvalidArgumentException('Post content extractor must return exactly fields and snippet_text.');
         }
+
+        $analysisOptions = array_intersect_key($opts, [
+            'document_lang' => true,
+            'default_lang' => true,
+        ]);
 
         return $this->prepare_index_source(
             $postId,
             $extracted['fields'],
-            $indexOptions,
+            $analysisOptions,
             $extracted['snippet_text']
         );
     }
@@ -147,10 +165,11 @@ final class WP_FTS_Indexer
      */
     private function prepare_index_source(int $doc_id, array $fields, array $opts, string $snippetText = ''): array
     {
-        $this->assert_recognized_option_bounds($opts);
+        $this->assert_option_keys($opts, ['document_lang', 'default_lang'], 'FTS document analysis');
+        $this->assert_language_options($opts);
         $primaryLang = $this->resolve_document_language($opts);
-        $fields = $this->normalize_index_fields($fields, $opts);
-        if (strlen($snippetText) > self::MAX_SNIPPET_TEXT_BYTES) {
+        $fields = $this->normalize_index_fields($fields);
+        if (strlen($snippetText) > WP_FTS_Set_Oriented_Search_Storage::MAX_SNIPPET_SOURCE_BYTES) {
             throw new WP_FTS_Analysis_Limit_Exceeded(
                 'snippet_text_bytes',
                 'FTS snippet text may contain at most 20,000 bytes.'
@@ -201,7 +220,7 @@ final class WP_FTS_Indexer
             throw new InvalidArgumentException('Invalid prepared post source payload.');
         }
         if (strlen($source['primary_lang']) > self::MAX_OPTION_SCALAR_BYTES
-            || strlen($source['snippet_text']) > self::MAX_SNIPPET_TEXT_BYTES
+            || strlen($source['snippet_text']) > WP_FTS_Set_Oriented_Search_Storage::MAX_SNIPPET_SOURCE_BYTES
         ) {
             throw new InvalidArgumentException('Prepared post source strings exceed their fixed bounds.');
         }
@@ -209,7 +228,7 @@ final class WP_FTS_Indexer
             throw new InvalidArgumentException('Prepared post source content_hash must contain 40 lowercase hexadecimal bytes.');
         }
         if (!hash_equals(
-            WP_FTS_TermNamespace::canonicalize_lang($source['primary_lang']),
+            WP_FTS_TermNamespace::parse_language_tag($source['primary_lang']),
             $source['primary_lang']
         )) {
             throw new InvalidArgumentException('Prepared post source language must already be canonical.');
@@ -219,13 +238,19 @@ final class WP_FTS_Indexer
         $primaryLang = $source['primary_lang'];
         $hash = $source['content_hash'];
         $opts = $source['analysis_options'];
-        $this->assert_recognized_option_bounds($opts);
-        foreach (array_keys($opts) as $key) {
-            if (!in_array($key, ['document_lang', 'default_lang'], true)) {
-                throw new InvalidArgumentException('Prepared post analysis options contain an unsupported field.');
-            }
+        $this->assert_option_keys($opts, ['document_lang', 'default_lang'], 'Prepared post analysis');
+        $this->assert_language_options($opts);
+        $configuredLanguage = WP_FTS_TermNamespace::language_from_options(
+            $opts,
+            null,
+            ['document_lang', 'default_lang']
+        );
+        if ($configuredLanguage !== null && $configuredLanguage !== $primaryLang) {
+            throw new InvalidArgumentException(
+                'Prepared post analysis language must match the canonical primary language.'
+            );
         }
-        $fields = $this->normalize_index_fields($source['fields'], $opts);
+        $fields = $this->normalize_index_fields($source['fields']);
         $expectedHash = $this->content_hash(
             $this->fields_hash_source($fields) . "\0snippet\0" . $source['snippet_text'],
             $primaryLang
@@ -245,7 +270,10 @@ final class WP_FTS_Indexer
             $fields,
             $this->analysis_options($fieldOpts, $primaryLang)
         );
-        if (count($batchedFieldOccurrences) !== count($fields)) {
+        if (!is_array($batchedFieldOccurrences)
+            || !array_is_list($batchedFieldOccurrences)
+            || count($batchedFieldOccurrences) !== count($fields)
+        ) {
             throw new WP_FTS_Analysis_Limit_Exceeded(
                 'occurrence_shape',
                 'Batched field analysis must return one occurrence list per field.'
@@ -260,7 +288,7 @@ final class WP_FTS_Indexer
             $fieldOpts['_max_document_occurrences'] = WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES - count($occurrences);
             $fieldOpts['_include_document_surface'] = true;
             $fieldOccurrences = $batchedFieldOccurrences[$fieldIndex];
-            if (!is_array($fieldOccurrences)) {
+            if (!is_array($fieldOccurrences) || !array_is_list($fieldOccurrences)) {
                 throw new WP_FTS_Analysis_Limit_Exceeded(
                     'occurrence_shape',
                     'Batched field analysis occurrence lists must be arrays.'
@@ -275,7 +303,7 @@ final class WP_FTS_Indexer
             $this->assert_analyzer_occurrence_bounds($fieldOccurrences);
 
             foreach ($this->mark_alternative_groups($fieldOccurrences, $nextAlternativeGroup) as $occurrence) {
-                $occurrence['weight'] = (float) ($occurrence['weight'] ?? 1.0) * $field['boost'];
+                $occurrence['weight'] = (float) $occurrence['weight'] * $field['boost'];
                 $occurrences[] = $occurrence;
             }
         }
@@ -298,65 +326,11 @@ final class WP_FTS_Indexer
     /** Bound custom analyzer rows before trimming, canonicalization, or copies. */
     private function assert_analyzer_occurrence_bounds(array $occurrences): void
     {
-        $allowedKeys = [
-            'term' => true,
-            'weight' => true,
-            'lang' => true,
-            'position' => true,
-            'rank' => true,
-            'source' => true,
-            'surface' => true,
-            'normalized_surface' => true,
-            '_alternative_group' => true,
-        ];
+        if (!array_is_list($occurrences)) {
+            throw new InvalidArgumentException('Document analyzer output must be a list of occurrences.');
+        }
         foreach ($occurrences as $occurrence) {
-            if (!is_array($occurrence)) {
-                throw new WP_FTS_Analysis_Limit_Exceeded('occurrence_shape', 'FTS analyzer occurrences must be arrays.');
-            }
-            if (count($occurrence) > count($allowedKeys)) {
-                throw new WP_FTS_Analysis_Limit_Exceeded('occurrence_shape', 'An FTS analyzer occurrence contains too many fields.');
-            }
-            foreach ($occurrence as $key => $_value) {
-                if (!is_string($key) || !isset($allowedKeys[$key])) {
-                    throw new WP_FTS_Analysis_Limit_Exceeded('occurrence_shape', 'An FTS analyzer occurrence contains an unsupported field.');
-                }
-            }
-            if (
-                !array_key_exists('term', $occurrence)
-                || !is_scalar($occurrence['term'])
-                || strlen((string) $occurrence['term']) > WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES
-            ) {
-                throw new WP_FTS_Analysis_Limit_Exceeded('occurrence_bytes', 'An FTS analyzer term exceeds the lexical key limit.');
-            }
-            if (
-                !array_key_exists('lang', $occurrence)
-                || !is_scalar($occurrence['lang'])
-                || strlen((string) $occurrence['lang']) > self::MAX_OPTION_SCALAR_BYTES
-            ) {
-                throw new WP_FTS_Analysis_Limit_Exceeded('occurrence_bytes', 'An FTS analyzer language exceeds 64 bytes.');
-            }
-            foreach (['position', 'rank', 'weight', '_alternative_group'] as $key) {
-                if (!array_key_exists($key, $occurrence)) {
-                    continue;
-                }
-                if (!is_scalar($occurrence[$key]) || (is_string($occurrence[$key]) && strlen($occurrence[$key]) > self::MAX_OPTION_SCALAR_BYTES)) {
-                    throw new WP_FTS_Analysis_Limit_Exceeded('occurrence_bytes', 'An FTS analyzer numeric field exceeds 64 bytes.');
-                }
-            }
-            if (
-                array_key_exists('source', $occurrence)
-                && (!is_scalar($occurrence['source']) || strlen((string) $occurrence['source']) > self::MAX_OCCURRENCE_SOURCE_BYTES)
-            ) {
-                throw new WP_FTS_Analysis_Limit_Exceeded('occurrence_bytes', 'An FTS analyzer source label exceeds 256 bytes.');
-            }
-            foreach (['surface', 'normalized_surface'] as $key) {
-                if (!array_key_exists($key, $occurrence)) {
-                    continue;
-                }
-                if (!is_scalar($occurrence[$key]) || strlen((string) $occurrence[$key]) > WP_FTS_Analysis_Limits::MAX_LEXICAL_RUN_BYTES) {
-                    throw new WP_FTS_Analysis_Limit_Exceeded('occurrence_bytes', 'An FTS analyzer surface exceeds the lexical-run limit.');
-                }
-            }
+            WP_FTS_Analyzer_Occurrence_Validator::assert_document($occurrence);
         }
     }
 
@@ -374,11 +348,11 @@ final class WP_FTS_Indexer
     {
         $groupsByPosition = [];
         foreach ($occurrences as &$occurrence) {
-            if (!isset($occurrence['position']) || !is_scalar($occurrence['position'])) {
+            if (!array_key_exists('position', $occurrence)) {
                 continue;
             }
 
-            $position = (string) $occurrence['position'];
+            $position = $occurrence['position'];
             if (!isset($groupsByPosition[$position])) {
                 $groupsByPosition[$position] = $nextGroup++;
             }
@@ -431,8 +405,8 @@ final class WP_FTS_Indexer
         }
 
         $signature = $this->analyzer->index_signature();
-        if (!is_string($signature) || trim($signature) === '') {
-            throw new LogicException('Analyzer index_signature() must return a nonempty string.');
+        if (!is_string($signature) || $signature === '' || trim($signature) !== $signature) {
+            throw new LogicException('Analyzer index_signature() must return an unpadded nonempty string.');
         }
         if (strlen($signature) > self::MAX_OCCURRENCE_SOURCE_BYTES) {
             throw new WP_FTS_Analysis_Limit_Exceeded(
@@ -468,51 +442,24 @@ final class WP_FTS_Indexer
         return $analysisOpts;
     }
 
-    /** Reject direct options before copies, canonicalization, or integer casts. */
-    private function assert_recognized_option_bounds(array $opts): void
+    /** @param string[] $allowedKeys */
+    private function assert_option_keys(array $opts, array $allowedKeys, string $surface): void
     {
-        if (count($opts) > self::MAX_OPTION_KEYS) {
-            throw new WP_FTS_Analysis_Limit_Exceeded('option_keys', 'FTS document options may contain at most 64 keys.');
-        }
-        $nodes = 0;
-        $sourceBytes = 0;
-        $stack = [[$opts, 0]];
-        while ($stack !== []) {
-            [$map, $depth] = array_pop($stack);
-            if ($depth > 16) {
-                throw new WP_FTS_Analysis_Limit_Exceeded('option_depth', 'FTS document options may contain at most 16 nested levels.');
-            }
-            if (count($map) > self::MAX_OPTION_NODES) {
-                throw new WP_FTS_Analysis_Limit_Exceeded('option_nodes', 'FTS document options exceed the 4,096-node limit.');
-            }
-            foreach ($map as $key => $value) {
-                if (++$nodes > self::MAX_OPTION_NODES) {
-                    throw new WP_FTS_Analysis_Limit_Exceeded('option_nodes', 'FTS document options exceed the 4,096-node limit.');
-                }
-                if (is_string($key)) {
-                    if (strlen($key) > self::MAX_FIELD_NAME_BYTES) {
-                        throw new WP_FTS_Analysis_Limit_Exceeded('option_key_bytes', 'An FTS document option key exceeds 191 bytes.');
-                    }
-                    $sourceBytes += strlen($key);
-                }
-                if (is_string($value)) {
-                    $sourceBytes += strlen($value);
-                } elseif (is_array($value)) {
-                    $stack[] = [$value, $depth + 1];
-                }
-                if ($sourceBytes > self::MAX_OPTION_SOURCE_BYTES) {
-                    throw new WP_FTS_Analysis_Limit_Exceeded('option_source_bytes', 'FTS document options exceed the 512 KiB source limit.');
-                }
+        foreach (array_keys($opts) as $key) {
+            if (!is_string($key) || !in_array($key, $allowedKeys, true)) {
+                throw new InvalidArgumentException("{$surface} options contain an unsupported field.");
             }
         }
+    }
 
+    /** @param array<string,mixed> $opts */
+    private function assert_language_options(array $opts): void
+    {
         foreach (['document_lang', 'default_lang'] as $key) {
-            if (!array_key_exists($key, $opts) || $opts[$key] === null) {
+            if (!array_key_exists($key, $opts)) {
                 continue;
             }
-            if (!is_scalar($opts[$key]) || strlen((string) $opts[$key]) > self::MAX_OPTION_SCALAR_BYTES) {
-                throw new InvalidArgumentException("FTS {$key} options may contain at most 64 bytes.");
-            }
+            WP_FTS_TermNamespace::parse_language_tag($opts[$key]);
         }
     }
 
@@ -520,11 +467,13 @@ final class WP_FTS_Indexer
      * Normalize index fields supplied by the extractor or direct callers.
      *
      * @param array<int,array<string,mixed>> $fields
-     * @param array<string,mixed> $opts
      * @return array<int,array{name:string,text:string,html?:string,boost:float}>
      */
-    private function normalize_index_fields(array $fields, array $opts): array
+    private function normalize_index_fields(array $fields): array
     {
+        if (!array_is_list($fields)) {
+            throw new InvalidArgumentException('FTS index fields must be a list.');
+        }
         if (count($fields) > self::MAX_INDEX_FIELDS) {
             throw new WP_FTS_Analysis_Limit_Exceeded(
                 'index_fields',
@@ -536,36 +485,33 @@ final class WP_FTS_Indexer
         $documentSourceBytes = 0;
         foreach ($fields as $field) {
             if (!is_array($field)) {
-                throw new WP_FTS_Analysis_Limit_Exceeded(
-                    'index_field_shape',
-                    'FTS index fields must be arrays.'
-                );
+                throw new InvalidArgumentException('FTS index fields must be arrays.');
             }
 
             if (!array_key_exists('name', $field) || !array_key_exists('text', $field)) {
-                throw new WP_FTS_Analysis_Limit_Exceeded(
-                    'index_field_shape',
-                    'FTS index fields must contain name and text.'
-                );
+                throw new InvalidArgumentException('FTS index fields must contain name and text.');
+            }
+            foreach (array_keys($field) as $key) {
+                if (!is_string($key) || !in_array($key, ['name', 'text', 'html', 'boost'], true)) {
+                    throw new InvalidArgumentException('FTS index fields contain an unsupported field.');
+                }
             }
             $rawName = $field['name'];
             $rawText = $field['text'];
-            $rawHtml = $field['html'] ?? null;
-            if (!is_scalar($rawName) || !is_scalar($rawText) || ($rawHtml !== null && !is_scalar($rawHtml))) {
-                throw new WP_FTS_Analysis_Limit_Exceeded(
-                    'index_field_shape',
-                    'FTS index field names and sources must be scalar.'
-                );
+            $hasHtml = array_key_exists('html', $field);
+            $rawHtml = $hasHtml ? $field['html'] : null;
+            if (!is_string($rawName) || !is_string($rawText) || ($hasHtml && !is_string($rawHtml))) {
+                throw new InvalidArgumentException('FTS index field names and sources must be strings.');
             }
-            $rawName = (string) $rawName;
+            if ($rawName === '' || trim($rawName) !== $rawName) {
+                throw new InvalidArgumentException('FTS index field names must be unpadded non-empty strings.');
+            }
             if (strlen($rawName) > self::MAX_FIELD_NAME_BYTES) {
                 throw new WP_FTS_Analysis_Limit_Exceeded(
                     'index_field_name_bytes',
                     'An FTS index field name exceeds the 191-byte limit.'
                 );
             }
-            $rawText = (string) $rawText;
-            $rawHtml = $rawHtml !== null ? (string) $rawHtml : null;
             $documentSourceBytes += strlen($rawText) + ($rawHtml === null ? 0 : strlen($rawHtml));
             WP_FTS_Analysis_Limits::assert_document_source_bytes($documentSourceBytes);
             if ($rawHtml !== null && trim($rawHtml) !== '') {
@@ -574,25 +520,27 @@ final class WP_FTS_Indexer
                 WP_FTS_Html_Text_Stream::assert_analysis_markup_limits($rawHtml);
             }
 
-            $name = trim($rawName);
+            $name = $rawName;
             $text = trim($rawText);
             $html = $rawHtml;
-            if ($name === '' || ($text === '' && trim((string) $html) === '')) {
+            if ($text === '' && trim((string) $html) === '') {
                 continue;
             }
 
-            $rawBoost = $field['boost'] ?? 1.0;
-            if (!is_scalar($rawBoost) || (is_string($rawBoost) && strlen($rawBoost) > self::MAX_OPTION_SCALAR_BYTES)) {
-                throw new WP_FTS_Analysis_Limit_Exceeded(
-                    'field_boost_value_bytes',
-                    'An FTS field boost must be a bounded scalar value.'
-                );
+            $rawBoost = array_key_exists('boost', $field) ? $field['boost'] : 1.0;
+            if ((!is_int($rawBoost) && !is_float($rawBoost))
+                || !is_finite((float) $rawBoost)
+                || floor((float) $rawBoost) !== (float) $rawBoost
+                || $rawBoost < 1
+                || $rawBoost > 100
+            ) {
+                throw new InvalidArgumentException('An FTS field boost must be a whole number from 1 through 100.');
             }
 
             $row = [
                 'name' => $name,
                 'text' => $text,
-                'boost' => $this->normalize_field_boost((float) $rawBoost),
+                'boost' => (float) $rawBoost,
             ];
             if ($html !== null && trim($html) !== '') {
                 $row['html'] = $html;
@@ -601,14 +549,6 @@ final class WP_FTS_Indexer
         }
 
         return $normalized;
-    }
-
-    /**
-     * Clamp field boosts to a positive bounded range.
-     */
-    private function normalize_field_boost(float $boost): float
-    {
-        return $boost > 0.0 ? min(100.0, $boost) : 1.0;
     }
 
     /**
@@ -644,23 +584,15 @@ final class WP_FTS_Indexer
         $surfaceWeights = [];
         $sequence = 0;
         foreach ($occurrences as $occurrence) {
-            $term = trim((string) ($occurrence['term'] ?? ''));
-            $lang = WP_FTS_TermNamespace::canonicalize_lang((string) ($occurrence['lang'] ?? ''), $defaultLang);
-            $weight = (float) ($occurrence['weight'] ?? 1.0);
-            if ($weight <= 0.0) {
-                continue;
-            }
+            $term = $occurrence['term'];
+            $lang = WP_FTS_TermNamespace::canonicalize_lang($occurrence['lang'], $defaultLang);
+            $weight = (float) $occurrence['weight'];
 
-            $group = isset($occurrence['_alternative_group']) && is_numeric($occurrence['_alternative_group'])
-                ? (string) (int) $occurrence['_alternative_group']
+            $group = array_key_exists('_alternative_group', $occurrence)
+                ? (string) $occurrence['_alternative_group']
                 : null;
-            $rank = isset($occurrence['rank']) && is_numeric($occurrence['rank'])
-                ? max(0, (int) $occurrence['rank'])
-                : 0;
-            $surface = '';
-            if (isset($occurrence['normalized_surface']) && is_scalar($occurrence['normalized_surface'])) {
-                $surface = trim((string) $occurrence['normalized_surface']);
-            }
+            $rank = $occurrence['rank'] ?? 0;
+            $surface = $occurrence['normalized_surface'] ?? '';
             if ($surface !== '') {
                 // Long lexical runs remain searchable by every representable
                 // prefix. Two runs sharing all storable bytes are equivalent
@@ -689,9 +621,11 @@ final class WP_FTS_Indexer
                 );
             }
 
-            if ($term === '' || !WP_FTS_TermNamespace::term_key_fits($term, $lang)) {
-                $sequence++;
-                continue;
+            if (!WP_FTS_TermNamespace::term_key_fits($term, $lang)) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'occurrence_bytes',
+                    'An analyzer term exceeds the relational dictionary key limit.'
+                );
             }
             $key = WP_FTS_TermNamespace::namespace_term($lang, $term);
             if (!isset($distinctKeys[$key])) {
@@ -708,7 +642,7 @@ final class WP_FTS_Indexer
                 'weight' => $weight,
                 'group' => $group,
                 'rank' => $rank,
-                'source' => (string) ($occurrence['source'] ?? ''),
+                'source' => $occurrence['source'] ?? '',
             ];
             $sequence++;
 

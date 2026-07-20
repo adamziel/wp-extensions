@@ -51,8 +51,6 @@ wp_fts_indonesian_fixture_same(64586, count($voc), 'Indonesian voc.txt fixture l
 wp_fts_indonesian_fixture_same(count($voc), count($expected), 'Indonesian fixture input/output line counts should match');
 
 $stemmer = new WP_FTS_SnowballStemmer();
-wp_fts_indonesian_fixture_true($stemmer->supports_language('id-ID'), 'Indonesian locale should be advertised');
-wp_fts_indonesian_fixture_true($stemmer->is_language_available('id'), 'Indonesian should not require optional Wamania classes');
 wp_fts_indonesian_fixture_true(
     str_contains($stemmer->source_identity('id'), 'Snowball Indonesian'),
     'Indonesian source identity should name the Snowball variant'
@@ -97,15 +95,19 @@ wp_fts_indonesian_fixture_same(
 );
 
 $analyzer = new WP_FTS_Analyzer(['default_lang' => 'id']);
-$storage = new WP_FTS_Storage_InMemory();
-$indexer = new WP_FTS_Indexer($storage, $analyzer);
-$indexer->index_document(966, '<p>Kami sedang mencari data pencarian dan berjalan cepat.</p>', ['lang' => 'id']);
-$searcher = new WP_FTS_Searcher($storage, $analyzer);
+$documentTerms = array_column(
+    $analyzer->analyze_content(
+        '<p>Kami sedang mencari data pencarian dan berjalan cepat.</p>',
+        ['document_lang' => 'id']
+    ),
+    'term'
+);
+$queryTerms = $analyzer->analyze_query('cari data jalan', ['query_lang' => 'id']);
 
 wp_fts_indonesian_fixture_same(
-    [966],
-    array_column($searcher->search('cari data jalan', ['query_lang' => 'id', 'mode' => 'AND']), 'doc_id'),
-    'Indonesian query and document inflections should meet through the same stems'
+    [],
+    array_values(array_diff($queryTerms, $documentTerms)),
+    'Indonesian document and query analysis should produce the same stems'
 );
 
-fwrite(STDOUT, '[PASS] Indonesian Snowball fixtures: ' . count($voc) . " official line pairs plus analyzer/search parity\n");
+fwrite(STDOUT, '[PASS] Indonesian Snowball fixtures: ' . count($voc) . " official line pairs plus document/query parity\n");

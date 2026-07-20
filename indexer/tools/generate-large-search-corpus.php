@@ -322,14 +322,6 @@ final class WP_FTS_LargeSearchCorpusGenerator
                 $options['smoke'] = true;
                 continue;
             }
-            if ($arg === '--plain') {
-                $options['compression'] = 'plain';
-                continue;
-            }
-            if ($arg === '--gzip') {
-                $options['compression'] = 'gzip';
-                continue;
-            }
             if (!str_starts_with($arg, '--')) {
                 throw new InvalidArgumentException("Unexpected argument: {$arg}");
             }
@@ -520,7 +512,6 @@ final class WP_FTS_LargeSearchCorpusGenerator
             '  --languages=en,pl,zh         Override generated language partitions.',
             '  --smoke                      Small deterministic run for tests and previews.',
             '  --compression=auto|gzip|plain  Default auto uses gzip when zlib is available.',
-            '  --plain / --gzip             Shortcuts for --compression=plain|gzip.',
             '',
             'Default languages are derived from README language support notes, the language',
             'pipeline/stemmer code, and committed analyzer-pack manifests. Generated data',

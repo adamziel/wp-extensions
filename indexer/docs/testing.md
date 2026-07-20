@@ -18,10 +18,10 @@ composer test
 ```
 
 The harness discovers `tests/quality/*.php` automatically and enforces the
-default minimum check count. Operator-owned Snowball, Cranfield, and full
-PoliMorf corpora are separate lanes: the normal harness runs their hermetic
-contracts, but reads those corpora only when their documented environment
-variables are set. The required extension-enabled CI matrix also sets
+default minimum check count. Operator-owned Snowball and full PoliMorf corpora
+are separate lanes: the normal harness runs their hermetic contracts, but reads
+those corpora only when their documented environment variables are set. The
+required extension-enabled CI matrix also sets
 `WP_FTS_FAIL_ON_PENDING=1`, so a newly deferred test cannot pass the gate
 silently.
 
@@ -126,9 +126,7 @@ The default collector target is `direct-install`, matching the documented
 direct-install ZIP release boundary. It records Git source metadata, keeps the
 direct-install readiness build lane blocked until explicitly opted in, captures
 public-submission blockers as non-target evidence, runs the optional
-WordPress/MySQL lanes only through their existing skip-first guards, and runs
-the PR-safe pure-PHP production-scale benchmark, including conservative
-generated-corpus performance budget gates for index and search/read timings.
+WordPress/MySQL lanes only through their existing skip-first guards.
 The JSON statuses are:
 
 - `pass`: the lane completed and its evidence passed.
@@ -141,8 +139,7 @@ The JSON statuses are:
 The report proves the current checkout's release evidence posture for the
 selected release target, disposable WordPress smoke readiness,
 provider-compatibility smoke readiness, real WordPress/MySQL proof availability,
-real MySQL production proof availability, public-submission blockers, and the
-generated-corpus benchmark's structural and performance-budget gates. It does
+real MySQL production proof availability, and public-submission blockers. It does
 not create a release ZIP by default, does not approve WordPress.org/SVN
 submission, does not replace a configured disposable WordPress/MySQL run, and
 does not prove live MySQL behavior or live production traffic.
@@ -334,112 +331,13 @@ signature changes when the verified source hash changes. The same focused lane
 covers the current Bengali and Urdu light suffix baselines, their analyzer
 signatures, and language-partition isolation.
 
-## Legacy Component BM25 Reference Fixture
-
-The deterministic BM25 gate is included in the main PHP harness and can also be
-run directly for a focused JSON report:
-
-```sh
-php tests/bm25-reference-gate.php --json
-composer test:bm25-reference
-```
-
-It indexes a fixed four-document field fixture through the component's legacy
-in-memory indexer/searcher and compares weighted postings, OR rankings, AND
-narrowing, and scores against a local Lucene-style BM25 oracle. This preserves
-the reusable component fixture; it does not exercise or certify the WordPress
-relational impact ranker.
-
-## Cranfield Relevance Quality Gate
-
-The main harness includes source-shaped Cranfield parser and metric tests using
-project-owned synthetic fixtures. It treats the missing-corpus response as a
-passing hermetic contract rather than a pending test. The separate full
-Cranfield relevance-quality command requires an operator-supplied local corpus:
-
-```sh
-php tests/cranfield-relevance-gate.php
-WP_FTS_CRANFIELD_DIR=/path/to/cranfield php tests/cranfield-relevance-gate.php
-WP_FTS_CRANFIELD_DIR=/path/to/cranfield php tests/cranfield-relevance-gate.php --json
-```
-
-The gate expects local documents, queries, and relevance judgments. In a
-directory, the accepted classic names are `cran.all.1400` or `cran.all`,
-`cran.qry`, and `qrels.text`, `cranqrel`, `qrels.txt`, or `cran.qrel`.
-It does not download data and this repository does not bundle the full
-Cranfield corpus until redistribution license and provenance are reviewed.
-Without local data the standalone command exits with pending/NO-GO status `2`.
-The main harness verifies that explicit response but does not claim the full
-external corpus ran.
-
-Build a reusable component relevance suite JSON from local source files when a CI
-or review lane wants to separate import from scoring:
-
-```sh
-php tools/build-cranfield-relevance-suite.php \
-  --cranfield-dir=/path/to/cranfield \
-  --out=/tmp/wp-fts-cranfield-suite.json
-php tests/cranfield-relevance-gate.php \
-  --suite=/tmp/wp-fts-cranfield-suite.json \
-  --json
-```
-
-The gate indexes the parsed corpus through the component analyzer/indexer and
-legacy in-memory searcher, then compares those fixture rankings with a local
-Lucene-style BM25 reference over the same analyzer terms. It reports nDCG@10,
-MAP, and P@5 for both fixture and reference results plus absolute deltas. It is
-not evidence for the production relational ranker.
-Allowed deltas default to `0.05` and can be overridden with
-`WP_FTS_CRANFIELD_MAX_NDCG_DELTA`, `WP_FTS_CRANFIELD_MAX_MAP_DELTA`, and
-`WP_FTS_CRANFIELD_MAX_PRECISION_AT_5_DELTA`, or the matching CLI flags.
-
-## Legacy Component Relevance Gold Benchmark
-
-The main harness includes the committed component relevance fixture automatically.
-Run the evaluator directly when you need the per-query metrics table:
-
-```sh
-php tests/relevance-benchmark.php --suite=tests/fixtures/relevance/native-core.json
-php tests/relevance-benchmark.php --suite=tests/fixtures/relevance/native-core.json --json
-php -n tests/relevance-benchmark.php --suite=tests/fixtures/relevance/native-core.json
-```
-
-The fixture is a modest regression gate for the legacy in-memory
-analyzer/searcher contract. It reports recall@5, precision@5, MRR, nDCG@5, and
-cross-language false positives; it does not exercise the production relational
-ranker and is not a production relevance-quality claim.
-
-## Legacy Component Generated-Scale Benchmark
-
-The main harness includes PR-safe generated component benchmark gates.
-Run the benchmark directly when you need the indexed-document, token, postings,
-materialized-row, result-window hydration, memory-delta, and conservative
-index/search timing budget counters:
-
-```sh
-php tests/production-scale-benchmark.php
-php tests/production-scale-benchmark.php --profile=expanded
-php tests/production-scale-benchmark.php --json
-php -n tests/production-scale-benchmark.php
-```
-
-Both profiles generate deterministic WordPress-shaped documents across title,
-body, excerpt, and content fields. The benchmark reports bounded query-check
-and result-window timings, plus pass/fail performance gates for the generated
-corpus. The release evidence collector surfaces those gates in the
-`production_scale_benchmark` lane and fails that required lane when benchmark
-JSON reports a failed duration gate. This is pure-PHP generated evidence only:
-it does not use live MySQL, does not replay production traffic, does not certify
-public-submission readiness, and does not commit generated corpora, caches,
-logs, or archives.
-
 ## Relational Search Worst-Case Acceptance
 
 The set-oriented relational backend has a separate destructive acceptance lane.
-Unlike the legacy component benchmark above, it builds the exact direct-install
-ZIP, installs it in disposable WordPress, uses a real constrained MariaDB or
-MySQL database, indexes 2,000, 50,000, or 100,000 canonical posts through the
-production WP-CLI path, and writes source-bound machine-readable evidence.
+It builds the exact direct-install ZIP, installs it in disposable WordPress,
+uses a real constrained MariaDB or MySQL database, indexes 2,000, 50,000, or
+100,000 canonical posts through the production WP-CLI path, and writes
+source-bound machine-readable reports.
 
 The lane exercises common-term OR, rare-anchor AND, high-cardinality final-word
 prefixes, all active analyzer packs, hidden and dirty high-impact rows, poison
@@ -452,11 +350,8 @@ incomplete evidence fails the command.
 Before the destructive lane, the focused bounds can be exercised directly:
 
 ```sh
-php -d memory_limit=128M ../components/full-text-search/tests/jieba-scan-bounds.php
-php -d memory_limit=128M ../components/full-text-search/tests/jieba-line-bounds.php
-php -d memory_limit=128M ../components/full-text-search/tests/jieba-cache-bounds.php
-WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='Jieba dictionary giant line' php tests/run.php
-WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='Jieba 32-prefix fanout' php tests/run.php
+php -d memory_limit=128M ../components/full-text-search/tests/jieba-query-producer-bounds.php
+php -d memory_limit=128M ../components/full-text-search/tests/jieba-indexed-multi-run.php
 php ../components/full-text-search/tests/lemma-pack-limits.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='64-file lemma packs' php tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='bundled multi-file lemma pack' php tests/run.php
@@ -513,7 +408,7 @@ Do not add this multi-hour real-database lane to `tests/run.php`, reduce the
 document counts under the same profile names, replace it with a fake `$wpdb`, or
 turn infrastructure failures into skips. See
 [`relational-search-acceptance.md`](relational-search-acceptance.md) for the
-fixed corpus, resource limits, numerical gates, migration proof, and required
+fixed corpus, resource limits, numerical gates, schema-repair proof, and required
 before/after PR evidence.
 
 ## Large Search Corpus Generator
@@ -523,7 +418,7 @@ shards for demos or external benchmark indexing:
 
 ```sh
 php tools/generate-large-search-corpus.php \
-  --output=/home/claude/indexer/.cao/generated/search-corpus-v1 \
+  --output=/tmp/wp-fts-search-corpus-v1 \
   --seed=wp-fts-large-search-corpus-v1 \
   --english-docs=100000 \
   --per-language-docs=30000
@@ -539,10 +434,10 @@ php -n tests/search-corpus-generator.php
 
 The default language scope and output contract are documented in
 [`docs/search-corpus-generator.md`](search-corpus-generator.md). Generated
-corpora are rebuildable artifacts and should stay under `.cao/generated/` or
-another untracked output directory. Length-focused tests cover the 200-token
-floor, the roughly 750-word modal bucket, and the deterministic 5,000+ token
-long tail.
+corpora are rebuildable artifacts. Write them to a caller-supplied temporary
+or external output directory, not into the source checkout. Length-focused
+tests cover the 200-token floor, the roughly 750-word modal bucket, and the
+deterministic 5,000+ token long tail.
 
 ## Analyzer Source-Lock Manifests
 
@@ -560,22 +455,22 @@ The normal PHP harness also includes the source-lock quality test through
 
 ## Polish Analyzer Pack Validation
 
-Validate the opt-in Polish Morfologik/PoliMorf fixture pack directly:
+Validate the test-only Polish Morfologik/PoliMorf contract pack directly:
 
 ```sh
-php tools/validate-analyzer-pack.php resources/analyzer-packs/pl-morfologik-polimorf-fixture/manifest.json
-php -n tools/validate-analyzer-pack.php resources/analyzer-packs/pl-morfologik-polimorf-fixture/manifest.json
+php tools/validate-analyzer-pack.php tests/fixtures/analyzer-packs/pl-morfologik-polimorf-fixture/manifest.json
+php -n tools/validate-analyzer-pack.php tests/fixtures/analyzer-packs/pl-morfologik-polimorf-fixture/manifest.json
 ```
 
 The validator checks manifest shape, runtime row normalization, duplicate rows,
-ambiguous no-op handling, and declared checksums for the bundled fixture pack.
+ambiguous no-op handling, and declared checksums for the test-only pack.
 
-Validate the generic non-Polish lemma-pack runtime with the bundled synthetic
+Validate the generic non-Polish lemma-pack runtime with the test-only synthetic
 Bengali contract fixture:
 
 ```sh
-php tools/validate-analyzer-pack.php resources/analyzer-packs/bn-synthetic-lemma-fixture/manifest.json
-php -n tools/validate-analyzer-pack.php resources/analyzer-packs/bn-synthetic-lemma-fixture/manifest.json
+php tools/validate-analyzer-pack.php tests/fixtures/analyzer-packs/bn-synthetic-lemma-fixture/manifest.json
+php -n tools/validate-analyzer-pack.php tests/fixtures/analyzer-packs/bn-synthetic-lemma-fixture/manifest.json
 ```
 
 This fixture is project-owned artificial data for runtime-contract testing
@@ -595,7 +490,7 @@ php tools/audit-top-language-lemma-packs.php \
   --require-pack-backed
 ```
 
-Those packs are source-backed, opt-in, default-disabled, and carry their
+Those packs are source-backed, activate only through plugin configuration, and carry their
 upstream license/provenance in each pack manifest and source lock. Run the
 next-language support harness when changing Russian, German, Japanese, Korean,
 Telugu, Turkish, Italian, Persian, Ukrainian, or Dutch routing and packs:
@@ -611,16 +506,14 @@ use deterministic fallback n-grams. Source repositories are pinned as git
 submodules, not copied dictionary rows:
 
 ```sh
-git submodule update --init --recursive components/full-text-search/resources/sources/jieba
-git -C components/full-text-search/resources/sources/jieba rev-parse HEAD
-sha256sum components/full-text-search/resources/sources/jieba/jieba/dict.txt
-wc -c components/full-text-search/resources/sources/jieba/jieba/dict.txt
+components/full-text-search/tools/initialize-jieba-source.sh
 ```
 
-The expected commit is `67fa2e36e72f69d9134b8a1037b83fbb070b9775`, SHA-256 is
-`7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`, and byte
-size is `5071852`. Urdu is audited as license-blocked until `unimorph/urd` has
-clear redistribution evidence, so no generated Urdu pack is bundled.
+The harness reads the upstream commit and dictionary, license, and lookup
+identities from the
+[Jieba runtime manifest](../../components/full-text-search/resources/runtime/jieba/manifest.json).
+Urdu is audited as license-blocked until `unimorph/urd` has clear redistribution
+proof, so no generated Urdu pack is bundled.
 
 Japanese and Korean pack experiments should stay external until a source-backed
 word segmenter is wired into the PHP pipeline. Initialize the pinned sources,
@@ -648,14 +541,6 @@ cover local fixture builds, source hash and byte-count mismatches, missing
 download acknowledgement, non-empty output refusal, generated pack validation,
 lemmatizer lookup from the generated pack, and the no-runtime-network-access
 boundary.
-
-The product-search check against a full generated PoliMorf pack is registered
-only when its external manifest is supplied:
-
-```sh
-WP_FTS_FULL_POLIMORF_MANIFEST=/path/to/full-pack/manifest.json \
-  php tests/quality/rigorous-fts-search-behavior.php
-```
 
 Build the synthetic fixture pack from the command line into a disposable
 external directory:
@@ -704,18 +589,6 @@ Repeat the build into a second disposable directory and compare `manifest.json`,
 archive, extracted TSV, generated runtime pack, cache files, and temporary files
 are third-party or generated data and must not be committed or bundled.
 
-## Polish Verified Stemmer Fixtures
-
-The opt-in Polish verified stemmer slice has a standalone fixture validator:
-
-```sh
-php tests/polish-verified-stemmer-fixtures.php
-php -n tests/polish-verified-stemmer-fixtures.php
-```
-
-The same fixture rows are also covered by `tests/run.php` through
-`tests/quality/polish-verified-stemmer.php`.
-
 ## Explicit Check Gate
 
 The integrated quality harness is expected to meet at least 1500 checks:
@@ -741,7 +614,7 @@ There is no machine-specific default. The compliance command exits with status
 runs the hermetic reference checks without pretending the official data was
 present.
 The focused external-reference command adds sampled official-row and
-unsupported-language boundary checks to its local BM25 and analyzer references.
+unsupported-language boundary checks to its local analyzer references.
 
 Composer also exposes:
 
@@ -751,15 +624,12 @@ SNOWBALL_DATA_DIR=/path/to/snowball-data composer test:snowball
 
 The harness reports unsupported Snowball languages as skipped. Skips are
 expected for languages that are not advertised by `WP_FTS_SnowballStemmer`.
-Arabic (`ar`), English (`en`), Spanish (`es`), French (`fr`), Hindi (`hi`),
-Portuguese (`pt`), and Indonesian (`id`) should pass from the bundled generated
-Snowball implementations even in a bare checkout; Wamania-backed Catalan (`ca`)
-and Dutch Porter (`nl`) skip when optional Composer dependencies are absent.
-With the current official Snowball data checkout, a source tree without `vendor/`
-should report `7 pass, 30 skip, 0 fail`; after installing production
-dependencies from `composer.lock`, Arabic, English, Spanish, French, Hindi,
-Portuguese, Indonesian, Catalan, and Dutch Porter should pass, for
-`9 pass, 28 skip, 0 fail`.
+Install production dependencies from `composer.lock` before running it. Arabic
+(`ar`), English (`en`), Spanish (`es`), French (`fr`), Hindi (`hi`), Portuguese
+(`pt`), Indonesian (`id`), Wamania-backed Catalan (`ca`), and Wamania-backed
+Dutch Porter (`nl`) should pass, for `9 pass, 28 skip, 0 fail` with the current
+official Snowball data checkout. A missing Wamania factory stops analyzer
+construction instead of turning two supported datasets into skips.
 
 The bundled Arabic, Spanish, French, Hindi, Portuguese, and Indonesian ports
 also have direct full-fixture validators. Point all of them at the same
@@ -781,18 +651,6 @@ php -n tests/portuguese-snowball-fixtures.php
 php tests/indonesian-snowball-fixtures.php
 php -n tests/indonesian-snowball-fixtures.php
 ```
-
-## Polish Lemmatizer Source-Lock Pilot
-
-The Polish source-lock pilot verifies metadata gates for a future
-Morfologik-style lemmatizer candidate without downloading or committing lexical
-data:
-
-```sh
-php tests/quality/polish-lemmatizer-source-lock.php
-```
-
-The main harness discovers the same verifier automatically.
 
 ## Tokenizer Source-Lock Verifier
 
@@ -847,21 +705,10 @@ evidence, inserts a small multilingual post set, indexes through
 `WP_FTS_Indexer`, and searches through `WP_FTS_Searcher`. It probes Polish
 stemming/detection, German detection, explicit language override, and fallback
 behavior for text without detector evidence. It explicitly enables and covers
-the otherwise-disabled public REST search route (`q`, `query`, invalid
-`mode`, missing query, and pre-limit visibility with hidden stale rows) plus
+the otherwise-disabled public REST search route (`q`, invalid `mode`, missing
+`q`, and pre-limit visibility with hidden stale rows) plus
 WP-CLI `wp fts reindex` and `wp fts search` when the Playground WP-CLI library
 is available.
-
-## Optional BM25 Python Reference
-
-Run the Python reference only when the environment has the optional virtualenv
-and native library path used by the hardening contract:
-
-```sh
-LD_LIBRARY_PATH=/nix/store/f2q5ld1nipl8w1r2w8m6azhlm2varqgb-zlib-1.3.1/lib:/nix/store/cf1a53iqg6ncnygl698c4v0l8qam5a2q-gcc-14.3.0-lib/lib /home/claude/.cache/indexer-bm25s-venv/bin/python tests/bm25_lucene_reference.py
-```
-
-If `bm25s` is not installed, the script exits as an explicit optional skip.
 
 ## PHP Syntax Check
 

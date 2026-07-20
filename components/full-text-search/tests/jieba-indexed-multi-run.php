@@ -22,12 +22,6 @@ function wp_fts_jieba_multi_run_check(bool $condition, string $message): void
     }
 }
 
-/** Returns the private dictionary-scan count for containment assertions. */
-function wp_fts_jieba_multi_run_scan_count(WP_FTS_ChineseJiebaSegmenter $segmenter): int
-{
-    return (int) (new ReflectionProperty($segmenter, 'dictionaryScanCount'))->getValue($segmenter);
-}
-
 /** @return array{bytes:int,source:string} */
 function wp_fts_jieba_multi_run_rss_sample(string $field): array
 {
@@ -185,7 +179,6 @@ function wp_fts_jieba_multi_run_high_fanout_prefixes(
  * @param string[] $runs
  * @return array{
  *   elapsed_seconds:float,
- *   complete_dictionary_scans:int,
  *   indexed_range_reads:int,
  *   php_peak_delta_bytes:int,
  *   rss_delta_bytes:int,
@@ -207,7 +200,6 @@ function wp_fts_jieba_measure_run_batch(WP_FTS_ChineseJiebaSegmenter $segmenter,
     $memoryBefore = memory_get_usage(true);
     $memoryPeakBefore = memory_get_peak_usage(true);
     $rssBeforeSample = wp_fts_jieba_multi_run_rss_sample('VmRSS');
-    $scansBefore = wp_fts_jieba_multi_run_scan_count($segmenter);
     $rangeReadsBefore = (int) (new ReflectionProperty($segmenter, 'indexedRangeReadCount'))->getValue($segmenter);
     $termCount = 0;
     $started = microtime(true);
@@ -237,7 +229,6 @@ function wp_fts_jieba_measure_run_batch(WP_FTS_ChineseJiebaSegmenter $segmenter,
 
     return [
         'elapsed_seconds' => $elapsed,
-        'complete_dictionary_scans' => wp_fts_jieba_multi_run_scan_count($segmenter) - $scansBefore,
         'indexed_range_reads' => (int) (new ReflectionProperty($segmenter, 'indexedRangeReadCount'))->getValue($segmenter)
             - $rangeReadsBefore,
         'php_peak_delta_bytes' => $phpPeakDelta,
@@ -266,7 +257,6 @@ function wp_fts_jieba_measure_run_batch(WP_FTS_ChineseJiebaSegmenter $segmenter,
 /**
  * @return array{
  *   elapsed_seconds:float,
- *   complete_dictionary_scans:int,
  *   indexed_range_reads:int,
  *   php_peak_delta_bytes:int,
  *   rss_delta_bytes:int,
@@ -294,7 +284,6 @@ function wp_fts_jieba_measure_multi_run(
     $memoryBefore = memory_get_usage(true);
     $memoryPeakBefore = memory_get_peak_usage(true);
     $rssBeforeSample = wp_fts_jieba_multi_run_rss_sample('VmRSS');
-    $scansBefore = wp_fts_jieba_multi_run_scan_count($segmenter);
     $rangeReadsBefore = (int) (new ReflectionProperty($segmenter, 'indexedRangeReadCount'))->getValue($segmenter);
     $started = microtime(true);
     $terms = $pipeline->analyze($text, 'zh');
@@ -325,7 +314,6 @@ function wp_fts_jieba_measure_multi_run(
 
     return [
         'elapsed_seconds' => $elapsed,
-        'complete_dictionary_scans' => wp_fts_jieba_multi_run_scan_count($segmenter) - $scansBefore,
         'indexed_range_reads' => (int) (new ReflectionProperty($segmenter, 'indexedRangeReadCount'))->getValue($segmenter)
             - $rangeReadsBefore,
         'php_peak_delta_bytes' => $phpPeakDelta,
@@ -383,7 +371,7 @@ if ($wp_fts_jieba_fresh_case !== null) {
     $freshRssDeltaCeiling = 25165824;
     $freshMeasurement = null;
     $freshSegmenter = null;
-    $freshWorkloadEvidence = [];
+    $freshWorkloadRecord = [];
     $wideCharacters = ['一', '中', '大', '三', '王', '不', '第', '马', '李', '二', '小', '金', '十', '张', '高', '阿', '无'];
 
     switch ($wp_fts_jieba_fresh_case) {
@@ -508,7 +496,7 @@ if ($wp_fts_jieba_fresh_case !== null) {
                 WP_FTS_ChineseJiebaSegmenter::default_source_file(),
                 1365
             );
-            $freshWorkloadEvidence = [
+            $freshWorkloadRecord = [
                 'run_bytes' => strlen($maximumFanout['run']),
                 'prefix_count' => $maximumFanout['prefix_count'],
                 'candidate_count' => $maximumFanout['candidate_count'],
@@ -531,7 +519,7 @@ if ($wp_fts_jieba_fresh_case !== null) {
                 WP_FTS_ChineseJiebaSegmenter::default_source_file(),
                 PHP_INT_MAX
             );
-            $freshWorkloadEvidence = [
+            $freshWorkloadRecord = [
                 'prefix_count' => $completePinned['prefix_count'],
                 'candidate_count' => $completePinned['candidate_count'],
                 'candidate_bytes' => $completePinned['candidate_bytes'],
@@ -556,12 +544,12 @@ if ($wp_fts_jieba_fresh_case !== null) {
     if (!$freshSegmenter instanceof WP_FTS_ChineseJiebaSegmenter || !is_array($freshMeasurement)) {
         throw new RuntimeException('The pinned Jieba segmenter should load for its isolated memory proof.');
     }
-    $freshWorkloadEvidence = wp_fts_jieba_multi_run_workload_identity(
+    $freshWorkloadRecord = wp_fts_jieba_multi_run_workload_identity(
         $freshMeasurement,
-        $freshWorkloadEvidence
+        $freshWorkloadRecord
     );
     $freshRssPeak = wp_fts_jieba_multi_run_rss_sample('VmHWM');
-    $freshProcessEvidence = [
+    $freshProcessRecord = [
         'php_peak_bytes' => memory_get_peak_usage(true),
         'rss_peak_bytes' => $freshRssPeak['bytes'],
         'rss_source' => $freshRssPeak['source'],
@@ -576,17 +564,17 @@ if ($wp_fts_jieba_fresh_case !== null) {
         'the isolated Jieba workload should retain its RSS allocation-delta ceiling'
     );
     wp_fts_jieba_multi_run_check(
-        $freshProcessEvidence['php_peak_bytes'] <= 134217728,
+        $freshProcessRecord['php_peak_bytes'] <= 134217728,
         'the isolated Jieba workload should stay within a 128 MiB PHP peak'
     );
     wp_fts_jieba_multi_run_check(
-        $freshProcessEvidence['rss_peak_bytes'] <= 134217728,
+        $freshProcessRecord['rss_peak_bytes'] <= 134217728,
         'the isolated Jieba workload should stay within a 128 MiB RSS peak'
     );
     if (PHP_OS_FAMILY === 'Linux') {
         wp_fts_jieba_multi_run_check(
             ($freshMeasurement['rss_source'] ?? null) === 'linux_proc_status'
-                && $freshProcessEvidence['rss_source'] === 'linux_proc_status',
+                && $freshProcessRecord['rss_source'] === 'linux_proc_status',
             'the isolated Linux RSS proof must come from /proc/self/status'
         );
     }
@@ -597,8 +585,8 @@ if ($wp_fts_jieba_fresh_case !== null) {
         'memory_authority' => 'fresh_process_conservative_peak_attribution',
         'memory_limit' => ini_get('memory_limit'),
         'measurement' => $freshMeasurement,
-        'process' => $freshProcessEvidence,
-        'workload' => $freshWorkloadEvidence,
+        'process' => $freshProcessRecord,
+        'workload' => $freshWorkloadRecord,
     ], JSON_THROW_ON_ERROR), "\n";
 
     return $wp_fts_jieba_multi_run_checks;
@@ -606,19 +594,30 @@ if ($wp_fts_jieba_fresh_case !== null) {
 
 $sourcePath = WP_FTS_ChineseJiebaSegmenter::default_source_file();
 $sourceBytes = is_file($sourcePath) ? filesize($sourcePath) : false;
-$lookupEvidence = WP_FTS_ChineseJiebaSegmenter::default_lookup_evidence();
+$runtimeManifest = WP_FTS_ChineseJiebaSegmenter::runtime_manifest();
+$dictionaryArtifact = $runtimeManifest['artifacts']['dictionary'];
+$lookupArtifact = $runtimeManifest['artifacts']['lookup'];
+$lookupPath = WP_FTS_ChineseJiebaSegmenter::default_lookup_file();
+$lookupRecord = [
+    'available' => is_file($lookupPath)
+        && filesize($lookupPath) === $lookupArtifact['bytes']
+        && hash_file('sha256', $lookupPath) === $lookupArtifact['sha256'],
+    'byte_size' => is_file($lookupPath) ? filesize($lookupPath) : false,
+    'range_count' => $lookupArtifact['ranges'],
+];
 wp_fts_jieba_multi_run_check(
-    $sourceBytes === WP_FTS_ChineseJiebaSegmenter::SOURCE_BYTE_SIZE,
+    $sourceBytes === $dictionaryArtifact['bytes'],
     'the exact-size pinned Jieba dictionary should be available'
 );
-wp_fts_jieba_multi_run_check($lookupEvidence['available'], 'the attested Jieba range index should be available');
+wp_fts_jieba_multi_run_check($lookupRecord['available'], 'the attested Jieba range index should be available');
 wp_fts_jieba_multi_run_check(
-    $lookupEvidence['byte_size'] < intdiv((int) $sourceBytes, 15),
+    $lookupRecord['byte_size'] < intdiv((int) $sourceBytes, 15),
     'the range index should stay below one fifteenth of the dictionary source bytes'
 );
 wp_fts_jieba_multi_run_check(
-    $lookupEvidence['range_count'] === 11783,
-    'the pinned source should retain exactly 11,783 first-codepoint ranges'
+    $lookupRecord['byte_size'] === $lookupArtifact['bytes']
+        && $lookupRecord['range_count'] === $lookupArtifact['ranges'],
+    'the pinned range index should match its runtime manifest'
 );
 
 $runs = [];
@@ -634,10 +633,6 @@ $coldConstructionElapsed = microtime(true) - $coldConstructionStarted;
 if (!$coldSegmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
     throw new RuntimeException('The pinned Jieba segmenter should load for the cold multi-run proof.');
 }
-wp_fts_jieba_multi_run_check(
-    (int) (new ReflectionProperty($coldSegmenter, 'sourceHashScanCount'))->getValue($coldSegmenter) === 0,
-    'cold pinned construction should attest the compact index without hashing all 5 MiB of source'
-);
 $lookupAttestation = new ReflectionMethod($coldSegmenter, 'lookup_file_is_attested');
 wp_fts_jieba_multi_run_check(
     $lookupAttestation->invoke($coldSegmenter, WP_FTS_ChineseJiebaSegmenter::default_lookup_file()) === true,
@@ -678,10 +673,6 @@ $saturatedConstructionElapsed = microtime(true) - $saturatedConstructionStarted;
 if (!$saturatedSegmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
     throw new RuntimeException('The pinned Jieba segmenter should load for the saturated multi-run proof.');
 }
-wp_fts_jieba_multi_run_check(
-    (int) (new ReflectionProperty($saturatedSegmenter, 'sourceHashScanCount'))->getValue($saturatedSegmenter) === 0,
-    'saturated pinned construction should not rehash all 5 MiB of source'
-);
 $saturatedSegmenter('一一', 'zh');
 $cachedAfterPrime = (int) (new ReflectionProperty($saturatedSegmenter, 'cachedCandidateCount'))->getValue($saturatedSegmenter);
 wp_fts_jieba_multi_run_check(
@@ -715,10 +706,6 @@ foreach (
     ['cold' => $repeatedWideCold, 'saturated' => $repeatedWideSaturated]
     as $name => $measurement
 ) {
-    wp_fts_jieba_multi_run_check(
-        $measurement['complete_dictionary_scans'] === 0,
-        "the {$name} repeated-wide-run analysis should perform no complete dictionary scan"
-    );
     wp_fts_jieba_multi_run_check(
         $measurement['indexed_range_reads'] <= 20,
         "the {$name} repeated-wide-run analysis should read each of its 17 prefix ranges only once"
@@ -780,10 +767,6 @@ $permutedWide = wp_fts_jieba_measure_multi_run(
     implode('', array_slice($lastPermutation, 0, 4))
 );
 wp_fts_jieba_multi_run_check(
-    $permutedWide['complete_dictionary_scans'] === 0,
-    '300 distinct hot-prefix permutations should perform no complete dictionary scan'
-);
-wp_fts_jieba_multi_run_check(
     $permutedWide['indexed_range_reads'] <= 20,
     '300 distinct hot-prefix permutations should read each populated prefix range only once'
 );
@@ -819,10 +802,6 @@ $changingPrefix = wp_fts_jieba_measure_multi_run(
     $changingSegmenter,
     implode('，', $changingRuns),
     implode('', array_slice($changingLastCharacters, 0, 4))
-);
-wp_fts_jieba_multi_run_check(
-    $changingPrefix['complete_dictionary_scans'] === 0,
-    '300 runs with one changing prefix should perform no complete dictionary scan'
 );
 wp_fts_jieba_multi_run_check(
     $changingPrefix['indexed_range_reads'] <= 350,
@@ -864,10 +843,6 @@ $distinctPrefixSets = wp_fts_jieba_measure_multi_run(
     implode('', array_slice($distinctSetLastCharacters, 0, 4))
 );
 wp_fts_jieba_multi_run_check(
-    $distinctPrefixSets['complete_dictionary_scans'] === 0,
-    '300 disjoint 17-prefix sets should perform no complete dictionary scan'
-);
-wp_fts_jieba_multi_run_check(
     $distinctPrefixSets['indexed_range_reads'] <= 4000,
     '300 disjoint 17-prefix sets should read at most the populated ranges in their 5,100-prefix union'
 );
@@ -900,10 +875,6 @@ $maximumDistinct = wp_fts_jieba_measure_multi_run($maximumSegmenter, $maximumTex
 wp_fts_jieba_multi_run_check(
     $maximumDistinct['term_count'] === WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES,
     '20,000 distinct one-character CJK runs should exercise the exact occurrence boundary'
-);
-wp_fts_jieba_multi_run_check(
-    $maximumDistinct['complete_dictionary_scans'] === 0,
-    'the 20,000-run occurrence boundary should perform no complete dictionary scan'
 );
 wp_fts_jieba_multi_run_check(
     $maximumDistinct['indexed_range_reads'] === 0,
@@ -948,10 +919,6 @@ $maximumFanout = wp_fts_jieba_measure_multi_run(
     $highFanoutSegmenter,
     $highFanout['run'],
     substr($highFanout['run'], 0, 12)
-);
-wp_fts_jieba_multi_run_check(
-    $maximumFanout['complete_dictionary_scans'] === 0,
-    'the maximum accepted pinned fanout should perform no complete dictionary scan'
 );
 wp_fts_jieba_multi_run_check(
     $maximumFanout['indexed_range_reads'] <= 1600,
@@ -1010,10 +977,6 @@ if (!$completePinnedSegmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
 }
 $completePinnedCache = wp_fts_jieba_measure_run_batch($completePinnedSegmenter, $completePinnedRuns);
 wp_fts_jieba_multi_run_check(
-    $completePinnedCache['complete_dictionary_scans'] === 0,
-    'warming every populated pinned prefix should perform no complete dictionary scan'
-);
-wp_fts_jieba_multi_run_check(
     $completePinnedCache['indexed_range_reads'] === 5632,
     'warming every populated Han prefix should read each of its 5,632 applicable attested ranges exactly once'
 );
@@ -1050,10 +1013,6 @@ foreach (['cold' => $coldConstructionElapsed, 'saturated' => $saturatedConstruct
 
 foreach (['cold' => $cold, 'saturated' => $saturated] as $name => $measurement) {
     wp_fts_jieba_multi_run_check(
-        $measurement['complete_dictionary_scans'] === 0,
-        "the {$name} 256-run analyzer call should use indexed ranges and no complete dictionary scan"
-    );
-    wp_fts_jieba_multi_run_check(
         $measurement['elapsed_seconds'] < 5.0,
         "the {$name} 256-run analyzer call should finish within five seconds"
     );
@@ -1077,13 +1036,12 @@ foreach (['cold' => $cold, 'saturated' => $saturated] as $name => $measurement) 
 
 $GLOBALS['wp_fts_jieba_multi_run_metrics'] = [
     'dictionary_bytes' => $sourceBytes,
-    'lookup_bytes' => $lookupEvidence['byte_size'],
-    'lookup_ranges' => $lookupEvidence['range_count'],
+    'lookup_bytes' => $lookupRecord['byte_size'],
+    'lookup_ranges' => $lookupRecord['range_count'],
     'distinct_runs' => count($runs),
     'cached_candidates_after_prime' => $cachedAfterPrime,
     'cold_construction_seconds' => $coldConstructionElapsed,
     'saturated_construction_seconds' => $saturatedConstructionElapsed,
-    'source_hash_scans_per_pinned_construction' => 0,
     'cold' => $cold,
     'saturated' => $saturated,
     'repeated_wide_cold' => $repeatedWideCold,
@@ -1092,14 +1050,14 @@ $GLOBALS['wp_fts_jieba_multi_run_metrics'] = [
     'changing_prefix' => $changingPrefix,
     'distinct_prefix_sets' => $distinctPrefixSets,
     'maximum_distinct' => $maximumDistinct,
-    'maximum_fanout_evidence' => [
+    'maximum_fanout_record' => [
         'run_bytes' => strlen($highFanout['run']),
         'prefix_count' => $highFanout['prefix_count'],
         'candidate_count' => $highFanout['candidate_count'],
         'candidate_bytes' => $highFanout['candidate_bytes'],
     ],
     'maximum_fanout' => $maximumFanout,
-    'complete_pinned_cache_evidence' => [
+    'complete_pinned_cache_record' => [
         'prefix_count' => $completePinned['prefix_count'],
         'candidate_count' => $completePinned['candidate_count'],
         'candidate_bytes' => $completePinned['candidate_bytes'],
@@ -1146,7 +1104,7 @@ $freshCases = [
         'measurement' => $maximumFanout,
         'workload' => wp_fts_jieba_multi_run_workload_identity(
             $maximumFanout,
-            $GLOBALS['wp_fts_jieba_multi_run_metrics']['maximum_fanout_evidence']
+            $GLOBALS['wp_fts_jieba_multi_run_metrics']['maximum_fanout_record']
         ),
         'delta_ceiling' => 67108864,
     ],
@@ -1154,7 +1112,7 @@ $freshCases = [
         'measurement' => $completePinnedCache,
         'workload' => wp_fts_jieba_multi_run_workload_identity(
             $completePinnedCache,
-            $GLOBALS['wp_fts_jieba_multi_run_metrics']['complete_pinned_cache_evidence']
+            $GLOBALS['wp_fts_jieba_multi_run_metrics']['complete_pinned_cache_record']
         ),
         'delta_ceiling' => 67108864,
     ],
@@ -1184,7 +1142,7 @@ foreach ($freshCases as $freshCase => $freshExpected) {
     }
     $freshPayload = json_decode((string) $freshOutput, true, 16, JSON_THROW_ON_ERROR);
     $freshMeasurement = is_array($freshPayload['measurement'] ?? null) ? $freshPayload['measurement'] : [];
-    $freshProcessEvidence = is_array($freshPayload['process'] ?? null) ? $freshPayload['process'] : [];
+    $freshProcessRecord = is_array($freshPayload['process'] ?? null) ? $freshPayload['process'] : [];
     wp_fts_jieba_multi_run_check(
         ($freshPayload['schema'] ?? null) === 'jieba-isolated-memory-case-v2'
             && ($freshPayload['status'] ?? null) === 'pass'
@@ -1195,7 +1153,7 @@ foreach ($freshCases as $freshCase => $freshExpected) {
         "the isolated {$freshCase} Jieba proof should complete under a 128 MiB PHP limit"
     );
     $measurementMatches = true;
-    foreach (['term_count', 'complete_dictionary_scans', 'indexed_range_reads'] as $field) {
+    foreach (['term_count', 'indexed_range_reads'] as $field) {
         $measurementMatches = $measurementMatches
             && ($freshMeasurement[$field] ?? null) === ($freshExpected['measurement'][$field] ?? null);
     }
@@ -1222,18 +1180,18 @@ foreach ($freshCases as $freshCase => $freshExpected) {
         "the isolated {$freshCase} Jieba RSS deltas should retain their per-case ceiling"
     );
     wp_fts_jieba_multi_run_check(
-        ($freshProcessEvidence['php_peak_bytes'] ?? PHP_INT_MAX) <= 134217728,
+        ($freshProcessRecord['php_peak_bytes'] ?? PHP_INT_MAX) <= 134217728,
         "the isolated {$freshCase} Jieba proof should stay within a 128 MiB PHP peak"
     );
     wp_fts_jieba_multi_run_check(
-        ($freshProcessEvidence['rss_peak_bytes'] ?? PHP_INT_MAX) <= 134217728,
+        ($freshProcessRecord['rss_peak_bytes'] ?? PHP_INT_MAX) <= 134217728,
         "the isolated {$freshCase} Jieba proof should stay within a 128 MiB RSS peak"
     );
     if (PHP_OS_FAMILY === 'Linux') {
         wp_fts_jieba_multi_run_check(
             ($freshMeasurement['rss_source'] ?? null) === 'linux_proc_status'
-                && ($freshProcessEvidence['rss_source'] ?? null) === 'linux_proc_status',
-            "the isolated {$freshCase} Linux RSS evidence should retain /proc/self/status provenance"
+                && ($freshProcessRecord['rss_source'] ?? null) === 'linux_proc_status',
+            "the isolated {$freshCase} Linux RSS signal should retain /proc/self/status provenance"
         );
     }
     $freshProofs[$freshCase] = [
@@ -1241,7 +1199,7 @@ foreach ($freshCases as $freshCase => $freshExpected) {
         'memory_authority' => $freshPayload['memory_authority'],
         'memory_limit' => $freshPayload['memory_limit'],
         'measurement' => $freshMeasurement,
-        'process' => $freshProcessEvidence,
+        'process' => $freshProcessRecord,
         'workload' => $freshPayload['workload'],
     ];
 }

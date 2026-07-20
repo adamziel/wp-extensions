@@ -62,7 +62,7 @@
       "support_kind": "lemma_pack",
       "pack_required": true,
       "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
-      "notes": "Committed UniMorph-derived analyzer pack provides source-backed lemma evidence; the older synthetic pack remains fixture-only."
+      "notes": "Committed UniMorph-derived analyzer pack provides source-backed lemma coverage; synthetic contract data lives only under tests."
     },
     {
       "language": "pt",
@@ -189,7 +189,7 @@
       "support_kind": "lemma_pack",
       "pack_required": true,
       "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
-      "notes": "Committed UniMorph-derived analyzer pack provides source-backed lemma evidence; the older optional Wamania Dutch Porter path remains only a fallback when no pack is configured."
+      "notes": "The committed UniMorph-derived pack is the primary Dutch morphology source; the required Wamania runtime stems Dutch only when no pack is configured."
     }
   ]
 }

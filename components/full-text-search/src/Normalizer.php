@@ -10,6 +10,12 @@ declare(strict_types=1);
  */
 final class WP_FTS_Normalizer
 {
+    private const CONSTRUCTOR_OPTION_KEYS = [
+        'fold_diacritics',
+        'token_normalizer',
+        'chinese_script_map',
+    ];
+
     private bool $foldDiacritics;
     /** @var callable|null */
     private $tokenNormalizer;
@@ -22,19 +28,44 @@ final class WP_FTS_Normalizer
      * @param array{
      *   fold_diacritics?:bool,
      *   token_normalizer?:callable|null,
-     *   chinese_script_map?:array<string,string>|array<string,array<string,string>>
+     *   chinese_script_map?:array<string,array<string,string>>
      * } $options Set `fold_diacritics` false when accents and
      *        language-specific letters must remain distinct in the index.
-     *        `token_normalizer` may perform deterministic language-specific
-     *        rewrites after the built-in dialect maps. `chinese_script_map`
-     *        accepts either a flat character map or a language-keyed map.
+     *        `token_normalizer` may return one unpadded non-empty string after
+     *        the built-in dialect maps. `chinese_script_map` is keyed first by
+     *        language and then by source character.
      */
     public function __construct(array $options = [])
     {
-        WP_FTS_Analyzer_Config_Limits::assert_option_graph($options, 'Normalizer options');
-        $this->foldDiacritics = (bool) ($options['fold_diacritics'] ?? true);
+        if (!class_exists(\Symfony\Polyfill\Intl\Normalizer\Normalizer::class)) {
+            throw new LogicException(
+                'WP_FTS_Normalizer requires symfony/polyfill-intl-normalizer. Install Composer dependencies before constructing the analyzer.'
+            );
+        }
+
+        WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'Normalizer options');
+        foreach (array_keys($options) as $key) {
+            if (!is_string($key) || !in_array($key, self::CONSTRUCTOR_OPTION_KEYS, true)) {
+                throw new InvalidArgumentException('Normalizer options contain an unsupported field.');
+            }
+        }
+        if (array_key_exists('fold_diacritics', $options) && !is_bool($options['fold_diacritics'])) {
+            throw new InvalidArgumentException('Normalizer option fold_diacritics must be a boolean.');
+        }
+        if (
+            array_key_exists('token_normalizer', $options)
+            && $options['token_normalizer'] !== null
+            && !is_callable($options['token_normalizer'])
+        ) {
+            throw new InvalidArgumentException('Normalizer option token_normalizer must be callable or null.');
+        }
+        if (array_key_exists('chinese_script_map', $options) && !is_array($options['chinese_script_map'])) {
+            throw new InvalidArgumentException('Normalizer option chinese_script_map must be a language map.');
+        }
+
+        $this->foldDiacritics = $options['fold_diacritics'] ?? true;
         $normalizer = $options['token_normalizer'] ?? null;
-        $this->tokenNormalizer = is_callable($normalizer) ? $normalizer : null;
+        $this->tokenNormalizer = $normalizer;
         $this->chineseScriptMaps = $this->normalize_chinese_script_maps($options['chinese_script_map'] ?? []);
     }
 
@@ -103,8 +134,6 @@ final class WP_FTS_Normalizer
      * ligatures. Composer's implementation is preferred even when ext-intl is
      * loaded: web and CLI SAPIs commonly ship different ICU releases, and an
      * index written by one process must produce the same terms in the other.
-     * The guarded native/fallback paths keep source-tree bootstraps usable when
-     * dependencies have not been installed yet.
      */
     public function normalize_unicode(string $text): string
     {
@@ -115,97 +144,45 @@ final class WP_FTS_Normalizer
         }
 
         $text = WP_FTS_Utf8::repair_word_boundaries($text);
-        $normalizer = $this->unicode_normalizer_class();
-        if ($normalizer === null) {
-            return $text;
+        $normalized = \Symfony\Polyfill\Intl\Normalizer\Normalizer::normalize(
+            $text,
+            \Symfony\Polyfill\Intl\Normalizer\Normalizer::FORM_KC
+        );
+        if (!is_string($normalized)) {
+            throw new UnexpectedValueException('Unicode normalization must return a string.');
         }
 
-        try {
-            $normalized = $normalizer::normalize($text, $normalizer::FORM_KC);
-        } catch (Throwable) {
-            return $text;
-        }
-
-        return is_string($normalized) ? $normalized : $text;
+        return $normalized;
     }
 
     /**
      * Identify the Unicode normalization backend for stale-index checks.
      *
-     * Composer makes one NFKC data set authoritative across SAPIs, while raw
-     * source-tree bootstraps may temporarily use native ICU or no normalizer.
-     * Encoding that distinction prevents a dependency change from silently
-     * changing query terms without reindexing existing documents.
+     * Composer makes one NFKC data set authoritative across SAPIs. Encoding
+     * its release prevents a dependency change from silently changing query
+     * terms without reindexing existing documents.
      */
     public function index_signature(): string
     {
-        if (class_exists('Symfony\\Polyfill\\Intl\\Normalizer\\Normalizer')) {
-            return 'wp-fts-unicode-normalizer:nfkc-symfony-polyfill-' . $this->polyfill_version_signature();
-        }
-
-        if (!class_exists('Normalizer')) {
-            return 'wp-fts-unicode-normalizer:none';
-        }
-
-        $backend = defined('INTL_ICU_VERSION')
-            ? 'intl-' . (string) constant('INTL_ICU_VERSION')
-            : 'symfony-polyfill-' . $this->polyfill_version_signature();
-
-        return 'wp-fts-unicode-normalizer:nfkc-' . $backend;
-    }
-
-    /** Return the deterministic packaged backend, then the raw-source fallback. */
-    private function unicode_normalizer_class(): ?string
-    {
-        if (class_exists('Symfony\\Polyfill\\Intl\\Normalizer\\Normalizer')) {
-            return 'Symfony\\Polyfill\\Intl\\Normalizer\\Normalizer';
-        }
-
-        return class_exists('Normalizer') ? 'Normalizer' : null;
+        return 'wp-fts-unicode-normalizer:nfkc-symfony-polyfill-' . $this->polyfill_version_signature();
     }
 
     /**
-     * Resolve the installed polyfill release, with a data hash fallback for
-     * source trees that load the Symfony class without Composer metadata.
+     * Resolve the installed polyfill release from Composer metadata.
      */
     private function polyfill_version_signature(): string
     {
-        if (class_exists('Composer\\InstalledVersions')) {
-            try {
-                $version = Composer\InstalledVersions::getPrettyVersion('symfony/polyfill-intl-normalizer')
-                    ?? Composer\InstalledVersions::getReference('symfony/polyfill-intl-normalizer');
-                if (is_string($version) && $version !== '') {
-                    return $version;
-                }
-            } catch (Throwable) {
-                // Fall through to hashing the loaded normalization tables.
-            }
+        if (!class_exists(Composer\InstalledVersions::class)) {
+            throw new LogicException('Unicode normalization requires Composer package metadata.');
         }
 
-        if (!class_exists('Symfony\\Polyfill\\Intl\\Normalizer\\Normalizer')) {
-            return 'unknown';
+        $version = Composer\InstalledVersions::getPrettyVersion('symfony/polyfill-intl-normalizer')
+            ?? Composer\InstalledVersions::getReference('symfony/polyfill-intl-normalizer');
+        if (!is_string($version) || $version === '') {
+            throw new LogicException('Could not resolve the installed Unicode normalizer release.');
         }
 
-        try {
-            $classFile = (new ReflectionClass('Symfony\\Polyfill\\Intl\\Normalizer\\Normalizer'))->getFileName();
-            if (!is_string($classFile) || !is_file($classFile)) {
-                return 'unknown';
-            }
-
-            $files = array_merge(
-                [$classFile],
-                glob(dirname($classFile) . '/Resources/unidata/*.php') ?: []
-            );
-            sort($files, SORT_STRING);
-            $hash = hash_init('sha256');
-            foreach ($files as $file) {
-                hash_update($hash, basename($file) . "\0" . hash_file('sha256', $file) . "\n");
-            }
-
-            return 'data-' . substr(hash_final($hash), 0, 16);
-        } catch (Throwable) {
-            return 'unknown';
-        }
+        return $version;
     }
 
     /**
@@ -466,52 +443,36 @@ final class WP_FTS_Normalizer
      */
     private function normalize_chinese_script_maps(mixed $maps): array
     {
-        if (!is_array($maps) || $maps === []) {
+        if ($maps === []) {
             return [];
         }
-
-        $isFlatMap = true;
-        foreach ($maps as $value) {
-            if (!is_scalar($value)) {
-                $isFlatMap = false;
-                break;
-            }
-        }
-
-        if ($isFlatMap) {
-            return ['zh' => $this->normalize_string_map($maps)];
+        if (!is_array($maps)) {
+            throw new InvalidArgumentException('Chinese script maps must be keyed by language.');
         }
 
         $normalized = [];
+        $seenLanguages = [];
         foreach ($maps as $language => $map) {
-            $map = $this->normalize_string_map($map);
-            if ($map === []) {
+            $canonicalLanguage = WP_FTS_TermNamespace::parse_language_tag($language);
+            if (isset($seenLanguages[$canonicalLanguage])) {
+                throw new InvalidArgumentException("Chinese script maps contain duplicate language {$canonicalLanguage}.");
+            }
+            $seenLanguages[$canonicalLanguage] = true;
+            if (!is_array($map)) {
+                throw new InvalidArgumentException('Each Chinese script map language must contain a character map.');
+            }
+            $validatedMap = [];
+            foreach ($map as $from => $to) {
+                if (!is_string($from) || $from === '' || !is_string($to)) {
+                    throw new InvalidArgumentException('Chinese script maps must contain only non-empty string keys and string values.');
+                }
+                $validatedMap[$from] = $to;
+            }
+            if ($validatedMap === []) {
                 continue;
             }
 
-            $normalized[$this->canonicalize_language((string) $language)] = $map;
-        }
-
-        return $normalized;
-    }
-
-    /**
-     * Keep only scalar-to-scalar entries in a normalization map.
-     *
-     * @param mixed $map
-     * @return array<string,string>
-     */
-    private function normalize_string_map(mixed $map): array
-    {
-        if (!is_array($map)) {
-            return [];
-        }
-
-        $normalized = [];
-        foreach ($map as $from => $to) {
-            if (is_scalar($from) && is_scalar($to) && (string) $from !== '') {
-                $normalized[(string) $from] = (string) $to;
-            }
+            $normalized[$canonicalLanguage] = $validatedMap;
         }
 
         return $normalized;
@@ -526,21 +487,17 @@ final class WP_FTS_Normalizer
             return $token;
         }
 
-        try {
-            $normalized = ($this->tokenNormalizer)($token, $language);
-        } catch (Throwable) {
-            return $token;
+        $normalized = ($this->tokenNormalizer)($token, $language);
+        if (!is_string($normalized)) {
+            throw new UnexpectedValueException('A token normalizer must return a string.');
         }
-
-        if (!is_scalar($normalized)) {
-            return $token;
-        }
-
-        $normalized = (string) $normalized;
         // Extension output crosses the same lexical boundary as source text.
         // Reject it before the second Unicode-normalization pass can copy or
         // scan an arbitrarily large callback result.
         WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($normalized));
+        if ($normalized === '' || trim($normalized) !== $normalized) {
+            throw new UnexpectedValueException('A token normalizer must return an unpadded non-empty string.');
+        }
 
         return $normalized;
     }
@@ -560,28 +517,6 @@ final class WP_FTS_Normalizer
             'tr' => strtr($token, $this->turkish_fold_map()),
             default => strtr($token, $this->latin_fallback_fold_map()),
         };
-    }
-
-    /**
-     * Return Polish-specific fold mappings.
-     *
-     * Kept separate for tests and future language-specific tuning.
-     *
-     * @return array<string,string>
-     */
-    private function polish_fold_map(): array
-    {
-        return [
-            'ą' => 'a',
-            'ć' => 'c',
-            'ę' => 'e',
-            'ł' => 'l',
-            'ń' => 'n',
-            'ó' => 'o',
-            'ś' => 's',
-            'ź' => 'z',
-            'ż' => 'z',
-        ];
     }
 
     /**

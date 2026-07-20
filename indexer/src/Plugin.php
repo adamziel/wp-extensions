@@ -35,11 +35,12 @@ final class WP_FTS_Search_Unavailable extends RuntimeException
 
 final class WP_FTS_Plugin
 {
-    public const SCHEMA_VERSION = 9;
+    public const SCHEMA_VERSION = 1;
     public const SCHEMA_VERSION_OPTION = 'wp_fts_schema_version';
     public const CRON_HOOK = 'wp_fts_process_index_queue';
     public const SCHEMA_REPAIR_CRON_HOOK = 'wp_fts_repair_schema';
     public const SCHEMA_SITE_CRON_HOOK = 'wp_fts_provision_site_schema';
+    public const SITE_SCHEMA_RETRY_CRON_HOOK = 'wp_fts_retry_site_schema';
     public const INDEX_LOCK_OPTION = 'wp_fts_indexing_lock';
     public const UNINSTALL_FENCE_OPTION = 'wp_fts_uninstall_fence';
     public const UNINSTALL_FENCE_VALUE = '1';
@@ -63,24 +64,15 @@ final class WP_FTS_Plugin
     public const SEARCH_REPLACEMENT_PRIORITY = 999;
     public const SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY = PHP_INT_MAX;
     public const LANGUAGE_META_KEY = '_wp_fts_index_language';
-    public const DEFAULT_BATCH_SIZE = 25;
     public const DEFAULT_CRON_INDEX_BATCH_SIZE = 20;
     public const DEFAULT_MANUAL_INDEX_BATCH_SIZE = 100;
+    public const MAX_MANUAL_INDEX_TIME_BUDGET_SECONDS = 300.0;
     public const MAX_SEARCH_LIMIT = WP_FTS_Set_Oriented_Search_Storage::MAX_PAGE_SIZE;
-    private const REST_MAX_QUERY_TERMS = 12;
-    private const MAX_SEARCH_QUERY_BYTES = 4096;
     private const MAX_WP_QUERY_SEARCH_BYTES = 1600;
-    private const MAX_SEARCH_MODE_BYTES = 8;
-    private const MAX_SEARCH_LANGUAGE_BYTES = 64;
-    private const MAX_SEARCH_CURSOR_BYTES = 2048;
     private const MAX_SEARCH_SWITCH_BYTES = 16;
     private const MAX_SEARCH_NUMERIC_BYTES = 64;
-    private const MAX_SEARCH_SCOPE_VALUES = 32;
     private const MAX_FILTER_SCOPE_LANES = 32;
-    private const MAX_SEARCH_SCOPE_VALUE_BYTES = 64;
-    private const MAX_SEARCH_SCOPE_BYTES = 4096;
     private const MAX_PUBLIC_SEARCH_OPTIONS = 32;
-    private const MAX_SEARCH_OPTION_KEY_BYTES = 64;
     private const MAX_QUERY_CONSTRAINT_DEPTH = 16;
     private const MAX_QUERY_CONSTRAINT_NODES = 64;
     private const UNSUPPORTED_SCOPE_SENTINEL = "\0wp_fts_scope_overflow";
@@ -99,7 +91,7 @@ final class WP_FTS_Plugin
     private const UNINSTALL_SITE_BATCH_SIZE = 100;
     private const MAX_INDEX_LOCK_DIAGNOSTIC_SECONDS = 2592000;
     private const MAX_CRON_INDEX_BATCH_SIZE = 500;
-    private const MAX_MANUAL_INDEX_BATCH_SIZE = 1000;
+    public const MAX_MANUAL_INDEX_BATCH_SIZE = 1000;
     private const MAX_SEARCH_PERFORMANCE_BUDGET_MS = 60000.0;
     private const MAX_INDEX_FAILURE_TITLE_BYTES = 120;
     private const MAX_INDEX_FAILURE_ERROR_BYTES = 240;
@@ -116,7 +108,6 @@ final class WP_FTS_Plugin
     private const MAX_INDEX_DEPENDENCY_QUERY_BRANCHES = 5;
     private const MAX_INDEX_DEPENDENCY_VALUE_QUERY_BRANCHES = 40;
     private const MAX_SERIALIZED_META_DEPTH = 16;
-    private const PRELOADED_POST_LANGUAGE_OPTION = 'wp_fts_preloaded_post_language';
     private const NETWORK_ACTIVATION_TOKEN_OPTION = 'wp_fts_network_activation_token';
     private const NETWORK_LIFECYCLE_LOCK_OPTION = 'wp_fts_network_lifecycle_lock';
     private const INITIAL_INDEX_STATUS_PENDING = 'pending';
@@ -132,10 +123,7 @@ final class WP_FTS_Plugin
     private const SUPPORT_SNAPSHOT_MAX_DEPTH = 6;
     private const SUPPORT_SNAPSHOT_MAX_LIST_ITEMS = 12;
     private const SUPPORT_SNAPSHOT_MAX_ASSOC_ITEMS = 80;
-    private const SUPPORT_SNAPSHOT_PLUGIN_NAME = 'Language FTS';
-    private const SUPPORT_SNAPSHOT_PLUGIN_VERSION = '0.1.9';
     private const INDEX_PROFILE_SCHEMA = 'wp-fts-index-profile-v1';
-    private const INDEX_PROFILE_INDEXER_SIGNATURE = 'wp-fts-indexer-v6';
     private const RANKING_TUNING_SCHEMA = 'wp-fts-ranking-tuning-v1';
     private const ADMIN_HEALTH_NONCE_ACTION = 'wp_fts_health_admin_action';
     private const ADMIN_HEALTH_NONCE_FIELD = 'wp_fts_health_nonce';
@@ -181,19 +169,8 @@ final class WP_FTS_Plugin
     private const POST_LANGUAGE_NONCE_ACTION = 'wp_fts_post_language';
     private const POST_LANGUAGE_NONCE_FIELD = 'wp_fts_post_language_nonce';
     private const SANDBOX_INDEXED_POSTS_PER_PAGE = 10;
-    private const SETTINGS_SNIPPET_MIN = 40;
-    private const SETTINGS_SNIPPET_MAX = 500;
-    private const PREFIX_MIN_LENGTH_MIN = 2;
-    private const PREFIX_MIN_LENGTH_MAX = 12;
-    private const PREFIX_MIN_LENGTH_DEFAULT = 4;
     private const FIELD_BOOST_MIN = 1.0;
     private const FIELD_BOOST_MAX = 100.0;
-    private const RECENCY_BOOST_STRENGTH_MIN = 0.0;
-    private const RECENCY_BOOST_STRENGTH_DEFAULT = 0.25;
-    private const RECENCY_BOOST_STRENGTH_MAX = 2.0;
-    private const RECENCY_BOOST_HALF_LIFE_MIN = 1.0;
-    private const RECENCY_BOOST_HALF_LIFE_MAX = 3650.0;
-    private const RECENCY_BOOST_HALF_LIFE_DEFAULT = 30.0;
     private const FIELD_BOOST_DEFAULTS = [
         'title' => 5.0,
         'content' => 1.0,
@@ -302,13 +279,13 @@ final class WP_FTS_Plugin
         'snippet_length' => 180,
         'match_mode' => 'OR',
         'prefix_matching' => true,
-        'prefix_min_length' => self::PREFIX_MIN_LENGTH_DEFAULT,
+        'prefix_min_length' => WP_FTS_Set_Oriented_Search_Storage::DEFAULT_PREFIX_LENGTH,
         'rest_api_enabled' => false,
         'rest_prefix_matching' => false,
         'result_limit' => 10,
         'field_boosts' => self::FIELD_BOOST_DEFAULTS,
         'recency_boost_strength' => 0.0,
-        'recency_boost_half_life_days' => self::RECENCY_BOOST_HALF_LIFE_DEFAULT,
+        'recency_boost_half_life_days' => WP_FTS_Set_Oriented_Search_Storage::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS,
     ];
     private const FRONTEND_SNIPPET_LENGTH = 180;
     private const FRONTEND_SEARCH_POST_STATUSES = ['publish'];
@@ -490,14 +467,9 @@ final class WP_FTS_Plugin
     private static array $foreground_queue_blocked_prefixes = [];
 
     /**
-     * @var array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>|null
+     * @var array<int,array{language:string,kind:string,status:string,pack_id:string,reason:string}>|null
      */
     private static ?array $runtime_analyzer_pack_statuses_cache = null;
-
-    /**
-     * @var array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>|null
-     */
-    private static ?array $sandbox_demo_analyzer_pack_statuses_cache = null;
 
     /** Runtime indexing and search share one validated analyzer per request. */
     private static ?WP_FTS_Analyzer $runtime_analyzer_cache = null;
@@ -570,7 +542,6 @@ final class WP_FTS_Plugin
     private static function clear_site_analyzer_caches(): void
     {
         self::$runtime_analyzer_pack_statuses_cache = null;
-        self::$sandbox_demo_analyzer_pack_statuses_cache = null;
         self::$runtime_analyzer_cache = null;
         self::$language_support_details_cache = [];
     }
@@ -645,6 +616,7 @@ final class WP_FTS_Plugin
         add_action(self::CRON_HOOK, [self::class, 'process_scheduled_indexing'], 10, 0);
         add_action(self::SCHEMA_REPAIR_CRON_HOOK, [self::class, 'run_scheduled_schema_repair'], 10, 0);
         add_action(self::SCHEMA_SITE_CRON_HOOK, [self::class, 'handle_scheduled_site_schema'], 10, 2);
+        add_action(self::SITE_SCHEMA_RETRY_CRON_HOOK, [self::class, 'handle_scheduled_site_schema_retry'], 10, 1);
         add_action('rest_api_init', [self::class, 'register_rest_routes'], 10, 0);
         add_action('admin_menu', [self::class, 'register_admin_menu'], 10, 0);
         add_action('admin_init', [self::class, 'maybe_redirect_after_activation'], 1, 0);
@@ -716,7 +688,6 @@ final class WP_FTS_Plugin
                 }
             },
             [
-                'batch_size' => 1,
                 'record_health' => false,
                 'record_skip' => false,
             ]
@@ -842,21 +813,43 @@ final class WP_FTS_Plugin
 
     /**
      * Provision FTS schema for a newly initialized multisite blog without indexing content.
-     *
-     * @param mixed $site WordPress passes a WP_Site object; tests or older
-     *        integration layers may pass a scalar blog id.
      */
-    public static function handle_site_initialization(mixed $site, mixed $args = []): void
+    public static function handle_site_initialization(WP_Site $site, array $args = []): void
     {
-        $site_id = self::site_id_from_value($site);
+        $site_id = self::database_site_id($site->blog_id);
         try {
             self::provision_site_schema($site_id);
-        } catch (Throwable) {
+        } catch (Throwable $error) {
             // wp_initialize_site is part of the canonical site-creation path;
-            // an optional derived index must never make that core operation
-            // fail. Scheduled network provisioning retains strict retry and
-            // error propagation, while storage(true) remains the lazy repair
-            // boundary for a new site that could not be switched here.
+            // retain the exact site as durable retry work before allowing that
+            // core operation to finish.
+            if (!self::schedule_site_schema_retry($site_id)) {
+                throw new RuntimeException(
+                    "Could not provision or schedule FTS schema for blog {$site_id}.",
+                    0,
+                    $error
+                );
+            }
+        }
+    }
+
+    /** Retry one exact site and retain it when provisioning still fails. */
+    public static function handle_scheduled_site_schema_retry(int $site_id): void
+    {
+        if ($site_id <= 0) {
+            throw new InvalidArgumentException('FTS site-schema retry requires a positive site ID.');
+        }
+        try {
+            self::provision_site_schema($site_id);
+        } catch (Throwable $error) {
+            if (!self::schedule_site_schema_retry($site_id)) {
+                throw new RuntimeException(
+                    "Could not retain FTS schema retry work for blog {$site_id}.",
+                    0,
+                    $error
+                );
+            }
+            throw $error;
         }
     }
 
@@ -882,9 +875,8 @@ final class WP_FTS_Plugin
 
         $current_site_id = function_exists('get_current_blog_id') ? (int) get_current_blog_id() : 0;
         $failure = null;
-        foreach ($sites as $site) {
-            $site_id = self::site_id_from_value($site);
-            if ($site_id <= 0 || $site_id === $current_site_id) {
+        foreach ($sites as $site_id) {
+            if ($site_id === $current_site_id) {
                 continue;
             }
 
@@ -951,10 +943,11 @@ final class WP_FTS_Plugin
 
         $sites = [];
         foreach ($rows as $row) {
-            $site_id = self::site_id_from_value($row);
-            if ($site_id > $after_site_id) {
-                $sites[$site_id] = true;
+            $site_id = self::database_site_id($row);
+            if ($site_id <= $after_site_id) {
+                throw new RuntimeException('Multisite keyset discovery returned a site outside the requested page.');
             }
+            $sites[$site_id] = true;
         }
         $sites = array_keys($sites);
         sort($sites, SORT_NUMERIC);
@@ -965,8 +958,11 @@ final class WP_FTS_Plugin
     /** Builds one site schema under the network lease and queues its reconciliation. */
     private static function provision_site_schema(int $site_id, string $network_activation_token = ''): void
     {
-        if ($site_id <= 0 || !function_exists('switch_to_blog') || !function_exists('restore_current_blog')) {
-            return;
+        if ($site_id <= 0) {
+            throw new InvalidArgumentException('FTS schema provisioning requires a positive site ID.');
+        }
+        if (!function_exists('switch_to_blog') || !function_exists('restore_current_blog')) {
+            throw new RuntimeException('Multisite blog-switch APIs are unavailable for FTS schema provisioning.');
         }
         $lifecycle_token = self::acquire_network_lifecycle_lock(
             $network_activation_token === '' ? 'site-provision' : 'network-provision'
@@ -1011,7 +1007,6 @@ final class WP_FTS_Plugin
                     }
                 },
                 [
-                    'batch_size' => 1,
                     'record_health' => false,
                     'record_skip' => false,
                 ]
@@ -1070,6 +1065,23 @@ final class WP_FTS_Plugin
         }
 
         return wp_schedule_single_event(time() + 60, self::SCHEMA_SITE_CRON_HOOK, $args) === true;
+    }
+
+    /** Coalesce a failed new-site hook into one exact-site retry event. */
+    private static function schedule_site_schema_retry(int $site_id): bool
+    {
+        if ($site_id <= 0 || !function_exists('wp_schedule_single_event')) {
+            return false;
+        }
+        $args = [$site_id];
+        if (function_exists('wp_next_scheduled') && wp_next_scheduled(self::SITE_SCHEMA_RETRY_CRON_HOOK, $args)) {
+            return true;
+        }
+        if (self::uninstall_fence_active()) {
+            return false;
+        }
+
+        return wp_schedule_single_event(time() + 60, self::SITE_SCHEMA_RETRY_CRON_HOOK, $args) === true;
     }
 
     /** Acquire one crash-recoverable lease shared by every site in the network. */
@@ -1478,9 +1490,8 @@ final class WP_FTS_Plugin
      * @param string[] $tables
      * @return string[]
      */
-    public static function filter_site_deletion_tables(array $tables, mixed $site): array
+    public static function filter_site_deletion_tables(array $tables, int $site_id): array
     {
-        $site_id = self::site_id_from_value($site);
         if ($site_id <= 0) {
             return self::unique_table_names($tables);
         }
@@ -1668,7 +1679,7 @@ final class WP_FTS_Plugin
         $guardQueue = new WP_FTS_Index_Queue($wpdb, $prefix);
         $exclusiveGuard = $guardQueue->acquire_exclusive_foreground_owner_guard();
         try {
-            $storage = new WP_FTS_Storage_Mysql(
+            $storage = new WP_FTS_Relational_Storage(
                 $wpdb,
                 $prefix,
                 static function (): void {
@@ -1706,7 +1717,6 @@ final class WP_FTS_Plugin
                     }
                 },
                 [
-                    'batch_size' => 1,
                     'record_health' => false,
                     'record_skip' => false,
                 ]
@@ -1890,7 +1900,6 @@ final class WP_FTS_Plugin
                 self::create_or_repair_schema_under_lock();
             },
             [
-                'batch_size' => 1,
                 'record_health' => false,
                 'record_skip' => false,
             ]
@@ -1913,7 +1922,7 @@ final class WP_FTS_Plugin
         // Schema repair is a mutation boundary, so readiness cached before
         // physical damage was discovered cannot authorize the rebuilt index.
         self::$search_takeover_status_cache = [];
-        $storage = self::mysql_storage();
+        $storage = self::relational_storage();
         $stored_version = self::schema_version_from_option(self::get_option(self::SCHEMA_VERSION_OPTION, null));
         if ($stored_version > self::SCHEMA_VERSION) {
             throw new RuntimeException("The installed FTS schema version {$stored_version} is newer than this plugin supports.");
@@ -1922,7 +1931,7 @@ final class WP_FTS_Plugin
         // A missing version marker or damaged current schema requires a
         // complete fail-closed corpus reconciliation. The index is derived
         // entirely from canonical WordPress content, so repair creates the
-        // current generation directly instead of transforming old layouts.
+        // current generation directly.
         $requires_initial_index_recheck = $stored_version !== self::SCHEMA_VERSION
             || empty($physical_before['valid']);
         if ($requires_initial_index_recheck) {
@@ -1963,7 +1972,7 @@ final class WP_FTS_Plugin
     }
 
     /** Persist ownership intent, then install both selective scope indexes. */
-    private static function ensure_scope_keyset_indexes(WP_FTS_Storage_Mysql $storage): void
+    private static function ensure_scope_keyset_indexes(WP_FTS_Relational_Storage $storage): void
     {
         $missing = $storage->scope_keyset_indexes_requiring_creation();
         if ($missing !== []) {
@@ -2231,20 +2240,14 @@ final class WP_FTS_Plugin
         self::set_option(self::INDEX_HEALTH_OPTION, $state);
     }
 
-    /**
-     * Build the production backend, optionally scheduling stale-schema repair.
-     *
-     * Reads are public. Every mutation validates the plugin's shared writer
-     * lease before opening a transaction; programmatic content changes should
-     * enqueue canonical post IDs through invalidate_post_content_dependencies().
-     */
-    public static function storage(bool $ensure_schema = false): WP_FTS_Storage_Mysql
+    /** Build the production backend, optionally scheduling stale-schema repair. */
+    private static function storage(bool $ensure_schema = false): WP_FTS_Relational_Storage
     {
         if ($ensure_schema) {
             self::maybe_schedule_schema_repair();
         }
 
-        return self::mysql_storage();
+        return self::relational_storage();
     }
 
     /**
@@ -2537,9 +2540,10 @@ final class WP_FTS_Plugin
             && self::settings()['auto_index']
             && self::post_meta_key_may_affect_index($meta_key)
         ) {
-            // State can be absent when canonical code switched blogs between
-            // the pre- and post-SQL hooks. Publish the global successor rather
-            // than losing a delete-all mutation after its old fence recovered.
+            // A blog switch deliberately discards the old site's request-local
+            // marker. The committed global action remains authoritative after
+            // restore and must recreate the corpus scope if watchdog recovery
+            // already consumed its pre-SQL fence.
             self::enqueue_scope_reconciliation('post-meta-delete-all:' . $meta_key, [
                 'reason' => 'selected_post_meta_deleted_globally',
                 'meta_key' => $meta_key,
@@ -2556,17 +2560,6 @@ final class WP_FTS_Plugin
             // WooCommerce-style save may issue hundreds of separate metadata
             // writes; their post-SQL actions must not each add two FTS queries.
             self::$post_meta_committed_posts[$post_id] = true;
-            return;
-        }
-
-        // Core emits a pre-SQL metadata action before this callback. Retain a
-        // one-query fallback for integrations that invoke only the public
-        // post-SQL action, and coalesce any physical-row fan-out by post id.
-        if (empty(self::$post_meta_committed_posts[$post_id])) {
-            self::queue_post($post_id);
-            if (self::foreground_mutation_target_is_retained('post:' . $post_id)) {
-                self::$post_meta_committed_posts[$post_id] = true;
-            }
         }
     }
 
@@ -2718,9 +2711,11 @@ final class WP_FTS_Plugin
             ? array_keys($ownedPostTokens)
             : array_keys(self::$foreground_mutation_posts);
         try {
-            $scope_incarnation = self::sanitize_readiness_incarnation($bulk['incarnation'] ?? '');
-            $profile_hash = self::sanitize_index_profile_hash($bulk['profile_hash'] ?? '');
+            $scope_incarnation = '';
+            $profile_hash = '';
             if ($requiresCorpus) {
+                $scope_incarnation = self::sanitize_readiness_incarnation($bulk['incarnation'] ?? '');
+                $profile_hash = self::sanitize_index_profile_hash($bulk['profile_hash'] ?? '');
                 // The request sentinel may predate a newer canonical corpus
                 // fence. Bind its successor to the current health authority;
                 // the queue preserves matching protected payload/ownership while
@@ -2738,15 +2733,13 @@ final class WP_FTS_Plugin
                 $ownedPostTokens,
                 $ownedScopeTokens,
                 $requiresCorpus,
-                [
-                    'reason' => $requiresCorpus
-                        ? 'foreground_bulk_corpus_reconciliation'
-                        : 'foreground_bulk_post_handoff',
+                $requiresCorpus ? [
+                    'reason' => 'foreground_bulk_corpus_reconciliation',
                     'overflow' => !empty($bulk['overflow']),
                     'scope_fanout' => !empty($bulk['requires_corpus']),
-                    'profile_hash' => $requiresCorpus ? $profile_hash : '',
-                ],
-                scope_incarnation: $requiresCorpus ? $scope_incarnation : ''
+                    'profile_hash' => $profile_hash,
+                ] : [],
+                scope_incarnation: $scope_incarnation
             );
         } catch (Throwable $error) {
             self::disable_foreground_queue_writes($error);
@@ -2778,26 +2771,6 @@ final class WP_FTS_Plugin
             // request's shared file guard as free.
             self::release_foreground_owner_guard();
         }
-    }
-
-    /**
-     * Explicitly invalidate host posts whose rendered output depends on external state.
-     *
-     * Dynamic blocks can depend on other posts, options, users, or remote data.
-     * Callers that opt into rendering must call this method when those dependencies
-     * change. Repeated invalidations advance the durable queue generation.
-     *
-     * @param int|int[] $post_ids
-     * @return int Number of unique indexable posts enqueued.
-     */
-    public static function invalidate_post_content_dependencies(int|array $post_ids): int
-    {
-        $post_ids = is_array($post_ids) ? $post_ids : [$post_ids];
-        if (count($post_ids) > WP_FTS_Index_Queue::MAX_ENQUEUE_POSTS) {
-            throw new InvalidArgumentException('FTS invalidation accepts at most 1,000 post ids.');
-        }
-
-        return self::queue_posts($post_ids);
     }
 
     /** Checks whether one post metadata mutation needs a durable generation. */
@@ -2847,21 +2820,6 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Process a bounded batch of queued post ids.
-     *
-     * @return int Number of queued ids processed.
-     */
-    public static function process_queue(int $batch_size = self::DEFAULT_BATCH_SIZE): int
-    {
-        $summary = self::process_indexing_batch('manual', [
-            'batch_size' => max(1, $batch_size),
-            'source' => 'queue',
-        ]);
-
-        return max(0, (int) ($summary['queue_processed'] ?? 0));
-    }
-
-    /**
      * WP-Cron entry point for bounded queue and backfill indexing work.
      *
      * @return array<string,mixed> Small batch summary suitable for logs/tests.
@@ -2888,6 +2846,8 @@ final class WP_FTS_Plugin
      */
     public static function process_manual_index_batch(array $opts = []): array
     {
+        self::assert_manual_index_batch_options($opts);
+
         return self::process_indexing_batch('manual', $opts);
     }
 
@@ -2899,15 +2859,21 @@ final class WP_FTS_Plugin
      */
     public static function enqueue_posts_for_reindex(array $post_ids, array $index_options = []): int
     {
+        if (!array_is_list($post_ids) || count($post_ids) > WP_FTS_Index_Queue::MAX_ENQUEUE_POSTS) {
+            throw new InvalidArgumentException('Reindex post ids must be a list of at most 1,000 values.');
+        }
+        foreach ($post_ids as $post_id) {
+            if (!is_int($post_id) || $post_id <= 0) {
+                throw new InvalidArgumentException('Reindex post ids must be positive integers.');
+            }
+        }
+        self::assert_index_option_keys($index_options, ['document_lang'], 'Direct reindex');
+        $language = self::index_language_option($index_options, 'document_lang');
+
         $releaseForegroundGuard = false;
         $queue = self::scoped_foreground_lifecycle_checked_index_queue($releaseForegroundGuard);
         try {
             $payload = [];
-            $language = WP_FTS_TermNamespace::language_from_options(
-                $index_options,
-                null,
-                ['document_lang']
-            );
             if ($language !== null) {
                 $payload['index_options'] = ['document_lang' => $language];
             }
@@ -2936,27 +2902,36 @@ final class WP_FTS_Plugin
      */
     public static function enqueue_reindex_scope(array $options): string
     {
+        self::assert_index_option_keys(
+            $options,
+            ['post_status', 'post_type', 'limit', 'document_lang'],
+            'Filtered reindex'
+        );
+        if (array_key_exists('limit', $options) && (!is_int($options['limit']) || $options['limit'] < 0)) {
+            throw new InvalidArgumentException('Filtered reindex limit must be a nonnegative integer.');
+        }
+        $language = self::index_language_option($options, 'document_lang');
+
         $releaseForegroundGuard = false;
         $queue = self::scoped_foreground_lifecycle_checked_index_queue($releaseForegroundGuard);
         try {
             $filters = [];
             foreach (['post_status', 'post_type'] as $name) {
-                $raw = $options[$name] ?? [];
-                if (!is_array($raw) || $raw === [] || count($raw) > self::MAX_SEARCH_SCOPE_VALUES) {
-                    throw new InvalidArgumentException("{$name} must contain between 1 and " . self::MAX_SEARCH_SCOPE_VALUES . ' values.');
+                $raw = $options[$name] ?? null;
+                if (!is_array($raw) || !array_is_list($raw) || $raw === [] || count($raw) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
+                    throw new InvalidArgumentException("{$name} must contain between 1 and " . WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES . ' values.');
                 }
                 $values = [];
                 foreach ($raw as $value) {
-                    if (!is_scalar($value) || strlen((string) $value) > self::MAX_SEARCH_SCOPE_VALUE_BYTES) {
-                        throw new InvalidArgumentException("{$name} values may contain at most " . self::MAX_SEARCH_SCOPE_VALUE_BYTES . ' bytes.');
+                    if (
+                        !is_string($value)
+                        || $value === ''
+                        || trim($value) !== $value
+                        || strlen($value) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES
+                    ) {
+                        throw new InvalidArgumentException("{$name} values must be unpadded nonempty strings of at most " . WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES . ' bytes.');
                     }
-                    $value = trim((string) $value);
-                    if ($value !== '') {
-                        $values[$value] = true;
-                    }
-                }
-                if ($values === []) {
-                    throw new InvalidArgumentException("{$name} must contain at least one non-empty value.");
+                    $values[$value] = true;
                 }
                 $filters[$name] = array_keys($values);
                 sort($filters[$name], SORT_STRING);
@@ -2974,15 +2949,10 @@ final class WP_FTS_Plugin
                 'post_status' => $filters['post_status'],
                 'post_type' => $filters['post_type'],
             ];
-            $limit = max(0, (int) ($options['limit'] ?? 0));
+            $limit = $options['limit'] ?? 0;
             if ($limit > 0) {
                 $payload['remaining_limit'] = $limit;
             }
-            $language = WP_FTS_TermNamespace::language_from_options(
-                $options,
-                null,
-                ['document_lang']
-            );
             if ($language !== null) {
                 $payload['index_options'] = ['document_lang' => $language];
             }
@@ -3029,6 +2999,27 @@ final class WP_FTS_Plugin
         ];
     }
 
+    /** Run the destructive reset command behind the shared writer lease. */
+    public static function reset_index_for_operator(): array
+    {
+        return self::run_index_writer_with_lock(
+            'wp-cli-reset-index',
+            static fn(): array => self::reset_index(),
+            ['record_skip' => false]
+        );
+    }
+
+    /** Run one bounded dictionary cleanup page behind the shared writer lease. */
+    public static function optimize_for_operator(): array
+    {
+        return self::run_index_writer_with_lock(
+            'wp-cli-optimize',
+            static function (): void {
+                self::storage(false)->optimize();
+            }
+        );
+    }
+
     /**
      * Run a direct index writer under the shared indexing lock.
      *
@@ -3039,15 +3030,15 @@ final class WP_FTS_Plugin
      * reindex and delete requests use durable scope/post work instead.
      *
      * @param callable():mixed $writer
-     * @param array<string,mixed> $opts Optional diagnostics hints.
+     * @param array<string,mixed> $opts Optional diagnostics controls.
      * @return array{acquired:bool,result:mixed,summary:array<string,mixed>}
      */
-    public static function run_index_writer_with_lock(string $source, callable $writer, array $opts = []): array
+    private static function run_index_writer_with_lock(string $source, callable $writer, array $opts = []): array
     {
-        $started = microtime(true);
+        self::assert_index_writer_options($opts);
         $source = self::index_writer_source($source);
-        $summary = self::default_index_batch_summary('manual', self::index_writer_batch_size($opts));
-        $summary['trigger'] = 'manual';
+        $started = microtime(true);
+        $summary = self::default_index_batch_summary('manual', 0);
         self::initialize_index_batch_summary($summary, ['source' => $source], $started);
 
         $blocked_reason = null;
@@ -3066,7 +3057,7 @@ final class WP_FTS_Plugin
             self::finalize_index_batch_summary($summary, $started);
             if (
                 $blocked_reason !== 'uninstall_fenced'
-                && (!array_key_exists('record_skip', $opts) || (bool) $opts['record_skip'])
+                && (!array_key_exists('record_skip', $opts) || $opts['record_skip'])
             ) {
                 self::update_index_health_state($summary);
             }
@@ -3086,7 +3077,6 @@ final class WP_FTS_Plugin
             self::assert_index_writer_ownership();
             $result = $writer();
             self::assert_index_writer_ownership();
-            $summary['indexed'] = self::index_writer_indexed_count($result, $opts);
         } catch (Throwable $e) {
             $thrown = $e;
             self::remember_index_batch_exception_in_summary($summary, $e);
@@ -3102,7 +3092,7 @@ final class WP_FTS_Plugin
                 self::$active_index_writer_token = null;
                 self::$active_index_writer_prefix = null;
                 self::finalize_index_batch_summary($summary, $started);
-                if (!array_key_exists('record_health', $opts) || (bool) $opts['record_health']) {
+                if (!array_key_exists('record_health', $opts) || $opts['record_health']) {
                     self::update_index_health_state($summary);
                 }
             }
@@ -3202,15 +3192,6 @@ final class WP_FTS_Plugin
             'search_provider_compatibility' => self::operator_search_provider_compatibility_status(),
             'language_pack_status' => self::operator_language_pack_status(),
             'failure_recovery' => self::failure_recovery_status(),
-            'lock_state' => $lock['state'],
-            'lock_active' => (bool) $lock['active'],
-            'lock_mode' => $lock['mode'],
-            'lock_started_at' => $lock['started_at'],
-            'lock_expires_at' => $lock['expires_at'],
-            'lock_age_seconds' => $lock['age_seconds'],
-            'lock_expires_in_seconds' => $lock['expires_in_seconds'],
-            'lock_expired_seconds' => $lock['expired_seconds'],
-            'lock_advice' => $lock['advice'],
             'lock' => $lock,
             'has_more' => (bool) ($health['has_more'] ?? false),
             'last_mode' => is_scalar($health['last_mode'] ?? null) ? (string) $health['last_mode'] : '',
@@ -3232,10 +3213,6 @@ final class WP_FTS_Plugin
             'last_indexed_post_id' => $last_indexed_post_id,
             'last_indexed_post_title' => $last_indexed_title,
             'last_indexed_at' => is_scalar($health['last_indexed_at'] ?? null) ? (string) $health['last_indexed_at'] : '',
-            'counts_exact' => false,
-            'eligible_count' => null,
-            'indexed_count' => null,
-            'remaining_count' => null,
             'latest_batch_diagnostics' => self::latest_index_batch_diagnostics_from_health($health),
         ];
     }
@@ -3362,14 +3339,14 @@ final class WP_FTS_Plugin
     {
         $field_boosts = self::settings_field_boosts($settings['field_boosts'] ?? []);
         $recency_strength = self::sanitize_recency_boost_strength($settings['recency_boost_strength'] ?? 0.0);
-        $recency_half_life = self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? self::RECENCY_BOOST_HALF_LIFE_DEFAULT);
+        $recency_half_life = self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS);
         $reconciliation_active = !empty($health['reconciliation_active']);
 
         return [
             'schema' => self::RANKING_TUNING_SCHEMA,
             'match_mode' => is_scalar($settings['match_mode'] ?? null) ? (string) $settings['match_mode'] : self::DEFAULT_SETTINGS['match_mode'],
             'prefix_matching' => !empty($settings['prefix_matching']),
-            'prefix_min_length' => self::sanitize_prefix_min_length($settings['prefix_min_length'] ?? self::PREFIX_MIN_LENGTH_DEFAULT),
+            'prefix_min_length' => self::sanitize_prefix_min_length($settings['prefix_min_length'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_PREFIX_LENGTH),
             'field_boosts' => $field_boosts,
             'field_boost_summary' => self::field_boost_summary($field_boosts),
             'recency_boost' => [
@@ -3383,7 +3360,7 @@ final class WP_FTS_Plugin
             ],
             'indexed_post_types' => self::operator_indexed_post_types($settings),
             'result_limit' => self::clamp_int($settings['result_limit'] ?? self::DEFAULT_SETTINGS['result_limit'], 1, self::MAX_SEARCH_LIMIT),
-            'snippet_length' => self::clamp_int($settings['snippet_length'] ?? self::DEFAULT_SETTINGS['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
+            'snippet_length' => self::clamp_int($settings['snippet_length'] ?? self::DEFAULT_SETTINGS['snippet_length'], WP_FTS_Set_Oriented_Search_Storage::MIN_SNIPPET_LENGTH, WP_FTS_Set_Oriented_Search_Storage::MAX_SNIPPET_LENGTH),
             'highlight_enabled' => !empty($settings['highlight']),
             'frontend_replacement_enabled' => !empty($settings['replace_frontend_search']),
             'admin_posts_replacement_enabled' => !empty($settings['replace_admin_post_search']),
@@ -3517,8 +3494,8 @@ final class WP_FTS_Plugin
     {
         return [
             'plugin' => [
-                'name' => self::support_snapshot_plugin_header('Plugin Name', self::SUPPORT_SNAPSHOT_PLUGIN_NAME),
-                'version' => self::support_snapshot_plugin_header('Version', self::SUPPORT_SNAPSHOT_PLUGIN_VERSION),
+                'name' => self::support_snapshot_plugin_header('Plugin Name'),
+                'version' => self::support_snapshot_plugin_header('Version'),
                 'source' => 'wordpress-plugin',
             ],
             'runtime' => [
@@ -3544,7 +3521,6 @@ final class WP_FTS_Plugin
         return [
             'pending_queue_count' => max(0, (int) ($operator['pending_queue_count'] ?? 0)),
             'pending_queue_count_relation' => self::bounded_count_relation($operator['pending_queue_count_relation'] ?? ''),
-            'remaining_count' => null,
             'has_more' => !empty($operator['has_more']),
             'queue_processor_schedule' => self::support_snapshot_array_section($operator['queue_processor_schedule'] ?? []),
             'cron_runner' => self::support_snapshot_array_section($operator['cron_runner'] ?? []),
@@ -3600,8 +3576,9 @@ final class WP_FTS_Plugin
         if (($operator['schema_status'] ?? '') !== 'current') {
             $advice[] = 'Review the Health schema controls before running indexing work.';
         }
-        if (!empty($operator['lock_active']) && is_scalar($operator['lock_advice'] ?? null)) {
-            $advice[] = (string) $operator['lock_advice'];
+        $lock = is_array($operator['lock'] ?? null) ? $operator['lock'] : [];
+        if (!empty($lock['active']) && is_scalar($lock['advice'] ?? null)) {
+            $advice[] = (string) $lock['advice'];
         }
 
         $schedule = is_array($operator['queue_processor_schedule'] ?? null) ? $operator['queue_processor_schedule'] : [];
@@ -3616,7 +3593,7 @@ final class WP_FTS_Plugin
 
         if (!empty($operator['reconciliation_active'])) {
             $advice[] = 'Durable index reconciliation is active; continue bounded Health indexing batches or let WP-Cron process the queue.';
-        } elseif (max(0, (int) ($operator['remaining_count'] ?? 0)) > 0 || max(0, (int) ($operator['pending_queue_count'] ?? 0)) > 0) {
+        } elseif (self::queue_processor_pending_work($operator)) {
             $advice[] = 'Indexing work remains; continue bounded Health indexing batches or verify the queue processor is running.';
         }
 
@@ -3727,22 +3704,32 @@ final class WP_FTS_Plugin
         return $value;
     }
 
-    private static function support_snapshot_plugin_header(string $header, string $fallback): string
+    private static function support_snapshot_plugin_header(string $header): string
     {
         $path = dirname(__DIR__) . '/indexer.php';
         $source = is_file($path) ? file_get_contents($path, false, null, 0, 8192) : false;
         if (!is_string($source) || $source === '') {
-            return $fallback;
+            return 'unknown';
         }
 
-        $quoted = preg_quote($header, '/');
-        if (preg_match('/^\s*\*\s*' . $quoted . ':\s*(.+)$/mi', $source, $matches) !== 1) {
-            return $fallback;
+        foreach (explode("\n", $source) as $line) {
+            $line = ltrim($line);
+            if (!str_starts_with($line, '*')) {
+                continue;
+            }
+
+            $line = ltrim(substr($line, 1));
+            $separator = strpos($line, ':');
+            if ($separator === false || trim(substr($line, 0, $separator)) !== $header) {
+                continue;
+            }
+
+            $value = self::debug_truncate_text(substr($line, $separator + 1), 120);
+
+            return $value !== '' ? $value : 'unknown';
         }
 
-        $value = self::debug_truncate_text((string) $matches[1], 120);
-
-        return $value !== '' ? $value : $fallback;
+        return 'unknown';
     }
 
     private static function support_snapshot_wordpress_version(): string
@@ -3783,9 +3770,7 @@ final class WP_FTS_Plugin
      *   mode:string,
      *   mode_label:string,
      *   mode_debug_value:string,
-     *   public_site_replacement:string,
      *   public_site_replacement_enabled:bool,
-     *   admin_posts_replacement:string,
      *   admin_posts_replacement_enabled:bool,
      *   known_provider_count:int,
      *   known_provider_names:string[],
@@ -3822,9 +3807,7 @@ final class WP_FTS_Plugin
             'mode' => $mode,
             'mode_label' => self::search_provider_compatibility_label($mode),
             'mode_debug_value' => self::search_provider_compatibility_debug_value($mode),
-            'public_site_replacement' => !empty($settings['replace_frontend_search']) ? 'enabled' : 'disabled',
             'public_site_replacement_enabled' => !empty($settings['replace_frontend_search']),
-            'admin_posts_replacement' => !empty($settings['replace_admin_post_search']) ? 'enabled' : 'disabled',
             'admin_posts_replacement_enabled' => !empty($settings['replace_admin_post_search']),
             'known_provider_count' => max(0, (int) ($advisory['detected_count'] ?? count($provider_names))),
             'known_provider_names' => $provider_names,
@@ -3844,7 +3827,7 @@ final class WP_FTS_Plugin
     {
         $site_language = WP_FTS_TermNamespace::canonicalize_lang(self::site_language(), WP_FTS_TermNamespace::DEFAULT_LANG);
         $top_language_config = self::top_language_pack_config_by_language();
-        $runtime_support = self::language_support_details($site_language, false);
+        $runtime_support = self::language_support_details($site_language);
         $runtime_support_label = self::analyzer_pack_status_matrix_support_label($site_language, $runtime_support, $top_language_config);
         $runtime_support_status = self::operator_language_pack_support_status($runtime_support_label, $runtime_support);
         $raw_matched_language = trim((string) ($runtime_support['matched_language'] ?? ''));
@@ -3875,10 +3858,6 @@ final class WP_FTS_Plugin
         return [
             'site_language' => $site_language,
             'site_language_label' => self::sandbox_language_display($site_language),
-            'runtime_support_status' => $runtime_support_status,
-            'runtime_support_label' => $runtime_support_label,
-            'runtime_support_full' => (bool) ($runtime_support['full'] ?? false),
-            'runtime_support_reason' => self::debug_truncate_text((string) ($runtime_support['reason'] ?? ''), 240),
             'runtime_support' => [
                 'status' => $runtime_support_status,
                 'label' => $runtime_support_label,
@@ -3887,8 +3866,6 @@ final class WP_FTS_Plugin
                 'matched_language' => $matched_language,
                 'matched_language_label' => $matched_language !== '' ? self::sandbox_language_display($matched_language) : '',
             ],
-            'matched_runtime_language' => $matched_language,
-            'matched_runtime_language_label' => $matched_language !== '' ? self::sandbox_language_display($matched_language) : '',
             'gzip_available' => $gzip_available,
             'gzip_status' => $gzip_available ? 'available' : 'missing',
             'runtime_pack_availability' => self::operator_language_pack_runtime_availability_summary($gzip_available, count($control_manifests)),
@@ -3913,10 +3890,6 @@ final class WP_FTS_Plugin
         if ($support_label === 'Tokenizer-only support' || ($support['label'] ?? '') === 'Tokenizer pack') {
             return 'tokenizer';
         }
-        if (($support['label'] ?? '') === 'Fixture morphology') {
-            return 'fixture';
-        }
-
         return 'fallback';
     }
 
@@ -3933,8 +3906,8 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $active_statuses
-     * @return array<int,array{language:string,language_label:string,kind:string,pack_id:string,fixture_only:bool,scope:string,summary:string}>
+     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,reason:string}> $active_statuses
+     * @return array<int,array{language:string,language_label:string,kind:string,pack_id:string,summary:string}>
      */
     private static function operator_language_pack_active_runtime_pack_summaries(array $active_statuses): array
     {
@@ -3946,9 +3919,7 @@ final class WP_FTS_Plugin
             }
             $kind = self::debug_truncate_text((string) ($status['kind'] ?? 'pack'), 40);
             $pack_id = self::debug_truncate_text((string) ($status['pack_id'] ?? ''), 80);
-            $fixture_only = !empty($status['fixture_only']);
-            $scope = $fixture_only ? 'fixture' : 'full local pack';
-            $summary = self::sandbox_language_display($language) . ' ' . $kind . ' - ' . $scope;
+            $summary = self::sandbox_language_display($language) . ' ' . $kind;
             if ($pack_id !== '') {
                 $summary .= ' (' . $pack_id . ')';
             }
@@ -3958,8 +3929,6 @@ final class WP_FTS_Plugin
                 'language_label' => self::sandbox_language_display($language),
                 'kind' => $kind,
                 'pack_id' => $pack_id,
-                'fixture_only' => $fixture_only,
-                'scope' => $scope,
                 'summary' => self::debug_truncate_text($summary, 160),
             ];
             if (count($summaries) >= self::DEBUG_MAX_LIST_ITEMS) {
@@ -3971,7 +3940,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array<int,array{language:string,language_label:string,kind:string,pack_id:string,fixture_only:bool,scope:string,summary:string}> $active_runtime_packs
+     * @param array<int,array{language:string,language_label:string,kind:string,pack_id:string,summary:string}> $active_runtime_packs
      * @return string[]
      */
     private static function operator_language_pack_active_runtime_language_summaries(array $active_runtime_packs): array
@@ -3988,7 +3957,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array<int,array{language_label:string,runtime_support:string,runtime_pack:string,sandbox_support:string,requirements:string,action:string}> $matrix_rows
+     * @param array<int,array{language_label:string,runtime_support:string,runtime_pack:string,requirements:string,action:string}> $matrix_rows
      * @return array<int,array{language_label:string,runtime_support:string,runtime_pack:string,requirements:string,action:string}>
      */
     private static function operator_language_pack_issue_summaries(array $matrix_rows): array
@@ -4071,9 +4040,9 @@ final class WP_FTS_Plugin
      * @param array<string,mixed> $health
      * @return array{hook:string,scheduled:bool,status:string,next_run_at:string,next_run_delay_seconds:?int,pending_work:bool,advice:string}
      */
-    private static function queue_processor_schedule_status(array $health, ?int $remaining_count = null): array
+    private static function queue_processor_schedule_status(array $health): array
     {
-        $pending_work = self::queue_processor_pending_work($health, $remaining_count);
+        $pending_work = self::queue_processor_pending_work($health);
         $base = [
             'hook' => self::CRON_HOOK,
             'scheduled' => false,
@@ -4314,10 +4283,13 @@ final class WP_FTS_Plugin
     /**
      * @param array<string,mixed> $health
      */
-    private static function queue_processor_pending_work(array $health, ?int $remaining_count = null): bool
+    private static function queue_processor_pending_work(array $health): bool
     {
         return max(0, (int) ($health['pending_queue_count'] ?? 0)) > 0
-            || max(0, (int) ($remaining_count ?? 0)) > 0
+            || max(0, (int) ($health['pending_post_work_count'] ?? 0)) > 0
+            || max(0, (int) ($health['pending_scope_work_count'] ?? 0)) > 0
+            || !empty($health['reconciliation_active'])
+            || !empty($health['profile_reconciliation_pending'])
             || !empty($health['has_more']);
     }
 
@@ -4347,7 +4319,6 @@ final class WP_FTS_Plugin
                 return self::schema_status();
             },
             [
-                'batch_size' => 1,
                 'record_health' => false,
                 'record_skip' => false,
             ]
@@ -4375,7 +4346,7 @@ final class WP_FTS_Plugin
      *
      * @return array<string,mixed>
      */
-    public static function reset_index(): array
+    private static function reset_index(): array
     {
         self::assert_index_writer_ownership();
         $health_before = self::index_health_state();
@@ -4384,11 +4355,7 @@ final class WP_FTS_Plugin
         // an operator retries reset or completes a fresh reconciliation.
         self::mark_initial_index_pending();
         self::maybe_schedule_schema_repair();
-        $storage = self::storage(false);
-        if (!$storage instanceof WP_FTS_Resettable_Storage) {
-            throw new RuntimeException('Configured FTS storage does not support index reset.');
-        }
-        $counts = $storage->reset_index();
+        $reset = self::storage(false)->reset_index();
 
         self::clear_scheduled_queue_processor();
         self::reset_index_health_state();
@@ -4402,22 +4369,14 @@ final class WP_FTS_Plugin
         return [
             'status' => 'reset',
             'reset' => true,
-            'reset_strategy' => is_scalar($counts['reset_strategy'] ?? null)
-                ? (string) $counts['reset_strategy']
+            'reset_strategy' => is_scalar($reset['reset_strategy'] ?? null)
+                ? (string) $reset['reset_strategy']
                 : 'unknown',
             'reconciliation_queued' => true,
-            'counts_exact' => false,
             'schema_status' => $schema['status'],
             'schema_version' => $schema['stored_version'],
             'expected_schema_version' => $schema['expected_version'],
             'storage_backend' => self::index_storage_backend_label(),
-            'postings_deleted' => null,
-            'terms_deleted' => null,
-            'docs_deleted' => null,
-            'doc_lengths_deleted' => null,
-            'doc_metadata_deleted' => null,
-            'collection_metadata_deleted' => null,
-            'pending_queue_cleared' => null,
             'last_batch_failures_cleared' => max(0, (int) ($health_before['last_batch_failures'] ?? 0)),
             'failure_recovery_records_cleared' => count(self::sanitize_failure_recovery_records($health_before['failure_history'] ?? [])),
             'wordpress_posts_deleted' => 0,
@@ -4438,7 +4397,7 @@ final class WP_FTS_Plugin
         $stored_version = self::schema_version_from_option($raw);
         global $wpdb;
         if (isset($wpdb) && is_object($wpdb)) {
-            $storage = self::mysql_storage();
+            $storage = self::relational_storage();
             $physical = $storage->verify_schema_and_scope_keyset_indexes();
         } else {
             $physical = [
@@ -4706,14 +4665,11 @@ final class WP_FTS_Plugin
 
         if (function_exists('apply_filters')) {
             $filtered = apply_filters(self::DEBUG_ENABLED_FILTER, $enabled, $context);
-            if (is_bool($filtered)) {
-                return $filtered;
-            }
-            if (is_scalar($filtered)) {
-                return self::truthy_admin_value($filtered);
+            if (!is_bool($filtered)) {
+                throw new UnexpectedValueException('wp_fts_debug_enabled must return a native boolean.');
             }
 
-            return (bool) $filtered;
+            return $filtered;
         }
 
         return $enabled;
@@ -6327,7 +6283,7 @@ final class WP_FTS_Plugin
             'provider_compatibility' => self::search_provider_compatibility_debug_value((string) ($settings['search_provider_compatibility'] ?? self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS)),
             'match_mode' => (string) ($settings['match_mode'] ?? 'OR'),
             'prefix_matching' => !empty($settings['prefix_matching']) ? 'enabled' : 'disabled',
-            'prefix_min_length' => self::sanitize_prefix_min_length($settings['prefix_min_length'] ?? self::PREFIX_MIN_LENGTH_DEFAULT),
+            'prefix_min_length' => self::sanitize_prefix_min_length($settings['prefix_min_length'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_PREFIX_LENGTH),
             'highlight' => !empty($settings['highlight']) ? 'enabled' : 'disabled',
             'snippet_length' => (int) ($settings['snippet_length'] ?? self::FRONTEND_SNIPPET_LENGTH),
             'result_limit' => (int) ($settings['result_limit'] ?? 10),
@@ -6514,15 +6470,24 @@ final class WP_FTS_Plugin
         ];
         $filtered = $defaults;
         if (function_exists('apply_filters')) {
-            $candidate = apply_filters(self::SEARCH_PERFORMANCE_BUDGET_FILTER, $defaults, $trace);
-            if (is_array($candidate)) {
-                $filtered = $candidate;
+            $filtered = apply_filters(self::SEARCH_PERFORMANCE_BUDGET_FILTER, $defaults, $trace);
+            if (
+                !is_array($filtered)
+                || array_keys($filtered) !== ['total_ms', 'storage_search_ms']
+                || !is_float($filtered['total_ms'])
+                || !is_finite($filtered['total_ms'])
+                || !is_float($filtered['storage_search_ms'])
+                || !is_finite($filtered['storage_search_ms'])
+            ) {
+                throw new UnexpectedValueException(
+                    'wp_fts_search_performance_budget must return exactly two finite native floats.'
+                );
             }
         }
 
         return [
-            'total_ms' => self::sanitize_search_performance_budget_ms($filtered['total_ms'] ?? $defaults['total_ms'], $defaults['total_ms']),
-            'storage_search_ms' => self::sanitize_search_performance_budget_ms($filtered['storage_search_ms'] ?? $defaults['storage_search_ms'], $defaults['storage_search_ms']),
+            'total_ms' => self::sanitize_search_performance_budget_ms($filtered['total_ms'], $defaults['total_ms']),
+            'storage_search_ms' => self::sanitize_search_performance_budget_ms($filtered['storage_search_ms'], $defaults['storage_search_ms']),
         ];
     }
 
@@ -6603,18 +6568,7 @@ final class WP_FTS_Plugin
 
     private static function debug_is_list(array $value): bool
     {
-        if (function_exists('array_is_list')) {
-            return array_is_list($value);
-        }
-
-        $index = 0;
-        foreach (array_keys($value) as $key) {
-            if ($key !== $index++) {
-                return false;
-            }
-        }
-
-        return true;
+        return array_is_list($value);
     }
 
     private static function debug_truncate_text(string $value, int $max_bytes = self::DEBUG_MAX_TEXT_BYTES): string
@@ -8025,7 +7979,7 @@ final class WP_FTS_Plugin
     private static function recency_boost_summary(array $settings): string
     {
         $strength = self::sanitize_recency_boost_strength($settings['recency_boost_strength'] ?? 0.0);
-        $half_life = self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? self::RECENCY_BOOST_HALF_LIFE_DEFAULT);
+        $half_life = self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS);
         if ($strength <= 0.0) {
             return 'Disabled';
         }
@@ -8480,7 +8434,7 @@ final class WP_FTS_Plugin
         echo '<table class="form-table" role="presentation"><tbody>';
 
         echo '<tr><th scope="row"><label for="wp-fts-settings-snippet-length">Search result excerpt length</label></th><td>';
-        echo '<input id="wp-fts-settings-snippet-length" type="number" min="' . self::esc_attr((string) self::SETTINGS_SNIPPET_MIN) . '" max="' . self::esc_attr((string) self::SETTINGS_SNIPPET_MAX) . '" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[snippet_length]" value="' . self::esc_attr((string) $settings['snippet_length']) . '">';
+        echo '<input id="wp-fts-settings-snippet-length" type="number" min="' . self::esc_attr((string) WP_FTS_Set_Oriented_Search_Storage::MIN_SNIPPET_LENGTH) . '" max="' . self::esc_attr((string) WP_FTS_Set_Oriented_Search_Storage::MAX_SNIPPET_LENGTH) . '" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[snippet_length]" value="' . self::esc_attr((string) $settings['snippet_length']) . '">';
         echo '<p class="description">A search result excerpt is the short piece of post text shown around a matching word. Longer excerpts show more context; shorter excerpts keep result lists compact.</p>';
         echo '</td></tr>';
 
@@ -8566,9 +8520,9 @@ final class WP_FTS_Plugin
      */
     private static function render_settings_prefix_threshold_rows(array $settings): void
     {
-        $min_length = self::sanitize_prefix_min_length($settings['prefix_min_length'] ?? self::PREFIX_MIN_LENGTH_DEFAULT);
+        $min_length = self::sanitize_prefix_min_length($settings['prefix_min_length'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_PREFIX_LENGTH);
         echo '<tr><th scope="row"><label for="wp-fts-settings-prefix-min-length">Shortest word beginning</label></th><td>';
-        echo '<input id="wp-fts-settings-prefix-min-length" type="number" min="' . self::esc_attr((string) self::PREFIX_MIN_LENGTH_MIN) . '" max="' . self::esc_attr((string) self::PREFIX_MIN_LENGTH_MAX) . '" step="1" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[prefix_min_length]" value="' . self::esc_attr((string) $min_length) . '">';
+        echo '<input id="wp-fts-settings-prefix-min-length" type="number" min="' . self::esc_attr((string) WP_FTS_Set_Oriented_Search_Storage::MIN_PREFIX_LENGTH) . '" max="' . self::esc_attr((string) WP_FTS_Set_Oriented_Search_Storage::MAX_PREFIX_LENGTH) . '" step="1" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[prefix_min_length]" value="' . self::esc_attr((string) $min_length) . '">';
         echo '<p class="description">Shorter values make word-beginning matches broader, but they can be slower and add noisier alternatives.</p>';
         echo '</td></tr>';
     }
@@ -8579,15 +8533,15 @@ final class WP_FTS_Plugin
     private static function render_settings_recency_boost_rows(array $settings): void
     {
         $strength = self::sanitize_recency_boost_strength($settings['recency_boost_strength'] ?? 0.0);
-        $half_life = self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? self::RECENCY_BOOST_HALF_LIFE_DEFAULT);
+        $half_life = self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS);
 
         echo '<tr><th scope="row"><label for="wp-fts-settings-recency-boost-strength">Recent post boost</label></th><td>';
-        echo '<input id="wp-fts-settings-recency-boost-strength" type="number" min="' . self::esc_attr((string) self::RECENCY_BOOST_STRENGTH_MIN) . '" max="' . self::esc_attr((string) self::RECENCY_BOOST_STRENGTH_MAX) . '" step="0.01" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[recency_boost_strength]" value="' . self::esc_attr(self::format_field_boost($strength)) . '">';
+        echo '<input id="wp-fts-settings-recency-boost-strength" type="number" min="' . self::esc_attr((string) WP_FTS_Set_Oriented_Search_Storage::MIN_RECENCY_BOOST_STRENGTH) . '" max="' . self::esc_attr((string) WP_FTS_Set_Oriented_Search_Storage::MAX_RECENCY_BOOST_STRENGTH) . '" step="0.01" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[recency_boost_strength]" value="' . self::esc_attr(self::format_field_boost($strength)) . '">';
         echo '<p class="description">Set to 0 to disable. Values above 0 give newer posts a small ranking lift using indexed GMT post dates, without rebuilding the index.</p>';
         echo '</td></tr>';
 
         echo '<tr><th scope="row"><label for="wp-fts-settings-recency-boost-half-life">Recent post half-life</label></th><td>';
-        echo '<input id="wp-fts-settings-recency-boost-half-life" type="number" min="' . self::esc_attr((string) self::RECENCY_BOOST_HALF_LIFE_MIN) . '" max="' . self::esc_attr((string) self::RECENCY_BOOST_HALF_LIFE_MAX) . '" step="1" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[recency_boost_half_life_days]" value="' . self::esc_attr(self::format_field_boost($half_life)) . '">';
+        echo '<input id="wp-fts-settings-recency-boost-half-life" type="number" min="' . self::esc_attr((string) WP_FTS_Set_Oriented_Search_Storage::MIN_RECENCY_BOOST_HALF_LIFE_DAYS) . '" max="' . self::esc_attr((string) WP_FTS_Set_Oriented_Search_Storage::MAX_RECENCY_BOOST_HALF_LIFE_DAYS) . '" step="1" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[recency_boost_half_life_days]" value="' . self::esc_attr(self::format_field_boost($half_life)) . '">';
         echo '<p class="description">Controls how quickly the lift fades as indexed post dates get older. Changing this only affects query-time ranking.</p>';
         echo '</td></tr>';
     }
@@ -8742,13 +8696,11 @@ final class WP_FTS_Plugin
     private static function render_analyzer_packs_tab(): void
     {
         echo '<h2>Analyzer packs</h2>';
-        echo '<p>Analyzer packs add language-specific tokenization or word-form matching. Runtime packs affect real site searches; sandbox packs are bundled so Sandbox searches have realistic language behavior.</p>';
+        echo '<p>Analyzer packs add language-specific tokenization or word-form matching. The same runtime analyzer is used for indexing and every search surface, including Sandbox.</p>';
         self::render_analyzer_pack_status_matrix();
         self::render_bundled_runtime_lemma_pack_controls();
         echo '<h3>Runtime analyzer packs</h3>';
         self::render_analyzer_pack_statuses(self::runtime_analyzer_pack_statuses());
-        echo '<h3>Sandbox analyzer packs</h3>';
-        self::render_analyzer_pack_statuses(self::sandbox_demo_analyzer_pack_statuses());
     }
 
     /**
@@ -8771,7 +8723,7 @@ final class WP_FTS_Plugin
         $controls = self::sandbox_search_controls($search_submitted);
         $results = self::empty_sandbox_search_results($selected_language);
         if ($search_submitted) {
-            if ($query === '') {
+            if (trim($query) === '') {
                 $messages[] = ['error', 'Enter a search query before running the sandbox search.'];
                 self::debug_record_bailout(
                     'sandbox search',
@@ -8846,7 +8798,7 @@ final class WP_FTS_Plugin
         return [
             'mode' => $mode,
             'limit' => self::clamp_int(self::request_text_value($source, self::ADMIN_LIMIT_FIELD, 8) ?: $settings['result_limit'], 1, self::MAX_SEARCH_LIMIT),
-            'snippet_length' => self::clamp_int(self::request_text_value($source, self::ADMIN_SNIPPET_LENGTH_FIELD, 8) ?: $settings['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
+            'snippet_length' => self::clamp_int(self::request_text_value($source, self::ADMIN_SNIPPET_LENGTH_FIELD, 8) ?: $settings['snippet_length'], WP_FTS_Set_Oriented_Search_Storage::MIN_SNIPPET_LENGTH, WP_FTS_Set_Oriented_Search_Storage::MAX_SNIPPET_LENGTH),
             'highlight' => self::request_bool_value($source, self::ADMIN_HIGHLIGHT_FIELD, $settings['highlight'], $search_submitted),
             'prefix_matching' => self::request_bool_value($source, self::ADMIN_PREFIX_MATCHING_FIELD, $settings['prefix_matching'], $search_submitted),
             'post_types' => self::request_list_value($source, self::ADMIN_POST_TYPE_FIELD, self::settings_post_type_choices(), $settings['index_post_types']),
@@ -8854,7 +8806,7 @@ final class WP_FTS_Plugin
             'date_after' => self::sanitize_date_filter(self::request_text_value($source, self::ADMIN_DATE_AFTER_FIELD, 20)),
             'date_before' => self::sanitize_date_filter(self::request_text_value($source, self::ADMIN_DATE_BEFORE_FIELD, 20)),
             'recency_boost_strength' => self::sanitize_recency_boost_strength($settings['recency_boost_strength'] ?? 0.0),
-            'recency_boost_half_life_days' => self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? self::RECENCY_BOOST_HALF_LIFE_DEFAULT),
+            'recency_boost_half_life_days' => self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS),
         ];
     }
 
@@ -8893,7 +8845,7 @@ final class WP_FTS_Plugin
             'replace_admin_post_search' => $replace_admin_post_search,
             'search_provider_compatibility' => $search_provider_compatibility,
             'highlight' => array_key_exists('highlight', $value) ? self::truthy_admin_value($value['highlight']) : $defaults['highlight'],
-            'snippet_length' => self::clamp_int($value['snippet_length'] ?? $defaults['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
+            'snippet_length' => self::clamp_int($value['snippet_length'] ?? $defaults['snippet_length'], WP_FTS_Set_Oriented_Search_Storage::MIN_SNIPPET_LENGTH, WP_FTS_Set_Oriented_Search_Storage::MAX_SNIPPET_LENGTH),
             'match_mode' => $mode,
             'prefix_matching' => array_key_exists('prefix_matching', $value) ? self::truthy_admin_value($value['prefix_matching']) : $defaults['prefix_matching'],
             'prefix_min_length' => self::sanitize_prefix_min_length($value['prefix_min_length'] ?? $defaults['prefix_min_length']),
@@ -8990,9 +8942,9 @@ final class WP_FTS_Plugin
     {
         return self::sanitize_prefix_threshold(
             $value,
-            self::PREFIX_MIN_LENGTH_DEFAULT,
-            self::PREFIX_MIN_LENGTH_MIN,
-            self::PREFIX_MIN_LENGTH_MAX
+            WP_FTS_Set_Oriented_Search_Storage::DEFAULT_PREFIX_LENGTH,
+            WP_FTS_Set_Oriented_Search_Storage::MIN_PREFIX_LENGTH,
+            WP_FTS_Set_Oriented_Search_Storage::MAX_PREFIX_LENGTH
         );
     }
 
@@ -9007,9 +8959,6 @@ final class WP_FTS_Plugin
 
     private static function sanitize_recency_boost_strength(mixed $value): float
     {
-        if (is_bool($value)) {
-            return $value ? self::RECENCY_BOOST_STRENGTH_DEFAULT : 0.0;
-        }
         if (!is_scalar($value) || !is_numeric($value)) {
             return 0.0;
         }
@@ -9019,21 +8968,21 @@ final class WP_FTS_Plugin
             return 0.0;
         }
 
-        return self::clamp_float($strength, self::RECENCY_BOOST_STRENGTH_MIN, self::RECENCY_BOOST_STRENGTH_MAX);
+        return self::clamp_float($strength, WP_FTS_Set_Oriented_Search_Storage::MIN_RECENCY_BOOST_STRENGTH, WP_FTS_Set_Oriented_Search_Storage::MAX_RECENCY_BOOST_STRENGTH);
     }
 
     private static function sanitize_recency_boost_half_life(mixed $value): float
     {
         if (!is_scalar($value) || !is_numeric($value)) {
-            return self::RECENCY_BOOST_HALF_LIFE_DEFAULT;
+            return WP_FTS_Set_Oriented_Search_Storage::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS;
         }
 
         $days = (float) $value;
         if (!is_finite($days) || $days <= 0.0) {
-            return self::RECENCY_BOOST_HALF_LIFE_DEFAULT;
+            return WP_FTS_Set_Oriented_Search_Storage::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS;
         }
 
-        return self::clamp_float($days, self::RECENCY_BOOST_HALF_LIFE_MIN, self::RECENCY_BOOST_HALF_LIFE_MAX);
+        return self::clamp_float($days, WP_FTS_Set_Oriented_Search_Storage::MIN_RECENCY_BOOST_HALF_LIFE_DAYS, WP_FTS_Set_Oriented_Search_Storage::MAX_RECENCY_BOOST_HALF_LIFE_DAYS);
     }
 
     private static function sanitize_search_provider_compatibility(mixed $value, string $default): string
@@ -9394,30 +9343,6 @@ final class WP_FTS_Plugin
      */
     private static function sanitize_replacement_scope_settings(array $value, array $defaults): array
     {
-        $scope = is_scalar($value['replace_search_scope'] ?? null)
-            ? self::sanitize_key((string) $value['replace_search_scope'])
-            : '';
-
-        if ($scope !== '') {
-            if ($scope === 'frontend-admin') {
-                return [true, true];
-            }
-            if ($scope === 'frontend') {
-                return [true, false];
-            }
-            if ($scope === 'admin') {
-                return [false, true];
-            }
-            if ($scope === 'none') {
-                return [false, false];
-            }
-
-            return [
-                (bool) ($defaults['replace_frontend_search'] ?? false),
-                (bool) ($defaults['replace_admin_post_search'] ?? false),
-            ];
-        }
-
         return [
             array_key_exists('replace_frontend_search', $value) ? self::truthy_admin_value($value['replace_frontend_search']) : (bool) $defaults['replace_frontend_search'],
             array_key_exists('replace_admin_post_search', $value) ? self::truthy_admin_value($value['replace_admin_post_search']) : (bool) $defaults['replace_admin_post_search'],
@@ -9474,7 +9399,7 @@ final class WP_FTS_Plugin
         }
         foreach (self::public_searchable_post_types() as $post_type) {
             $choices[$post_type] = true;
-            if (count($choices) >= self::MAX_SEARCH_SCOPE_VALUES) {
+            if (count($choices) >= WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
                 break;
             }
         }
@@ -9495,7 +9420,7 @@ final class WP_FTS_Plugin
         $settings ??= self::settings();
         $profile = [
             'schema' => self::INDEX_PROFILE_SCHEMA,
-            'indexer_signature' => self::INDEX_PROFILE_INDEXER_SIGNATURE,
+            'indexer_signature' => WP_FTS_Indexer::INDEX_SIGNATURE_VERSION,
             'analyzer_signature' => self::runtime_analyzer_index_signature(),
             'runtime_analyzer_options' => self::stored_runtime_analyzer_profile_options(),
             'field_boosts' => self::settings_field_boosts($settings['field_boosts'] ?? []),
@@ -9523,18 +9448,12 @@ final class WP_FTS_Plugin
     /** Hashes the effective analyzer configuration used to detect stale documents. */
     private static function runtime_analyzer_index_signature(): string
     {
-        try {
-            $signature = self::runtime_analyzer()->index_signature();
-            if (is_scalar($signature) && trim((string) $signature) !== '') {
-                return (string) $signature;
-            }
-        } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
-            throw $error;
-        } catch (Throwable) {
-            // Fall through to a conservative class-level signature.
+        $signature = self::runtime_analyzer()->index_signature();
+        if (!is_string($signature) || $signature === '' || trim($signature) !== $signature) {
+            throw new UnexpectedValueException('The runtime analyzer must return an unpadded nonempty index signature.');
         }
 
-        return 'analyzer:' . WP_FTS_Analyzer::class;
+        return $signature;
     }
 
     /**
@@ -9678,27 +9597,27 @@ final class WP_FTS_Plugin
         $allowed_map = [];
         $allowed_count = 0;
         foreach ($allowed as $item) {
-            if (++$allowed_count > self::MAX_SEARCH_SCOPE_VALUES) {
+            if (++$allowed_count > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
                 break;
             }
-            if (!is_scalar($item) || strlen((string) $item) > self::MAX_SEARCH_SCOPE_VALUE_BYTES) {
+            if (!is_scalar($item) || strlen((string) $item) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES) {
                 continue;
             }
             $item = self::sanitize_key((string) $item);
             if ($item !== '') {
                 $allowed_map[$item] = true;
             }
-            if (count($allowed_map) >= self::MAX_SEARCH_SCOPE_VALUES) {
+            if (count($allowed_map) >= WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
                 break;
             }
         }
         $post_types = [];
         $raw_count = 0;
         foreach (is_array($value) ? $value : [$value] as $item) {
-            if (++$raw_count > self::MAX_SEARCH_SCOPE_VALUES) {
+            if (++$raw_count > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
                 break;
             }
-            if (!is_scalar($item) || strlen((string) $item) > self::MAX_SEARCH_SCOPE_VALUE_BYTES) {
+            if (!is_scalar($item) || strlen((string) $item) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES) {
                 continue;
             }
             $post_type = self::sanitize_key((string) $item);
@@ -9831,7 +9750,9 @@ final class WP_FTS_Plugin
      */
     public static function prepare_post_index_options(object $post, array $opts = []): array
     {
-        $options = $opts;
+        $allowed = ['document_lang', 'default_lang', 'custom_field_keys', 'field_boosts'];
+        self::assert_index_option_keys($opts, $allowed, 'Post indexing');
+        $options = self::normalize_index_language_options($opts);
         $post_language_preloaded = property_exists($post, 'fts_language_override')
             && property_exists($post, 'fts_integration_language');
         $site_language = self::site_language();
@@ -9851,27 +9772,46 @@ final class WP_FTS_Plugin
 
         if (function_exists('apply_filters')) {
             $filtered = apply_filters(self::POST_INDEX_OPTIONS_FILTER, $options, $post);
-            if (is_array($filtered)) {
-                $options = $filtered;
+            if (!is_array($filtered)) {
+                throw new UnexpectedValueException('wp_fts_post_index_options must return an array.');
+            }
+            $options = $filtered;
+        }
+
+        self::assert_index_option_keys($options, $allowed, 'Post indexing');
+        $options = self::normalize_index_language_options($options);
+
+        return $options;
+    }
+
+    /** Reject indexing options outside one named boundary contract. */
+    private static function assert_index_option_keys(array $options, array $allowed, string $surface): void
+    {
+        foreach (array_keys($options) as $key) {
+            if (!is_string($key) || !in_array($key, $allowed, true)) {
+                throw new InvalidArgumentException("{$surface} options contain an unsupported field.");
             }
         }
+    }
 
-        $document_language = WP_FTS_TermNamespace::language_from_options(
-            $options,
-            null,
-            ['document_lang', 'primary_lang', 'lang', 'language', 'locale']
-        );
-        unset($options['primary_lang'], $options['lang'], $options['language'], $options['locale']);
-        if ($document_language !== null) {
-            $options['document_lang'] = $document_language;
+    /** Return one canonical native language string, or null when absent. */
+    private static function index_language_option(array $options, string $key): ?string
+    {
+        if (!array_key_exists($key, $options)) {
+            return null;
         }
 
-        // The batch dependency snapshot is authoritative for this generation,
-        // including an absent language override. Preserve that fact through
-        // analyzer callbacks so they cannot restore one get_post_meta() query
-        // per document after the set-oriented preload.
-        if ($post_language_preloaded) {
-            $options[self::PRELOADED_POST_LANGUAGE_OPTION] = true;
+        return WP_FTS_TermNamespace::parse_language_tag($options[$key]);
+    }
+
+    /** Validate and canonicalize the two supported indexing language hints. */
+    private static function normalize_index_language_options(array $options): array
+    {
+        foreach (['default_lang', 'document_lang'] as $key) {
+            $language = self::index_language_option($options, $key);
+            if ($language !== null) {
+                $options[$key] = $language;
+            }
         }
 
         return $options;
@@ -10061,12 +10001,8 @@ final class WP_FTS_Plugin
 
         $result_languages = [];
         foreach ($results as $row) {
-            $candidate = trim((string) ($row['language'] ?? ''));
-            if ($candidate === '') {
-                continue;
-            }
-            $language = WP_FTS_TermNamespace::canonicalize_lang($candidate);
-            if ($language !== '' && array_key_exists($language, self::sandbox_language_labels()) && $language !== 'auto') {
+            $language = $row['language'];
+            if (array_key_exists($language, self::sandbox_language_labels()) && $language !== 'auto') {
                 $result_languages[$language] = true;
             }
         }
@@ -10079,15 +10015,13 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @return array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>}
+     * @return array{requested_lang:string,query_lang:string,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>}
      */
     private static function empty_sandbox_search_results(string $selected_language): array
     {
         return [
             'requested_lang' => $selected_language,
             'query_lang' => '',
-            'total' => 0,
-            'total_relation' => 'unknown',
             'has_more' => false,
             'next_cursor' => null,
             'previous_cursor' => null,
@@ -10097,7 +10031,7 @@ final class WP_FTS_Plugin
 
     /**
      * @param array<string,mixed> $controls
-     * @return array{requested_lang:string,query_lang:string,total:int,results:array<int,array<string,mixed>>}
+     * @return array{requested_lang:string,query_lang:string,results:array<int,array<string,mixed>>}
      */
     private static function sandbox_search_results(string $query, string $selected_language, array $controls = [], bool $include_snippets = false): array
     {
@@ -10123,8 +10057,8 @@ final class WP_FTS_Plugin
             'prefix_matching' => (bool) ($controls['prefix_matching'] ?? $settings['prefix_matching']),
             'snippet_length' => self::clamp_int(
                 $controls['snippet_length'] ?? $settings['snippet_length'],
-                self::SETTINGS_SNIPPET_MIN,
-                self::SETTINGS_SNIPPET_MAX
+                WP_FTS_Set_Oriented_Search_Storage::MIN_SNIPPET_LENGTH,
+                WP_FTS_Set_Oriented_Search_Storage::MAX_SNIPPET_LENGTH
             ),
         ] + self::searcher_prefix_threshold_options($settings, $controls);
         foreach (['post_types', 'post_statuses'] as $key) {
@@ -10152,23 +10086,14 @@ final class WP_FTS_Plugin
 
         $results = [];
         foreach ($payload['results'] as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $post_id = max(0, (int) ($row['doc_id'] ?? 0));
-            if ($post_id <= 0) {
-                continue;
-            }
-            $result = self::sandbox_result_row($row, $post_id, (string) ($payload['query_lang'] ?? ''));
-            $results[] = $result;
+            $results[] = self::sandbox_result_row($row, $row['doc_id']);
         }
 
         $query_language = self::sandbox_resolved_query_language(
             $selected_language,
-            is_scalar($payload['query_lang'] ?? null) ? (string) $payload['query_lang'] : '',
+            $payload['query_lang'],
             $results
         );
-        $has_more = !empty($payload['has_more']);
         self::debug_set_counts($trace_id, [
             'search_batches' => 1,
             'ranked_page_rows' => count($results),
@@ -10178,7 +10103,6 @@ final class WP_FTS_Plugin
         self::debug_set_query_language($trace_id, $query_language !== 'auto' ? $query_language : '');
         self::debug_add_notes($trace_id, [
             'FTS sandbox search used the same one-pass relational backend as production.',
-            'The interactive total is intentionally unknown.',
         ]);
         self::debug_add_timing($trace_id, 'total', $trace_started);
         self::debug_finish_trace($trace_id, 'ran');
@@ -10186,33 +10110,11 @@ final class WP_FTS_Plugin
         return [
             'requested_lang' => $selected_language,
             'query_lang' => $query_language,
-            'total' => count($results) + ($has_more ? 1 : 0),
-            'total_relation' => 'unknown',
-            'has_more' => $has_more,
-            'next_cursor' => is_scalar($payload['next_cursor'] ?? null) ? (string) $payload['next_cursor'] : null,
-            'previous_cursor' => is_scalar($payload['previous_cursor'] ?? null) ? (string) $payload['previous_cursor'] : null,
+            'has_more' => $payload['has_more'],
+            'next_cursor' => $payload['next_cursor'],
+            'previous_cursor' => $payload['previous_cursor'],
             'results' => $results,
         ];
-    }
-
-    /**
-     * Build the analyzer used only by the admin/Playground demo corpus.
-     */
-    public static function sandbox_demo_analyzer(): WP_FTS_Analyzer
-    {
-        return new WP_FTS_Analyzer(self::sandbox_demo_analyzer_options());
-    }
-
-    /**
-     * Return demo-only analyzer options with bundled local packs preconfigured.
-     *
-     * @return array<string,mixed>
-     */
-    public static function sandbox_demo_analyzer_options(): array
-    {
-        return self::with_wordpress_analyzer_options(
-            self::sanitize_runtime_analyzer_options(self::raw_sandbox_demo_analyzer_options(), true)
-        );
     }
 
     /**
@@ -10265,22 +10167,21 @@ final class WP_FTS_Plugin
      */
     public static function set_runtime_lemma_pack_option(string $language, string $manifestPath): array
     {
-        if (strlen($language) > WP_FTS_Analyzer_Config_Limits::MAX_LANGUAGE_BYTES) {
-            throw new WP_FTS_Analyzer_Config_Limit_Exceeded('language_bytes', 'Runtime lemma-pack language exceeds 64 bytes.');
+        $language = WP_FTS_TermNamespace::parse_language_tag($language);
+        if ($manifestPath === '' || trim($manifestPath) !== $manifestPath) {
+            throw new InvalidArgumentException('Runtime lemma pack option requires an unpadded manifest path.');
         }
         WP_FTS_Analyzer_Config_Limits::assert_path($manifestPath, 'Runtime lemma-pack manifest path');
-        $language = WP_FTS_TermNamespace::canonicalize_lang($language);
-        $manifestPath = trim($manifestPath);
-        if ($language === '' || $manifestPath === '') {
-            throw new InvalidArgumentException('Runtime lemma pack option requires a language and manifest path.');
+        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
+        if (!is_array($stored)) {
+            throw new UnexpectedValueException('Stored WordPress analyzer options must be an array.');
         }
+        $options = $stored;
+        WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'Stored WordPress analyzer options');
+        self::runtime_lemma_pack_options_by_language($options);
         self::assert_runtime_lemma_pack_can_enable($language, $manifestPath);
 
-        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
-        $options = is_array($stored) ? $stored : [];
-        WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'Stored WordPress analyzer options');
-
-        if (!isset($options['lemma_packs_by_lang']) || !is_array($options['lemma_packs_by_lang'])) {
+        if (!array_key_exists('lemma_packs_by_lang', $options)) {
             $options['lemma_packs_by_lang'] = [];
         }
         $options['lemma_packs_by_lang'] = self::set_language_pack_map_entry(
@@ -10289,7 +10190,7 @@ final class WP_FTS_Plugin
             $manifestPath
         );
 
-        if ($options == (is_array($stored) ? $stored : [])) {
+        if ($options === $stored) {
             return $options;
         }
         self::assert_runtime_analyzer_options_can_enable($options);
@@ -10341,11 +10242,17 @@ final class WP_FTS_Plugin
     ): array
     {
         WP_FTS_Analyzer_Config_Limits::assert_language_map($bundledManifests, 'Bundled runtime lemma packs');
+        $bundledManifests = self::runtime_lemma_pack_options_by_language([
+            'lemma_packs_by_lang' => $bundledManifests,
+        ]);
         if (count($selectedLanguages) > WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES) {
             throw new WP_FTS_Analyzer_Config_Limit_Exceeded('configured_languages', 'Bundled runtime selection exceeds 32 languages.');
         }
         $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
-        $options = is_array($stored) ? $stored : [];
+        if (!is_array($stored)) {
+            throw new UnexpectedValueException('Stored WordPress analyzer options must be an array.');
+        }
+        $options = $stored;
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'Stored WordPress analyzer options');
         $selected = array_fill_keys($selectedLanguages, true);
         $filterControlled = self::filter_controlled_runtime_lemma_pack_languages();
@@ -10357,7 +10264,7 @@ final class WP_FTS_Plugin
 
             if (isset($selected[$language])) {
                 self::assert_runtime_lemma_pack_can_enable($language, $manifestPath);
-                if (!isset($options['lemma_packs_by_lang']) || !is_array($options['lemma_packs_by_lang'])) {
+                if (!array_key_exists('lemma_packs_by_lang', $options)) {
                     $options['lemma_packs_by_lang'] = [];
                 }
                 $options['lemma_packs_by_lang'] = self::set_language_pack_map_entry(
@@ -10371,7 +10278,7 @@ final class WP_FTS_Plugin
             $options = self::remove_exact_bundled_runtime_lemma_pack_entry($options, $language, $manifestPath);
         }
 
-        if ($options != (is_array($stored) ? $stored : [])) {
+        if ($options !== $stored) {
             self::assert_runtime_analyzer_options_can_enable($options);
         }
 
@@ -10401,7 +10308,7 @@ final class WP_FTS_Plugin
 
         // Activatable packs still receive the complete streamed integrity audit
         // before their configuration is persisted.
-        $validator->validate($manifestPath, false);
+        $validator->validate($manifestPath);
     }
 
     /**
@@ -10426,14 +10333,13 @@ final class WP_FTS_Plugin
     /**
      * Report configured runtime lemma packs for admin diagnostics.
      *
-     * @return array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
+     * @return array<int,array{language:string,kind:string,status:string,pack_id:string,reason:string}>
      */
     public static function runtime_analyzer_pack_statuses(): array
     {
         if (self::$runtime_analyzer_pack_statuses_cache === null) {
             self::$runtime_analyzer_pack_statuses_cache = self::analyzer_pack_statuses(
-                self::raw_runtime_analyzer_options(),
-                false
+                self::raw_runtime_analyzer_options()
             );
         }
 
@@ -10441,27 +10347,10 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Report configured sandbox/demo lemma packs for admin diagnostics.
-     *
-     * @return array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
-     */
-    public static function sandbox_demo_analyzer_pack_statuses(): array
-    {
-        if (self::$sandbox_demo_analyzer_pack_statuses_cache === null) {
-            self::$sandbox_demo_analyzer_pack_statuses_cache = self::analyzer_pack_statuses(
-                self::raw_sandbox_demo_analyzer_options(),
-                true
-            );
-        }
-
-        return self::$sandbox_demo_analyzer_pack_statuses_cache;
-    }
-
-    /**
      * @param array<string,mixed> $options
-     * @return array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
+     * @return array<int,array{language:string,kind:string,status:string,pack_id:string,reason:string}>
      */
-    private static function analyzer_pack_statuses(array $options, bool $allow_fixture_segmenters): array
+    private static function analyzer_pack_statuses(array $options): array
     {
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'WordPress analyzer options');
         $statuses = [];
@@ -10469,17 +10358,10 @@ final class WP_FTS_Plugin
         $admission = new WP_FTS_ConfiguredLemmaPackAdmission();
         $lemmaPackPreflights = [];
         foreach ($lemmaPackOptions as $language => $option) {
-            if (self::lemma_pack_option_is_disabled($option)) {
+            if (self::pack_option_is_disabled($option)) {
                 continue;
             }
-            $manifestPath = WP_FTS_LanguageLemmaPack::manifest_path_from_option(
-                $option,
-                self::default_lemma_pack_manifest_for_language($language)
-            );
-            if ($manifestPath === null) {
-                $lemmaPackPreflights[$language] = ['state' => 'unresolved'];
-                continue;
-            }
+            $manifestPath = WP_FTS_LanguageLemmaPack::manifest_path_from_option($option);
             $realManifestPath = realpath($manifestPath);
             if (!is_string($realManifestPath) || !is_file($realManifestPath)) {
                 $lemmaPackPreflights[$language] = ['state' => 'missing'];
@@ -10508,29 +10390,20 @@ final class WP_FTS_Plugin
 
         $lemmaPackAttemptsByManifest = [];
         foreach ($lemmaPackOptions as $language => $option) {
-            if (self::lemma_pack_option_is_disabled($option)) {
+            if (self::pack_option_is_disabled($option)) {
                 $statuses[] = [
                     'language' => $language,
                     'kind' => 'lemmatizer',
                     'status' => 'disabled',
                     'pack_id' => '',
-                    'fixture_only' => false,
                     'reason' => 'Disabled by configuration.',
                 ];
                 continue;
             }
 
-            $preflight = $lemmaPackPreflights[$language] ?? ['state' => 'unresolved'];
-            if ($preflight['state'] === 'unresolved') {
-                $statuses[] = [
-                    'language' => $language,
-                    'kind' => 'lemmatizer',
-                    'status' => 'not-active',
-                    'pack_id' => '',
-                    'fixture_only' => false,
-                    'reason' => 'No runtime manifest could be resolved for this configured pack.',
-                ];
-                continue;
+            $preflight = $lemmaPackPreflights[$language] ?? null;
+            if (!is_array($preflight)) {
+                throw new LogicException('Configured lemma-pack status requires a preflight result.');
             }
             if ($preflight['state'] === 'missing') {
                 $statuses[] = [
@@ -10538,7 +10411,6 @@ final class WP_FTS_Plugin
                     'kind' => 'lemmatizer',
                     'status' => 'not-active',
                     'pack_id' => '',
-                    'fixture_only' => false,
                     'reason' => 'Configured pack manifest is missing and is not active.',
                 ];
                 continue;
@@ -10584,8 +10456,7 @@ final class WP_FTS_Plugin
                         throw $error;
                     } catch (Throwable $error) {
                         // Cache failed physical attempts too; otherwise aliases
-                        // repeat the same bounded but expensive digest or
-                        // eager-decoding work.
+                        // repeat the same bounded but expensive digest work.
                         $lemmaPackAttemptsByManifest[$manifestIdentity] = $error;
                         throw $error;
                     }
@@ -10604,9 +10475,8 @@ final class WP_FTS_Plugin
                     'kind' => 'lemmatizer',
                     'status' => $notActive ? 'not-active' : 'corrupt',
                     'pack_id' => '',
-                    'fixture_only' => false,
                     'reason' => $missingLookup
-                        ? 'Configured non-eager pack is missing a validated lookup sidecar for at least one runtime shard and is not active.'
+                        ? 'Configured pack is missing a validated lookup sidecar for at least one runtime shard and is not active.'
                         : ($notActive
                             ? 'Configured pack is language-mismatched or lacks its optional runtime dependency and is not active.'
                             : 'Configured pack failed strict runtime integrity verification and is not active.'),
@@ -10619,53 +10489,27 @@ final class WP_FTS_Plugin
                 'kind' => 'lemmatizer',
                 'status' => 'active',
                 'pack_id' => (string) $validation['manifest']['pack_id'],
-                'fixture_only' => (bool) $validation['manifest']['fixture_only'],
                 'reason' => '',
             ];
         }
         foreach (self::runtime_segmenter_pack_options_by_language($options) as $language => $option) {
-            if (self::lemma_pack_option_is_disabled($option)) {
+            if (self::pack_option_is_disabled($option)) {
                 $statuses[] = [
                     'language' => $language,
                     'kind' => 'tokenizer',
                     'status' => 'disabled',
                     'pack_id' => '',
-                    'fixture_only' => false,
                     'reason' => 'Disabled by configuration.',
-                ];
-                continue;
-            }
-            if (!$allow_fixture_segmenters && $option !== true) {
-                $statuses[] = [
-                    'language' => $language,
-                    'kind' => 'tokenizer',
-                    'status' => 'not-active',
-                    'pack_id' => '',
-                    'fixture_only' => is_array($option) && !empty($option['fixture_only']),
-                    'reason' => 'WordPress runtime accepts only the packaged, attested Jieba dictionary; source-only custom dictionaries are fixture-only and were not read.',
                 ];
                 continue;
             }
 
             $pack = WP_FTS_ChineseJiebaSegmenter::from_pack_option($option, $language);
-            if ($pack === null) {
-                $statuses[] = [
-                    'language' => $language,
-                    'kind' => 'tokenizer',
-                    'status' => 'fallback',
-                    'pack_id' => '',
-                    'fixture_only' => false,
-                    'reason' => 'Jieba dictionary source is missing, invalid, or hash-mismatched; using fallback CJK n-grams.',
-                ];
-                continue;
-            }
-
             $statuses[] = [
                 'language' => $language,
                 'kind' => 'tokenizer',
                 'status' => 'active',
                 'pack_id' => $pack->pack_id(),
-                'fixture_only' => $pack->is_fixture_only(),
                 'reason' => '',
             ];
         }
@@ -10691,22 +10535,8 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Read bundled sandbox/demo defaults, the WordPress option, and the analyzer
-     * options filter.
-     *
-     * @return array<string,mixed>
-     */
-    private static function raw_sandbox_demo_analyzer_options(): array
-    {
-        return self::raw_analyzer_options_with_bundled_packs(
-            self::bundled_sandbox_demo_lemma_packs_by_lang(),
-            self::bundled_sandbox_demo_segmenter_packs_by_lang()
-        );
-    }
-
-    /**
-     * @param array<string,bool|string> $bundled_lemma_packs
-     * @param array<string,bool|string> $bundled_segmenter_packs
+     * @param array<string,string> $bundled_lemma_packs
+     * @param array<string,bool> $bundled_segmenter_packs
      * @param array<string,mixed>|null $stored_options Prospective stored value, or null to read WordPress.
      * @return array<string,mixed>
      */
@@ -10725,13 +10555,14 @@ final class WP_FTS_Plugin
         if (function_exists('apply_filters')) {
             $base = $options;
             $filtered = apply_filters(self::ANALYZER_OPTIONS_FILTER, $options);
-            if (is_array($filtered)) {
-                WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($filtered, 'Filtered WordPress analyzer options');
-                $options = self::merge_runtime_analyzer_options(
-                    $base,
-                    self::runtime_analyzer_filter_override_layer($base, $filtered)
-                );
+            if (!is_array($filtered)) {
+                throw new UnexpectedValueException('The WordPress analyzer options filter must return an array.');
             }
+            WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($filtered, 'Filtered WordPress analyzer options');
+            $options = self::merge_runtime_analyzer_options(
+                $base,
+                self::runtime_analyzer_filter_override_layer($base, $filtered)
+            );
         }
 
         return $options;
@@ -10741,8 +10572,8 @@ final class WP_FTS_Plugin
      * Read bundled defaults and the stored WordPress option without applying
      * the higher-precedence analyzer-options filter.
      *
-     * @param array<string,bool|string> $bundled_lemma_packs
-     * @param array<string,bool|string> $bundled_segmenter_packs
+     * @param array<string,string> $bundled_lemma_packs
+     * @param array<string,bool> $bundled_segmenter_packs
      * @param array<string,mixed>|null $stored_options Prospective stored value, or null to read WordPress.
      * @return array<string,mixed>
      */
@@ -10758,10 +10589,11 @@ final class WP_FTS_Plugin
         ];
 
         $stored = $stored_options ?? self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
-        if (is_array($stored)) {
-            WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($stored, 'Stored WordPress analyzer options');
-            $options = self::merge_runtime_analyzer_options($options, $stored);
+        if (!is_array($stored)) {
+            throw new UnexpectedValueException('Stored WordPress analyzer options must be an array.');
         }
+        WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($stored, 'Stored WordPress analyzer options');
+        $options = self::merge_runtime_analyzer_options($options, $stored);
 
         return $options;
     }
@@ -10772,16 +10604,10 @@ final class WP_FTS_Plugin
      * @param array<string,mixed> $options
      * @return array<string,mixed>
      */
-    private static function sanitize_runtime_analyzer_options(array $options, bool $allow_fixture_segmenters = false): array
+    private static function sanitize_runtime_analyzer_options(array $options): array
     {
         $lemmaPacks = self::runtime_lemma_pack_options_by_language($options);
         $segmenterPacks = self::runtime_segmenter_pack_options_by_language($options);
-        if (!$allow_fixture_segmenters) {
-            $segmenterPacks = array_filter(
-                $segmenterPacks,
-                static fn(mixed $option): bool => $option === true || self::lemma_pack_option_is_disabled($option)
-            );
-        }
         if ($lemmaPacks === [] && $segmenterPacks === []) {
             return [];
         }
@@ -10808,11 +10634,12 @@ final class WP_FTS_Plugin
     {
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($base, 'Base WordPress analyzer options');
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($override, 'WordPress analyzer option override');
+        $base = self::normalize_runtime_analyzer_option_layer($base);
         $override = self::normalize_runtime_analyzer_option_layer($override);
 
         foreach ($override as $key => $value) {
             if (in_array($key, ['lemma_packs_by_lang', 'segmenter_packs_by_lang'], true) && is_array($value)) {
-                $current = isset($base[$key]) && is_array($base[$key]) ? $base[$key] : [];
+                $current = $base[$key] ?? [];
                 $base[$key] = WP_FTS_Analyzer_Config_Limits::merge_language_maps(
                     [$current, $value],
                     "WordPress analyzer {$key}"
@@ -10836,14 +10663,16 @@ final class WP_FTS_Plugin
     {
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($base, 'Base filtered WordPress analyzer options');
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($filtered, 'Filtered WordPress analyzer options');
+        $base = self::normalize_runtime_analyzer_option_layer($base);
+        $filtered = self::normalize_runtime_analyzer_option_layer($filtered);
         $override = [];
 
         foreach (['lemma_packs_by_lang', 'segmenter_packs_by_lang'] as $key) {
-            if (!isset($filtered[$key]) || !is_array($filtered[$key])) {
+            if (!isset($filtered[$key])) {
                 continue;
             }
 
-            $baseMap = isset($base[$key]) && is_array($base[$key]) ? $base[$key] : [];
+            $baseMap = $base[$key] ?? [];
             foreach ($filtered[$key] as $language => $option) {
                 if (!array_key_exists($language, $baseMap) || $baseMap[$language] !== $option) {
                     $override[$key][$language] = $option;
@@ -10866,33 +10695,15 @@ final class WP_FTS_Plugin
         $normalized = [];
 
         foreach (['lemma_packs_by_lang', 'segmenter_packs_by_lang'] as $key) {
-            if (isset($options[$key]) && is_array($options[$key])) {
-                $normalized[$key] = self::normalize_runtime_analyzer_language_map($options[$key]);
-            }
-        }
-        foreach ($normalized as $key => $map) {
-            if (is_array($map)) {
-                WP_FTS_Analyzer_Config_Limits::assert_language_map($map, "WordPress analyzer {$key}");
-            }
-        }
-
-        return $normalized;
-    }
-
-    /**
-     * @param array<string,mixed> $packs
-     * @return array<string,mixed>
-     */
-    private static function normalize_runtime_analyzer_language_map(array $packs): array
-    {
-        WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'WordPress analyzer language map');
-        $normalized = [];
-        foreach ($packs as $language => $option) {
-            if (!is_scalar($language) || trim((string) $language) === '') {
+            if (!array_key_exists($key, $options)) {
                 continue;
             }
-
-            $normalized[WP_FTS_TermNamespace::canonicalize_lang((string) $language)] = $option;
+            if (!is_array($options[$key])) {
+                throw new InvalidArgumentException("WordPress analyzer option {$key} must be a language map.");
+            }
+            $normalized[$key] = $key === 'lemma_packs_by_lang'
+                ? self::runtime_lemma_pack_options_by_language([$key => $options[$key]])
+                : self::runtime_segmenter_pack_options_by_language([$key => $options[$key]]);
         }
 
         return $normalized;
@@ -10904,24 +10715,11 @@ final class WP_FTS_Plugin
      */
     private static function set_language_pack_map_entry(array $packs, string $language, string $manifestPath): array
     {
-        WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'Stored WordPress analyzer language map');
+        $language = WP_FTS_TermNamespace::parse_language_tag($language);
+        $packs = self::runtime_lemma_pack_options_by_language(['lemma_packs_by_lang' => $packs]);
         WP_FTS_Analyzer_Config_Limits::assert_path($manifestPath, 'Runtime lemma-pack manifest path');
-        $updated = false;
-        foreach ($packs as $entryLanguage => $option) {
-            if (!is_scalar($entryLanguage) || trim((string) $entryLanguage) === '') {
-                continue;
-            }
-            if (WP_FTS_TermNamespace::canonicalize_lang((string) $entryLanguage) !== $language) {
-                continue;
-            }
-
-            $packs[$entryLanguage] = $manifestPath;
-            $updated = true;
-        }
-
-        if (!$updated) {
-            $packs[$language] = $manifestPath;
-        }
+        $packs[$language] = $manifestPath;
+        ksort($packs, SORT_STRING);
         WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'Stored WordPress analyzer language map');
 
         return $packs;
@@ -10932,18 +10730,21 @@ final class WP_FTS_Plugin
     {
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'WordPress analyzer options');
         $packs = $options['lemma_packs_by_lang'] ?? [];
+        if (!is_array($packs)) {
+            throw new InvalidArgumentException('WordPress lemma packs must be a language map.');
+        }
         WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'WordPress lemma packs');
 
         $normalized = [];
         foreach ($packs as $language => $option) {
-            if (!is_scalar($language) || trim((string) $language) === '') {
-                continue;
+            $language = WP_FTS_TermNamespace::parse_language_tag($language);
+            if (array_key_exists($language, $normalized)) {
+                throw new InvalidArgumentException("WordPress lemma packs contain duplicate language {$language}.");
             }
-
-            $language = WP_FTS_TermNamespace::canonicalize_lang((string) $language);
-            if (!self::is_supported_lemma_pack_option($option)) {
-                continue;
+            if ($option !== false && !is_string($option)) {
+                throw new InvalidArgumentException("WordPress lemma pack {$language} must be an exact manifest path or false.");
             }
+            WP_FTS_LanguageLemmaPack::manifest_path_from_option($option);
 
             $normalized[$language] = $option;
         }
@@ -10952,22 +10753,24 @@ final class WP_FTS_Plugin
         return $normalized;
     }
 
-    /** @return array<string,mixed> */
+    /** @return array<string,bool> */
     private static function runtime_segmenter_pack_options_by_language(array $options): array
     {
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'WordPress analyzer options');
         $packs = $options['segmenter_packs_by_lang'] ?? [];
+        if (!is_array($packs)) {
+            throw new InvalidArgumentException('WordPress segmenter packs must be a language map.');
+        }
         WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'WordPress segmenter packs');
 
         $normalized = [];
         foreach ($packs as $language => $option) {
-            if (!is_scalar($language) || trim((string) $language) === '') {
-                continue;
+            $language = WP_FTS_TermNamespace::parse_language_tag($language);
+            if (array_key_exists($language, $normalized)) {
+                throw new InvalidArgumentException("WordPress segmenter packs contain duplicate language {$language}.");
             }
-
-            $language = WP_FTS_TermNamespace::canonicalize_lang((string) $language);
-            if (!self::is_supported_lemma_pack_option($option)) {
-                continue;
+            if (!is_bool($option)) {
+                throw new InvalidArgumentException("WordPress segmenter pack {$language} must be a boolean.");
             }
 
             $normalized[$language] = $option;
@@ -10978,72 +10781,31 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @return array<string,bool|string>
+     * @return array<string,string>
      */
     private static function bundled_runtime_lemma_packs_by_lang(): array
     {
-        return [
-            'pl' => self::sandbox_polish_pack(),
-        ];
+        $polishManifest = self::bundled_polish_pack();
+
+        return $polishManifest === null ? [] : ['pl' => $polishManifest];
     }
 
     /**
-     * @return array<string,bool|string>
+     * @return array<string,bool>
      */
     private static function bundled_runtime_segmenter_packs_by_lang(): array
     {
         return [];
     }
 
-    /**
-     * @return array<string,bool|string>
-     */
-    private static function bundled_sandbox_demo_lemma_packs_by_lang(): array
+    private static function bundled_polish_pack(): ?string
     {
-        $packs = self::bundled_runtime_lemma_packs_by_lang();
-        if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
-            $packs = WP_FTS_Analyzer_Config_Limits::merge_language_maps(
-                [$packs, WP_FTS_AnalyzerPackValidator::bundled_unimorph_top_language_pack_manifests()],
-                'Bundled sandbox lemma packs'
-            );
-        }
-
-        ksort($packs, SORT_STRING);
-
-        return $packs;
-    }
-
-    /**
-     * @return array<string,bool|string>
-     */
-    private static function bundled_sandbox_demo_segmenter_packs_by_lang(): array
-    {
-        return [
-            'zh' => true,
-        ];
-    }
-
-    private static function sandbox_polish_pack(): bool|string
-    {
-        $manifestPath = WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest();
+        $manifestPath = WP_FTS_AnalyzerPackValidator::default_polish_manifest();
         if (is_file($manifestPath) && WP_FTS_AnalyzerPackValidator::gzip_available()) {
             return $manifestPath;
         }
 
-        return true;
-    }
-
-    private static function default_lemma_pack_manifest_for_language(string $language): ?string
-    {
-        $parts = explode('-', str_replace('_', '-', $language));
-        $base = strtolower((string) ($parts[0] ?? $language));
-
-        return $base === 'pl' ? WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest() : null;
-    }
-
-    private static function is_supported_lemma_pack_option(mixed $option): bool
-    {
-        return $option === null || is_bool($option) || is_string($option) || is_array($option);
+        return null;
     }
 
     /**
@@ -11052,11 +10814,15 @@ final class WP_FTS_Plugin
     private static function bundled_runtime_lemma_pack_control_manifests(): array
     {
         $manifests = WP_FTS_AnalyzerPackValidator::bundled_unimorph_top_language_pack_manifests();
+        WP_FTS_Analyzer_Config_Limits::assert_language_map($manifests, 'Bundled runtime lemma-pack controls');
         foreach ($manifests as $language => $manifestPath) {
             if (!is_string($manifestPath) || !is_file($manifestPath)) {
-                unset($manifests[$language]);
+                throw new RuntimeException("Bundled runtime lemma-pack manifest is missing for {$language}.");
             }
         }
+        $manifests = self::runtime_lemma_pack_options_by_language([
+            'lemma_packs_by_lang' => $manifests,
+        ]);
 
         ksort($manifests, SORT_STRING);
 
@@ -11117,41 +10883,21 @@ final class WP_FTS_Plugin
      */
     private static function stored_runtime_lemma_pack_entries_for_language(array $storedOptions, string $language): array
     {
-        $language = WP_FTS_TermNamespace::canonicalize_lang($language);
-        $entries = [];
-        foreach (($storedOptions['lemma_packs_by_lang'] ?? []) as $entryLanguage => $option) {
-            if (!is_scalar($entryLanguage) || trim((string) $entryLanguage) === '') {
-                continue;
-            }
-            if (WP_FTS_TermNamespace::canonicalize_lang((string) $entryLanguage) === $language) {
-                $entries[] = $option;
-            }
-        }
+        $language = WP_FTS_TermNamespace::parse_language_tag($language);
+        $packs = self::runtime_lemma_pack_options_by_language($storedOptions);
 
-        return $entries;
+        return array_key_exists($language, $packs) ? [$packs[$language]] : [];
     }
 
     private static function lemma_pack_option_points_to_manifest(mixed $option, string $manifestPath): bool
     {
-        if (is_string($option)) {
-            $path = trim($option);
-            return ($path !== '' ? $path : '') === $manifestPath;
+        if ($manifestPath === '' || trim($manifestPath) !== $manifestPath) {
+            throw new InvalidArgumentException('Bundled lemma-pack manifest path must be unpadded and non-empty.');
         }
+        WP_FTS_Analyzer_Config_Limits::assert_path($manifestPath, 'Bundled lemma-pack manifest path');
+        $configuredPath = WP_FTS_LanguageLemmaPack::manifest_path_from_option($option);
 
-        if (is_array($option)) {
-            foreach (['manifest', 'manifest_path', 'path'] as $key) {
-                if (!isset($option[$key]) || !is_scalar($option[$key])) {
-                    continue;
-                }
-
-                $path = trim((string) $option[$key]);
-                if ($path !== '') {
-                    return $path === $manifestPath;
-                }
-            }
-        }
-
-        return false;
+        return $configuredPath !== null && $configuredPath === $manifestPath;
     }
 
     /**
@@ -11160,34 +10906,25 @@ final class WP_FTS_Plugin
      */
     private static function remove_exact_bundled_runtime_lemma_pack_entry(array $options, string $language, string $manifestPath): array
     {
-        $language = WP_FTS_TermNamespace::canonicalize_lang($language);
-        foreach (($options['lemma_packs_by_lang'] ?? []) as $entryLanguage => $option) {
-            if (!is_scalar($entryLanguage) || WP_FTS_TermNamespace::canonicalize_lang((string) $entryLanguage) !== $language) {
-                continue;
-            }
-
-            if (self::lemma_pack_option_points_to_manifest($option, $manifestPath)) {
-                unset($options['lemma_packs_by_lang'][$entryLanguage]);
-            }
+        $language = WP_FTS_TermNamespace::parse_language_tag($language);
+        $packs = self::runtime_lemma_pack_options_by_language($options);
+        if (array_key_exists($language, $packs)
+            && self::lemma_pack_option_points_to_manifest($packs[$language], $manifestPath)
+        ) {
+            unset($packs[$language]);
         }
-        if (($options['lemma_packs_by_lang'] ?? null) === []) {
+        if ($packs === []) {
             unset($options['lemma_packs_by_lang']);
+        } else {
+            $options['lemma_packs_by_lang'] = $packs;
         }
 
         return $options;
     }
 
-    private static function lemma_pack_option_is_disabled(mixed $option): bool
+    private static function pack_option_is_disabled(mixed $option): bool
     {
-        if ($option === false || $option === null) {
-            return true;
-        }
-
-        if (is_string($option)) {
-            return in_array(strtolower(trim($option)), ['', '0', 'false', 'no', 'off'], true);
-        }
-
-        return false;
+        return $option === false;
     }
 
     /**
@@ -11245,7 +10982,7 @@ final class WP_FTS_Plugin
         echo '<span class="description">Controls how many results are shown in this Sandbox search view.</span></p>';
 
         echo '<p class="wp-fts-sandbox-field"><label for="wp-fts-sandbox-snippet-length">Search result excerpt length</label>';
-        echo '<input id="wp-fts-sandbox-snippet-length" type="number" min="' . self::esc_attr((string) self::SETTINGS_SNIPPET_MIN) . '" max="' . self::esc_attr((string) self::SETTINGS_SNIPPET_MAX) . '" name="' . self::esc_attr(self::ADMIN_SNIPPET_LENGTH_FIELD) . '" value="' . self::esc_attr((string) $controls['snippet_length']) . '">';
+        echo '<input id="wp-fts-sandbox-snippet-length" type="number" min="' . self::esc_attr((string) WP_FTS_Set_Oriented_Search_Storage::MIN_SNIPPET_LENGTH) . '" max="' . self::esc_attr((string) WP_FTS_Set_Oriented_Search_Storage::MAX_SNIPPET_LENGTH) . '" name="' . self::esc_attr(self::ADMIN_SNIPPET_LENGTH_FIELD) . '" value="' . self::esc_attr((string) $controls['snippet_length']) . '">';
         echo '<span class="description">A search result excerpt is the short piece of post text shown around a matching word.</span></p>';
 
         echo '<fieldset><legend class="wp-fts-sandbox-option-label">Highlight matches</legend>';
@@ -11290,7 +11027,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $statuses
+     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,reason:string}> $statuses
      */
     private static function render_analyzer_pack_statuses(array $statuses): void
     {
@@ -11300,11 +11037,11 @@ final class WP_FTS_Plugin
         }
 
         echo '<table class="widefat striped">';
-        echo '<thead><tr><th scope="col">Language</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Pack</th><th scope="col">Scope</th></tr></thead>';
+        echo '<thead><tr><th scope="col">Language</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Pack</th><th scope="col">Details</th></tr></thead>';
         echo '<tbody>';
         foreach ($statuses as $status) {
-            $scope = $status['status'] === 'active'
-                ? ($status['fixture_only'] ? 'Fixture' : 'Full local pack')
+            $details = $status['status'] === 'active'
+                ? 'Indexed local pack'
                 : $status['reason'];
             $pack = $status['pack_id'] !== '' ? $status['pack_id'] : '-';
             echo '<tr>';
@@ -11312,7 +11049,7 @@ final class WP_FTS_Plugin
             echo '<td>' . self::esc_html(ucfirst($status['kind'])) . '</td>';
             echo '<td>' . self::esc_html(ucfirst($status['status'])) . '</td>';
             echo '<td><code>' . self::esc_html($pack) . '</code></td>';
-            echo '<td>' . self::esc_html($scope) . '</td>';
+            echo '<td>' . self::esc_html($details) . '</td>';
             echo '</tr>';
         }
         echo '</tbody></table>';
@@ -11325,14 +11062,13 @@ final class WP_FTS_Plugin
         echo '<h3>Analyzer pack status matrix</h3>';
         echo '<p>Current WordPress site language: <strong>' . self::esc_html(self::sandbox_language_display(self::site_language())) . '</strong>.</p>';
         echo '<table class="widefat striped wp-fts-analyzer-pack-status-matrix">';
-        echo '<thead><tr><th scope="col">Language</th><th scope="col">Runtime support</th><th scope="col">Runtime pack/status</th><th scope="col">Sandbox support</th><th scope="col">Server/runtime requirements</th><th scope="col">Action</th></tr></thead>';
+        echo '<thead><tr><th scope="col">Language</th><th scope="col">Runtime support</th><th scope="col">Runtime pack/status</th><th scope="col">Server/runtime requirements</th><th scope="col">Action</th></tr></thead>';
         echo '<tbody>';
         foreach ($rows as $row) {
             echo '<tr>';
             echo '<td>' . self::esc_html($row['language_label']) . '</td>';
             echo '<td>' . self::esc_html($row['runtime_support']) . '</td>';
             echo '<td>' . self::esc_html($row['runtime_pack']) . '</td>';
-            echo '<td>' . self::esc_html($row['sandbox_support']) . '</td>';
             echo '<td>' . self::esc_html($row['requirements']) . '</td>';
             echo '<td>' . self::esc_html($row['action']) . '</td>';
             echo '</tr>';
@@ -11341,24 +11077,22 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @return array<int,array{language_label:string,runtime_support:string,runtime_pack:string,sandbox_support:string,requirements:string,action:string}>
+     * @return array<int,array{language_label:string,runtime_support:string,runtime_pack:string,requirements:string,action:string}>
      */
     private static function analyzer_pack_status_matrix_rows(): array
     {
         $siteLanguage = WP_FTS_TermNamespace::canonicalize_lang(self::site_language(), WP_FTS_TermNamespace::DEFAULT_LANG);
         $runtimeStatuses = self::runtime_analyzer_pack_statuses();
-        $sandboxStatuses = self::sandbox_demo_analyzer_pack_statuses();
         $manifests = self::bundled_runtime_lemma_pack_control_manifests();
         $controlRows = self::bundled_runtime_lemma_pack_control_rows($manifests);
         $topLanguageConfig = self::top_language_pack_config_by_language();
         $gzipAvailable = WP_FTS_AnalyzerPackValidator::gzip_available();
         $rows = [];
 
-        foreach (self::analyzer_pack_status_matrix_languages($siteLanguage, $runtimeStatuses, $sandboxStatuses, $manifests, $topLanguageConfig) as $language) {
+        foreach (self::analyzer_pack_status_matrix_languages($siteLanguage, $runtimeStatuses, $manifests, $topLanguageConfig) as $language) {
             $controlRow = self::analyzer_pack_status_matrix_control_row_for_language($language, $controlRows);
-            $runtimeSupport = self::language_support_details($language, false);
+            $runtimeSupport = self::language_support_details($language);
             $runtimeSupportLabel = self::analyzer_pack_status_matrix_support_label($language, $runtimeSupport, $topLanguageConfig);
-            $sandboxSupportLabel = self::analyzer_pack_status_matrix_support_label($language, self::language_support_details($language, true), $topLanguageConfig);
             $matchingStatuses = self::analyzer_pack_status_matrix_matching_statuses($runtimeStatuses, $language);
             $languageConfig = self::analyzer_pack_status_matrix_language_config($language, $topLanguageConfig);
 
@@ -11366,9 +11100,6 @@ final class WP_FTS_Plugin
                 'language_label' => self::sandbox_language_display($language) . ($language === $siteLanguage ? ' - current site language' : ''),
                 'runtime_support' => $runtimeSupportLabel,
                 'runtime_pack' => self::analyzer_pack_status_matrix_runtime_pack_summary($language, $matchingStatuses, $controlRow, $languageConfig, $gzipAvailable),
-                'sandbox_support' => $sandboxSupportLabel === $runtimeSupportLabel
-                    ? $sandboxSupportLabel . ' - same as runtime'
-                    : $sandboxSupportLabel . ' - differs from runtime',
                 'requirements' => self::analyzer_pack_status_matrix_requirements($runtimeSupportLabel, $controlRow, $languageConfig, $gzipAvailable),
                 'action' => self::analyzer_pack_status_matrix_action($runtimeSupportLabel, $controlRow, $languageConfig, $gzipAvailable),
             ];
@@ -11378,13 +11109,12 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $runtimeStatuses
-     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $sandboxStatuses
+     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,reason:string}> $runtimeStatuses
      * @param array<string,string> $manifests
      * @param array<string,array<string,mixed>> $topLanguageConfig
      * @return string[]
      */
-    private static function analyzer_pack_status_matrix_languages(string $siteLanguage, array $runtimeStatuses, array $sandboxStatuses, array $manifests, array $topLanguageConfig): array
+    private static function analyzer_pack_status_matrix_languages(string $siteLanguage, array $runtimeStatuses, array $manifests, array $topLanguageConfig): array
     {
         $bounded = [];
         $addLanguage = static function (mixed $language) use (&$bounded): void {
@@ -11407,7 +11137,7 @@ final class WP_FTS_Plugin
         foreach (array_keys($manifests) as $language) {
             $addLanguage($language);
         }
-        foreach (array_merge($runtimeStatuses, $sandboxStatuses) as $status) {
+        foreach ($runtimeStatuses as $status) {
             $addLanguage($status['language'] ?? '');
         }
         foreach (array_keys(self::filter_controlled_runtime_lemma_pack_languages()) as $language) {
@@ -11514,8 +11244,8 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $statuses
-     * @return array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
+     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,reason:string}> $statuses
+     * @return array<int,array{language:string,kind:string,status:string,pack_id:string,reason:string}>
      */
     private static function analyzer_pack_status_matrix_matching_statuses(array $statuses, string $language): array
     {
@@ -11534,7 +11264,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $statuses
+     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,reason:string}> $statuses
      * @param array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}|null $controlRow
      * @param array<string,mixed> $languageConfig
      */
@@ -11574,7 +11304,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string} $status
+     * @param array{language:string,kind:string,status:string,pack_id:string,reason:string} $status
      */
     private static function analyzer_pack_status_matrix_status_summary(array $status): string
     {
@@ -11582,10 +11312,9 @@ final class WP_FTS_Plugin
         $state = (string) ($status['status'] ?? 'unknown');
         $packId = (string) ($status['pack_id'] ?? '');
         if ($state === 'active') {
-            $scope = !empty($status['fixture_only']) ? 'fixture' : 'full local pack';
             $pack = $packId !== '' ? ' Pack: ' . $packId . '.' : '';
 
-            return 'Active ' . $scope . ' ' . $kind . '.' . $pack;
+            return 'Active indexed local ' . $kind . '.' . $pack;
         }
 
         $reason = trim((string) ($status['reason'] ?? ''));
@@ -11611,9 +11340,6 @@ final class WP_FTS_Plugin
         }
         if ($controlRow !== null && !empty($controlRow['editable'])) {
             return 'PHP gzip stream support is available for bundled packs.';
-        }
-        if ($runtimeSupportLabel === 'Fixture morphology') {
-            return 'Fixture coverage only; full production morphology needs a source-backed pack.';
         }
         if ($runtimeSupportLabel === 'Tokenizer-only support') {
             return 'No morphology pack is active; tokenizer-only matching remains available.';
@@ -11645,9 +11371,6 @@ final class WP_FTS_Plugin
         }
         if ($runtimeSupportLabel === 'Full morphology') {
             return 'Reindex existing content after analyzer changes.';
-        }
-        if ($runtimeSupportLabel === 'Fixture morphology') {
-            return 'Configure a source-backed external pack for full morphology, or accept fixture coverage.';
         }
         if ($runtimeSupportLabel === 'Tokenizer-only support') {
             return 'Accept tokenizer-only support, or configure an external tokenizer or lemma pack.';
@@ -11975,8 +11698,6 @@ JS;
         return [
             'page' => max(1, $page),
             'per_page' => self::SANDBOX_INDEXED_POSTS_PER_PAGE,
-            'total' => null,
-            'total_pages' => null,
             'has_more' => false,
             'next_cursor' => null,
             'previous_cursor' => null,
@@ -11987,7 +11708,7 @@ JS;
     }
 
     /**
-     * Read the current indexed-post list from storage state, not the demo option.
+     * Read the current indexed-post list directly from relational storage.
      *
      * @return array<string,mixed>
      */
@@ -12061,8 +11782,6 @@ LIMIT %d",
         return [
             'page' => max(1, $page),
             'per_page' => $per_page,
-            'total' => null,
-            'total_pages' => null,
             'has_more' => $has_more,
             'next_cursor' => $next_cursor,
             'previous_cursor' => $previous_cursor,
@@ -12080,7 +11799,7 @@ LIMIT %d",
     {
         $post_type = is_scalar($metadata['post_type'] ?? null) ? (string) $metadata['post_type'] : '';
         $post_status = is_scalar($metadata['post_status'] ?? null) ? (string) $metadata['post_status'] : '';
-        $preview = (string) ($metadata['search_text'] ?? $metadata['excerpt'] ?? '');
+        $preview = is_scalar($metadata['search_text'] ?? null) ? (string) $metadata['search_text'] : '';
         $title = is_scalar($metadata['title'] ?? null) ? trim((string) $metadata['title']) : '';
 
         return [
@@ -12093,17 +11812,15 @@ LIMIT %d",
         ];
     }
 
-    /** Describe the analyzer support for one indexed language partition. */
+    /** Describe runtime analyzer support for one indexed language partition. */
     private static function sandbox_indexed_post_language_display(string $language): string
     {
         $language = WP_FTS_TermNamespace::canonicalize_lang($language, 'und');
-        $support = self::language_support_details($language, true);
+        $support = self::language_support_details($language);
         $suffix = '';
         if (!$support['full']) {
             if ($support['label'] === 'Conservative fallback') {
                 $suffix = ' (exact forms only)';
-            } elseif ($support['label'] === 'Fixture morphology') {
-                $suffix = ' (limited demo coverage)';
             } elseif ($support['label'] === 'Tokenizer pack') {
                 $suffix = ' (word boundaries only)';
             }
@@ -12128,21 +11845,17 @@ LIMIT %d",
     /**
      * @return array{label:string,full:bool,reason:string,matched_language:string}
      */
-    private static function language_support_details(string $language, bool $include_sandbox): array
+    private static function language_support_details(string $language): array
     {
         $language = WP_FTS_TermNamespace::canonicalize_lang($language, WP_FTS_TermNamespace::DEFAULT_LANG);
-        $cache_key = $language . '|' . ($include_sandbox ? 'sandbox' : 'runtime');
+        $cache_key = $language;
         if (isset(self::$language_support_details_cache[$cache_key])) {
             return self::$language_support_details_cache[$cache_key];
         }
 
         $base = self::base_language($language);
         $statuses = self::runtime_analyzer_pack_statuses();
-        if ($include_sandbox) {
-            $statuses = array_merge($statuses, self::sandbox_demo_analyzer_pack_statuses());
-        }
 
-        $fixture = false;
         $tokenizer = false;
         foreach ($statuses as $status) {
             $status_language = WP_FTS_TermNamespace::canonicalize_lang((string) ($status['language'] ?? ''), WP_FTS_TermNamespace::DEFAULT_LANG);
@@ -12153,28 +11866,17 @@ LIMIT %d",
                 continue;
             }
             if (($status['kind'] ?? '') === 'lemmatizer') {
-                if (empty($status['fixture_only'])) {
-                    return self::$language_support_details_cache[$cache_key] = [
-                        'label' => 'Full morphology',
-                        'full' => true,
-                        'reason' => self::language_support_reason($language, $status_language, 'full'),
-                        'matched_language' => $status_language,
-                    ];
-                }
-                $fixture = true;
+                return self::$language_support_details_cache[$cache_key] = [
+                    'label' => 'Full morphology',
+                    'full' => true,
+                    'reason' => self::language_support_reason($language, $status_language, 'full'),
+                    'matched_language' => $status_language,
+                ];
             } elseif (($status['kind'] ?? '') === 'tokenizer') {
                 $tokenizer = true;
             }
         }
 
-        if ($fixture) {
-            return self::$language_support_details_cache[$cache_key] = [
-                'label' => 'Fixture morphology',
-                'full' => false,
-                'reason' => 'Only a fixture-sized analyzer pack is active for this language, so coverage is limited to reviewed test forms.',
-                'matched_language' => $language,
-            ];
-        }
         if ($tokenizer) {
             return self::$language_support_details_cache[$cache_key] = [
                 'label' => 'Tokenizer pack',
@@ -12220,7 +11922,7 @@ LIMIT %d",
     private static function render_site_language_status_notice(): void
     {
         $language = self::site_language();
-        $runtime_support = self::language_support_details($language, false);
+        $runtime_support = self::language_support_details($language);
         if ($runtime_support['full']) {
             if (($runtime_support['matched_language'] ?? '') !== '' && $runtime_support['matched_language'] !== WP_FTS_TermNamespace::canonicalize_lang($language, WP_FTS_TermNamespace::DEFAULT_LANG)) {
                 echo '<p class="description wp-fts-language-status">' . self::esc_html(
@@ -12231,23 +11933,6 @@ LIMIT %d",
                     )
                 ) . '</p>';
             }
-            return;
-        }
-
-        $page_support = self::language_support_details($language, true);
-        if ($page_support['full'] && ($page_support['matched_language'] ?? '') !== '') {
-            $message = self::base_language($language) === 'en' && $page_support['matched_language'] === 'en'
-                ? sprintf(
-                    'Current site language %s uses conservative fallback for runtime site searches because no runtime analyzer pack covers it. Sandbox searches can use English morphology through the active base-language analyzer pack %s for English dialects/locales.',
-                    self::sandbox_language_display($language),
-                    self::sandbox_language_display($page_support['matched_language'])
-                )
-                : sprintf(
-                    'Current site language %s uses conservative fallback for runtime site searches because no runtime analyzer pack covers it. Sandbox searches can use full morphology through the active base-language analyzer pack %s.',
-                    self::sandbox_language_display($language),
-                    self::sandbox_language_display($page_support['matched_language'])
-                );
-            echo '<p class="description wp-fts-language-status">' . self::esc_html($message) . '</p>';
             return;
         }
 
@@ -12387,29 +12072,14 @@ LIMIT %d",
      * @param array<string,mixed> $row
      * @return array{post_id:int,title:string,score:float,language:string,snippet:string}
      */
-    private static function sandbox_result_row(array $row, int $post_id, string $query_language = ''): array
+    private static function sandbox_result_row(array $row, int $post_id): array
     {
-        $language = '';
-        foreach ([$row['language'] ?? null, $row['primary_lang'] ?? null, $row['lang'] ?? null, $query_language] as $candidate) {
-            if (is_scalar($candidate) && trim((string) $candidate) !== '') {
-                $language = WP_FTS_TermNamespace::canonicalize_lang((string) $candidate);
-                break;
-            }
-        }
-
-        $title = is_scalar($row['title'] ?? null) && trim((string) $row['title']) !== ''
-            ? (string) $row['title']
-            : '(untitled)';
-        $snippet = is_scalar($row['snippet'] ?? null) && trim((string) $row['snippet']) !== ''
-            ? (string) $row['snippet']
-            : '';
-
         return [
             'post_id' => $post_id,
-            'title' => $title,
-            'score' => (float) ($row['score'] ?? 0.0),
-            'language' => $language !== '' ? $language : 'unknown',
-            'snippet' => $snippet,
+            'title' => $row['title'] !== '' ? $row['title'] : '(untitled)',
+            'score' => $row['score'],
+            'language' => $row['primary_lang'],
+            'snippet' => $row['snippet'] ?? '',
         ];
     }
 
@@ -12551,14 +12221,13 @@ LIMIT %d",
                 'mode' => $mode,
                 'limit' => self::rest_limit($request),
                 'prefix_matching' => !empty($settings['rest_prefix_matching']),
-                'max_query_terms' => self::REST_MAX_QUERY_TERMS,
             ];
             $language = self::rest_language($request);
             if ($language !== null) {
                 $search_args['lang'] = $language;
             }
             $cursor = self::rest_cursor($request);
-            $direction = self::rest_cursor_direction($request);
+            $direction = self::rest_cursor_direction($request, $cursor !== null);
             if ($cursor !== null) {
                 $search_args['cursor'] = $cursor;
                 $search_args['direction'] = $direction;
@@ -12619,7 +12288,7 @@ LIMIT %d",
      * Callers without the operator capability receive the normal visible rows
      * plus a small unavailable marker, never the internal explain payload.
      *
-     * @return array{results:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string,previous_cursor:?string,total:null,total_relation:string,query_lang:string,explain?:array<string,mixed>,explain_available?:bool,explain_unavailable_reason?:string}
+     * @return array{results:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string,previous_cursor:?string,query_lang:string,explain?:array<string,mixed>,explain_available?:bool,explain_unavailable_reason?:string}
      */
     public static function search_with_explain(string $query, array $opts = []): array
     {
@@ -12637,7 +12306,7 @@ LIMIT %d",
     /**
      * Search one exact, visibility-authorized cursor page.
      *
-     * @return array{results:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string,previous_cursor:?string,total:null,total_relation:string,query_lang:string}
+     * @return array{results:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string,previous_cursor:?string,query_lang:string}
      */
     public static function search_page(string $query, array $opts = []): array
     {
@@ -12649,7 +12318,7 @@ LIMIT %d",
      * bounded relational-storage explain.
      *
      * @param array<string,mixed> $opts
-     * @return array{results:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string,previous_cursor:?string,total:null,total_relation:string,query_lang:string,explain?:array<string,mixed>}
+     * @return array{results:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string,previous_cursor:?string,query_lang:string,explain?:array<string,mixed>}
      */
     private static function search_visible_payload(
         string $query,
@@ -12659,11 +12328,10 @@ LIMIT %d",
     ): array
     {
         $opts = self::normalize_public_search_options($opts);
-        if (strlen($query) > self::MAX_SEARCH_QUERY_BYTES) {
+        if (strlen($query) > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_BYTES) {
             throw new WP_FTS_Search_Budget_Exceeded('query bytes');
         }
-        $query = trim($query);
-        if ($query === '') {
+        if (trim($query) === '') {
             if (isset($opts['cursor'])) {
                 throw new InvalidArgumentException('Search cursor cannot be used with an empty query.');
             }
@@ -12672,8 +12340,6 @@ LIMIT %d",
                 'has_more' => false,
                 'next_cursor' => null,
                 'previous_cursor' => null,
-                'total' => null,
-                'total_relation' => 'unknown',
                 'query_lang' => '',
             ];
         }
@@ -12686,8 +12352,6 @@ LIMIT %d",
                 'has_more' => false,
                 'next_cursor' => null,
                 'previous_cursor' => null,
-                'total' => null,
-                'total_relation' => 'unknown',
                 'query_lang' => '',
             ];
         }
@@ -12696,8 +12360,8 @@ LIMIT %d",
             throw new WP_FTS_Search_Unavailable('Full-text search is unavailable: ' . (string) ($readiness['reason'] ?? 'not_ready'));
         }
 
-        $limit = (int) ($opts['limit'] ?? 10);
-        $mode = (string) ($opts['mode'] ?? 'OR');
+        $limit = $opts['limit'] ?? 10;
+        $mode = $opts['mode'] ?? 'OR';
         $search_options = [
             'mode' => $mode,
             'limit' => $limit,
@@ -12705,14 +12369,10 @@ LIMIT %d",
             '_search_ready_incarnation' => (string) $readiness['ready_incarnation'],
             '_search_ready_profile_hash' => (string) $readiness['ready_profile_hash'],
         ] + self::searcher_prefix_threshold_options($settings, $opts) + self::searcher_recency_boost_options($settings);
-        if (array_key_exists('lang', $opts) && $opts['lang'] !== null) {
-            if (trim((string) $opts['lang']) !== '') {
-                $search_options['query_lang'] = (string) $opts['lang'];
-            }
+        if (array_key_exists('lang', $opts)) {
+            $search_options['query_lang'] = $opts['lang'];
         }
         foreach ([
-            'max_query_terms',
-            'request_budget_guard',
             'cursor',
             'direction',
             'post_types',
@@ -12725,7 +12385,6 @@ LIMIT %d",
             'snippet_length',
             'recency_boost_strength',
             'recency_boost_half_life_days',
-            'now_gmt',
         ] as $key) {
             if (array_key_exists($key, $opts)) {
                 $search_options[$key] = $opts[$key];
@@ -12740,101 +12399,192 @@ LIMIT %d",
 
         $searcher = new WP_FTS_Searcher(self::storage(false), self::runtime_analyzer());
         try {
-            self::invoke_search_budget_guard($search_options);
             $payload = $searcher->search($query, $search_options);
-            self::invoke_search_budget_guard($search_options);
+            self::assert_normalized_search_payload(
+                $payload,
+                $limit,
+                $include_explain,
+                $include_internal_post_rows
+            );
         } catch (WP_FTS_Search_Budget_Exceeded|InvalidArgumentException|WP_FTS_Search_Unavailable $error) {
             throw $error;
         } catch (Throwable $error) {
             self::latch_search_runtime_failure($error);
             throw new WP_FTS_Search_Unavailable('Full-text search failed closed and scheduled repair.', 0, $error);
         }
-        $rows = $payload['results'];
+        return $payload;
+    }
 
-        $explain = [];
-        if ($include_explain && is_array($payload['explain'] ?? null)) {
-            $explain = $payload['explain'];
-        }
-
-        $visible = [];
-        foreach ($rows as $row) {
-            if (!is_array($row) || !is_numeric($row['doc_id'] ?? null) || !is_numeric($row['score'] ?? null)) {
-                continue;
-            }
-
-            $doc_id = (int) $row['doc_id'];
-            if ($doc_id <= 0) {
-                continue;
-            }
-
-            $row['doc_id'] = $doc_id;
-            $row['score'] = (float) $row['score'];
-            if (!$include_internal_post_rows) {
-                unset($row['_canonical_post_row']);
-            }
-            $visible[] = $row;
-            if (count($visible) >= $limit) {
-                break;
-            }
-        }
-
-        if (function_exists('apply_filters')) {
-            $filter_visible = [];
-            foreach ($visible as $row) {
-                unset($row['_canonical_post_row']);
-                $filter_visible[] = $row;
-            }
-            $filtered = apply_filters('wp_fts_search_results', $filter_visible, $query, $opts);
-            if (is_array($filtered) && count($filtered) === count($visible)) {
-                $decorated = [];
-                foreach (array_values($filtered) as $index => $row) {
-                    $authorized = $visible[$index];
-                    if (
-                        !is_array($row)
-                        || !is_numeric($row['doc_id'] ?? null)
-                        || (int) $row['doc_id'] !== (int) $authorized['doc_id']
-                    ) {
-                        $decorated = [];
-                        break;
-                    }
-                    $internal_post_row = $authorized['_canonical_post_row'] ?? null;
-                    $row['doc_id'] = $authorized['doc_id'];
-                    $row['score'] = $authorized['score'];
-                    if ($include_internal_post_rows && $internal_post_row !== null) {
-                        $row['_canonical_post_row'] = $internal_post_row;
-                    } else {
-                        unset($row['_canonical_post_row']);
-                    }
-                    $decorated[] = $row;
-                }
-                if (count($decorated) === count($visible)) {
-                    $visible = $decorated;
-                }
-            }
-            self::invoke_search_budget_guard($search_options);
-        }
-
-        $result = [
-            'results' => $visible,
-            'has_more' => !empty($payload['has_more']),
-            'next_cursor' => isset($payload['next_cursor']) && is_scalar($payload['next_cursor'])
-                ? (string) $payload['next_cursor']
-                : null,
-            'previous_cursor' => isset($payload['previous_cursor']) && is_scalar($payload['previous_cursor'])
-                ? (string) $payload['previous_cursor']
-                : null,
-            'total' => null,
-            'total_relation' => 'unknown',
-            'query_lang' => isset($payload['query_lang']) && is_scalar($payload['query_lang'])
-                ? (string) $payload['query_lang']
-                : '',
-        ];
+    /** Require the exact normalized component search payload. */
+    private static function assert_normalized_search_payload(
+        array $payload,
+        int $limit,
+        bool $include_explain,
+        bool $include_internal_post_rows
+    ): void {
+        $expectedKeys = ['query_lang', 'has_more', 'next_cursor', 'previous_cursor', 'results'];
         if ($include_explain) {
-            $result['explain'] = $explain;
+            $expectedKeys[] = 'explain';
         }
-        self::invoke_search_budget_guard($search_options);
+        if (array_keys($payload) !== $expectedKeys) {
+            throw new LogicException('The component search payload has an invalid shape.');
+        }
+        if (!is_bool($payload['has_more'])) {
+            throw new LogicException('The component search continuation flag must be a native boolean.');
+        }
+        foreach (['next_cursor', 'previous_cursor'] as $key) {
+            $cursor = $payload[$key];
+            if (
+                $cursor !== null
+                && (
+                    !is_string($cursor)
+                    || $cursor === ''
+                    || trim($cursor) !== $cursor
+                    || strlen($cursor) > WP_FTS_Set_Oriented_Search_Storage::MAX_CURSOR_BYTES
+                )
+            ) {
+                throw new LogicException('The component search payload contains an invalid cursor.');
+            }
+        }
 
-        return $result;
+        $queryLanguage = $payload['query_lang'];
+        if (!is_string($queryLanguage) || strlen($queryLanguage) > WP_FTS_Set_Oriented_Search_Storage::MAX_LANGUAGE_BYTES) {
+            throw new LogicException('The component search language must be a bounded native string.');
+        }
+        try {
+            $canonicalQueryLanguage = WP_FTS_TermNamespace::parse_language_tag($queryLanguage);
+        } catch (Throwable $error) {
+            throw new LogicException('The component search payload contains an invalid language.', 0, $error);
+        }
+        if ($canonicalQueryLanguage !== $queryLanguage) {
+            throw new LogicException('The component search language must already be canonical.');
+        }
+
+        $rows = $payload['results'];
+        if (!is_array($rows) || !array_is_list($rows) || count($rows) > $limit) {
+            throw new LogicException('The component search results must be a page-sized list.');
+        }
+        $documentIds = [];
+        foreach ($rows as $row) {
+            if (
+                !is_array($row)
+                || !is_int($row['doc_id'] ?? null)
+                || $row['doc_id'] <= 0
+                || !is_float($row['score'] ?? null)
+                || !is_finite($row['score'])
+            ) {
+                throw new LogicException('The component search payload contains an invalid result row.');
+            }
+            if (isset($documentIds[$row['doc_id']])) {
+                throw new LogicException('The component search payload contains duplicate document IDs.');
+            }
+            $documentIds[$row['doc_id']] = true;
+            if ($include_internal_post_rows) {
+                $postRow = $row['_canonical_post_row'] ?? null;
+                if (
+                    !is_array($postRow)
+                    || array_keys($postRow) !== WP_FTS_Index_Queue::CANONICAL_POST_COLUMNS
+                    || !is_int($postRow['ID'])
+                    || $postRow['ID'] !== $row['doc_id']
+                ) {
+                    throw new LogicException('The component search payload contains an invalid canonical post row.');
+                }
+                foreach ($postRow as $column => $value) {
+                    if ($column !== 'ID' && !is_string($value)) {
+                        throw new LogicException('The component search canonical post fields must be native strings.');
+                    }
+                }
+            } elseif (array_key_exists('_canonical_post_row', $row)) {
+                throw new LogicException('The public component search payload exposed a canonical post row.');
+            }
+        }
+        if ($include_explain) {
+            self::assert_component_search_explain($payload['explain']);
+        }
+    }
+
+    /** Require the component's fixed relational diagnostic map. */
+    private static function assert_component_search_explain(mixed $explain): void
+    {
+        if (
+            !is_array($explain)
+            || array_keys($explain) !== [
+                'storage',
+                'logical_group_count',
+                'resolved_alternatives',
+                'anchor_group',
+                'prefix_range',
+                'prefix_strategy',
+                'query_statements',
+                'interactive_total',
+                'recency_boost',
+                'canonical_page_bytes',
+            ]
+            || $explain['storage'] !== 'set_oriented'
+            || !is_int($explain['logical_group_count'])
+            || $explain['logical_group_count'] < 0
+            || $explain['logical_group_count'] > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_GROUPS
+            || !is_int($explain['resolved_alternatives'])
+            || $explain['resolved_alternatives'] < 0
+            || $explain['resolved_alternatives'] > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_ALTERNATIVES
+            || (
+                $explain['anchor_group'] !== null
+                && (
+                    !is_int($explain['anchor_group'])
+                    || $explain['anchor_group'] < 0
+                    || $explain['anchor_group'] >= $explain['logical_group_count']
+                )
+            )
+            || !is_bool($explain['prefix_range'])
+            || !in_array($explain['prefix_strategy'], ['none', 'surface_range', 'candidate_first'], true)
+            || ($explain['prefix_strategy'] === 'none') !== ($explain['prefix_range'] === false)
+            || !is_int($explain['query_statements'])
+            || $explain['query_statements'] < 0
+            || $explain['query_statements'] > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_STATEMENTS
+            || $explain['interactive_total'] !== 'unknown'
+            || !is_int($explain['canonical_page_bytes'])
+            || $explain['canonical_page_bytes'] < 0
+            || $explain['canonical_page_bytes'] > WP_FTS_Set_Oriented_Search_Storage::MAX_SIDECAR_PAGE_BYTES
+        ) {
+            throw new LogicException('The component search explain payload has an invalid shape or value.');
+        }
+
+        $recency = $explain['recency_boost'];
+        if (
+            !is_array($recency)
+            || array_keys($recency) !== ['enabled', 'strength', 'half_life_days', 'scoring_now_gmt']
+            || !is_bool($recency['enabled'])
+            || !is_float($recency['strength'])
+            || !is_finite($recency['strength'])
+            || $recency['strength'] < WP_FTS_Set_Oriented_Search_Storage::MIN_RECENCY_BOOST_STRENGTH
+            || $recency['strength'] > WP_FTS_Set_Oriented_Search_Storage::MAX_RECENCY_BOOST_STRENGTH
+            || $recency['enabled'] !== ($recency['strength'] > 0.0)
+            || !is_float($recency['half_life_days'])
+            || !is_finite($recency['half_life_days'])
+            || $recency['half_life_days'] < WP_FTS_Set_Oriented_Search_Storage::MIN_RECENCY_BOOST_HALF_LIFE_DAYS
+            || $recency['half_life_days'] > WP_FTS_Set_Oriented_Search_Storage::MAX_RECENCY_BOOST_HALF_LIFE_DAYS
+            || !is_string($recency['scoring_now_gmt'])
+            || (
+                $recency['enabled']
+                    ? !self::is_exact_search_gmt_datetime($recency['scoring_now_gmt'])
+                    : $recency['scoring_now_gmt'] !== ''
+            )
+        ) {
+            throw new LogicException('The component search explain payload has invalid recency values.');
+        }
+    }
+
+    /** Recognize one exact UTC second without accepting parser normalization. */
+    private static function is_exact_search_gmt_datetime(string $value): bool
+    {
+        if (strlen($value) !== 19) {
+            return false;
+        }
+        try {
+            return gmdate('Y-m-d H:i:s', self::strict_search_gmt_timestamp($value, 'scoring_now_gmt')) === $value;
+        } catch (InvalidArgumentException) {
+            return false;
+        }
     }
 
     /** Disable takeover after an unexpected read failure and request verification. */
@@ -12915,8 +12665,6 @@ LIMIT %d",
             'direction',
             'prefix_matching',
             'prefix_min_length',
-            'max_query_terms',
-            'request_budget_guard',
             'post_types',
             'post_statuses',
             'date_after',
@@ -12927,13 +12675,12 @@ LIMIT %d",
             'snippet_length',
             'recency_boost_strength',
             'recency_boost_half_life_days',
-            'now_gmt',
         ], true);
         foreach ($opts as $key => $_value) {
             if (!is_string($key)) {
                 throw new InvalidArgumentException('WordPress search option keys must be strings.');
             }
-            if (strlen($key) > self::MAX_SEARCH_OPTION_KEY_BYTES) {
+            if (strlen($key) > WP_FTS_Set_Oriented_Search_Storage::MAX_OPTION_KEY_BYTES) {
                 throw new InvalidArgumentException('WordPress search option keys may contain at most 64 bytes.');
             }
             if (!isset($allowed[$key])) {
@@ -12943,37 +12690,34 @@ LIMIT %d",
 
         $normalized = $opts;
         if (array_key_exists('mode', $normalized)) {
-            if (!is_string($normalized['mode']) || strlen($normalized['mode']) > self::MAX_SEARCH_MODE_BYTES) {
+            if (!is_string($normalized['mode']) || strlen($normalized['mode']) > WP_FTS_Set_Oriented_Search_Storage::MAX_MODE_BYTES) {
                 throw new InvalidArgumentException('Search mode must be a string of at most 8 bytes.');
             }
-            $normalized['mode'] = strtoupper($normalized['mode']);
             if (!in_array($normalized['mode'], ['OR', 'AND'], true)) {
-                throw new InvalidArgumentException('Search mode must be OR or AND.');
+                throw new InvalidArgumentException('Search mode must be exactly OR or AND.');
             }
         }
         foreach ([
             'limit' => [1, self::MAX_SEARCH_LIMIT],
-            'max_query_terms' => [1, self::REST_MAX_QUERY_TERMS],
-            'prefix_min_length' => [self::PREFIX_MIN_LENGTH_MIN, self::PREFIX_MIN_LENGTH_MAX],
-            'snippet_length' => [1, self::SETTINGS_SNIPPET_MAX],
+            'prefix_min_length' => [WP_FTS_Set_Oriented_Search_Storage::MIN_PREFIX_LENGTH, WP_FTS_Set_Oriented_Search_Storage::MAX_PREFIX_LENGTH],
+            'snippet_length' => [WP_FTS_Set_Oriented_Search_Storage::MIN_SNIPPET_LENGTH, WP_FTS_Set_Oriented_Search_Storage::MAX_SNIPPET_LENGTH],
         ] as $key => [$minimum, $maximum]) {
             if (array_key_exists($key, $normalized)) {
                 $normalized[$key] = self::strict_search_integer($normalized[$key], $key, $minimum, $maximum);
             }
         }
         if (array_key_exists('lang', $normalized)) {
-            if (!is_string($normalized['lang']) || strlen($normalized['lang']) > self::MAX_SEARCH_LANGUAGE_BYTES) {
-                throw new InvalidArgumentException('Search language must be a string of at most 64 bytes.');
-            }
+            $normalized['lang'] = WP_FTS_TermNamespace::parse_language_tag($normalized['lang']);
         }
 
         if (array_key_exists('cursor', $normalized)) {
             if (
                 !is_string($normalized['cursor'])
-                || trim($normalized['cursor']) === ''
-                || strlen($normalized['cursor']) > self::MAX_SEARCH_CURSOR_BYTES
+                || $normalized['cursor'] === ''
+                || trim($normalized['cursor']) !== $normalized['cursor']
+                || strlen($normalized['cursor']) > WP_FTS_Set_Oriented_Search_Storage::MAX_CURSOR_BYTES
             ) {
-                throw new InvalidArgumentException('Search cursor must be a nonempty string of at most 2,048 bytes.');
+                throw new InvalidArgumentException('Search cursor must be an unpadded nonempty string of at most 2,048 bytes.');
             }
         }
         if (array_key_exists('direction', $normalized)) {
@@ -12992,6 +12736,9 @@ LIMIT %d",
         }
         foreach (['post_types', 'post_statuses'] as $key) {
             if (array_key_exists($key, $normalized)) {
+                if (!is_array($normalized[$key])) {
+                    throw new InvalidArgumentException("Search {$key} must be an array of WordPress keys.");
+                }
                 $normalized[$key] = self::search_scope_values($normalized[$key]);
             }
         }
@@ -13000,68 +12747,38 @@ LIMIT %d",
                 self::strict_search_gmt_timestamp($normalized[$key], $key);
             }
         }
-        if (array_key_exists('request_budget_guard', $normalized) && !is_callable($normalized['request_budget_guard'])) {
-            throw new InvalidArgumentException('Search request_budget_guard must be callable.');
-        }
         if (array_key_exists('recency_boost_strength', $normalized)) {
             $normalized['recency_boost_strength'] = self::strict_search_float(
                 $normalized['recency_boost_strength'],
                 'recency_boost_strength',
-                self::RECENCY_BOOST_STRENGTH_MIN,
-                self::RECENCY_BOOST_STRENGTH_MAX
+                WP_FTS_Set_Oriented_Search_Storage::MIN_RECENCY_BOOST_STRENGTH,
+                WP_FTS_Set_Oriented_Search_Storage::MAX_RECENCY_BOOST_STRENGTH
             );
         }
         if (array_key_exists('recency_boost_half_life_days', $normalized)) {
             $normalized['recency_boost_half_life_days'] = self::strict_search_float(
                 $normalized['recency_boost_half_life_days'],
                 'recency_boost_half_life_days',
-                self::RECENCY_BOOST_HALF_LIFE_MIN,
-                self::RECENCY_BOOST_HALF_LIFE_MAX
+                WP_FTS_Set_Oriented_Search_Storage::MIN_RECENCY_BOOST_HALF_LIFE_DAYS,
+                WP_FTS_Set_Oriented_Search_Storage::MAX_RECENCY_BOOST_HALF_LIFE_DAYS
             );
         }
-        if (array_key_exists('now_gmt', $normalized)) {
-            self::strict_search_gmt_timestamp($normalized['now_gmt'], 'now_gmt');
-        }
-
         return $normalized;
     }
 
-    /** Accept only the explicit boolean spellings used by the relational contract. */
+    /** Require native booleans at the PHP search boundary. */
     private static function strict_search_switch(mixed $value, string $key): bool
     {
-        if (is_bool($value)) {
-            return $value;
-        }
-        if (is_int($value) && ($value === 0 || $value === 1)) {
-            return $value === 1;
-        }
-        if (is_string($value) && strlen($value) <= self::MAX_SEARCH_SWITCH_BYTES) {
-            $value = strtolower($value);
-            if (in_array($value, ['1', 'true', 'yes', 'on'], true)) {
-                return true;
-            }
-            if (in_array($value, ['0', 'false', 'no', 'off'], true)) {
-                return false;
-            }
+        if (!is_bool($value)) {
+            throw new InvalidArgumentException("Search {$key} must be a boolean.");
         }
 
-        throw new InvalidArgumentException("Search {$key} must be a boolean switch.");
+        return $value;
     }
 
-    /** Parse an exact non-negative integer without permissive PHP numeric casts. */
+    /** Require a native integer in the documented range. */
     private static function strict_search_integer(mixed $value, string $key, int $minimum, int $maximum): int
     {
-        if (is_string($value)) {
-            if (
-                $value === ''
-                || strlen($value) > self::MAX_SEARCH_NUMERIC_BYTES
-                || !self::is_ascii_decimal_digits($value)
-                || (strlen($value) > 1 && $value[0] === '0')
-            ) {
-                throw new InvalidArgumentException("Search {$key} must be an integer from {$minimum} through {$maximum}.");
-            }
-            $value = (int) $value;
-        }
         if (!is_int($value) || $value < $minimum || $value > $maximum) {
             throw new InvalidArgumentException("Search {$key} must be an integer from {$minimum} through {$maximum}.");
         }
@@ -13069,21 +12786,9 @@ LIMIT %d",
         return $value;
     }
 
-    /** Parse one finite unsigned decimal without exponent or padded spellings. */
+    /** Require a native finite number in the documented range. */
     private static function strict_search_float(mixed $value, string $key, float $minimum, float $maximum): float
     {
-        if (is_string($value)) {
-            $parts = strlen($value) <= self::MAX_SEARCH_NUMERIC_BYTES ? explode('.', $value) : [];
-            $valid = ($parts !== [] && count($parts) <= 2)
-                && $parts[0] !== ''
-                && self::is_ascii_decimal_digits($parts[0])
-                && (strlen($parts[0]) === 1 || $parts[0][0] !== '0')
-                && (count($parts) === 1 || self::is_ascii_decimal_digits($parts[1]));
-            if (!$valid) {
-                throw new InvalidArgumentException("Search {$key} must be a finite number from {$minimum} through {$maximum}.");
-            }
-            $value = (float) $value;
-        }
         if ((!is_int($value) && !is_float($value)) || !is_finite((float) $value)) {
             throw new InvalidArgumentException("Search {$key} must be a finite number from {$minimum} through {$maximum}.");
         }
@@ -13108,7 +12813,7 @@ LIMIT %d",
             !is_string($value)
             || $value === ''
             || trim($value) !== $value
-            || strlen($value) > self::MAX_SEARCH_SCOPE_VALUE_BYTES
+            || strlen($value) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES
         ) {
             throw new InvalidArgumentException("Search {$key} must be a valid UTC date or datetime of at most 64 bytes.");
         }
@@ -13156,7 +12861,7 @@ LIMIT %d",
             $settings['index_post_types'] ?? [],
             self::settings_post_type_choices()
         );
-        $requestedTypes = self::search_scope_values($opts['post_types'] ?? $opts['post_type'] ?? []);
+        $requestedTypes = self::search_scope_values($opts['post_types'] ?? []);
         if ($requestedTypes === []) {
             $requestedTypes = $configuredTypes;
         }
@@ -13166,7 +12871,7 @@ LIMIT %d",
                 throw new InvalidArgumentException('Search post types must be enabled public searchable types.');
             }
         }
-        $statuses = self::search_scope_values($opts['post_statuses'] ?? $opts['post_status'] ?? []);
+        $statuses = self::search_scope_values($opts['post_statuses'] ?? []);
         if ($statuses === []) {
             $statuses = self::FRONTEND_SEARCH_POST_STATUSES;
         }
@@ -13184,7 +12889,6 @@ LIMIT %d",
             throw new InvalidArgumentException('The current user cannot search non-public posts.');
         }
 
-        unset($opts['post_type'], $opts['post_status']);
         $opts['post_types'] = $requestedTypes;
         $opts['post_statuses'] = $statuses;
 
@@ -13258,54 +12962,35 @@ LIMIT %d",
     }
 
     /** @return string[] */
-    private static function search_scope_values(mixed $value): array
+    private static function search_scope_values(array $value): array
     {
-        $items = is_array($value) ? $value : [$value];
-        if (count($items) > self::MAX_SEARCH_SCOPE_VALUES) {
+        if (!array_is_list($value)) {
+            throw new InvalidArgumentException('Search scope values must be a list.');
+        }
+        if (count($value) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
             throw new InvalidArgumentException('Search accepts at most 32 values per scope.');
         }
 
         $values = [];
         $input_bytes = 0;
-        foreach ($items as $item) {
+        foreach ($value as $item) {
             if (!is_string($item)) {
                 throw new InvalidArgumentException('Search scope values must be strings.');
             }
 
             $input_bytes += strlen($item);
-            if ($input_bytes > self::MAX_SEARCH_SCOPE_BYTES) {
+            if ($input_bytes > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_BYTES) {
                 throw new InvalidArgumentException('Search scope values may contain at most 4,096 bytes.');
             }
-            foreach (explode(',', $item) as $part) {
-                $part = trim($part);
-                if ($part === '' || strlen($part) > self::MAX_SEARCH_SCOPE_VALUE_BYTES) {
-                    throw new InvalidArgumentException('Search scope values must be nonempty and contain at most 64 bytes each.');
-                }
-                $part = self::sanitize_key($part);
-                if ($part === '') {
-                    throw new InvalidArgumentException('Search scope values must contain a valid WordPress key.');
-                }
-                $values[$part] = true;
-                if (count($values) > self::MAX_SEARCH_SCOPE_VALUES) {
-                    throw new InvalidArgumentException('Search accepts at most 32 values per scope.');
-                }
+            if ($item === '' || strlen($item) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES || self::sanitize_key($item) !== $item) {
+                throw new InvalidArgumentException('Search scope values must be exact nonempty WordPress keys of at most 64 bytes.');
             }
+            $values[$item] = true;
         }
         $values = array_keys($values);
         sort($values, SORT_STRING);
 
         return $values;
-    }
-
-    /**
-     * @param array<string,mixed> $options
-     */
-    private static function invoke_search_budget_guard(array $options): void
-    {
-        $guard = $options['request_budget_guard'] ?? null;
-        if (is_callable($guard) && $guard() === false) {
-            throw new WP_FTS_Search_Budget_Exceeded('request circuit breaker');
-        }
     }
 
     private static function current_user_can_search_explain(): bool
@@ -13322,7 +13007,7 @@ LIMIT %d",
     private static function search_prefix_matching_value(array $opts, array $settings): bool
     {
         if (array_key_exists('prefix_matching', $opts)) {
-            return self::truthy_admin_value($opts['prefix_matching']);
+            return $opts['prefix_matching'];
         }
 
         return (bool) ($settings['prefix_matching'] ?? true);
@@ -13339,7 +13024,7 @@ LIMIT %d",
             'prefix_min_length' => self::sanitize_prefix_min_length(
                 array_key_exists('prefix_min_length', $overrides)
                     ? $overrides['prefix_min_length']
-                    : ($settings['prefix_min_length'] ?? self::PREFIX_MIN_LENGTH_DEFAULT)
+                    : ($settings['prefix_min_length'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_PREFIX_LENGTH)
             ),
         ];
     }
@@ -13357,7 +13042,7 @@ LIMIT %d",
 
         return [
             'recency_boost_strength' => $strength,
-            'recency_boost_half_life_days' => self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? self::RECENCY_BOOST_HALF_LIFE_DEFAULT),
+            'recency_boost_half_life_days' => self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS),
         ];
     }
 
@@ -14452,15 +14137,11 @@ LIMIT %d",
             $replace = apply_filters(self::FRONTEND_SEARCH_REPLACEMENT_FILTER, $replace, $query);
         }
 
-        if (is_bool($replace)) {
-            $enabled = $replace;
-        } elseif (is_scalar($replace)) {
-            $enabled = !in_array(strtolower(trim((string) $replace)), ['', '0', 'false', 'no', 'off'], true);
-        } else {
-            $enabled = (bool) $replace;
+        if (!is_bool($replace)) {
+            throw new UnexpectedValueException('wp_fts_replace_frontend_search must return a native boolean.');
         }
 
-        return $enabled;
+        return $replace;
     }
 
     /** A non-null posts_pre_query value means another provider owns membership. */
@@ -14530,15 +14211,11 @@ LIMIT %d",
             $replace = apply_filters(self::ADMIN_POST_SEARCH_REPLACEMENT_FILTER, $replace, $query);
         }
 
-        if (is_bool($replace)) {
-            $enabled = $replace;
-        } elseif (is_scalar($replace)) {
-            $enabled = !in_array(strtolower(trim((string) $replace)), ['', '0', 'false', 'no', 'off'], true);
-        } else {
-            $enabled = (bool) $replace;
+        if (!is_bool($replace)) {
+            throw new UnexpectedValueException('wp_fts_replace_admin_post_search must return a native boolean.');
         }
 
-        return $enabled;
+        return $replace;
     }
 
     /**
@@ -14650,18 +14327,16 @@ LIMIT %d",
 
         $direction = self::query_var($query, 'wp_fts_cursor_direction', null);
         if ($direction !== null && (
-            !is_scalar($direction)
-            || strlen((string) $direction) > self::MAX_SEARCH_MODE_BYTES
-            || !in_array(strtolower(trim((string) $direction)), ['after', 'before'], true)
+            !is_string($direction)
+            || !in_array($direction, ['after', 'before'], true)
         )) {
             return true;
         }
         if (is_array($original) && array_key_exists('wp_fts_cursor_direction', $original)) {
             $direction = $original['wp_fts_cursor_direction'];
             if (
-                !is_scalar($direction)
-                || strlen((string) $direction) > self::MAX_SEARCH_MODE_BYTES
-                || !in_array(strtolower(trim((string) $direction)), ['after', 'before'], true)
+                !is_string($direction)
+                || !in_array($direction, ['after', 'before'], true)
             ) {
                 return true;
             }
@@ -14740,7 +14415,7 @@ LIMIT %d",
         if (!self::query_var_truthy($query, $prepared_var)) {
             $text = stripslashes($text);
         }
-        $length = min(strlen($text), self::MAX_SEARCH_QUERY_BYTES);
+        $length = min(strlen($text), WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_BYTES);
         $at_token_start = true;
         for ($offset = 0; $offset < $length; $offset++) {
             $character = $text[$offset];
@@ -14777,14 +14452,14 @@ LIMIT %d",
         }
 
         $language = self::query_var($query, 'wp_fts_lang', null);
-        if (is_string($language) && strlen($language) > self::MAX_SEARCH_LANGUAGE_BYTES) {
+        if (is_string($language) && strlen($language) > WP_FTS_Set_Oriented_Search_Storage::MAX_LANGUAGE_BYTES) {
             return true;
         }
 
         $cursor = self::query_var($query, 'wp_fts_cursor', null);
 
         return $cursor !== null
-            && (!is_scalar($cursor) || strlen((string) $cursor) > self::MAX_SEARCH_CURSOR_BYTES);
+            && (!is_scalar($cursor) || strlen((string) $cursor) > WP_FTS_Set_Oriented_Search_Storage::MAX_CURSOR_BYTES);
     }
 
     /** Applies the separate core-compatible byte ceiling to WP_Query search text. */
@@ -14803,7 +14478,7 @@ LIMIT %d",
             }
         }
 
-        if (strlen(self::frontend_search_query_text($query)) > self::MAX_SEARCH_QUERY_BYTES) {
+        if (strlen(self::frontend_search_query_text($query)) > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_BYTES) {
             return true;
         }
 
@@ -15231,14 +14906,14 @@ LIMIT %d",
             return '';
         }
 
-        if (is_string($value) && strlen($value) > self::MAX_SEARCH_QUERY_BYTES) {
+        if (is_string($value) && strlen($value) > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_BYTES) {
             // Preserve the original value without allocating a trimmed copy.
             // The shared search boundary raises the typed complexity error, and
             // the WordPress replacement catches it to fail closed without LIKE.
             return $value;
         }
         $value = (string) $value;
-        if (strlen($value) > self::MAX_SEARCH_QUERY_BYTES) {
+        if (strlen($value) > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_BYTES) {
             return $value;
         }
 
@@ -15331,7 +15006,7 @@ LIMIT %d",
         if (!is_scalar($cursor)) {
             return true;
         }
-        if (strlen((string) $cursor) > self::MAX_SEARCH_CURSOR_BYTES) {
+        if (strlen((string) $cursor) > WP_FTS_Set_Oriented_Search_Storage::MAX_CURSOR_BYTES) {
             // Keep the query owned by FTS so the replacement can reject the
             // cursor without falling back to an unbounded core LIKE search.
             return false;
@@ -15556,7 +15231,7 @@ LIMIT %d",
 
         $examined = 0;
         foreach ($post_types as $post_type) {
-            if (++$examined > self::MAX_SEARCH_SCOPE_VALUES || !is_string($post_type)) {
+            if (++$examined > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES || !is_string($post_type)) {
                 return true;
             }
             $object = get_post_type_object($post_type);
@@ -15570,7 +15245,7 @@ LIMIT %d",
             if ($raw_query_var === true) {
                 $raw_query_var = $post_type;
             }
-            if (!is_scalar($raw_query_var) || strlen((string) $raw_query_var) > self::MAX_SEARCH_SCOPE_VALUE_BYTES) {
+            if (!is_scalar($raw_query_var) || strlen((string) $raw_query_var) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES) {
                 return true;
             }
             $query_var = trim((string) $raw_query_var);
@@ -15591,7 +15266,7 @@ LIMIT %d",
         }
 
         return !is_scalar($fields)
-            || strlen((string) $fields) > self::MAX_SEARCH_SCOPE_VALUE_BYTES
+            || strlen((string) $fields) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES
             || trim((string) $fields) !== 'all';
     }
 
@@ -15622,7 +15297,7 @@ LIMIT %d",
         if (self::constraint_value_present($orderby)) {
             if (
                 !is_scalar($orderby)
-                || strlen((string) $orderby) > self::MAX_SEARCH_SCOPE_VALUE_BYTES
+                || strlen((string) $orderby) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES
                 || strtolower(trim((string) $orderby)) !== 'relevance'
             ) {
                 return true;
@@ -15635,7 +15310,7 @@ LIMIT %d",
         }
 
         return !is_scalar($order)
-            || strlen((string) $order) > self::MAX_SEARCH_SCOPE_VALUE_BYTES
+            || strlen((string) $order) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES
             || strtoupper(trim((string) $order)) !== 'DESC';
     }
 
@@ -15677,12 +15352,12 @@ LIMIT %d",
         $types = [];
         $examined = 0;
         foreach ($raw as $key => $value) {
-            if (++$examined > self::MAX_SEARCH_SCOPE_VALUES) {
+            if (++$examined > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
                 $types[self::UNSUPPORTED_SCOPE_SENTINEL] = true;
                 break;
             }
             $raw_type = is_scalar($value) ? (string) $value : (is_scalar($key) ? (string) $key : '');
-            if (strlen($raw_type) > self::MAX_SEARCH_SCOPE_VALUE_BYTES) {
+            if (strlen($raw_type) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES) {
                 $types[self::UNSUPPORTED_SCOPE_SENTINEL] = true;
                 break;
             }
@@ -15809,7 +15484,7 @@ LIMIT %d",
         }
 
         if (is_string($value)) {
-            if (strlen($value) > self::MAX_SEARCH_SCOPE_VALUE_BYTES) {
+            if (strlen($value) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES) {
                 return true;
             }
             $value = trim($value);
@@ -15913,32 +15588,21 @@ LIMIT %d",
             'post_statuses' => $post_statuses,
         ] + self::searcher_prefix_threshold_options($settings) + $cursor_options;
         $explicit_language = self::query_var($query, 'wp_fts_lang', null);
-        if (is_scalar($explicit_language)) {
-            $raw_language = (string) $explicit_language;
-            if (strlen($raw_language) > self::MAX_SEARCH_LANGUAGE_BYTES) {
-                $search_options['lang'] = $raw_language;
-            } elseif (trim($raw_language) !== '') {
-                $search_options['lang'] = WP_FTS_TermNamespace::canonicalize_lang($raw_language);
-            }
+        if ($explicit_language !== null) {
+            $search_options['lang'] = WP_FTS_TermNamespace::parse_language_tag($explicit_language);
         }
         $search_started = microtime(true);
         $payload = self::search_visible_payload($search_query, $search_options, $trace_id > 0, true);
         self::debug_add_timing($trace_id, 'storage/search', $search_started);
         self::debug_set_search_explain($trace_id, $payload['explain'] ?? null);
-        $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
+        $rows = $payload['results'];
         self::debug_add_count($trace_id, 'search_batches');
         self::debug_add_count($trace_id, 'ranked_page_rows', count($rows));
 
         $ids = [];
         $rows_by_id = [];
         foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $post_id = max(0, (int) ($row['doc_id'] ?? $row['post_id'] ?? 0));
-            if ($post_id <= 0 || isset($rows_by_id[$post_id])) {
-                continue;
-            }
+            $post_id = $row['doc_id'];
             $ids[] = $post_id;
             $rows_by_id[$post_id] = $row;
         }
@@ -15948,23 +15612,21 @@ LIMIT %d",
         self::debug_add_timing($trace_id, 'page hydration', $hydrate_started);
         $snippets = [];
         $titles = [];
-        foreach ($posts as $post) {
-            $post_id = self::post_id_from_value($post);
-            $snippet = $rows_by_id[$post_id]['snippet'] ?? null;
-            if ($build_frontend_previews && is_scalar($snippet) && trim((string) $snippet) !== '') {
-                $snippets[$post_id] = self::sanitize_frontend_snippet_html((string) $snippet);
+        foreach ($posts as $index => $post) {
+            $post_id = $ids[$index];
+            $snippet = $rows_by_id[$post_id]['snippet'] ?? '';
+            if ($build_frontend_previews && $snippet !== '') {
+                $snippets[$post_id] = self::sanitize_frontend_snippet_html($snippet);
                 self::debug_add_count($trace_id, 'snippets_reused');
             }
-            $highlighted_title = $rows_by_id[$post_id]['highlighted_title'] ?? null;
-            if ($build_frontend_previews && is_scalar($highlighted_title) && trim((string) $highlighted_title) !== '') {
-                $titles[$post_id] = self::sanitize_frontend_snippet_html((string) $highlighted_title);
+            $highlighted_title = $rows_by_id[$post_id]['highlighted_title'] ?? '';
+            if ($build_frontend_previews && $highlighted_title !== '') {
+                $titles[$post_id] = self::sanitize_frontend_snippet_html($highlighted_title);
             }
         }
 
-        $query_lang = is_scalar($payload['query_lang'] ?? null)
-            ? WP_FTS_TermNamespace::canonicalize_lang((string) $payload['query_lang'])
-            : '';
-        $has_more = !empty($payload['has_more']);
+        $query_lang = $payload['query_lang'];
+        $has_more = $payload['has_more'];
         $lower_bound = count($posts) + ($has_more ? 1 : 0);
         self::debug_set_counts($trace_id, [
             'result_ids_returned' => count($posts),
@@ -15988,8 +15650,8 @@ LIMIT %d",
             'limit' => $limit,
             'query_lang' => $query_lang,
             'has_more' => $has_more,
-            'next_cursor' => is_scalar($payload['next_cursor'] ?? null) ? (string) $payload['next_cursor'] : null,
-            'previous_cursor' => is_scalar($payload['previous_cursor'] ?? null) ? (string) $payload['previous_cursor'] : null,
+            'next_cursor' => $payload['next_cursor'],
+            'previous_cursor' => $payload['previous_cursor'],
         ];
     }
 
@@ -16005,15 +15667,8 @@ LIMIT %d",
     {
         $posts = [];
         foreach ($post_ids as $post_id) {
-            $post_id = (int) $post_id;
-            $canonical_row = $rows_by_id[$post_id]['_canonical_post_row'] ?? null;
-            if ($post_id <= 0 || !is_array($canonical_row)) {
-                continue;
-            }
+            $canonical_row = $rows_by_id[$post_id]['_canonical_post_row'];
             $row = (object) $canonical_row;
-            if ((int) ($row->ID ?? 0) !== $post_id) {
-                continue;
-            }
             if (function_exists('sanitize_post')) {
                 // Mark the database row raw before WP_Query calls get_post().
                 // Without this, WP_Post::filter('raw') reloads every cold ID;
@@ -16022,19 +15677,21 @@ LIMIT %d",
             }
             $posts[] = class_exists('WP_Post') ? new WP_Post($row) : $row;
         }
+        if (count($posts) !== count($post_ids)) {
+            throw new LogicException('Canonical search hydration must preserve every ranked row.');
+        }
 
         return $posts;
     }
 
-    /** Normalizes public cursor direction to the two supported adjacent values. */
+    /** Require one exact public cursor direction. */
     private static function search_cursor_direction(mixed $value): string
     {
-        if (!is_scalar($value) || strlen((string) $value) > self::MAX_SEARCH_MODE_BYTES) {
-            return 'after';
+        if (!is_string($value) || !in_array($value, ['after', 'before'], true)) {
+            throw new InvalidArgumentException('FTS cursor direction must be exactly after or before.');
         }
-        $direction = strtolower(trim((string) $value));
 
-        return $direction === 'before' ? 'before' : 'after';
+        return $value;
     }
 
     /**
@@ -16240,13 +15897,13 @@ LIMIT %d",
             if (is_array($raw)) {
                 $examined = 0;
                 foreach ($raw as $key => $value) {
-                    if (++$examined > self::MAX_SEARCH_SCOPE_VALUES) {
+                    if (++$examined > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
                         break;
                     }
                     $type = is_scalar($value) ? (string) $value : (is_scalar($key) ? (string) $key : '');
                     if (
                         $type !== ''
-                        && strlen($type) <= self::MAX_SEARCH_SCOPE_VALUE_BYTES
+                        && strlen($type) <= WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES
                         && self::is_public_searchable_post_type($type)
                     ) {
                         $types[$type] = true;
@@ -16299,7 +15956,7 @@ LIMIT %d",
     private static function normalize_string_list(mixed $value): array
     {
         $items = is_array($value) ? $value : [$value];
-        if (count($items) > self::MAX_SEARCH_SCOPE_VALUES) {
+        if (count($items) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
             return [self::UNSUPPORTED_SCOPE_SENTINEL];
         }
         $result = [];
@@ -16310,17 +15967,17 @@ LIMIT %d",
             }
             $item = (string) $item;
             $input_bytes += strlen($item);
-            if ($input_bytes > self::MAX_SEARCH_SCOPE_BYTES) {
+            if ($input_bytes > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_BYTES) {
                 return [self::UNSUPPORTED_SCOPE_SENTINEL];
             }
             foreach (explode(',', $item) as $part) {
-                if (strlen($part) > self::MAX_SEARCH_SCOPE_VALUE_BYTES) {
+                if (strlen($part) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES) {
                     return [self::UNSUPPORTED_SCOPE_SENTINEL];
                 }
                 $part = trim($part);
                 if ($part !== '') {
                     $result[$part] = true;
-                    if (count($result) > self::MAX_SEARCH_SCOPE_VALUES) {
+                    if (count($result) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
                         return [self::UNSUPPORTED_SCOPE_SENTINEL];
                     }
                 }
@@ -16445,23 +16102,25 @@ LIMIT %d",
         return 0;
     }
 
-    private static function site_id_from_value(mixed $site): int
+    private static function database_site_id(mixed $value): int
     {
-        if (is_object($site)) {
-            if (isset($site->blog_id) && is_numeric($site->blog_id)) {
-                return max(0, (int) $site->blog_id);
-            }
-
-            if (isset($site->id) && is_numeric($site->id)) {
-                return max(0, (int) $site->id);
-            }
+        if (is_int($value) && $value > 0) {
+            return $value;
+        }
+        if (
+            !is_string($value)
+            || $value === ''
+            || $value[0] === '0'
+            || strspn($value, '0123456789') !== strlen($value)
+        ) {
+            throw new RuntimeException('Multisite keyset discovery returned an invalid site ID.');
+        }
+        $site_id = (int) $value;
+        if ($site_id <= 0 || (string) $site_id !== $value) {
+            throw new RuntimeException('Multisite keyset discovery returned an invalid site ID.');
         }
 
-        if (is_numeric($site)) {
-            return max(0, (int) $site);
-        }
-
-        return 0;
+        return $site_id;
     }
 
     private static function site_table_prefix(int $site_id): string
@@ -16506,7 +16165,7 @@ LIMIT %d",
             $tables[] = $prefix . $suffix;
         }
 
-        $name_source = new WP_FTS_Storage_Mysql($wpdb, $prefix);
+        $name_source = new WP_FTS_Relational_Storage($wpdb, $prefix);
         return self::unique_table_names(array_merge($tables, $name_source->reset_generation_table_names()));
     }
 
@@ -17802,7 +17461,7 @@ LIMIT %d",
             $cleaned = self::storage(false)->cleanup_empty_terms();
             $summary['empty_terms_cleaned'] = max(0, (int) ($summary['empty_terms_cleaned'] ?? 0))
                 + max(0, $cleaned);
-            if ($cleaned >= WP_FTS_Storage_Mysql::MAX_EMPTY_TERM_CLEANUP) {
+            if ($cleaned >= WP_FTS_Relational_Storage::MAX_EMPTY_TERM_CLEANUP) {
                 // A full page proves cleanup debt may remain. Continue one
                 // bounded DELETE per invocation without polling the queue.
                 $summary['cleanup_pending'] = true;
@@ -18136,7 +17795,7 @@ LIMIT %d",
                 $cleaned = self::storage(false)->cleanup_empty_terms();
                 $summary['empty_terms_cleaned'] = max(0, (int) ($summary['empty_terms_cleaned'] ?? 0))
                     + max(0, $cleaned);
-                if ($cleaned >= WP_FTS_Storage_Mysql::MAX_EMPTY_TERM_CLEANUP) {
+                if ($cleaned >= WP_FTS_Relational_Storage::MAX_EMPTY_TERM_CLEANUP) {
                     $summary['cleanup_pending'] = true;
                     $summary['has_more'] = true;
                 }
@@ -18251,7 +17910,7 @@ LIMIT %d",
                     'canonical_bytes' => max(0, (int) ($claim['canonical_bytes'] ?? 0)),
                 ];
                 if (isset($claim['source_snapshot']) && is_object($claim['source_snapshot'])) {
-                    $source_snapshots[$post_id] = $claim['source_snapshot'];
+                    $source_snapshots[$post_id] = clone $claim['source_snapshot'];
                 }
                 $payload = is_array($claim['payload'] ?? null) ? $claim['payload'] : [];
                 $index_options_by_post_id[$post_id] = is_array($payload['index_options'] ?? null)
@@ -18389,11 +18048,11 @@ LIMIT %d",
                                 "Prepared FTS document {$post_id} exceeds the " . WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES . '-surface writer contract.'
                             );
                         }
-                        if ($document_postings > WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS) {
+                        if ($document_postings > WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS) {
                             throw new WP_FTS_Prepared_Document_Rejected(
                                 $post_id,
                                 'posting_limit',
-                                "Prepared FTS document {$post_id} exceeds the " . WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS . '-posting writer contract.'
+                                "Prepared FTS document {$post_id} exceeds the " . WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS . '-posting writer contract.'
                             );
                         }
 
@@ -18411,8 +18070,8 @@ LIMIT %d",
                             }
                         }
                         if (
-                            $prepared_postings + $document_postings > WP_FTS_Storage_Mysql::MAX_BATCH_POSTINGS
-                            || count($prepared_terms) + count($new_terms) > WP_FTS_Storage_Mysql::MAX_BATCH_TERMS
+                            $prepared_postings + $document_postings > WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS
+                            || count($prepared_terms) + count($new_terms) > WP_FTS_Relational_Storage::MAX_BATCH_TERMS
                         ) {
                             foreach (array_slice($document_claims, $claim_index) as $deferred_document_claim) {
                                 $deferred_post_id = max(0, (int) ($deferred_document_claim['post_id'] ?? 0));
@@ -18847,12 +18506,12 @@ LIMIT %d",
             $filters = [];
             foreach (['post_status', 'post_type'] as $name) {
                 $raw = $payload[$name] ?? [];
-                if (!is_array($raw) || $raw === [] || count($raw) > self::MAX_SEARCH_SCOPE_VALUES) {
+                if (!is_array($raw) || $raw === [] || count($raw) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
                     throw new RuntimeException("Invalid durable WP-CLI {$name} scope filter.");
                 }
                 $values = [];
                 foreach ($raw as $value) {
-                    if (!is_scalar($value) || strlen((string) $value) > self::MAX_SEARCH_SCOPE_VALUE_BYTES) {
+                    if (!is_scalar($value) || strlen((string) $value) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES) {
                         throw new RuntimeException("Invalid durable WP-CLI {$name} scope filter.");
                     }
                     $value = trim((string) $value);
@@ -18878,7 +18537,7 @@ LIMIT %d",
             // fail-closed. Together with the selector, every selective page
             // remains a fixed two-statement workflow on every supported
             // database.
-            $index_hint = self::mysql_storage()->validated_filtered_scope_index_hint();
+            $index_hint = self::relational_storage()->validated_filtered_scope_index_hint();
             $sqlite = self::database_adapter_is_sqlite($wpdb);
             $branches = [];
             $args = [];
@@ -18927,7 +18586,7 @@ LIMIT %d",
             && $term_taxonomy_id > 0
         ) {
             $relationships = (string) ($wpdb->term_relationships ?? ((string) ($wpdb->prefix ?? '') . 'term_relationships'));
-            $index_hint = self::mysql_storage()->validated_targeted_scope_index_hint();
+            $index_hint = self::relational_storage()->validated_targeted_scope_index_hint();
             $rows = $wpdb->get_results($wpdb->prepare(
                 "/* wp_fts:targeted-scope-page */
 SELECT scope_rel.object_id AS post_id, 1 AS should_process
@@ -19085,7 +18744,7 @@ LIMIT %d",
             }
             $source_bytes = $measurements[$post_id]['source_bytes'];
             $canonical_bytes = $measurements[$post_id]['canonical_bytes'];
-            if ($canonical_bytes > WP_FTS_Storage_Mysql::MAX_CANONICAL_POST_BYTES) {
+            if ($canonical_bytes > WP_FTS_Relational_Storage::MAX_CANONICAL_POST_BYTES) {
                 $posts[$post_id] = self::rejected_index_source(
                     $post_id,
                     'canonical_post_bytes',
@@ -19251,7 +18910,11 @@ ORDER BY p.ID ASC",
                     $index_options['custom_field_keys'] = $configured;
                 }
                 $index_options = self::prepare_post_index_options($post, $index_options);
-                $custom_keys = $extractor->selected_custom_field_keys($post, $index_options);
+                $extraction_options = array_intersect_key($index_options, [
+                    'custom_field_keys' => true,
+                    'field_boosts' => true,
+                ]);
+                $custom_keys = $extractor->selected_custom_field_keys($post, $extraction_options);
             } catch (WP_FTS_Analysis_Limit_Exceeded $error) {
                 $posts[$post_id] = self::rejected_index_source(
                     (int) $post_id,
@@ -20219,7 +19882,6 @@ WHERE p.ID IN ({$post_placeholders})";
             'last_error' => '',
             'last_error_class' => '',
             'last_error_message' => '',
-            'trigger' => $mode,
             'source' => '',
             'status' => 'started',
             'started_at' => '',
@@ -20251,6 +19913,64 @@ WHERE p.ID IN ({$post_placeholders})";
         ];
     }
 
+    /** Reject manual batch options before reading lock, queue, or health state. */
+    private static function assert_manual_index_batch_options(array $opts): void
+    {
+        self::assert_index_option_keys(
+            $opts,
+            ['batch_size', 'source', 'time_budget'],
+            'Manual index batch'
+        );
+        if (
+            array_key_exists('batch_size', $opts)
+            && (
+                !is_int($opts['batch_size'])
+                || $opts['batch_size'] < 1
+                || $opts['batch_size'] > self::MAX_MANUAL_INDEX_BATCH_SIZE
+            )
+        ) {
+            throw new InvalidArgumentException('Manual index batch_size must be an integer from 1 through 1,000.');
+        }
+        if (
+            array_key_exists('source', $opts)
+            && (
+                !is_string($opts['source'])
+                || $opts['source'] === ''
+                || trim($opts['source']) !== $opts['source']
+                || strlen($opts['source']) > 40
+                || strspn($opts['source'], 'abcdefghijklmnopqrstuvwxyz0123456789_-') !== strlen($opts['source'])
+            )
+        ) {
+            throw new InvalidArgumentException('Manual index source must be an unpadded lowercase identifier of at most 40 bytes.');
+        }
+        if (array_key_exists('time_budget', $opts)) {
+            $seconds = $opts['time_budget'];
+            if (
+                (!is_int($seconds) && !is_float($seconds))
+                || !is_finite((float) $seconds)
+                || $seconds <= 0
+                || $seconds > self::MAX_MANUAL_INDEX_TIME_BUDGET_SECONDS
+            ) {
+                throw new InvalidArgumentException('Manual index time_budget must be a finite native number from above 0 through 300 seconds.');
+            }
+        }
+    }
+
+    /** Reject direct writer options before reading or acquiring the writer lock. */
+    private static function assert_index_writer_options(array $opts): void
+    {
+        self::assert_index_option_keys(
+            $opts,
+            ['record_skip', 'record_health'],
+            'Direct index writer'
+        );
+        foreach (['record_skip', 'record_health'] as $key) {
+            if (array_key_exists($key, $opts) && !is_bool($opts[$key])) {
+                throw new InvalidArgumentException("Direct index writer {$key} must be a boolean.");
+            }
+        }
+    }
+
     /**
      * @param array<string,mixed> $opts
      * @param array<string,mixed> $summary
@@ -20280,11 +20000,8 @@ WHERE p.ID IN ({$post_placeholders})";
      */
     private static function index_batch_source(mixed $mode, array $opts): string
     {
-        if (isset($opts['source']) && is_scalar($opts['source'])) {
-            $source = self::sanitize_key((string) $opts['source']);
-            if ($source !== '') {
-                return self::debug_truncate_text($source, 60);
-            }
+        if (array_key_exists('source', $opts)) {
+            return $opts['source'];
         }
 
         if ($mode === 'cron') {
@@ -20296,47 +20013,21 @@ WHERE p.ID IN ({$post_placeholders})";
 
     private static function index_writer_source(string $source): string
     {
-        $source = self::sanitize_key($source);
-
-        return $source !== '' ? self::debug_truncate_text($source, 40) : 'manual';
-    }
-
-    /**
-     * @param array<string,mixed> $opts
-     */
-    private static function index_writer_batch_size(array $opts): int
-    {
-        if (isset($opts['batch_size']) && is_numeric($opts['batch_size'])) {
-            return max(0, (int) $opts['batch_size']);
+        if (
+            $source === ''
+            || trim($source) !== $source
+            || strlen($source) > 40
+            || strspn($source, 'abcdefghijklmnopqrstuvwxyz0123456789_-') !== strlen($source)
+        ) {
+            throw new InvalidArgumentException('Index writer sources must be unpadded lowercase identifiers of at most 40 bytes.');
         }
 
-        return 0;
-    }
-
-    /**
-     * @param array<string,mixed> $opts
-     */
-    private static function index_writer_indexed_count(mixed $result, array $opts): int
-    {
-        if (isset($opts['indexed']) && is_numeric($opts['indexed'])) {
-            return max(0, (int) $opts['indexed']);
-        }
-        if (is_array($result) && isset($result['indexed']) && is_numeric($result['indexed'])) {
-            return max(0, (int) $result['indexed']);
-        }
-        if (is_bool($result)) {
-            return $result ? 1 : 0;
-        }
-        if (is_int($result) || is_float($result) || (is_scalar($result) && is_numeric($result))) {
-            return max(0, (int) $result);
-        }
-
-        return 0;
+        return $source;
     }
 
     private static function index_storage_backend_label(): string
     {
-        return 'mysql';
+        return 'relational';
     }
 
     /** Return the canonical hash for the analyzer/index settings in force now. */
@@ -21142,12 +20833,12 @@ WHERE p.ID IN ({$post_placeholders})";
      */
     private static function index_batch_deadline(array $opts, float $started): ?float
     {
-        if (!isset($opts['time_budget']) || !is_numeric($opts['time_budget'])) {
+        if (!array_key_exists('time_budget', $opts)) {
             return null;
         }
-        $seconds = (float) $opts['time_budget'];
+        $seconds = $opts['time_budget'];
 
-        return is_finite($seconds) && $seconds > 0.0 ? $started + $seconds : null;
+        return $started + $seconds;
     }
 
     /**
@@ -21155,8 +20846,8 @@ WHERE p.ID IN ({$post_placeholders})";
      */
     private static function index_batch_size(string $mode, array $opts): int
     {
-        if (isset($opts['batch_size']) && is_numeric($opts['batch_size'])) {
-            return self::clamp_int((int) $opts['batch_size'], 1, self::MAX_MANUAL_INDEX_BATCH_SIZE);
+        if (array_key_exists('batch_size', $opts)) {
+            return $opts['batch_size'];
         }
 
         if ($mode === 'cron') {
@@ -21338,39 +21029,6 @@ WHERE NOT EXISTS (
         return true;
     }
 
-    /**
-     * Renew the active writer capability once at the bounded transaction boundary.
-     *
-     * @throws WP_FTS_Index_Writer_Ownership_Lost When another writer replaced
-     *         the lease or its expiry passed before renewal.
-     */
-    public static function heartbeat_index_writer(bool $force = false): void
-    {
-        $token = self::$active_index_writer_token;
-        $current = self::assert_index_writer_ownership();
-        if ($token === null) {
-            throw new WP_FTS_Index_Writer_Ownership_Lost('FTS index writer ownership was lost before lease renewal.');
-        }
-
-        $now = time();
-        $ttl = self::configured_int_constant('WP_FTS_INDEX_LOCK_TTL', self::DEFAULT_INDEX_LOCK_TTL, 30, 3600);
-        $renew_before = max(5, min(60, intdiv($ttl, 3)));
-        if (!$force && (int) ($current['expires_at'] ?? 0) - $now > $renew_before) {
-            return;
-        }
-
-        $renewed = $current;
-        $renewed['heartbeat_at'] = $now;
-        $renewed['expires_at'] = $now + $ttl;
-        $renewed['renewals'] = max(0, (int) ($current['renewals'] ?? 0)) + 1;
-
-        if (!self::compare_and_swap_index_lock($current, $renewed)) {
-            throw new WP_FTS_Index_Writer_Ownership_Lost('FTS index writer ownership changed during lease renewal.');
-        }
-
-        self::assert_index_writer_ownership();
-    }
-
     private static function release_index_lock(string $token): void
     {
         $lock = self::get_option(self::INDEX_LOCK_OPTION, null);
@@ -21385,7 +21043,7 @@ WHERE NOT EXISTS (
      * Work membership and the cursor epoch change in one transactional-table
      * commit. The outer worker retains that lease for its optional bounded
      * dictionary cleanup and retires it in the common finally block. This is
-     * safe when a legacy site's wp_options table is MyISAM: a crash can leave a
+     * safe when the site's wp_options table is MyISAM: a crash can leave a
      * short-lived diagnostic lease, but cannot publish work without its
      * matching epoch or erase a successor's lease.
      *
@@ -21393,7 +21051,7 @@ WHERE NOT EXISTS (
      */
     private static function acknowledge_claims_under_index_lock(
         array $claims,
-        ?WP_FTS_Storage_Mysql $storage = null
+        ?WP_FTS_Relational_Storage $storage = null
     ): ?array
     {
         global $wpdb;
@@ -21490,7 +21148,7 @@ STRAIGHT_JOIN {$work_table} work_row
             }
             if ($uses_storage_transaction) {
                 // The exact option lease remains owned through COMMIT. This is
-                // safe even when a legacy wp_options table is nontransactional.
+                // safe even when wp_options is nontransactional.
                 $storage->commit();
             } else {
                 $committed = $wpdb->query('COMMIT');
@@ -21602,30 +21260,6 @@ STRAIGHT_JOIN {$work_table} work_row
     }
 
     /**
-     * Atomically replace the exact lease payload when the database option table
-     * is available. Test and non-WordPress adapters use a single-process
-     * checked option update.
-     *
-     * @param array<string,mixed> $expected
-     * @param array<string,mixed> $replacement
-     */
-    private static function compare_and_swap_index_lock(array $expected, array $replacement): bool
-    {
-        $database_result = self::compare_and_swap_index_lock_in_database($expected, $replacement, false);
-        if ($database_result !== null) {
-            return $database_result;
-        }
-
-        if (self::get_option(self::INDEX_LOCK_OPTION, null) !== $expected) {
-            return false;
-        }
-        self::set_option(self::INDEX_LOCK_OPTION, $replacement);
-        $stored = self::get_option(self::INDEX_LOCK_OPTION, null);
-
-        return is_array($stored) && ($stored['token'] ?? null) === ($replacement['token'] ?? null);
-    }
-
-    /**
      * Delete only the exact lease payload observed by the releasing/taking-over
      * writer so an expired owner cannot delete its successor's lock.
      *
@@ -21633,7 +21267,7 @@ STRAIGHT_JOIN {$work_table} work_row
      */
     private static function compare_and_delete_index_lock(mixed $expected): bool
     {
-        $database_result = self::compare_and_swap_index_lock_in_database($expected, [], true);
+        $database_result = self::compare_and_delete_index_lock_in_database($expected);
         if ($database_result !== null) {
             return $database_result;
         }
@@ -21648,10 +21282,9 @@ STRAIGHT_JOIN {$work_table} work_row
 
     /**
      * @param mixed $expected Exact structured or malformed value observed by the contender.
-     * @param array<string,mixed> $replacement
      * @return bool|null Null when the WordPress option table is unavailable.
      */
-    private static function compare_and_swap_index_lock_in_database(mixed $expected, array $replacement, bool $delete): ?bool
+    private static function compare_and_delete_index_lock_in_database(mixed $expected): ?bool
     {
         global $wpdb;
 
@@ -21669,31 +21302,16 @@ STRAIGHT_JOIN {$work_table} work_row
 
         $table = (string) $wpdb->options;
         $expected_value = maybe_serialize($expected);
-        $statement = $delete
-            ? $wpdb->prepare(
-                "DELETE FROM {$table} WHERE option_name = %s AND option_value = %s",
-                self::INDEX_LOCK_OPTION,
-                $expected_value
-            )
-            : $wpdb->prepare(
-                "UPDATE {$table} SET option_value = %s WHERE option_name = %s AND option_value = %s",
-                maybe_serialize($replacement),
-                self::INDEX_LOCK_OPTION,
-                $expected_value
-            );
+        $statement = $wpdb->prepare(
+            "DELETE FROM {$table} WHERE option_name = %s AND option_value = %s",
+            self::INDEX_LOCK_OPTION,
+            $expected_value
+        );
         $result = $wpdb->query($statement);
         if ($result === false) {
-            throw new RuntimeException('Could not compare and update the FTS index writer lease.');
+            throw new RuntimeException('Could not compare and delete the FTS index writer lease.');
         }
-        if ((int) $result === 1 && !$delete && function_exists('wp_cache_set')) {
-            // The exact compare-and-swap just published this payload. Keep the
-            // option cache authoritative so the immediately following lease
-            // assertion does not pay a redundant primary-key read.
-            wp_cache_set(self::INDEX_LOCK_OPTION, $replacement, 'options');
-            if (function_exists('wp_cache_delete')) {
-                wp_cache_delete('notoptions', 'options');
-            }
-        } elseif (function_exists('wp_cache_delete')) {
+        if (function_exists('wp_cache_delete')) {
             wp_cache_delete(self::INDEX_LOCK_OPTION, 'options');
         }
 
@@ -22488,7 +22106,7 @@ STRAIGHT_JOIN {$work_table} work_row
     {
         return self::sanitize_index_batch_diagnostics([
             'schema' => 'wp-fts-index-batch-diagnostics-v1',
-            'trigger' => $summary['trigger'] ?? $summary['mode'] ?? '',
+            'trigger' => $summary['mode'] ?? '',
             'source' => $summary['source'] ?? '',
             'status' => $summary['status'] ?? '',
             'started_at' => $summary['started_at'] ?? '',
@@ -22525,8 +22143,8 @@ STRAIGHT_JOIN {$work_table} work_row
             'schema_version' => $summary['schema_version'] ?? 0,
             'expected_schema_version' => $summary['expected_schema_version'] ?? 0,
             'storage_backend' => $summary['storage_backend'] ?? '',
-            'error_class' => $summary['error_class'] ?? $summary['last_error_class'] ?? '',
-            'error_message' => $summary['error_message'] ?? $summary['last_error_message'] ?? '',
+            'error_class' => $summary['error_class'] ?? '',
+            'error_message' => $summary['error_message'] ?? '',
             'successor_schedule_failed' => $summary['successor_schedule_failed'] ?? false,
             'last_failed_post_id' => $summary['last_failed_post_id'] ?? 0,
             'last_failed_post_title' => $summary['last_failed_post_title'] ?? '',
@@ -22742,7 +22360,7 @@ STRAIGHT_JOIN {$work_table} work_row
     /**
      * Build a storage backend against the active WordPress database connection.
      */
-    private static function mysql_storage(): WP_FTS_Storage_Mysql
+    private static function relational_storage(): WP_FTS_Relational_Storage
     {
         global $wpdb;
 
@@ -22759,7 +22377,7 @@ STRAIGHT_JOIN {$work_table} work_row
             self::assert_index_writer_ownership();
         };
 
-        return new WP_FTS_Storage_Mysql($wpdb, null, $mutation_guard);
+        return new WP_FTS_Relational_Storage($wpdb, null, $mutation_guard);
     }
 
     /**
@@ -22935,10 +22553,7 @@ STRAIGHT_JOIN {$work_table} work_row
     private static function replace_queue_processor_cron_event(int $timestamp): bool
     {
         if (!function_exists('_get_cron_array') || !function_exists('_set_cron_array')) {
-            // Older/custom cron implementations may not expose Core's array
-            // helpers. Retaining a valid later watchdog is safer and cheaper
-            // than a non-atomic clear-then-add fallback.
-            return true;
+            throw new LogicException('The current WordPress cron array helpers are required to move the queue event.');
         }
         $event = (object) [
             'hook' => self::CRON_HOOK,
@@ -23052,6 +22667,7 @@ STRAIGHT_JOIN {$work_table} work_row
         if (function_exists('wp_clear_scheduled_hook')) {
             wp_clear_scheduled_hook(self::SCHEMA_REPAIR_CRON_HOOK);
             wp_clear_scheduled_hook(self::SCHEMA_SITE_CRON_HOOK);
+            wp_clear_scheduled_hook(self::SITE_SCHEMA_RETRY_CRON_HOOK);
         }
     }
 
@@ -23156,12 +22772,30 @@ STRAIGHT_JOIN {$work_table} work_row
      */
     private static function option_matches_schema_version(mixed $value): bool
     {
-        return is_scalar($value) && (int) $value === self::SCHEMA_VERSION;
+        return self::schema_version_option_value($value) === self::SCHEMA_VERSION;
     }
 
     private static function schema_version_from_option(mixed $value): int
     {
-        return is_scalar($value) && is_numeric($value) ? max(0, (int) $value) : 0;
+        return self::schema_version_option_value($value) ?? 0;
+    }
+
+    private static function schema_version_option_value(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value >= 0 ? $value : null;
+        }
+        if (
+            !is_string($value)
+            || $value === ''
+            || ($value !== '0' && $value[0] === '0')
+            || strspn($value, '0123456789') !== strlen($value)
+        ) {
+            return null;
+        }
+        $version = (int) $value;
+
+        return $version >= 0 && (string) $version === $value ? $version : null;
     }
 
     /**
@@ -23214,27 +22848,27 @@ STRAIGHT_JOIN {$work_table} work_row
         $allowed_map = [];
         $allowed_count = 0;
         foreach ($allowed as $allowed_item) {
-            if (++$allowed_count > self::MAX_SEARCH_SCOPE_VALUES) {
+            if (++$allowed_count > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
                 break;
             }
-            if (!is_scalar($allowed_item) || strlen((string) $allowed_item) > self::MAX_SEARCH_SCOPE_VALUE_BYTES) {
+            if (!is_scalar($allowed_item) || strlen((string) $allowed_item) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES) {
                 continue;
             }
             $allowed_item = self::sanitize_key((string) $allowed_item);
             if ($allowed_item !== '') {
                 $allowed_map[$allowed_item] = true;
             }
-            if (count($allowed_map) >= self::MAX_SEARCH_SCOPE_VALUES) {
+            if (count($allowed_map) >= WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
                 break;
             }
         }
         $selected = [];
         $raw_count = 0;
         foreach (is_array($value) ? $value : [$value] as $item) {
-            if (++$raw_count > self::MAX_SEARCH_SCOPE_VALUES) {
+            if (++$raw_count > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUES) {
                 break;
             }
-            if (!is_scalar($item) || strlen((string) $item) > self::MAX_SEARCH_SCOPE_VALUE_BYTES) {
+            if (!is_scalar($item) || strlen((string) $item) > WP_FTS_Set_Oriented_Search_Storage::MAX_FILTER_VALUE_BYTES) {
                 continue;
             }
             $item = self::sanitize_key(self::unslash_scalar($item));
@@ -23384,15 +23018,6 @@ STRAIGHT_JOIN {$work_table} work_row
         }
 
         return $key;
-    }
-
-    private static function is_wordpress_error(mixed $value): bool
-    {
-        if (function_exists('is_wp_error')) {
-            return is_wp_error($value);
-        }
-
-        return class_exists('WP_Error') && $value instanceof WP_Error;
     }
 
     private static function esc_html(string $value): string
@@ -23570,20 +23195,38 @@ STRAIGHT_JOIN {$work_table} work_row
         return $default;
     }
 
+    /** Report whether a REST request explicitly contains a parameter. */
+    private static function request_has_param(mixed $request, string $key): bool
+    {
+        if (is_object($request) && is_callable([$request, 'has_param'])) {
+            return $request->has_param($key) === true;
+        }
+        if (is_array($request)) {
+            return array_key_exists($key, $request);
+        }
+        if (is_object($request) && is_callable([$request, 'get_params'])) {
+            $params = $request->get_params();
+            return is_array($params) && array_key_exists($key, $params);
+        }
+
+        return is_object($request) && property_exists($request, $key);
+    }
+
     /** Return the bounded REST query string. */
     private static function rest_query(mixed $request): string
     {
+        if (!self::request_has_param($request, 'q')) {
+            return '';
+        }
         $value = self::request_param($request, 'q', null);
-        if ($value !== null && !is_scalar($value)) {
-            throw new InvalidArgumentException('REST search q must be a scalar value.');
+        if (!is_string($value)) {
+            throw new InvalidArgumentException('REST search q must be a string.');
+        }
+        if (strlen($value) > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_BYTES) {
+            throw new WP_FTS_Search_Budget_Exceeded('query bytes');
         }
 
-        return is_scalar($value)
-            ? self::truncate_request_text(
-                self::sanitize_text(self::bounded_unslash_scalar($value, 200)),
-                200
-            )
-            : '';
+        return $value;
     }
 
     /**
@@ -23591,12 +23234,14 @@ STRAIGHT_JOIN {$work_table} work_row
      */
     private static function rest_mode(mixed $request): ?string
     {
-        $mode = self::request_param($request, 'mode', 'OR');
-        if (!is_scalar($mode)) {
+        if (!self::request_has_param($request, 'mode')) {
+            return 'OR';
+        }
+        $mode = self::request_param($request, 'mode', null);
+        if (!is_string($mode) || strlen($mode) > WP_FTS_Set_Oriented_Search_Storage::MAX_MODE_BYTES) {
             return null;
         }
 
-        $mode = strtoupper(trim(self::bounded_unslash_scalar($mode, 8)));
         return in_array($mode, ['OR', 'AND'], true) ? $mode : null;
     }
 
@@ -23605,82 +23250,98 @@ STRAIGHT_JOIN {$work_table} work_row
      */
     private static function rest_language(mixed $request): ?string
     {
-        $language = self::request_param($request, 'lang', null);
-        if ($language === null) {
+        if (!self::request_has_param($request, 'lang')) {
             return null;
         }
-        if (!is_scalar($language)) {
-            throw new InvalidArgumentException('REST search lang must be a scalar value.');
-        }
 
-        $language = self::truncate_request_text(self::sanitize_text(
-            self::bounded_unslash_scalar($language, 40)
-        ), 40);
-
-        return $language !== '' ? $language : null;
+        return WP_FTS_TermNamespace::parse_language_tag(self::request_param($request, 'lang', null));
     }
 
-    /** Clamps the REST page size before analysis or SQL construction. */
+    /** Parse one canonical REST page size before analysis or SQL. */
     private static function rest_limit(mixed $request): int
     {
-        $limit = self::request_param($request, 'limit', 10);
-        if (!is_scalar($limit)) {
-            throw new InvalidArgumentException('REST search limit must be a bounded numeric scalar.');
+        if (!self::request_has_param($request, 'limit')) {
+            return 10;
         }
-        if (is_string($limit) && strlen($limit) > self::MAX_SEARCH_NUMERIC_BYTES) {
-            throw new InvalidArgumentException('REST search limit must be a bounded numeric scalar.');
-        }
-        $limit = self::bounded_unslash_scalar($limit, self::MAX_SEARCH_NUMERIC_BYTES);
-        if (!is_numeric($limit)) {
-            throw new InvalidArgumentException('REST search limit must be numeric.');
+        $limit = self::request_param($request, 'limit', null);
+        if (is_string($limit)) {
+            if (
+                $limit === ''
+                || strlen($limit) > self::MAX_SEARCH_NUMERIC_BYTES
+                || strspn($limit, '0123456789') !== strlen($limit)
+                || (strlen($limit) > 1 && $limit[0] === '0')
+            ) {
+                throw new InvalidArgumentException('REST search limit must be a canonical unsigned decimal integer.');
+            }
+            $limit = (int) $limit;
+        } elseif (!is_int($limit)) {
+            throw new InvalidArgumentException('REST search limit must be a canonical unsigned decimal integer.');
         }
 
-        return self::clamp_int($limit, 1, self::MAX_SEARCH_LIMIT);
+        if ($limit < 1 || $limit > self::MAX_SEARCH_LIMIT) {
+            throw new InvalidArgumentException('REST search limit must be from 1 through 50.');
+        }
+
+        return $limit;
     }
 
     /** Reads and bounds one opaque REST search-after cursor. */
     private static function rest_cursor(mixed $request): ?string
     {
-        $value = self::request_param($request, 'cursor', null);
-        if ($value === null) {
+        if (!self::request_has_param($request, 'cursor')) {
             return null;
         }
+        $value = self::request_param($request, 'cursor', null);
         if (!is_string($value)) {
             throw new InvalidArgumentException('REST search cursor must be a string.');
         }
-        if (strlen($value) > self::MAX_SEARCH_CURSOR_BYTES) {
-            throw new InvalidArgumentException('REST search cursor may contain at most 2,048 bytes.');
+        if (trim($value) === '' || strlen($value) > WP_FTS_Set_Oriented_Search_Storage::MAX_CURSOR_BYTES) {
+            throw new InvalidArgumentException('REST search cursor must be a non-empty string of at most 2,048 bytes.');
         }
-        $cursor = trim(self::bounded_unslash_scalar($value, self::MAX_SEARCH_CURSOR_BYTES));
 
-        return $cursor !== '' ? $cursor : null;
+        return $value;
     }
 
     /** Allows only adjacent forward or backward REST traversal. */
-    private static function rest_cursor_direction(mixed $request): string
+    private static function rest_cursor_direction(mixed $request, bool $hasCursor): string
     {
-        $value = self::request_param($request, 'direction', 'after');
-        if (!is_string($value) || strlen($value) > self::MAX_SEARCH_MODE_BYTES) {
-            throw new InvalidArgumentException('REST search direction must be after or before.');
+        if (!self::request_has_param($request, 'direction')) {
+            return 'after';
         }
-        $direction = strtolower(trim(self::bounded_unslash_scalar($value, self::MAX_SEARCH_MODE_BYTES)));
-        if (!in_array($direction, ['after', 'before'], true)) {
-            throw new InvalidArgumentException('REST search direction must be after or before.');
+        if (!$hasCursor) {
+            throw new InvalidArgumentException('REST search direction requires a non-empty cursor.');
+        }
+        $value = self::request_param($request, 'direction', null);
+        if (!is_string($value) || !in_array($value, ['after', 'before'], true)) {
+            throw new InvalidArgumentException('REST search direction must be exactly after or before.');
         }
 
-        return $direction;
+        return $value;
     }
 
-    /** Enables bounded explain metadata only for an explicit truthy REST value. */
+    /** Enable bounded explain metadata only for an explicit REST boolean. */
     private static function rest_explain_requested(mixed $request): bool
     {
-        $value = self::request_param($request, 'explain', false);
-        if (!is_scalar($value) || (is_string($value) && strlen($value) > self::MAX_SEARCH_SWITCH_BYTES)) {
-            throw new InvalidArgumentException('REST search explain must be a bounded scalar value.');
+        if (!self::request_has_param($request, 'explain')) {
+            return false;
         }
-        $value = self::bounded_unslash_scalar($value, self::MAX_SEARCH_SWITCH_BYTES);
+        $value = self::request_param($request, 'explain', null);
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value) && ($value === 0 || $value === 1)) {
+            return $value === 1;
+        }
+        if (is_string($value) && strlen($value) <= self::MAX_SEARCH_SWITCH_BYTES) {
+            if (in_array($value, ['1', 'true', 'yes', 'on'], true)) {
+                return true;
+            }
+            if (in_array($value, ['0', 'false', 'no', 'off'], true)) {
+                return false;
+            }
+        }
 
-        return self::truthy_admin_value($value);
+        throw new InvalidArgumentException('REST search explain must be an explicit boolean.');
     }
 
     /**

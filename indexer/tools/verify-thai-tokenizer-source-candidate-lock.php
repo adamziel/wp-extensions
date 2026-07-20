@@ -8,6 +8,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 require_once dirname(__DIR__) . '/src/bootstrap.php';
+require_once __DIR__ . '/lib/TokenizerSourceCandidateLockVerifier.php';
 
 exit(wp_fts_verify_thai_tokenizer_source_candidate_lock_main($_SERVER['argv'] ?? []));
 
@@ -75,7 +76,7 @@ function wp_fts_verify_thai_tokenizer_source_candidate_lock_parse_options(array 
             $options['json'] = true;
             continue;
         }
-        if ($arg === '--allow-pending-exact-values' || $arg === '--allow-pending-artifact-values') {
+        if ($arg === '--allow-pending-exact-values') {
             $options['allow_pending_exact_values'] = true;
             continue;
         }

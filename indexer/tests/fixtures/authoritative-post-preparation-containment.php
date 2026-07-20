@@ -49,9 +49,7 @@ $wpdb = (object) [
     'posts' => 'wp_posts',
     'term_relationships' => 'wp_term_relationships',
 ];
-$storage = new WP_FTS_Storage_Mysql($wpdb);
 $indexer = new WP_FTS_Indexer(
-    $storage,
     new WP_FTS_Analyzer(['default_lang' => 'en']),
     new WP_FTS_PostContentExtractor()
 );
@@ -69,7 +67,7 @@ for ($postId = 1; $postId <= 100; $postId++) {
         'terms' => ['category' => ['Category ' . $postId]],
         'custom_fields' => ['signal' => ['Signal ' . $postId]],
     ];
-    $source = $indexer->prepare_post_source($post, ['lang' => 'en']);
+    $source = $indexer->prepare_post_source($post, ['document_lang' => 'en']);
     if ((int) ($source['doc_id'] ?? 0) !== $postId) {
         throw new RuntimeException('authoritative preparation returned the wrong document id');
     }

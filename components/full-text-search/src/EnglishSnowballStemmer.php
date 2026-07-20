@@ -54,16 +54,6 @@ abstract class WP_FTS_SnowballGeneratedStemmer {
     abstract public function stem(): bool;
 
 
-    protected function copyFrom(self $other): void {
-        $this->current          = $other->current;
-        $this->cursor           = $other->cursor;
-        $this->limit            = $other->limit;
-        $this->limit_backward   = $other->limit_backward;
-        $this->bra              = $other->bra;
-        $this->ket              = $other->ket;
-    }
-
-
     /**
      * @param int[] $s
      */
@@ -109,21 +99,6 @@ abstract class WP_FTS_SnowballGeneratedStemmer {
         }
         $this->cursor -= strlen($ch);
         return true;
-    }
-
-
-    /**
-     * @param int[] $s
-     */
-    protected function go_in_grouping_b(array $s): bool {
-        while ($this->cursor > $this->limit_backward) {
-            $ch = $this->charBefore();
-            if (!array_key_exists($ch, $s)) {
-                return true;
-            }
-            $this->cursor -= strlen($ch);
-        }
-        return false;
     }
 
 
@@ -411,11 +386,6 @@ abstract class WP_FTS_SnowballGeneratedStemmer {
     }
 
 
-    protected function slice_to(): string {
-        $this->slice_check();
-        return substr($this->current, $this->bra, $this->ket - $this->bra);
-    }
-
     private function charAt(): string {
         $s = $this->current[$this->cursor];
         $c = ord($s);
@@ -456,10 +426,6 @@ abstract class WP_FTS_SnowballGeneratedStemmer {
         return true;
     }
 
-    protected function hop_checked(int $delta): bool {
-        return $delta >= 0 && $this->hop($delta);
-    }
-
     protected function hop_back(int $delta): bool {
         $res = $this->cursor;
         while ($delta > 0) {
@@ -473,10 +439,6 @@ abstract class WP_FTS_SnowballGeneratedStemmer {
         }
         $this->cursor = $res;
         return true;
-    }
-
-    protected function hop_back_checked(int $delta): bool {
-        return $delta >= 0 && $this->hop_back($delta);
     }
 
     /**

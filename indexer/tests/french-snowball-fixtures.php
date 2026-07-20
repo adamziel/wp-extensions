@@ -51,8 +51,6 @@ wp_fts_french_fixture_same(21653, count($voc), 'French voc.txt fixture line coun
 wp_fts_french_fixture_same(count($voc), count($expected), 'French fixture input/output line counts should match');
 
 $stemmer = new WP_FTS_SnowballStemmer();
-wp_fts_french_fixture_true($stemmer->supports_language('fr-FR'), 'French locale should be advertised');
-wp_fts_french_fixture_true($stemmer->is_language_available('fr'), 'French should not require optional Wamania classes');
 wp_fts_french_fixture_true(
     str_contains($stemmer->source_identity('fr'), 'Snowball French'),
     'French source identity should name the Snowball variant'
@@ -99,15 +97,19 @@ wp_fts_french_fixture_same(
 );
 
 $analyzer = new WP_FTS_Analyzer(['default_lang' => 'fr']);
-$storage = new WP_FTS_Storage_InMemory();
-$indexer = new WP_FTS_Indexer($storage, $analyzer);
-$indexer->index_document(960, '<p>Les enfants mangeaient des donnees claires rapidement.</p>', ['lang' => 'fr']);
-$searcher = new WP_FTS_Searcher($storage, $analyzer);
+$documentTerms = array_column(
+    $analyzer->analyze_content(
+        '<p>Les enfants mangeaient des donnees claires rapidement.</p>',
+        ['document_lang' => 'fr']
+    ),
+    'term'
+);
+$queryTerms = $analyzer->analyze_query('manger donnee claire rapide', ['query_lang' => 'fr']);
 
 wp_fts_french_fixture_same(
-    [960],
-    array_column($searcher->search('manger donnee claire rapide', ['query_lang' => 'fr', 'mode' => 'AND']), 'doc_id'),
-    'French query and document inflections should meet through the same stems'
+    [],
+    array_values(array_diff($queryTerms, $documentTerms)),
+    'French document and query analysis should produce the same stems'
 );
 
-fwrite(STDOUT, '[PASS] French Snowball fixtures: ' . count($voc) . " official line pairs plus analyzer/search parity\n");
+fwrite(STDOUT, '[PASS] French Snowball fixtures: ' . count($voc) . " official line pairs plus document/query parity\n");

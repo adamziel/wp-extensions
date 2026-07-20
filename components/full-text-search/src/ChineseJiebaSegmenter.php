@@ -4,61 +4,47 @@ declare(strict_types=1);
 /**
  * Optional Chinese segmenter backed by the pinned Jieba dictionary.
  *
- * Runtime construction validates custom source hashes eagerly. The pinned
- * dictionary instead requires an attested, compact first-codepoint range index
- * and verifies each source range when it is read. Ordinary lookups therefore
- * avoid rescanning the 5 MiB dictionary. Source-only custom dictionaries are
- * limited to fixtures: they build the same range shape in one bounded source
- * pass and must pass complete-cache admission before any result is returned.
+ * The dictionary requires an attested, compact first-codepoint range index and
+ * verifies each source range when it is read. Ordinary lookups therefore avoid
+ * rescanning the 5 MiB dictionary.
  */
 final class WP_FTS_ChineseJiebaSegmenter
 {
-    public const SOURCE_REPOSITORY = 'https://github.com/fxsjy/jieba';
-    public const SOURCE_COMMIT = '67fa2e36e72f69d9134b8a1037b83fbb070b9775';
-    public const SOURCE_FILE = 'jieba/dict.txt';
-    public const SOURCE_SHA256 = '7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8';
-    public const SOURCE_BYTE_SIZE = 5071852;
-    public const LOOKUP_SHA256 = '4c979fd244e59b8343c2e584dbd5ba062deb1f836b8ae9ca2b56b54f130b9046';
-    public const LOOKUP_BYTE_SIZE = 329972;
-    public const LOOKUP_RANGE_COUNT = 11783;
-
     // A dictionary word may use the complete 4-KiB lexical-run allowance;
     // another 4 KiB leaves room for its frequency and tag without permitting
-    // one valid custom dictionary row to allocate the complete 16-MiB source.
+    // one valid dictionary row to allocate the complete 16-MiB source.
     public const MAX_DICTIONARY_LINE_BYTES = 8192;
 
     // The public segmenter definition admits 337,461 pinned rows and 3,013,799
     // bytes of candidate words; LanguagePipeline can reach the 337,399 rows and
     // 3,013,489 bytes whose first codepoint is Han. Compact word-membership and
     // length maps therefore keep every populated pinned prefix resident after
-    // its first indexed read. Fixture dictionaries must fit the same complete
-    // cache at admission; there is no eviction/re-read path.
+    // its first indexed read. There is no eviction/re-read path.
     public const MAX_RETAINED_DICTIONARY_CANDIDATES = 350000;
     public const MAX_RETAINED_DICTIONARY_CANDIDATE_BYTES = 8388608;
 
     private const FALLBACK_MAX_NGRAM_LENGTH = 4;
-    private const DEFAULT_MAX_CANDIDATES_PER_PREFIX = 5000;
     private const MAX_CANDIDATES_PER_PREFIX = 5000;
     private const MAX_SOURCE_FILE_BYTES = 16777216;
     private const LOOKUP_MAGIC = "WPFTSJ2\0";
     private const LOOKUP_HEADER_BYTES = 48;
     private const LOOKUP_RECORD_BYTES = 28;
-    private const DYNAMIC_LOOKUP_RECORD_BYTES = 12;
-    private const UNICODE_CODEPOINT_COUNT = 1114112;
-    private const NO_DYNAMIC_RANGE = 0xFFFFFFFF;
     private const LOADED_PREFIX_BYTES = 139264;
     private const MAX_RETAINED_RUNS = 256;
     private const MAX_RETAINED_RUN_TOKENS = 4096;
     private const MAX_RETAINED_RUN_BYTES = 262144;
+    private const RUNTIME_MANIFEST_SCHEMA = 'wp-fts-jieba-runtime-v1';
+    private const MAX_RUNTIME_MANIFEST_BYTES = 8192;
+    private const LANGUAGE = 'zh';
+    private const PACK_ID = 'zh-jieba-dict-67fa2e36e72f';
+    private const PACK_VERSION = '67fa2e36e72f-source-v1';
+
+    /** @var array<string,mixed>|null */
+    private static ?array $runtimeManifest = null;
 
     /** @var array<string,array{words:array<string,bool>,lengths:array<int,bool>,candidate_count:int,candidate_bytes:int}> */
     private array $prefixCache = [];
     private ?string $loadedPrefixBits = null;
-
-    /** Number of complete dictionary scans, retained for bounded-work tests. */
-    private int $dictionaryScanCount = 0;
-    /** Number of complete source hashes performed by this instance. */
-    private int $sourceHashScanCount = 0;
 
     /** Aggregate retained entries and logical word bytes across complete prefixes. */
     private int $cachedCandidateCount = 0;
@@ -74,182 +60,163 @@ final class WP_FTS_ChineseJiebaSegmenter
     private int $indexedRangeReadCount = 0;
 
     private string $sourceFile;
-    private ?string $attestedSourceSnapshot = null;
-    private string $language;
-    private string $packId;
-    private string $packVersion;
-    private string $sourceSha256;
-    private int $sourceByteSize;
-    private bool $fixtureOnly;
-    private int $maxCandidatesPerPrefix;
     private string $indexSignature;
-    private ?string $lookupFile = null;
+    private string $lookupFile;
     /** @var resource|null */
     private $lookupHandle = null;
-    /** @var resource|null */
-    private $dynamicLookupHandle = null;
-    private ?string $dynamicLookupHeads = null;
-    private int $dynamicLookupRangeCount = 0;
-    private ?Throwable $dynamicLookupFailure = null;
 
-    /**
-     * @param array{
-     *   source_file:string,
-     *   language?:string,
-     *   pack_id?:string,
-     *   version?:string,
-     *   source_repository?:string,
-     *   source_commit?:string,
-     *   source_path?:string,
-     *   expected_sha256?:string,
-     *   sha256?:string,
-     *   expected_byte_size?:int,
-     *   expected_bytes?:int,
-     *   byte_size?:int,
-     *   fixture_only?:bool,
-     *   max_candidates_per_prefix?:int
-     * } $config
-     */
-    private function __construct(array $config)
+    private function __construct()
     {
-        WP_FTS_Analyzer_Config_Limits::assert_option_graph($config, 'Jieba segmenter configuration');
-        WP_FTS_Analyzer_Config_Limits::assert_path((string) ($config['source_file'] ?? ''), 'Jieba dictionary path');
-        $this->sourceFile = (string) $config['source_file'];
-        $this->language = self::base_language((string) ($config['language'] ?? 'zh'));
-        $this->packId = trim((string) ($config['pack_id'] ?? 'zh-jieba-dict-67fa2e36e72f'));
-        $this->packVersion = trim((string) ($config['version'] ?? '67fa2e36e72f-source-v1'));
-        $this->sourceSha256 = strtolower(trim((string) ($config['expected_sha256'] ?? $config['sha256'] ?? self::SOURCE_SHA256)));
-        $this->sourceByteSize = (int) ($config['expected_byte_size'] ?? $config['expected_bytes'] ?? $config['byte_size'] ?? self::SOURCE_BYTE_SIZE);
-        $this->fixtureOnly = (bool) ($config['fixture_only'] ?? false);
-        $this->maxCandidatesPerPrefix = self::bounded_positive_int(
-            $config['max_candidates_per_prefix'] ?? self::DEFAULT_MAX_CANDIDATES_PER_PREFIX,
-            self::MAX_CANDIDATES_PER_PREFIX,
-            'Jieba prefix-candidate limit'
-        );
+        $manifest = self::runtime_manifest();
+        $dictionary = $manifest['artifacts']['dictionary'];
+        $this->sourceFile = self::default_source_file();
+        $this->lookupFile = self::default_lookup_file();
+        if (!$this->lookup_file_is_attested($this->lookupFile)) {
+            throw new RuntimeException('The curated Jieba dictionary requires its attested range index.');
+        }
+        if (!is_file($this->sourceFile)) {
+            throw new RuntimeException('Jieba dictionary source file is missing.');
+        }
+        if (filesize($this->sourceFile) !== $dictionary['bytes']) {
+            throw new RuntimeException('Jieba dictionary byte size mismatch.');
+        }
+        $this->indexSignature = $this->build_index_signature();
+    }
 
-        if ($this->language !== 'zh') {
-            throw new RuntimeException('Jieba segmenter can only be used for the zh language partition.');
+    /** Return the manifest that owns the bundled source and runtime artifact identities. */
+    public static function runtime_manifest_path(): string
+    {
+        return dirname(__DIR__) . '/resources/runtime/jieba/manifest.json';
+    }
+
+    /** @return array<string,mixed> */
+    public static function runtime_manifest(): array
+    {
+        if (self::$runtimeManifest !== null) {
+            return self::$runtimeManifest;
         }
-        if ($this->packId === '') {
-            throw new RuntimeException('Jieba segmenter pack id cannot be empty.');
+
+        $json = file_get_contents(self::runtime_manifest_path(), false, null, 0, self::MAX_RUNTIME_MANIFEST_BYTES + 1);
+        if (!is_string($json) || $json === '' || strlen($json) > self::MAX_RUNTIME_MANIFEST_BYTES) {
+            throw new RuntimeException('Jieba runtime manifest is missing or oversized.');
         }
-        if ($this->packVersion === '') {
-            throw new RuntimeException('Jieba segmenter version cannot be empty.');
+        try {
+            $manifest = json_decode($json, true, 32, JSON_THROW_ON_ERROR);
+        } catch (Throwable $error) {
+            throw new RuntimeException('Jieba runtime manifest is not valid JSON.', 0, $error);
         }
-        if (strlen($this->packId) > WP_FTS_Analyzer_Config_Limits::MAX_OPTION_KEY_BYTES
-            || strlen($this->packVersion) > WP_FTS_Analyzer_Config_Limits::MAX_OPTION_KEY_BYTES
+        $manifest = self::validate_runtime_manifest($manifest);
+
+        self::$runtimeManifest = $manifest;
+
+        return $manifest;
+    }
+
+    /** Validate the manifest contract shared by runtime and release packaging. */
+    public static function validate_runtime_manifest(mixed $manifest): array
+    {
+        if (!is_array($manifest)
+            || !self::has_exact_keys($manifest, ['schema', 'upstream', 'artifacts'])
+            || ($manifest['schema'] ?? null) !== self::RUNTIME_MANIFEST_SCHEMA
         ) {
-            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-                'pack_identity_bytes',
-                'Jieba pack identity exceeds the 128-byte limit.'
-            );
+            throw new RuntimeException('Jieba runtime manifest schema is invalid.');
         }
-        if (preg_match('/^[a-f0-9]{64}$/', $this->sourceSha256) !== 1) {
-            throw new RuntimeException('Jieba dictionary SHA-256 must be a 64-character hex digest.');
+
+        $upstream = $manifest['upstream'] ?? null;
+        $artifacts = $manifest['artifacts'] ?? null;
+        if (!is_array($upstream)
+            || !self::has_exact_keys($upstream, ['repository', 'commit', 'dictionary_path', 'license_path'])
+            || !is_array($artifacts)
+            || !self::has_exact_keys($artifacts, ['dictionary', 'license', 'lookup'])
+        ) {
+            throw new RuntimeException('Jieba runtime manifest sections are invalid.');
         }
-        if ($this->sourceByteSize < 1 || $this->sourceByteSize > self::MAX_SOURCE_FILE_BYTES) {
-            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-                'source_file_bytes',
-                'Jieba dictionary exceeds the 16 MiB source-file limit.'
-            );
+        foreach (['repository', 'commit', 'dictionary_path', 'license_path'] as $key) {
+            if (!is_string($upstream[$key] ?? null) || trim($upstream[$key]) === '') {
+                throw new RuntimeException("Jieba runtime manifest upstream {$key} is invalid.");
+            }
         }
-        $this->lookupFile = $this->resolve_lookup_file();
-        if ($this->lookupFile === null && !$this->fixtureOnly) {
-            throw new RuntimeException(
-                'Source-only custom Jieba dictionaries are fixture-only and production custom dictionaries are not supported.'
-            );
+        foreach (['dictionary_path', 'license_path'] as $key) {
+            $path = (string) $upstream[$key];
+            if (str_starts_with($path, '/') || in_array('..', explode('/', str_replace('\\', '/', $path)), true)) {
+                throw new RuntimeException("Jieba runtime manifest upstream {$key} must be relative.");
+            }
         }
-        $this->verify_source_file();
-        $this->indexSignature = $this->build_index_signature($config);
+
+        foreach (['dictionary', 'license', 'lookup'] as $name) {
+            $artifact = $artifacts[$name] ?? null;
+            $artifactKeys = $name === 'lookup'
+                ? ['runtime_path', 'sha256', 'bytes', 'ranges']
+                : ['runtime_path', 'sha256', 'bytes'];
+            if (!is_array($artifact)
+                || !self::has_exact_keys($artifact, $artifactKeys)
+                || !is_string($artifact['runtime_path'] ?? null)
+                || basename($artifact['runtime_path']) !== $artifact['runtime_path']
+                || preg_match('/^[a-f0-9]{64}$/', (string) ($artifact['sha256'] ?? '')) !== 1
+                || !is_int($artifact['bytes'] ?? null)
+                || $artifact['bytes'] < 1
+            ) {
+                throw new RuntimeException("Jieba runtime manifest {$name} artifact is invalid.");
+            }
+        }
+        if ($artifacts['dictionary']['bytes'] > self::MAX_SOURCE_FILE_BYTES
+            || !is_int($artifacts['lookup']['ranges'] ?? null)
+            || $artifacts['lookup']['ranges'] < 1
+        ) {
+            throw new RuntimeException('Jieba runtime manifest artifact bounds are invalid.');
+        }
+
+        return $manifest;
+    }
+
+    /** Return whether an object-like array has exactly the documented keys. */
+    private static function has_exact_keys(array $value, array $keys): bool
+    {
+        return count($value) === count($keys)
+            && array_diff_key($value, array_fill_keys($keys, true)) === [];
     }
 
     /** Return the curated runtime dictionary, or its source checkout in development. */
     public static function default_source_file(): string
     {
-        $runtime = dirname(__DIR__) . '/resources/runtime/jieba/dict.txt';
+        $manifest = self::runtime_manifest();
+        $runtime = dirname(self::runtime_manifest_path()) . '/' . $manifest['artifacts']['dictionary']['runtime_path'];
 
         return is_file($runtime)
             ? $runtime
-            : dirname(__DIR__) . '/resources/sources/jieba/' . self::SOURCE_FILE;
+            : dirname(__DIR__) . '/resources/sources/jieba/' . $manifest['upstream']['dictionary_path'];
     }
 
     /** Return the compact lookup shipped next to the curated runtime source. */
     public static function default_lookup_file(): string
     {
-        return dirname(__DIR__) . '/resources/runtime/jieba/dict.idx';
+        $manifest = self::runtime_manifest();
+
+        return dirname(self::runtime_manifest_path()) . '/' . $manifest['artifacts']['lookup']['runtime_path'];
     }
 
     /**
-     * Return source evidence for diagnostics and result artifacts.
-     *
-     * @return array{repository:string,commit:string,file:string,sha256:string,byte_size:int,path:string,available:bool}
-     */
-    public static function default_source_evidence(): array
-    {
-        $path = self::default_source_file();
-
-        return [
-            'repository' => self::SOURCE_REPOSITORY,
-            'commit' => self::SOURCE_COMMIT,
-            'file' => self::SOURCE_FILE,
-            'sha256' => self::SOURCE_SHA256,
-            'byte_size' => self::SOURCE_BYTE_SIZE,
-            'path' => $path,
-            'available' => self::file_matches_digest(
-                $path,
-                self::SOURCE_BYTE_SIZE,
-                self::SOURCE_SHA256,
-                self::MAX_SOURCE_FILE_BYTES
-            ),
-        ];
-    }
-
-    /**
-     * Return attestation evidence for the pinned dictionary range index.
-     *
-     * @return array{path:string,sha256:string,byte_size:int,range_count:int,available:bool}
-     */
-    public static function default_lookup_evidence(): array
-    {
-        $path = self::default_lookup_file();
-
-        return [
-            'path' => $path,
-            'sha256' => self::LOOKUP_SHA256,
-            'byte_size' => self::LOOKUP_BYTE_SIZE,
-            'range_count' => self::LOOKUP_RANGE_COUNT,
-            'available' => self::lookup_file_is_attested_static($path),
-        ];
-    }
-
-    /**
-     * Load a segmenter from the public analyzer option shape.
+     * Load the pinned segmenter when the public analyzer option is enabled.
      */
     public static function from_pack_option(mixed $option, ?string $expectedLanguage = null): ?self
     {
-        WP_FTS_Analyzer_Config_Limits::assert_pack_option($option, 'Jieba segmenter pack option');
-        if ($expectedLanguage !== null && strlen($expectedLanguage) > WP_FTS_Analyzer_Config_Limits::MAX_LANGUAGE_BYTES) {
-            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-                'language_bytes',
-                'Expected Jieba language exceeds the 64-byte limit.'
-            );
-        }
-        $config = self::source_config_from_option($option);
-        if ($config === null) {
+        $expectedLanguage = $expectedLanguage === null
+            ? null
+            : WP_FTS_TermNamespace::parse_language_tag($expectedLanguage);
+        if ($option === false) {
             return null;
         }
-
-        if ($expectedLanguage !== null && trim($expectedLanguage) !== '') {
-            $config['language'] = self::base_language($expectedLanguage);
+        if ($option !== true) {
+            throw new InvalidArgumentException('Jieba segmenter pack option must be true or false.');
+        }
+        if (
+            $expectedLanguage !== null
+            && self::base_language($expectedLanguage) !== self::LANGUAGE
+        ) {
+            throw new RuntimeException('The Jieba segmenter can only be enabled for Chinese language partitions.');
         }
 
-        try {
-            return new self($config);
-        } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
-            throw $error;
-        } catch (Throwable) {
-            return null;
-        }
+        return new self();
     }
 
     /**
@@ -267,7 +234,8 @@ final class WP_FTS_ChineseJiebaSegmenter
      */
     public function __invoke(string $run, string $language, ?int $maxTokens = null): array
     {
-        if (self::base_language($language) !== $this->language) {
+        $language = WP_FTS_TermNamespace::parse_language_tag($language);
+        if (self::base_language($language) !== self::LANGUAGE) {
             return [];
         }
 
@@ -346,68 +314,15 @@ final class WP_FTS_ChineseJiebaSegmenter
 
     public function pack_id(): string
     {
-        return $this->packId;
-    }
-
-    public function is_fixture_only(): bool
-    {
-        return $this->fixtureOnly;
-    }
-
-    public function source_file(): string
-    {
-        return $this->sourceFile;
-    }
-
-    /** Bind custom dictionaries to a bounded immutable snapshot before use. */
-    private function verify_source_file(): void
-    {
-        if (!is_file($this->sourceFile)) {
-            throw new RuntimeException('Jieba dictionary source file is missing.');
-        }
-
-        // Every indexed range carries a digest anchored by the attested lookup
-        // file, so the immutable bundled source is verified lazily as ranges
-        // are read. Custom paths keep the eager complete hash contract.
-        if ($this->lookupFile !== null) {
-            if (filesize($this->sourceFile) !== $this->sourceByteSize) {
-                throw new RuntimeException('Jieba dictionary byte size mismatch.');
-            }
-            return;
-        }
-
-        $this->sourceHashScanCount++;
-        $this->attestedSourceSnapshot = $this->snapshot_custom_source_file();
-    }
-
-    /**
-     * Use the committed range index only for the exact pinned source bytes.
-     *
-     * The index is deliberately not trusted from path or filename. Its own
-     * digest and header bind every byte range to the declared source digest and
-     * size. Per-range digests verify bytes lazily when they are read. A custom
-     * path therefore keeps eager source hashing and generated indexed lookup.
-     */
-    private function resolve_lookup_file(): ?string
-    {
-        if ($this->sourceSha256 !== self::SOURCE_SHA256
-            || $this->sourceByteSize !== self::SOURCE_BYTE_SIZE
-            || !$this->is_curated_source_path()
-        ) {
-            return null;
-        }
-
-        $path = self::default_lookup_file();
-        if (!$this->lookup_file_is_attested($path)) {
-            throw new RuntimeException('The curated Jieba dictionary requires its attested range index.');
-        }
-
-        return $path;
+        return self::PACK_ID;
     }
 
     /** Validate the curated lookup header from its exact bounded byte string. */
     private function lookup_file_is_attested(string $path): bool
     {
+        $manifest = self::runtime_manifest();
+        $dictionary = $manifest['artifacts']['dictionary'];
+        $lookup = $manifest['artifacts']['lookup'];
         $contents = self::attested_lookup_contents($path);
         if ($contents === null) {
             return false;
@@ -415,9 +330,9 @@ final class WP_FTS_ChineseJiebaSegmenter
         $header = substr($contents, 0, self::LOOKUP_HEADER_BYTES);
         $counts = unpack('Nsource_size/Nrange_count', substr($header, 40, 8));
         if (substr($header, 0, 8) !== self::LOOKUP_MAGIC
-            || !hash_equals(hex2bin(self::SOURCE_SHA256), substr($header, 8, 32))
-            || (int) ($counts['source_size'] ?? 0) !== self::SOURCE_BYTE_SIZE
-            || (int) ($counts['range_count'] ?? 0) !== self::LOOKUP_RANGE_COUNT
+            || !hash_equals(hex2bin($dictionary['sha256']), substr($header, 8, 32))
+            || (int) ($counts['source_size'] ?? 0) !== $dictionary['bytes']
+            || (int) ($counts['range_count'] ?? 0) !== $lookup['ranges']
         ) {
             return false;
         }
@@ -425,22 +340,17 @@ final class WP_FTS_ChineseJiebaSegmenter
         return true;
     }
 
-    /** Verify the curated lookup from one bounded in-memory generation. */
-    private static function lookup_file_is_attested_static(string $path): bool
-    {
-        return self::attested_lookup_contents($path) !== null;
-    }
-
     /** Return exact curated lookup bytes only when size and digest both match. */
     private static function attested_lookup_contents(string $path): ?string
     {
+        $lookup = self::runtime_manifest()['artifacts']['lookup'];
         if (!is_file($path)) {
             return null;
         }
-        $contents = file_get_contents($path, false, null, 0, self::LOOKUP_BYTE_SIZE + 1);
+        $contents = file_get_contents($path, false, null, 0, $lookup['bytes'] + 1);
         if (!is_string($contents)
-            || strlen($contents) !== self::LOOKUP_BYTE_SIZE
-            || hash('sha256', $contents) !== self::LOOKUP_SHA256
+            || strlen($contents) !== $lookup['bytes']
+            || hash('sha256', $contents) !== $lookup['sha256']
         ) {
             return null;
         }
@@ -448,101 +358,11 @@ final class WP_FTS_ChineseJiebaSegmenter
         return $contents;
     }
 
-    /** Check diagnostics evidence without hashing bytes past its declared cap. */
-    private static function file_matches_digest(string $path, int $bytes, string $sha256, int $maxBytes): bool
-    {
-        if (!is_file($path)) {
-            return false;
-        }
-        try {
-            $result = WP_FTS_LemmaPackLimits::hash_file_bounded(
-                $path,
-                $maxBytes,
-                'source_file_bytes',
-                'Jieba dictionary exceeds the 16 MiB source-file limit.'
-            );
-        } catch (Throwable) {
-            return false;
-        }
-
-        return $result['bytes'] === $bytes && hash_equals(strtolower($sha256), strtolower($result['sha256']));
-    }
-
-    /** Copy and attest a custom source once so later scans cannot race its path. */
-    private function snapshot_custom_source_file(): string
-    {
-        $snapshotPath = tempnam(sys_get_temp_dir(), 'wp-fts-jieba-source-');
-        $source = @fopen($this->sourceFile, 'rb');
-        $snapshot = is_string($snapshotPath) ? @fopen($snapshotPath, 'w+b') : false;
-        if (!is_string($snapshotPath) || !is_resource($source) || !is_resource($snapshot)) {
-            if (is_resource($source)) {
-                fclose($source);
-            }
-            if (is_resource($snapshot)) {
-                fclose($snapshot);
-            }
-            if (is_string($snapshotPath)) {
-                @unlink($snapshotPath);
-            }
-            throw new RuntimeException('Could not create an attested Jieba source snapshot.');
-        }
-
-        try {
-            $result = WP_FTS_LemmaPackLimits::hash_open_file_bounded(
-                $source,
-                self::MAX_SOURCE_FILE_BYTES,
-                'source_file_bytes',
-                'Jieba dictionary exceeds the 16 MiB source-file limit.',
-                $snapshot
-            );
-            if (!fflush($snapshot)) {
-                throw new RuntimeException('Could not flush the attested Jieba source snapshot.');
-            }
-        } catch (Throwable $error) {
-            fclose($source);
-            fclose($snapshot);
-            @unlink($snapshotPath);
-            throw $error;
-        }
-        fclose($source);
-        fclose($snapshot);
-        if ($result['bytes'] !== $this->sourceByteSize) {
-            @unlink($snapshotPath);
-            throw new RuntimeException('Jieba dictionary byte size mismatch.');
-        }
-        if (!hash_equals($this->sourceSha256, strtolower($result['sha256']))) {
-            @unlink($snapshotPath);
-            throw new RuntimeException('Jieba dictionary SHA-256 mismatch.');
-        }
-
-        return $snapshotPath;
-    }
-
-    /** Limit the committed range index to the two repository-owned source paths. */
-    private function is_curated_source_path(): bool
-    {
-        $source = realpath($this->sourceFile);
-        if (!is_string($source)) {
-            return false;
-        }
-        $runtime = realpath(dirname(__DIR__) . '/resources/runtime/jieba/dict.txt');
-        $checkout = realpath(dirname(__DIR__) . '/resources/sources/jieba/' . self::SOURCE_FILE);
-
-        return (is_string($runtime) && $source === $runtime)
-            || (is_string($checkout) && $source === $checkout);
-    }
-
-    /** Close retained indexes and remove the private custom-source snapshot. */
+    /** Close the retained range index. */
     public function __destruct()
     {
         if (is_resource($this->lookupHandle)) {
             fclose($this->lookupHandle);
-        }
-        if (is_resource($this->dynamicLookupHandle)) {
-            fclose($this->dynamicLookupHandle);
-        }
-        if ($this->attestedSourceSnapshot !== null) {
-            @unlink($this->attestedSourceSnapshot);
         }
     }
 
@@ -683,9 +503,9 @@ final class WP_FTS_ChineseJiebaSegmenter
      *
      * Indexed ranges record only the longest match at each source offset plus
      * the two- and three-character words needed for search-mode output. The
-     * pinned source identity or fixture admission guarantees that the complete
-     * compact prefix maps fit the retained-cache bounds. Every requested map is
-     * installed completely; there is no partial-cache or eviction branch.
+     * pinned source identity guarantees that the complete compact prefix maps
+     * fit the retained-cache bounds. Every requested map is installed
+     * completely; there is no partial-cache or eviction branch.
      *
      * @param string[] $chars
      * @param array<string,bool> $cachePrefixes Missing prefixes to retain.
@@ -736,7 +556,7 @@ final class WP_FTS_ChineseJiebaSegmenter
             }
 
             $prefixCandidateCounts[$first] = ($prefixCandidateCounts[$first] ?? 0) + 1;
-            if ($prefixCandidateCounts[$first] > $this->maxCandidatesPerPrefix) {
+            if ($prefixCandidateCounts[$first] > self::MAX_CANDIDATES_PER_PREFIX) {
                 throw new WP_FTS_Analysis_Limit_Exceeded(
                     'jieba_dictionary_candidates',
                     'A Jieba dictionary prefix exceeds the 5,000-candidate allowance.'
@@ -800,10 +620,7 @@ final class WP_FTS_ChineseJiebaSegmenter
      * Stream dictionary rows for the requested first characters.
      *
      * The attested index turns a pinned-source lookup into a handful of byte
-     * ranges. Fixture dictionaries have no trusted offsets and build their
-     * source-local index in one complete scan. `dictionaryScanCount`
-     * intentionally counts only those complete scans, which makes the
-     * non-rescan invariant observable.
+     * ranges, each bound to the pinned source by its digest.
      *
      * @param string[] $prefixes
      * @return iterable<int,string>
@@ -815,7 +632,7 @@ final class WP_FTS_ChineseJiebaSegmenter
             return;
         }
 
-        $handle = fopen($this->attestedSourceSnapshot ?? $this->sourceFile, 'rb');
+        $handle = fopen($this->sourceFile, 'rb');
         if (!is_resource($handle)) {
             throw new RuntimeException('Could not open the Jieba dictionary for indexed lookup.');
         }
@@ -825,31 +642,19 @@ final class WP_FTS_ChineseJiebaSegmenter
                 if (fseek($handle, $range['offset']) !== 0) {
                     throw new RuntimeException('Could not seek an indexed Jieba dictionary range.');
                 }
-                if (isset($range['digest'])) {
-                    $bytes = '';
-                    while (strlen($bytes) < $range['length']) {
-                        $chunk = fread($handle, $range['length'] - strlen($bytes));
-                        if (!is_string($chunk) || $chunk === '') {
-                            throw new RuntimeException('Could not read an attested Jieba dictionary range.');
-                        }
-                        $bytes .= $chunk;
+                $bytes = '';
+                while (strlen($bytes) < $range['length']) {
+                    $chunk = fread($handle, $range['length'] - strlen($bytes));
+                    if (!is_string($chunk) || $chunk === '') {
+                        throw new RuntimeException('Could not read an attested Jieba dictionary range.');
                     }
-                    $digest = substr(hash('sha256', $bytes, true), 0, 16);
-                    if (!hash_equals($range['digest'], $digest)) {
-                        throw new RuntimeException('Jieba dictionary range digest mismatch.');
-                    }
-                    yield from $this->dictionary_lines_from_buffer($bytes);
-                    continue;
+                    $bytes .= $chunk;
                 }
-
-                $end = $range['offset'] + $range['length'];
-                while (ftell($handle) < $end) {
-                    $line = $this->read_dictionary_line($handle);
-                    if ($line === false) {
-                        throw new RuntimeException('Could not read an indexed Jieba dictionary range.');
-                    }
-                    yield $line;
+                $digest = substr(hash('sha256', $bytes, true), 0, 16);
+                if (!hash_equals($range['digest'], $digest)) {
+                    throw new RuntimeException('Jieba dictionary range digest mismatch.');
                 }
+                yield from $this->dictionary_lines_from_buffer($bytes);
             }
         } finally {
             fclose($handle);
@@ -883,32 +688,10 @@ final class WP_FTS_ChineseJiebaSegmenter
 
     /**
      * @param string[] $prefixes
-     * @return array<int,array{offset:int,length:int,digest?:string}>
+     * @return array<int,array{offset:int,length:int,digest:string}>
      */
     private function indexed_ranges_for_prefixes(array $prefixes): array
     {
-        if ($this->lookupFile === null) {
-            $this->ensure_dynamic_lookup();
-
-            $ranges = [];
-            $seen = [];
-            foreach ($prefixes as $prefix) {
-                $codepoint = $this->utf8_codepoint((string) $prefix);
-                if ($codepoint === null || isset($seen[$codepoint])) {
-                    continue;
-                }
-                $seen[$codepoint] = true;
-                foreach ($this->dynamic_ranges_for_codepoint($codepoint) as $range) {
-                    $ranges[] = $range;
-                }
-            }
-            usort(
-                $ranges,
-                static fn(array $a, array $b): int => $a['offset'] <=> $b['offset']
-            );
-
-            return $ranges;
-        }
         if (!is_resource($this->lookupHandle)) {
             $this->lookupHandle = fopen($this->lookupFile, 'rb');
             if (!is_resource($this->lookupHandle)) {
@@ -941,199 +724,13 @@ final class WP_FTS_ChineseJiebaSegmenter
     }
 
     /**
-     * Build a compact source-local range index once for a fixture dictionary.
-     *
-     * A 4.25 MiB packed head table and transient 2.13 MiB prefix-count table
-     * cover the complete Unicode range without PHP arrays per codepoint.
-     * Twelve-byte range records spill to the system temporary stream above
-     * 1 MiB. During the same scan, complete-cache admission rejects a source
-     * above 350,000 eligible rows, 8 MiB of word bytes, or the configured
-     * per-prefix bound. Failure is permanent for the instance, so neither
-     * accepted nor rejected fixtures can trigger repeated complete scans or
-     * alternating-prefix cache thrash.
-     */
-    private function ensure_dynamic_lookup(): void
-    {
-        if ($this->dynamicLookupHeads !== null && is_resource($this->dynamicLookupHandle)) {
-            return;
-        }
-        if ($this->dynamicLookupFailure !== null) {
-            throw $this->dynamicLookupFailure;
-        }
-
-        $source = fopen($this->attestedSourceSnapshot ?? $this->sourceFile, 'rb');
-        $index = fopen('php://temp/maxmemory:1048576', 'w+b');
-        if (!is_resource($source) || !is_resource($index)) {
-            if (is_resource($source)) {
-                fclose($source);
-            }
-            if (is_resource($index)) {
-                fclose($index);
-            }
-            throw new RuntimeException('Could not create the Jieba custom-dictionary range index.');
-        }
-
-        $heads = str_repeat("\xFF", self::UNICODE_CODEPOINT_COUNT * 4);
-        $prefixCandidateCounts = str_repeat("\0", self::UNICODE_CODEPOINT_COUNT * 2);
-        $rangeCount = 0;
-        $rangeCodepoint = null;
-        $rangeOffset = 0;
-        $rangeEnd = 0;
-        $candidateCount = 0;
-        $candidateBytes = 0;
-        $this->dictionaryScanCount++;
-        try {
-            while (true) {
-                $lineOffset = ftell($source);
-                $line = $this->read_dictionary_line($source);
-                if ($line === false) {
-                    break;
-                }
-                $lineEnd = ftell($source);
-                $row = $this->parse_dict_line($line);
-                $first = $row === null ? '' : $this->first_utf8_character($row['word']);
-                $codepoint = $this->utf8_codepoint($first);
-                if ($row === null || $codepoint === null || $codepoint >= self::UNICODE_CODEPOINT_COUNT) {
-                    if ($rangeCodepoint !== null) {
-                        $this->append_dynamic_range(
-                            $index,
-                            $heads,
-                            $rangeCount,
-                            $rangeCodepoint,
-                            $rangeOffset,
-                            $rangeEnd - $rangeOffset
-                        );
-                        $rangeCodepoint = null;
-                    }
-                    continue;
-                }
-
-                $word = $row['word'];
-                if (strlen($word) > strlen($first) && $this->contains_han($word)) {
-                    $candidateCount++;
-                    $candidateBytes += strlen($word);
-                    $countOffset = $codepoint * 2;
-                    $packedCount = unpack('nvalue', substr($prefixCandidateCounts, $countOffset, 2));
-                    $prefixCandidateCount = (int) ($packedCount['value'] ?? 0) + 1;
-                    $encodedCount = pack('n', $prefixCandidateCount);
-                    $prefixCandidateCounts[$countOffset] = $encodedCount[0];
-                    $prefixCandidateCounts[$countOffset + 1] = $encodedCount[1];
-                    if ($candidateCount > self::MAX_RETAINED_DICTIONARY_CANDIDATES
-                        || $candidateBytes > self::MAX_RETAINED_DICTIONARY_CANDIDATE_BYTES
-                        || $prefixCandidateCount > $this->maxCandidatesPerPrefix
-                    ) {
-                        throw new WP_FTS_Analysis_Limit_Exceeded(
-                            'jieba_dictionary_candidates',
-                            'Custom Jieba dictionaries must fit the complete 350,000-row, 8-MiB, and configured per-prefix cache admission.'
-                        );
-                    }
-                }
-
-                if ($rangeCodepoint !== $codepoint) {
-                    if ($rangeCodepoint !== null) {
-                        $this->append_dynamic_range(
-                            $index,
-                            $heads,
-                            $rangeCount,
-                            $rangeCodepoint,
-                            $rangeOffset,
-                            $rangeEnd - $rangeOffset
-                        );
-                    }
-                    $rangeCodepoint = $codepoint;
-                    $rangeOffset = (int) $lineOffset;
-                }
-                $rangeEnd = (int) $lineEnd;
-            }
-            if ($rangeCodepoint !== null) {
-                $this->append_dynamic_range(
-                    $index,
-                    $heads,
-                    $rangeCount,
-                    $rangeCodepoint,
-                    $rangeOffset,
-                    $rangeEnd - $rangeOffset
-                );
-            }
-        } catch (Throwable $error) {
-            $this->dynamicLookupFailure = $error;
-            fclose($index);
-            throw $error;
-        } finally {
-            fclose($source);
-        }
-
-        $this->dynamicLookupHandle = $index;
-        $this->dynamicLookupHeads = $heads;
-        $this->dynamicLookupRangeCount = $rangeCount;
-    }
-
-    /**
-     * @param resource $index
-     */
-    private function append_dynamic_range(
-        $index,
-        string &$heads,
-        int &$rangeCount,
-        int $codepoint,
-        int $offset,
-        int $length
-    ): void {
-        $headOffset = $codepoint * 4;
-        $previous = unpack('Nvalue', substr($heads, $headOffset, 4));
-        $previousRange = (int) ($previous['value'] ?? self::NO_DYNAMIC_RANGE);
-        $record = pack('NNN', $offset, $length, $previousRange);
-        if (fwrite($index, $record) !== self::DYNAMIC_LOOKUP_RECORD_BYTES) {
-            throw new RuntimeException('Could not build the Jieba custom-dictionary range index.');
-        }
-        $head = pack('N', $rangeCount);
-        for ($byte = 0; $byte < 4; $byte++) {
-            $heads[$headOffset + $byte] = $head[$byte];
-        }
-        $rangeCount++;
-    }
-
-    /** @return array<int,array{offset:int,length:int}> */
-    private function dynamic_ranges_for_codepoint(int $codepoint): array
-    {
-        if ($this->dynamicLookupHeads === null || !is_resource($this->dynamicLookupHandle)) {
-            return [];
-        }
-        $headOffset = $codepoint * 4;
-        $head = unpack('Nvalue', substr($this->dynamicLookupHeads, $headOffset, 4));
-        $recordNumber = (int) ($head['value'] ?? self::NO_DYNAMIC_RANGE);
-        $ranges = [];
-        while ($recordNumber !== self::NO_DYNAMIC_RANGE) {
-            if ($recordNumber < 0 || $recordNumber >= $this->dynamicLookupRangeCount) {
-                throw new RuntimeException('Jieba custom-dictionary range index is corrupt.');
-            }
-            if (fseek($this->dynamicLookupHandle, $recordNumber * self::DYNAMIC_LOOKUP_RECORD_BYTES) !== 0) {
-                throw new RuntimeException('Could not seek the Jieba custom-dictionary range index.');
-            }
-            $bytes = fread($this->dynamicLookupHandle, self::DYNAMIC_LOOKUP_RECORD_BYTES);
-            $record = is_string($bytes) && strlen($bytes) === self::DYNAMIC_LOOKUP_RECORD_BYTES
-                ? unpack('Noffset/Nlength/Nnext', $bytes)
-                : false;
-            if (!is_array($record)) {
-                throw new RuntimeException('Could not read the Jieba custom-dictionary range index.');
-            }
-            $ranges[] = [
-                'offset' => (int) $record['offset'],
-                'length' => (int) $record['length'],
-            ];
-            $recordNumber = (int) $record['next'];
-        }
-
-        return $ranges;
-    }
-
-    /**
      * @return array<int,array{offset:int,length:int,digest:string}>|null
      */
     private function lookup_ranges_for_codepoint(int $codepoint): ?array
     {
+        $rangeCount = self::runtime_manifest()['artifacts']['lookup']['ranges'];
         $low = 0;
-        $high = self::LOOKUP_RANGE_COUNT;
+        $high = $rangeCount;
         while ($low < $high) {
             $middle = intdiv($low + $high, 2);
             $record = $this->read_lookup_record($middle);
@@ -1148,7 +745,7 @@ final class WP_FTS_ChineseJiebaSegmenter
         }
 
         $ranges = [];
-        for ($recordNumber = $low; $recordNumber < self::LOOKUP_RANGE_COUNT; $recordNumber++) {
+        for ($recordNumber = $low; $recordNumber < $rangeCount; $recordNumber++) {
             $record = $this->read_lookup_record($recordNumber);
             if ($record === null) {
                 return null;
@@ -1346,38 +943,7 @@ final class WP_FTS_ChineseJiebaSegmenter
         return substr($text, 0, $length);
     }
 
-    /**
-     * Read one bounded dictionary row without materializing an oversized line.
-     *
-     * @param resource $handle
-     */
-    private function read_dictionary_line($handle): string|false
-    {
-        // fgets() reads at most length - 1 bytes. Two extra bytes admit both
-        // LF and CRLF after an exact-boundary payload while exposing byte 8,193.
-        $line = fgets($handle, self::MAX_DICTIONARY_LINE_BYTES + 3);
-        if ($line === false) {
-            return false;
-        }
-
-        $payloadBytes = strlen($line);
-        if ($payloadBytes > 0 && $line[$payloadBytes - 1] === "\n") {
-            $payloadBytes--;
-            if ($payloadBytes > 0 && $line[$payloadBytes - 1] === "\r") {
-                $payloadBytes--;
-            }
-        } elseif (!feof($handle)) {
-            $this->throw_dictionary_line_limit();
-        }
-
-        if ($payloadBytes > self::MAX_DICTIONARY_LINE_BYTES) {
-            $this->throw_dictionary_line_limit();
-        }
-
-        return $line;
-    }
-
-    /** Raise the stable typed failure shared by every dictionary read path. */
+    /** Raise the stable typed failure for an oversized attested range row. */
     private function throw_dictionary_line_limit(): never
     {
         throw new WP_FTS_Analysis_Limit_Exceeded(
@@ -1489,11 +1055,11 @@ final class WP_FTS_ChineseJiebaSegmenter
      */
     private function utf8_chars(string $text): array
     {
-        if (!preg_match_all('/./us', $text, $matches)) {
-            return [];
+        if (preg_match_all('/./us', $text, $matches) === false) {
+            throw new RuntimeException('Jieba Unicode character tokenization failed.');
         }
 
-        return $matches[0];
+        return $matches[0] ?? [];
     }
 
     /**
@@ -1561,25 +1127,24 @@ final class WP_FTS_ChineseJiebaSegmenter
         unset($this->runCache[$oldest]);
     }
 
-    /**
-     * @param array<string,mixed> $config
-     */
-    private function build_index_signature(array $config): string
+    private function build_index_signature(): string
     {
+        $manifest = self::runtime_manifest();
+        $upstream = $manifest['upstream'];
+        $dictionary = $manifest['artifacts']['dictionary'];
         $payload = [
             'contract' => 'wp-fts-chinese-jieba-segmenter',
             'version' => 1,
-            'pack_id' => $this->packId,
-            'pack_version' => $this->packVersion,
-            'language' => $this->language,
-            'fixture_only' => $this->fixtureOnly,
-            'source_repository' => (string) ($config['source_repository'] ?? self::SOURCE_REPOSITORY),
-            'source_commit' => (string) ($config['source_commit'] ?? self::SOURCE_COMMIT),
-            'source_path' => (string) ($config['source_path'] ?? self::SOURCE_FILE),
-            'source_sha256' => $this->sourceSha256,
-            'source_byte_size' => $this->sourceByteSize,
+            'pack_id' => self::PACK_ID,
+            'pack_version' => self::PACK_VERSION,
+            'language' => self::LANGUAGE,
+            'source_repository' => $upstream['repository'],
+            'source_commit' => $upstream['commit'],
+            'source_path' => $upstream['dictionary_path'],
+            'source_sha256' => $dictionary['sha256'],
+            'source_byte_size' => $dictionary['bytes'],
             'fallback_max_ngram_length' => self::FALLBACK_MAX_NGRAM_LENGTH,
-            'max_candidates_per_prefix' => $this->maxCandidatesPerPrefix,
+            'max_candidates_per_prefix' => self::MAX_CANDIDATES_PER_PREFIX,
         ];
 
         return 'wp-fts-chinese-jieba-segmenter-v1:' . sha1($this->stable_json($payload));
@@ -1588,7 +1153,7 @@ final class WP_FTS_ChineseJiebaSegmenter
     private function stable_json(mixed $value): string
     {
         if (is_array($value)) {
-            if (array_keys($value) !== range(0, count($value) - 1)) {
+            if (!array_is_list($value)) {
                 ksort($value, SORT_STRING);
             }
             foreach ($value as $key => $item) {
@@ -1596,11 +1161,7 @@ final class WP_FTS_ChineseJiebaSegmenter
             }
         }
 
-        try {
-            return json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-        } catch (Throwable) {
-            return serialize($value);
-        }
+        return json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
     }
 
     private function stable_json_value(mixed $value): mixed
@@ -1609,7 +1170,7 @@ final class WP_FTS_ChineseJiebaSegmenter
             return $value;
         }
 
-        if (array_keys($value) !== range(0, count($value) - 1)) {
+        if (!array_is_list($value)) {
             ksort($value, SORT_STRING);
         }
         foreach ($value as $key => $item) {
@@ -1619,127 +1180,10 @@ final class WP_FTS_ChineseJiebaSegmenter
         return $value;
     }
 
-    /**
-     * @return array<string,mixed>|null
-     */
-    private static function source_config_from_option(mixed $option): ?array
-    {
-        if ($option === false || $option === null) {
-            return null;
-        }
-
-        if ($option === true) {
-            return self::default_source_config();
-        }
-
-        if (is_string($option)) {
-            $path = trim($option);
-            if ($path === '' || in_array(strtolower($path), ['0', 'false', 'no', 'off'], true)) {
-                return null;
-            }
-
-            return self::default_source_config(self::source_file_from_path($path));
-        }
-
-        if (!is_array($option)) {
-            return null;
-        }
-
-        $path = null;
-        foreach (['source_file', 'dict_path', 'dictionary', 'path'] as $key) {
-            if (isset($option[$key]) && is_scalar($option[$key])) {
-                $path = self::source_file_from_path(trim((string) $option[$key]));
-                break;
-            }
-        }
-        if ($path === null) {
-            foreach (['source_root', 'root', 'submodule_path'] as $key) {
-                if (isset($option[$key]) && is_scalar($option[$key])) {
-                    $path = self::source_file_from_path(trim((string) $option[$key]));
-                    break;
-                }
-            }
-        }
-
-        $config = self::default_source_config($path);
-        foreach ([
-            'language',
-            'pack_id',
-            'version',
-            'source_repository',
-            'source_commit',
-            'source_path',
-            'expected_sha256',
-            'sha256',
-            'expected_byte_size',
-            'expected_bytes',
-            'byte_size',
-            'fixture_only',
-            'max_candidates_per_prefix',
-        ] as $key) {
-            if (array_key_exists($key, $option)) {
-                $config[$key] = $option[$key];
-            }
-        }
-
-        return $config;
-    }
-
-    /**
-     * @return array<string,mixed>
-     */
-    private static function default_source_config(?string $sourceFile = null): array
-    {
-        return [
-            'source_file' => $sourceFile ?? self::default_source_file(),
-            'language' => 'zh',
-            'pack_id' => 'zh-jieba-dict-67fa2e36e72f',
-            'version' => '67fa2e36e72f-source-v1',
-            'source_repository' => self::SOURCE_REPOSITORY,
-            'source_commit' => self::SOURCE_COMMIT,
-            'source_path' => self::SOURCE_FILE,
-            'expected_sha256' => self::SOURCE_SHA256,
-            'expected_byte_size' => self::SOURCE_BYTE_SIZE,
-            'fixture_only' => false,
-        ];
-    }
-
-    /** Resolve either a direct dictionary path or its repository root form. */
-    private static function source_file_from_path(string $path): ?string
-    {
-        WP_FTS_Analyzer_Config_Limits::assert_path($path, 'Jieba dictionary path');
-        if ($path === '') {
-            return null;
-        }
-        if (is_dir($path)) {
-            return rtrim($path, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . self::SOURCE_FILE;
-        }
-
-        return $path;
-    }
-
-    /** Parse one public numeric option while enforcing its independent hard max. */
-    private static function bounded_positive_int(mixed $value, int $maximum, string $label): int
-    {
-        if (!is_int($value) && (!is_string($value) || preg_match('/^[1-9][0-9]*$/', $value) !== 1)) {
-            throw new InvalidArgumentException("{$label} must be a positive integer.");
-        }
-        $value = (int) $value;
-        if ($value < 1 || $value > $maximum) {
-            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-                'segmenter_numeric_limit',
-                "{$label} exceeds its hard maximum of {$maximum}."
-            );
-        }
-
-        return $value;
-    }
-
     private static function base_language(string $language): string
     {
-        $canonical = WP_FTS_TermNamespace::canonicalize_lang($language);
-        $parts = explode('-', str_replace('_', '-', $canonical));
+        $parts = explode('-', $language);
 
-        return strtolower((string) ($parts[0] ?? $canonical));
+        return strtolower($parts[0]);
     }
 }

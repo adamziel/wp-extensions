@@ -67,7 +67,7 @@ echo json_encode([
     'run_bytes' => strlen($run),
     'lexical_run_limit_bytes' => WP_FTS_Analysis_Limits::MAX_LEXICAL_RUN_BYTES,
     'error' => $error,
-    'dictionary_scan_count' => (int) (new ReflectionProperty($segmenter, 'dictionaryScanCount'))->getValue($segmenter),
+    'indexed_range_read_count' => (int) (new ReflectionProperty($segmenter, 'indexedRangeReadCount'))->getValue($segmenter),
     'elapsed_seconds' => $elapsed,
     'php_peak_bytes' => $peakAfter,
     'php_peak_delta_bytes' => max(0, $peakAfter - $peakBefore),

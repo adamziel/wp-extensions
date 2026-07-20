@@ -63,7 +63,7 @@ test_case('bundled source-backed lemma manifests fit every importer envelope', f
     assert_same(1162505, $spanish['source']['parse_stats']['accepted_rows'] ?? null, 'pinned Spanish source should fit beneath the 1.25-million staging limit');
 
     $polimorf = json_decode((string) file_get_contents(
-        dirname(__DIR__, 2) . '/resources/analyzer-packs/pl-polimorf-20180722-full-playground/manifest.json'
+        dirname(__DIR__, 2) . '/resources/analyzer-packs/pl-polimorf-20180722-full/manifest.json'
     ), true, 512, JSON_THROW_ON_ERROR);
     assert_same(41550540, $polimorf['source']['byte_count'] ?? null, 'pinned PoliMorf source should retain its measured physical size');
     assert_same(7374578, $polimorf['source']['parse_stats']['source_lines'] ?? null, 'pinned PoliMorf source should fit beneath the eight-million-line limit');

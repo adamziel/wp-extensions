@@ -19,7 +19,6 @@ try {
         'chunk-file-boundary' => wp_fts_importer_chunk_file_boundary_case(),
         'physical-generic' => wp_fts_importer_physical_cap_case(false),
         'physical-polimorf' => wp_fts_importer_physical_cap_case(true),
-        'plain-fixture' => wp_fts_importer_plain_fixture_case(),
         'path-safety' => wp_fts_importer_path_safety_case(),
         'temp-symlink-cleanup' => wp_fts_importer_temp_symlink_cleanup_case(),
         'invalid-temp-parent' => wp_fts_importer_invalid_temp_parent_case(),
@@ -551,8 +550,6 @@ function wp_fts_importer_fan_in_case(bool $polimorf): array
         wp_fts_importer_write_reverse_compact_rows($source, $rows, $polimorf);
         $out = $root . '/pack';
         $summary = wp_fts_importer_run($kind, $source, $out, [
-            'fixture_only' => false,
-            'runtime_compression' => 'gzip',
             'chunk_rows' => 1,
             'max_rows_per_file' => 200000,
         ]);
@@ -606,8 +603,6 @@ function wp_fts_importer_chunk_row_boundary_case(): array
                 $kind === 'polimorf'
             );
             $exact = wp_fts_importer_run($kind, $source, $root . '/exact-' . $kind, [
-                'fixture_only' => false,
-                'runtime_compression' => 'gzip',
                 'chunk_rows' => WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS,
                 'max_rows_per_file' => WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS,
             ]);
@@ -616,8 +611,6 @@ function wp_fts_importer_chunk_row_boundary_case(): array
             $overFailure = null;
             try {
                 wp_fts_importer_run($kind, $source, $overOut, [
-                    'fixture_only' => false,
-                    'runtime_compression' => 'gzip',
                     'chunk_rows' => WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS + 1,
                 ]);
             } catch (Throwable $caught) {
@@ -659,8 +652,6 @@ function wp_fts_importer_chunk_file_boundary_case(): array
                 $kind === 'polimorf'
             );
             $exact = wp_fts_importer_run($kind, $source, $root . '/exact-' . $kind, [
-                'fixture_only' => false,
-                'runtime_compression' => 'gzip',
                 'chunk_rows' => 1,
                 'max_rows_per_file' => WP_FTS_LemmaChunkSet::MAX_INITIAL_FILES,
             ]);
@@ -671,8 +662,6 @@ function wp_fts_importer_chunk_file_boundary_case(): array
             $overFailure = null;
             try {
                 wp_fts_importer_run($kind, $source, $overOut, [
-                    'fixture_only' => false,
-                    'runtime_compression' => 'gzip',
                     'chunk_rows' => 1,
                     'max_rows_per_file' => WP_FTS_LemmaChunkSet::MAX_INITIAL_FILES,
                 ]);
@@ -718,8 +707,6 @@ function wp_fts_importer_physical_cap_case(bool $polimorf): array
         $failure = null;
         try {
             wp_fts_importer_run($kind, $source, $out, [
-                'fixture_only' => false,
-                'runtime_compression' => 'gzip',
                 'chunk_rows' => 200000,
                 'max_rows_per_file' => 200000,
             ]);
@@ -797,8 +784,6 @@ function wp_fts_importer_chunk_case(bool $polimorf): array
         wp_fts_importer_write_maximum_width_rows($source, $rows, $polimorf);
         $out = $root . '/pack';
         $summary = wp_fts_importer_run($kind, $source, $out, [
-            'fixture_only' => false,
-            'runtime_compression' => 'gzip',
             'chunk_rows' => 200000,
             'max_rows_per_file' => 200000,
         ]);
@@ -834,70 +819,6 @@ function wp_fts_importer_chunk_case(bool $polimorf): array
     }
 }
 
-/** @return array<string,mixed> */
-function wp_fts_importer_plain_fixture_case(): array
-{
-    $started = microtime(true);
-    $root = wp_fts_importer_fixture_root('plain-fixture');
-    try {
-        $cases = [];
-        foreach (['rows-exact', 'rows', 'bytes-exact', 'bytes'] as $boundary) {
-            $source = $root . '/' . $boundary . '.tsv';
-            if ($boundary === 'rows-exact' || $boundary === 'rows') {
-                wp_fts_importer_write_compact_rows(
-                    $source,
-                    WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_ROWS + ($boundary === 'rows' ? 1 : 0)
-                );
-            } else {
-                wp_fts_importer_write_exact_runtime_bytes(
-                    $source,
-                    WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_BYTES + ($boundary === 'bytes' ? 1 : 0)
-                );
-            }
-            $out = $root . '/out-' . $boundary;
-            $failure = null;
-            $summary = null;
-            $activatable = false;
-            try {
-                $summary = wp_fts_importer_run('generic', $source, $out, [
-                    'fixture_only' => true,
-                    'runtime_compression' => 'none',
-                    'chunk_rows' => 200000,
-                    'max_rows_per_file' => 100000,
-                ]);
-                $pack = WP_FTS_LanguageLemmaPack::from_manifest_file((string) $summary['manifest'], null, 'qaa');
-                $activatable = $pack->runtime_file_count() === (int) $summary['runtime']['files'];
-            } catch (Throwable $caught) {
-                $failure = $caught;
-            }
-            $entries = is_dir($out)
-                ? array_values(array_diff(scandir($out) ?: [], ['.', '..']))
-                : [];
-            $cases[$boundary] = [
-                'class' => $failure instanceof Throwable ? get_class($failure) : null,
-                'message' => $failure instanceof Throwable ? $failure->getMessage() : null,
-                'manifest_written' => is_file($out . '/manifest.json'),
-                'output_entries' => $entries,
-                'source_bytes' => filesize($source),
-                'runtime_rows' => is_array($summary) ? ($summary['runtime']['rows'] ?? null) : null,
-                'activatable' => $activatable,
-            ];
-            unset($pack);
-            gc_collect_cycles();
-            gc_mem_caches();
-        }
-
-        return wp_fts_importer_process_evidence($started) + [
-            'case' => 'plain-fixture',
-            'row_limit' => WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_ROWS,
-            'decoded_byte_limit' => WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_BYTES,
-            'cases' => $cases,
-        ];
-    } finally {
-        wp_fts_importer_remove_tree($root);
-    }
-}
-
 /**
  * @param array<string,mixed> $overrides
  * @return array<string,mixed>
@@ -916,8 +837,6 @@ function wp_fts_importer_run(string $kind, string $source, string $out, array $o
         'license' => 'CC0-1.0',
         'license_url' => 'urn:wp-fts:test:lemma-importer-containment-license',
         'attribution' => 'Project-owned generated importer containment data.',
-        'fixture_only' => true,
-        'runtime_compression' => 'none',
         'chunk_rows' => 200000,
         'max_rows_per_file' => 100000,
         'importer_commit' => 'test',
@@ -930,11 +849,17 @@ function wp_fts_importer_run(string $kind, string $source, string $out, array $o
         'generic' => (new WP_FTS_LemmaTsvPackImporter())->import($options),
         'conllu' => (new WP_FTS_ConlluLemmaPackImporter())->import($options),
         'unimorph' => (new WP_FTS_UnimorphLemmaPackImporter())->import($options),
-        'polimorf' => (new WP_FTS_PolishPolimorfImporter())->import(array_replace($options, [
-            'pack_id' => 'pl-importer-containment-polimorf',
-            'source_name' => 'Project-owned PoliMorf importer containment source',
-            'source_url' => 'urn:wp-fts:test:polimorf-importer-containment',
-        ])),
+        'polimorf' => (new WP_FTS_PolishPolimorfImporter())->import(array_replace(
+            array_intersect_key(
+                $options,
+                array_fill_keys(WP_FTS_PolishPolimorfImporter::IMPORT_OPTION_KEYS, true)
+            ),
+            [
+                'pack_id' => 'pl-importer-containment-polimorf',
+                'source_name' => 'Project-owned PoliMorf importer containment source',
+                'source_url' => 'urn:wp-fts:test:polimorf-importer-containment',
+            ]
+        )),
         default => throw new InvalidArgumentException("Unknown importer kind: {$kind}"),
     };
 }
@@ -986,25 +911,6 @@ function wp_fts_importer_write_maximum_width_rows(string $path, int $rows, bool 
     }
 }
 
-/** Emit compact distinct pairs for the eager-fixture row boundary. */
-function wp_fts_importer_write_compact_rows(string $path, int $rows): void
-{
-    $handle = fopen($path, 'wb');
-    if (!is_resource($handle)) {
-        throw new RuntimeException('Could not create row-boundary importer source.');
-    }
-    try {
-        for ($index = 0; $index < $rows; $index++) {
-            $row = sprintf("q%05d\tl%05d\n", $index, $index);
-            if (fwrite($handle, $row) !== strlen($row)) {
-                throw new RuntimeException('Could not write row-boundary importer source.');
-            }
-        }
-    } finally {
-        fclose($handle);
-    }
-}
-
 /** Force global sorting across one-row chunks by emitting reverse order. */
 function wp_fts_importer_write_reverse_compact_rows(string $path, int $rows, bool $polimorf): void
 {
@@ -1042,44 +948,6 @@ function wp_fts_importer_write_high_entropy_rows(string $path, int $rows, bool $
         }
     } finally {
         fclose($handle);
-    }
-}
-
-/** Partition an exact decoded-runtime byte count into valid bounded rows. */
-function wp_fts_importer_write_exact_runtime_bytes(string $path, int $bytes): void
-{
-    $tokenBytes = wp_fts_importer_max_term_bytes('qaa');
-    $maxLineBytes = ($tokenBytes * 2) + 2;
-    $rows = (int) ceil($bytes / $maxLineBytes);
-    $baseLineBytes = intdiv($bytes, $rows);
-    $longLineCount = $bytes % $rows;
-    if ($baseLineBytes < 4 || $baseLineBytes + ($longLineCount > 0 ? 1 : 0) > $maxLineBytes) {
-        throw new RuntimeException('Exact runtime byte fixture cannot partition its bounded TSV rows.');
-    }
-
-    $handle = fopen($path, 'wb');
-    if (!is_resource($handle)) {
-        throw new RuntimeException('Could not create decoded-byte-boundary importer source.');
-    }
-    try {
-        for ($index = 0; $index < $rows; $index++) {
-            $lineBytes = $baseLineBytes + ($index < $longLineCount ? 1 : 0);
-            $surface = wp_fts_importer_fixed_token('q', $index, $tokenBytes, 'a');
-            $lemmaPrefix = 'l' . str_pad((string) $index, 8, '0', STR_PAD_LEFT);
-            $lemmaBytes = $lineBytes - strlen($surface) - 2;
-            if ($lemmaBytes < strlen($lemmaPrefix)) {
-                throw new RuntimeException('Decoded-byte-boundary row cannot fit its normalized tokens.');
-            }
-            $row = $surface . "\t" . $lemmaPrefix . str_repeat('a', $lemmaBytes - strlen($lemmaPrefix)) . "\n";
-            if (fwrite($handle, $row) !== strlen($row)) {
-                throw new RuntimeException('Could not write decoded-byte-boundary importer row.');
-            }
-        }
-    } finally {
-        fclose($handle);
-    }
-    if (filesize($path) !== $bytes) {
-        throw new RuntimeException('Decoded-byte-boundary importer source has the wrong size.');
     }
 }
 

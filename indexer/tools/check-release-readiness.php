@@ -79,21 +79,7 @@ final class WP_FTS_ReleaseReadinessChecker
         'vendor/wp-php-toolkit/full-text-search/src/LemmaPackLookupIndex.php',
     ];
 
-    private const SHIPPED_TOOL_PATHS = [
-        'tools/import-lemma-tsv-pack.php',
-        'tools/import-conllu-lemma-pack.php',
-        'tools/import-unimorph-lemma-pack.php',
-        'tools/import-polish-polimorf-lemmatizer.php',
-        'tools/validate-analyzer-pack.php',
-        'tools/audit-top-language-lemma-packs.php',
-        'tools/build-lemma-pack-lookup-index.php',
-        'tools/build-polish-polimorf-external-pack.php',
-        'tools/lemma-source-import-limits.php',
-        'tools/lemma-chunk-merge.php',
-    ];
-
     private const PROHIBITED_PACKAGE_PREFIXES = [
-        '.cao',
         '.distignore',
         '.git',
         '.gitignore',
@@ -126,15 +112,6 @@ final class WP_FTS_ReleaseReadinessChecker
                 $options['help'] = true;
                 continue;
             }
-            if ($arg === '--json') {
-                $options['format'] = 'json';
-                continue;
-            }
-            if ($arg === '--text') {
-                $options['format'] = 'text';
-                continue;
-            }
-
             foreach (['target', 'format', 'plugin-src', 'monorepo-root', 'build-dir', 'output', 'package-dir'] as $name) {
                 $prefix = "--{$name}=";
                 if (str_starts_with($arg, $prefix)) {
@@ -158,8 +135,6 @@ final class WP_FTS_ReleaseReadinessChecker
             'Options:',
             '  --target=direct-install|public-submission',
             '  --format=json|text       Output format. Defaults to json.',
-            '  --json                   Alias for --format=json.',
-            '  --text                   Alias for --format=text.',
             '  --plugin-src=PATH        Plugin source directory. Defaults to this script parent.',
             '  --monorepo-root=PATH     Monorepo root. Defaults to the plugin source parent.',
             '  --build-dir=PATH         Direct-install build directory.',
@@ -282,17 +257,18 @@ final class WP_FTS_ReleaseReadinessChecker
             return;
         }
 
+        require_once $builderPath;
+        if (!class_exists('WP_FTS_ReleasePackageBuilder')) {
+            $this->record($checks, $blockers, 'direct_builder_class', 'fail', 'Direct-install ZIP builder class is not loadable.');
+            return;
+        }
+
         if ($packageDir !== null) {
             $this->record($checks, $blockers, 'direct_builder_script', 'pass', 'Direct-install ZIP builder script exists; validating supplied package directory.');
             $this->check_direct_package_directory($packageDir, $sourceMetadata, $checks, $blockers);
             return;
         }
 
-        require_once $builderPath;
-        if (!class_exists('WP_FTS_ReleasePackageBuilder')) {
-            $this->record($checks, $blockers, 'direct_builder_class', 'fail', 'Direct-install ZIP builder class is not loadable.');
-            return;
-        }
         $this->record($checks, $blockers, 'direct_builder_class', 'pass', 'Direct-install ZIP builder class is loadable.');
 
         $buildOptions = [
@@ -846,9 +822,9 @@ final class WP_FTS_ReleaseReadinessChecker
             return;
         }
 
-        $bootstrap = $packageDir . '/vendor/wp-php-toolkit/full-text-search/src/bootstrap.php';
-        if (!class_exists('WP_FTS_AnalyzerPackValidator', false) && is_file($bootstrap)) {
-            require_once $bootstrap;
+        $autoload = $packageDir . '/vendor/autoload.php';
+        if (is_file($autoload)) {
+            require_once $autoload;
         }
         if (!class_exists('WP_FTS_AnalyzerPackValidator', false) || !class_exists('WP_FTS_LanguageLemmaPack', false)) {
             $this->record($checks, $blockers, 'direct_analyzer_pack_runtime_integrity', 'fail', 'Analyzer pack runtime classes are not loadable from the staged package.');
@@ -859,7 +835,7 @@ final class WP_FTS_ReleaseReadinessChecker
         $indexedRuntimeFiles = 0;
         try {
             foreach ($manifests as $manifestPath) {
-                $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath, false);
+                $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath);
                 $language = (string) $validation['manifest']['language'];
                 $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifestPath, null, $language);
                 $probe = null;
@@ -980,7 +956,7 @@ final class WP_FTS_ReleaseReadinessChecker
     /** @return string[] */
     private static function required_package_paths(): array
     {
-        return array_merge(self::REQUIRED_PACKAGE_PATHS, self::SHIPPED_TOOL_PATHS);
+        return array_merge(self::REQUIRED_PACKAGE_PATHS, WP_FTS_ReleasePackageBuilder::SHIPPED_TOOL_PATHS);
     }
 
     /**
@@ -1025,7 +1001,7 @@ final class WP_FTS_ReleaseReadinessChecker
         }
 
         if (str_starts_with($relativePath, 'tools/')) {
-            return !in_array($relativePath, self::SHIPPED_TOOL_PATHS, true);
+            return !in_array($relativePath, WP_FTS_ReleasePackageBuilder::SHIPPED_TOOL_PATHS, true);
         }
 
         foreach (self::PROHIBITED_PACKAGE_PREFIXES as $blocked) {
@@ -1766,43 +1742,6 @@ final class WP_FTS_ReleaseReadinessChecker
     private static function readme_section_titles(string $section): array
     {
         return self::PUBLIC_README_SECTION_ALIASES[$section] ?? [$section];
-    }
-
-    private static function public_asset_kind(string $relativePath): ?string
-    {
-        $name = strtolower(basename(str_replace('\\', '/', $relativePath)));
-        if (preg_match('/^banner-(?:772x250|1544x500)\.(?:png|jpe?g)$/', $name) === 1) {
-            return 'banner';
-        }
-        if (preg_match('/^icon-(?:128x128|256x256)\.(?:png|jpe?g)$/', $name) === 1 || $name === 'icon.svg') {
-            return 'icon';
-        }
-        if (preg_match('/^screenshot-[1-9][0-9]*\.(?:png|jpe?g)$/', $name) === 1) {
-            return 'screenshot';
-        }
-
-        return null;
-    }
-
-    private static function public_asset_has_valid_signature(string $path, string $relativePath): bool
-    {
-        $bytes = file_get_contents($path, false, null, 0, 512);
-        if (!is_string($bytes) || $bytes === '') {
-            return false;
-        }
-
-        $extension = strtolower(pathinfo($relativePath, PATHINFO_EXTENSION));
-        if ($extension === 'png') {
-            return str_starts_with($bytes, "\x89PNG\r\n\x1a\n");
-        }
-        if ($extension === 'jpg' || $extension === 'jpeg') {
-            return str_starts_with($bytes, "\xff\xd8\xff");
-        }
-        if ($extension === 'svg') {
-            return preg_match('/<svg(?:\s|>)/i', ltrim($bytes)) === 1;
-        }
-
-        return false;
     }
 
     private static function public_license_identifier_is_gpl_compatible(mixed $license): bool

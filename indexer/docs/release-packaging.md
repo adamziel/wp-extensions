@@ -26,7 +26,6 @@ indexer/
     import-polish-polimorf-lemmatizer.php
     validate-analyzer-pack.php
     audit-top-language-lemma-packs.php
-    build-lemma-pack-lookup-index.php
     build-polish-polimorf-external-pack.php
     lemma-source-import-limits.php
     lemma-chunk-merge.php
@@ -52,8 +51,8 @@ Ship:
 - `playground/*.json` and `playground/sqlite-smoke.php`;
 - `resources/analyzer-packs/` runtime manifests, notices, provenance, and
   runtime shards that the plugin can validate locally;
-- the ten `tools/` modules that back the shipped WP-CLI import commands and
-  documented pack validation, audit, lookup retrofit, and external PoliMorf
+- the nine `tools/` modules that back the shipped WP-CLI import commands and
+  documented pack validation, audit, and external PoliMorf
   workflows;
 - runtime Composer dependencies under `vendor/`, including
   `wp-php-toolkit/full-text-search`, for release archives.
@@ -67,11 +66,11 @@ Do not ship:
   `.gitignore`, or `.distignore`;
 - nested dependency dotfiles such as `.gitattributes`, `.gitignore`, and
   `.distignore`;
-- `.cao/` task and review artifacts;
 - `review-artifacts/`;
 - `tests/`;
 - all other `tools/` source-checkout build, test, release, corpus-generation,
-  source-verification, and smoke utilities;
+  source-verification, and smoke utilities, including the developer-only
+  `tools/lib/` verifier classes;
 - `goal.md`;
 - Composer auth files such as `indexer/auth.json` and
   `indexer/.composer/auth.json`;
@@ -205,15 +204,11 @@ policy, and authority evidence are supplied. The bundle also records
 skip/pass/fail evidence for the host-configured disposable WordPress release
 smoke, host-configured provider compatibility smoke, explicitly opted-in Docker
 disposable release/provider smoke, explicitly opted-in Docker disposable
-lifecycle smoke, real WordPress/MySQL integration proof, real MySQL production
-proof, and PR-safe production-scale benchmark. The benchmark lane is generated
-pure-PHP evidence and includes bounded structural gates plus conservative
-index/search performance-budget gates for the deterministic generated corpus;
-it fails when benchmark JSON reports failed gates. It is not live MySQL proof,
-production-traffic proof, or public-submission certification. The
-release/provider Docker lane builds a temporary direct-install ZIP and
-disposable WordPress/MariaDB stack so it can replace the host-environment skip
-with direct-install release/provider smoke evidence when Docker is available.
+lifecycle smoke, real WordPress/MySQL integration proof, and real MySQL
+production proof. The release/provider Docker lane builds a temporary
+direct-install ZIP and disposable WordPress/MariaDB stack. When Docker is
+available, it replaces the host-environment skip with direct-install
+release/provider smoke proof.
 The lifecycle Docker lane is direct-install/operator lifecycle evidence: it
 installs a source copy in a disposable WordPress/MariaDB multisite stack and
 proves activation/repair, reversible network deactivation, and destructive
@@ -242,9 +237,9 @@ Current runtime dependencies:
 
 - `wp-php-toolkit/full-text-search`, the framework-neutral FTS component used
   by the plugin adapter;
-- `wamania/php-stemmer`, used only when stemming is enabled and the language is
-  one of the optional Wamania-backed allowlist entries: Catalan (`ca`) or Dutch
-  Porter (`nl`).
+- `wamania/php-stemmer`, a required runtime dependency used by the allowlisted
+  Catalan (`ca`) and Dutch Porter (`nl`) Snowball paths when stemming is
+  enabled.
 
 The plugin bootstrap prefers the adjacent `../components/full-text-search`
 source when it exists in a monorepo checkout, then loads `vendor/autoload.php`
@@ -258,6 +253,7 @@ Run from the monorepo checkout:
 
 ```sh
 BUILD="$(mktemp -d)"
+components/full-text-search/tools/initialize-jieba-source.sh
 php indexer/tools/build-release-zip.php \
   --build-dir="$BUILD" \
   --output="$BUILD/wp-fts-indexer.zip"
@@ -269,7 +265,9 @@ The builder stages `indexer/` through `.distignore`, copies the local
 with a fresh package-local Composer home and cache, fixed locale/time inputs,
 and no ambient authentication or global Composer configuration. The explicit
 `--no-plugins --no-scripts` boundary prevents dependency or global hooks from
-executing during packaging. Reusing a build directory still clears its
+executing during packaging. After installation and source comparison, the
+builder deletes the temporary sibling component tree so package validation has
+only the installed vendor runtime. Reusing a build directory still clears its
 package-local Composer home and default cache first; only an explicitly selected
 offline archive cache is retained for a historical source build. The build
 directory must remain outside both immutable source trees. The output ZIP and
@@ -277,8 +275,9 @@ explicit Composer cache cannot overlap either source tree, either staged tree,
 or Composer home, and cannot overlap each other; invalid paths fail before
 staging can remove or overwrite source bytes. The builder removes vendor
 development directories such as `test`, `tests`, `Tests`, and `coverage`, plus
-`vendor/bin`. It prunes staged dotfiles anywhere in the package before ZIP creation,
-and refuses staged Composer auth files such as `indexer/auth.json` or
+`vendor/bin` and the component's checkout-only `tools/` directory. It prunes
+staged dotfiles anywhere in the package before ZIP creation, and refuses staged
+Composer auth files such as `indexer/auth.json` or
 `indexer/.composer/auth.json` before dependency installation so Composer cannot
 read source-tree credentials. It rejects every staged symbolic link before
 Composer and repeats that check after dependency installation, so ZIP creation
@@ -294,11 +293,12 @@ Inspect the archive contents:
 php -r '$z=new ZipArchive(); $z->open($argv[1]); for ($i=0; $i<$z->numFiles; $i++) { echo $z->getNameIndex($i), PHP_EOL; }' "$BUILD/wp-fts-indexer.zip" | sed -n '1,120p'
 ```
 
-The listing should include `indexer/resources/analyzer-packs/`, the ten listed
+The listing should include `indexer/resources/analyzer-packs/`, the nine listed
 `indexer/tools/` modules, and production `indexer/vendor/` dependencies. It
-should not include `.cao`, root `indexer/tests/`, unlisted source-checkout
+should not include root `indexer/tests/`, unlisted source-checkout
 `indexer/tools/` utilities, dependency-internal vendor tests such as
 `indexer/vendor/wp-php-toolkit/full-text-search/tests/*`, `indexer/vendor/bin/`,
+`indexer/vendor/wp-php-toolkit/full-text-search/tools/`,
 dependency dotfiles such as `indexer/vendor/wamania/php-stemmer/.gitignore`,
 Composer auth files such as `indexer/auth.json` or
 `indexer/.composer/auth.json`, `review-artifacts`, `resources/sources`,
@@ -320,20 +320,21 @@ The schema probe should succeed even before any content is indexed.
 ## Release Checklist
 
 1. Start from a clean worktree.
-2. Run the normal PHP harness and any required hardening acceptance commands.
-3. Run `php indexer/tools/check-release-readiness.php --target=direct-install`.
-4. Run `php indexer/tools/collect-release-evidence.php --release-target=direct-install --run-direct-install-readiness`
+2. Run `components/full-text-search/tools/initialize-jieba-source.sh`.
+3. Run the normal PHP harness and any required hardening acceptance commands.
+4. Run `php indexer/tools/check-release-readiness.php --target=direct-install`.
+5. Run the release collector for `direct-install` with its direct-install readiness check,
    or use `--direct-package-dir=/path/to/staged/indexer` when validating an
    existing staged package.
-5. Run `php indexer/tools/check-release-readiness.php --target=public-submission`
+6. Run `php indexer/tools/check-release-readiness.php --target=public-submission`
    and treat the current blockers as expected unless the release explicitly
    includes a completed public-submission authority pass.
-6. Build the release ZIP with `php indexer/tools/build-release-zip.php`.
-7. Inspect the ZIP for unexpected `.cao`, dotfiles, root `tests/`,
+7. Build the release ZIP with `php indexer/tools/build-release-zip.php`.
+8. Inspect the ZIP for unexpected dotfiles, root `tests/`,
    dependency-internal vendor tests or coverage fixtures, or local cache files.
-8. Install the ZIP in a disposable WordPress site.
-9. Activate the plugin, run the schema probe, run a small reindex, and run one
+9. Install the ZIP in a disposable WordPress site.
+10. Activate the plugin, run the schema probe, run a small reindex, and run one
    search.
-10. Record the commit SHA, archive name, dependency versions, readiness target
+11. Record the commit SHA, archive name, dependency versions, readiness target
    results, and test results in
    the release notes.

@@ -109,7 +109,7 @@ function wp_fts_playground_index_post(WP_FTS_Indexer $indexer, string $title, st
         $post,
         WP_FTS_Plugin::prepare_post_index_options($post, $indexOptions)
     );
-    WP_FTS_Plugin::storage(false)->replace_prepared_documents([$prepared]);
+    wp_fts_playground_storage_fixture(false)->replace_prepared_documents([$prepared]);
 
     return $postId;
 }
@@ -335,7 +335,7 @@ function wp_fts_playground_assert_wpcli_reindex_effect(): void
     sort($ids, SORT_NUMERIC);
     wp_fts_playground_assert(count($ids) === 2, 'WP-CLI fixture post IDs were not persisted', ['ids' => $ids]);
 
-    $searcher = new WP_FTS_Searcher(WP_FTS_Plugin::storage(true), new WP_FTS_Analyzer(['default_lang' => 'en']));
+    $searcher = new WP_FTS_Searcher(wp_fts_playground_storage_fixture(true), new WP_FTS_Analyzer(['default_lang' => 'en']));
     $page = $searcher->search(WP_FTS_PLAYGROUND_CLI_QUERY, ['query_lang' => 'en', 'limit' => 10]);
     $actual = array_map('intval', array_column($page['results'], 'doc_id'));
     sort($actual, SORT_NUMERIC);
@@ -372,12 +372,12 @@ function wp_fts_playground_run_setup_smoke(): void
     update_option(WP_FTS_Plugin::SETTINGS_OPTION, $settings, false);
 
     $sqliteEvidence = wp_fts_playground_sqlite_evidence();
-    $storage = WP_FTS_Plugin::storage(true);
+    $storage = wp_fts_playground_storage_fixture(true);
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
     $indexer = new WP_FTS_Indexer($analyzer, new WP_FTS_PostContentExtractor());
     $searcher = new WP_FTS_Searcher($storage, $analyzer);
 
-    $fixtureWrite = WP_FTS_Plugin::run_index_writer_with_lock(
+    $fixtureWrite = wp_fts_playground_run_writer_fixture(
         'playground-sqlite-smoke',
         static function () use ($indexer): array {
             return [
@@ -408,7 +408,7 @@ function wp_fts_playground_run_setup_smoke(): void
     wp_fts_playground_assert_search($searcher, 'sqliteabsentqzxv', ['query_lang' => 'en', 'prefix_matching' => false, 'limit' => 10], [], 'SQLite absent binary term lookup should stay empty');
     wp_fts_playground_assert_search($searcher, 'sqliteprefixqzxv sqliteabsentqzxv', ['query_lang' => 'en', 'mode' => 'OR', 'prefix_matching' => false, 'limit' => 10], [$binaryTermId], 'SQLite mixed exact lookup should return the existing term without scanning for the absent term');
 
-    $restWrite = WP_FTS_Plugin::run_index_writer_with_lock(
+    $restWrite = wp_fts_playground_run_writer_fixture(
         'playground-rest-smoke',
         static fn(): array => wp_fts_playground_rest_smoke($indexer),
         ['record_health' => false, 'record_skip' => false]
@@ -440,9 +440,8 @@ function wp_fts_playground_run_setup_smoke(): void
             'sqlite_binary_absent' => 'sqliteabsentqzxv',
             'sqlite_binary_mixed' => 'sqliteprefixqzxv OR sqliteabsentqzxv',
             'rest_q' => 'restsurfacealpha',
-            'rest_query' => 'restsurfacebeta',
             'rest_invalid_mode' => 'xor',
-            'rest_missing_query' => 'blank q/query',
+            'rest_missing_query' => 'blank q',
             'rest_visibility_before_limit' => 'refillvisibleword',
             'wpcli_reindex_search' => WP_FTS_PLAYGROUND_CLI_QUERY,
         ],
@@ -452,6 +451,15 @@ function wp_fts_playground_run_setup_smoke(): void
     echo $summary . PHP_EOL;
 }
 
+/** Invoke the plugin's private writer boundary for smoke fixtures. */
+function wp_fts_playground_run_writer_fixture(string $source, callable $writer, array $options = []): array
+{
+    $method = new ReflectionMethod(WP_FTS_Plugin::class, 'run_index_writer_with_lock');
+    $method->setAccessible(true);
+
+    return $method->invoke(null, $source, $writer, $options);
+}
+
 $mode = defined('WP_FTS_PLAYGROUND_SMOKE_MODE') ? (string) WP_FTS_PLAYGROUND_SMOKE_MODE : 'setup';
 if ($mode === 'setup') {
     wp_fts_playground_run_setup_smoke();
@@ -459,4 +467,13 @@ if ($mode === 'setup') {
     wp_fts_playground_assert_wpcli_reindex_effect();
 } else {
     wp_fts_playground_fail('Unknown Playground smoke mode', ['mode' => $mode]);
+}
+
+/** Reach the private production storage factory only from this fixture. */
+function wp_fts_playground_storage_fixture(bool $ensureSchema = false): WP_FTS_Relational_Storage
+{
+    $method = new ReflectionMethod(WP_FTS_Plugin::class, 'storage');
+    $method->setAccessible(true);
+
+    return $method->invoke(null, $ensureSchema);
 }

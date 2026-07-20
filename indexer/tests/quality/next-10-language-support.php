@@ -98,14 +98,6 @@ function wp_fts_n10_analyzer(): WP_FTS_Analyzer
 }
 
 /**
- * @return int[]
- */
-function wp_fts_n10_result_ids(array $rows): array
-{
-    return array_values(array_map('intval', array_column($rows, 'doc_id')));
-}
-
-/**
  * @return array<int,array{lang:string,text:string}>
  */
 function wp_fts_n10_detection_cases(): array
@@ -158,37 +150,38 @@ test_case('quality next 10 language support routes detector evidence for every a
     }
 });
 
-test_case('quality next 10 language support retrieves variants and isolates bait partitions', function (): void {
+test_case('quality next 10 language support analyzes variants and isolates bait partitions', function (): void {
     $gzipAvailable = WP_FTS_AnalyzerPackValidator::gzip_available();
-    foreach (wp_fts_n10_search_cases() as $offset => $case) {
+    foreach (wp_fts_n10_search_cases() as $case) {
         if ($case['support'] === 'lemma_pack' && !$gzipAvailable) {
             assert_true(is_file(wp_fts_n10_pack_manifests()[$case['lang']] ?? ''), "{$case['id']} compressed pack manifest should still be present without zlib");
             continue;
         }
 
         $analyzer = wp_fts_n10_analyzer();
-        $storage = new WP_FTS_Storage_InMemory();
-        $indexer = new WP_FTS_Indexer($storage, $analyzer);
-        $searcher = new WP_FTS_Searcher($storage, $analyzer);
-        $targetId = 7000 + $offset;
-        $baitId = 8000 + $offset;
+        $identity = static fn(array $occurrence): string => WP_FTS_TermNamespace::namespace_term(
+            (string) ($occurrence['lang'] ?? 'und'),
+            (string) ($occurrence['term'] ?? '')
+        );
+        $target = array_values(array_unique(array_map(
+            $identity,
+            $analyzer->analyze_content('<article><p>' . $case['target'] . '</p></article>', ['document_lang' => $case['lang']])
+        )));
+        $bait = array_values(array_unique(array_map(
+            $identity,
+            $analyzer->analyze_content('<article><p>' . $case['bait'] . '</p></article>', ['document_lang' => $case['bait_lang']])
+        )));
+        $query = array_values(array_unique(array_map(
+            $identity,
+            $analyzer->analyze_query_occurrences($case['query'], ['query_lang' => $case['lang']])
+        )));
 
-        $indexer->index_document($targetId, '<article><p>' . $case['target'] . '</p></article>', ['lang' => $case['lang']]);
-        $indexer->index_document($baitId, '<article><p>' . $case['bait'] . '</p></article>', ['lang' => $case['bait_lang']]);
-
-        $results = $searcher->search($case['query'], [
-            'query_lang' => $case['lang'],
-            'mode' => 'AND',
-            'limit' => 5,
-        ]);
-        $ids = wp_fts_n10_result_ids($results);
-
-        assert_true($ids !== [], "{$case['id']} should return a result through {$case['support']}");
-        assert_same($targetId, $ids[0] ?? null, "{$case['id']} target should be top result");
-        assert_true(!in_array($baitId, $ids, true), "{$case['id']} bait partition should not match");
+        assert_true($query !== [], "{$case['id']} should analyze a query through {$case['support']}");
+        assert_true(array_intersect($query, $target) !== [], "{$case['id']} target should contain at least one query alternative");
+        assert_same([], array_values(array_intersect($query, $bait)), "{$case['id']} bait partition should remain isolated");
     }
 
-    record_check('next 10 retrieval scenarios', count(wp_fts_n10_search_cases()));
+    record_check('next 10 analyzer scenarios', count(wp_fts_n10_search_cases()));
 });
 
 test_case('quality next 10 language support registry, packs, admin labels, and docs agree', function (): void {

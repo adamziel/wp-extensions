@@ -33,7 +33,7 @@ if (is_string($pluginPath) && trim($pluginPath) !== '') {
 } else {
     require_once dirname(__DIR__, 3) . '/components/full-text-search/src/bootstrap.php';
     require_once dirname(__DIR__, 2) . '/src/IndexQueue.php';
-    require_once dirname(__DIR__, 2) . '/src/MysqlStorage.php';
+    require_once dirname(__DIR__, 2) . '/src/RelationalStorage.php';
 }
 
 if (!extension_loaded('mysqli')) {
@@ -53,18 +53,18 @@ $mysqli->set_charset('utf8mb4');
 $connectionId = (int) $mysqli->thread_id;
 $prefix = 'wpfts_frontier_' . getmypid() . '_';
 $db = new WP_FTS_Frontier_WPDB($mysqli, $prefix);
-$storage = new WP_FTS_Storage_Mysql($db, $prefix);
+$storage = new WP_FTS_Relational_Storage($db, $prefix);
 $postIds = range(700001, 700007);
 $lexicalTermCountPerPost = WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS;
 $surfaceTermCountPerPost = WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES;
 $termCountPerPost = $lexicalTermCountPerPost + $surfaceTermCountPerPost;
 wp_fts_frontier_assert($lexicalTermCountPerPost === 4096, 'The lexical document frontier drifted from 4,096.');
 wp_fts_frontier_assert($surfaceTermCountPerPost === 4096, 'The normalized-surface document frontier drifted from 4,096.');
-wp_fts_frontier_assert($termCountPerPost === WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS, 'The document posting frontier is not the lexical-plus-surface envelope.');
-wp_fts_frontier_assert(WP_FTS_Storage_Mysql::MAX_BATCH_TERMS === 8192, 'The batch dictionary frontier drifted from 8,192 identities.');
-wp_fts_frontier_assert(WP_FTS_Storage_Mysql::MAX_BATCH_POSTINGS === 50000, 'The batch mutation frontier drifted from 50,000 postings.');
-wp_fts_frontier_assert(WP_FTS_Storage_Mysql::MAX_BATCH_POSTINGS + 1 === 50001, 'The old-posting read frontier drifted from the exact 50,001-row limit-plus-one bound.');
-wp_fts_frontier_assert(WP_FTS_Storage_Mysql::MAX_BATCH_POSTINGS + WP_FTS_Storage_Mysql::MAX_BATCH_DOCUMENTS === 50100, 'The combined delete materialization barrier drifted from 50,100 rows.');
+wp_fts_frontier_assert($termCountPerPost === WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS, 'The document posting frontier is not the lexical-plus-surface envelope.');
+wp_fts_frontier_assert(WP_FTS_Relational_Storage::MAX_BATCH_TERMS === 8192, 'The batch dictionary frontier drifted from 8,192 identities.');
+wp_fts_frontier_assert(WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS === 50000, 'The batch mutation frontier drifted from 50,000 postings.');
+wp_fts_frontier_assert(WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS + 1 === 50001, 'The old-posting read frontier drifted from the exact 50,001-row limit-plus-one bound.');
+wp_fts_frontier_assert(WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS + WP_FTS_Relational_Storage::MAX_BATCH_DOCUMENTS === 50100, 'The combined delete materialization barrier drifted from 50,100 rows.');
 $targetPostingCount = count($postIds) * $termCountPerPost;
 $decoyPostingCount = 100000;
 $decoyTermId = $targetPostingCount + 1;
@@ -143,7 +143,7 @@ try {
     $sharedSurvivorLastPostId = $sharedSurvivorPostIds[array_key_last($sharedSurvivorPostIds)];
     $sharedFirstTermId = $decoyTermId + 1;
     $sharedTermCount = count($sharedTargetPostIds) * $termCountPerPost;
-    wp_fts_frontier_assert($sharedTermCount === 49152, 'The survivor fixture drifted from the exact 49,152-term v6 pass.');
+    wp_fts_frontier_assert($sharedTermCount === 49152, 'The survivor fixture drifted from the exact 49,152-term pass.');
     $sharedLastTermId = $sharedFirstTermId + $sharedTermCount - 1;
     $sharedSeedStarted = hrtime(true);
     wp_fts_frontier_seed_shared_fixture(
@@ -272,7 +272,7 @@ try {
         $result = $storage->replace_prepared_documents([], $plan->admitted_post_ids, $plan);
         $writeStatements = $db->statements_since($beforeWrite);
         $writeEvidence = wp_fts_frontier_write_evidence($writeStatements);
-        wp_fts_frontier_assert($plan->posting_mutations <= WP_FTS_Storage_Mysql::MAX_BATCH_POSTINGS, 'A pass exceeded the posting mutation ceiling.');
+        wp_fts_frontier_assert($plan->posting_mutations <= WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS, 'A pass exceeded the posting mutation ceiling.');
         wp_fts_frontier_assert($plan->admitted_post_ids !== [], 'A valid 8,192-row document must always make progress.');
         wp_fts_frontier_assert(
             (int) ($result['old_postings'] ?? -1) === count($plan->admitted_post_ids) * $termCountPerPost,
@@ -399,12 +399,12 @@ try {
             && ($pass['frontier_rows_returned'] ?? null) === $expectedFrontierRows
             && ($pass['frontier_rows_scanned'] ?? null) === $expectedScannedRows
             && ($pass['posting_mutations'] ?? null) === $expectedPostingMutations,
-            "Old-posting pass {$offset} did not retain its exact v6 frontier shape."
+            "Old-posting pass {$offset} did not retain its exact frontier shape."
         );
     }
     wp_fts_frontier_assert(max(array_column($passes, 'frontier_rows_returned')) <= 7, 'The aggregate frontier returned more than seven per-post rows.');
     wp_fts_frontier_assert(
-        max(array_column($passes, 'frontier_rows_scanned')) === WP_FTS_Storage_Mysql::MAX_BATCH_POSTINGS + 1,
+        max(array_column($passes, 'frontier_rows_scanned')) === WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS + 1,
         'The old-posting scan did not exercise the exact limit-plus-one frontier.'
     );
     wp_fts_frontier_assert(max(array_column($passes, 'posting_mutations')) === 49152, 'The complete admitted prefix did not expose its exact posting mutation count.');
@@ -483,7 +483,7 @@ try {
         throw new RuntimeException('The reset proof requires resettable PHP peak-memory accounting.');
     }
     $resetGuardCalls = 0;
-    $resetStorage = new WP_FTS_Storage_Mysql(
+    $resetStorage = new WP_FTS_Relational_Storage(
         $db,
         $prefix,
         static function () use (&$resetGuardCalls): void {
@@ -548,14 +548,9 @@ try {
     );
     $expectedResetSummary = [
         'reset_strategy' => 'mysql_atomic_table_swap',
-        'counts_exact' => false,
-        'postings_deleted' => null,
-        'docs_deleted' => null,
-        'terms_deleted' => null,
-        'pending_queue_cleared' => null,
         'search_epoch' => $oldSearchEpoch + 1,
     ];
-    wp_fts_frontier_assert($resetSummary === $expectedResetSummary, 'Populated reset returned an inexact summary.');
+    wp_fts_frontier_assert($resetSummary === $expectedResetSummary, 'Populated reset returned the strategy and new search epoch.');
 
     $schemaVerification = $resetStorage->verify_schema();
     wp_fts_frontier_assert(($schemaVerification['valid'] ?? false) === true, 'Atomic reset did not preserve the exact current schema.');
@@ -702,7 +697,7 @@ try {
             'php_allocation_delta_bytes' => $resetPhpDeltaBytes,
             'php_peak_bytes' => $resetPhpPeakBytes,
             'linux_vmhwm_bytes' => $resetLinuxVmHwmBytes,
-            'schema_version' => 9,
+            'schema_version' => 1,
             'schema_verification' => $schemaVerification,
             'physical_schema' => $schemaEvidence,
             'post_reset' => $postReset,
@@ -1249,7 +1244,7 @@ function wp_fts_frontier_seed_target_fixture(
         }
     }
     $documentRows = array_map(
-        static fn(int $postId): string => "({$postId},'en','fixture','',1)",
+        static fn(int $postId): string => "({$postId},'en','" . sha1("fixture:{$postId}") . "','',1)",
         $postIds
     );
     wp_fts_frontier_query(
@@ -1303,7 +1298,7 @@ function wp_fts_frontier_seed_shared_fixture(
         }
         $documentRows = [];
         foreach ([...$targetPostIds, ...$survivorPostIds] as $postId) {
-            $documentRows[] = "({$postId},'en','shared-fixture','',1)";
+            $documentRows[] = "({$postId},'en','" . sha1("shared-fixture:{$postId}") . "','',1)";
         }
         wp_fts_frontier_query(
             $db,
@@ -1550,7 +1545,7 @@ PRIMARY KEY (term_id,post_id), KEY post_term_impact (post_id,term_id,impact)
 ) ENGINE=InnoDB DEFAULT CHARSET=binary",
         "CREATE TABLE {$documents} (
 post_id bigint unsigned NOT NULL, primary_lang varbinary(32) NOT NULL DEFAULT 'und',
-content_hash varbinary(64) NULL, snippet_text mediumtext NULL, indexed_at bigint unsigned NOT NULL DEFAULT 0,
+content_hash varbinary(40) NOT NULL, snippet_text mediumtext NOT NULL, indexed_at bigint unsigned NOT NULL DEFAULT 0,
 PRIMARY KEY (post_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
         "CREATE TABLE {$work} (

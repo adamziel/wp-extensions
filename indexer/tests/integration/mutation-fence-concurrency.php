@@ -195,19 +195,19 @@ try {
     $coalescedPostId = 42;
     $coalescedToken = str_repeat('d', 32);
     $qa->fence_post($coalescedPostId, $coalescedToken, $recoveryAt, ['source' => 'foreground']);
-    $qb->enqueue_many([$coalescedPostId], null, ['index_options' => ['language' => 'pl']]);
+    $qb->enqueue_many([$coalescedPostId], null, ['index_options' => ['document_lang' => 'pl']]);
     wp_fts_mutation_proof_row($b, $table, $coalescedPostId, 'fenced', 2, $coalescedToken, 'enqueue preserves the active token');
     $qa->promote_post($coalescedPostId, $coalescedToken);
     $coalesced = wp_fts_mutation_proof_row($a, $table, $coalescedPostId, 'ready', 2, '', 'the foreground hook releases the coalesced generation');
     $coalescedPayload = json_decode((string) ($coalesced['payload'] ?? ''), true, flags: JSON_THROW_ON_ERROR);
     wp_fts_mutation_proof_assert(
-        ($coalescedPayload['index_options']['language'] ?? null) === 'pl',
+        ($coalescedPayload['index_options']['document_lang'] ?? null) === 'pl',
         'The newer generic payload must survive an older foreground promotion.'
     );
 
     $readyClaims = $qc->claim_batch(100, time() + 1, 30);
     wp_fts_mutation_proof_assert(count($readyClaims) === 2, 'The two ready canonical generations should be claimable once each.');
-    $readyAck = $qc->acknowledge_many($readyClaims, time() + 2);
+    $readyAck = $qc->acknowledge_many($readyClaims);
     wp_fts_mutation_proof_assert(($readyAck['acknowledged'] ?? -1) === 2, 'The two ready canonical generations should acknowledge once each.');
 
     // Hold the exact production guard in an independent PHP process. This must
@@ -258,7 +258,7 @@ try {
 
     $qa->fence_post($guardedPostId, $guardedToken, $guardNow - 2, ['source' => 'live-owner']);
     $qa->fence_post($fencedPostId, $fencedToken, $guardNow - 1, ['source' => 'operator-only']);
-    $qa->enqueue($unrelatedReadyPostId, $guardNow - 3);
+    $qa->enqueue_many([$unrelatedReadyPostId], $guardNow - 3);
     $noiseDueAt = $guardNow + 7200;
     $noiseValues = [];
     for ($noiseOffset = 0; $noiseOffset < 512; $noiseOffset++) {
@@ -323,7 +323,7 @@ try {
         'busy cross-process claim'
     );
     wp_fts_mutation_proof_assert(
-        $qc->acknowledge($claimsBehindGuard[0], $guardNow + 1),
+        $qc->acknowledge_many([$claimsBehindGuard[0]])['acknowledged'] === 1,
         'The unrelated generation claimed behind the holder should acknowledge once.'
     );
 
@@ -385,7 +385,7 @@ try {
         'A free probe must never recover operator-fenced debt.'
     );
     wp_fts_mutation_proof_assert(
-        $qc->acknowledge($recoveredGuardedClaims[0], time() + 1),
+        $qc->acknowledge_many([$recoveredGuardedClaims[0]])['acknowledged'] === 1,
         'The exact recovered guarded generation should acknowledge once.'
     );
     $blockedScheduleMarker = $c->statement_marker();
@@ -414,7 +414,7 @@ try {
     wp_fts_mutation_proof_assert(
         count($promotedFallbackStatements) === 2
             && array_column($promotedFallbackClaims, 'post_id') === [$fencedPostId]
-            && $qc->acknowledge($promotedFallbackClaims[0], time() + 2),
+            && $qc->acknowledge_many([$promotedFallbackClaims[0]])['acknowledged'] === 1,
         'Only the authoritative post-SQL promotion may make an unmarked fallback claimable.'
     );
     $promotedFencedClaimEvidence = wp_fts_mutation_proof_operation_evidence(
@@ -505,8 +505,8 @@ try {
             && ($recovered['token'] ?? '') !== $crashToken,
         'Crash recovery must own exactly generation one under a fresh claim token.'
     );
-    wp_fts_mutation_proof_assert($qc->acknowledge($recovered, $recoveryAt + 1), 'The recovered generation should acknowledge once.');
-    wp_fts_mutation_proof_assert(!$qc->acknowledge($recovered, $recoveryAt + 1), 'The same recovered CAS must not acknowledge twice.');
+    wp_fts_mutation_proof_assert($qc->acknowledge_many([$recovered])['acknowledged'] === 1, 'The recovered generation should acknowledge once.');
+    wp_fts_mutation_proof_assert($qc->acknowledge_many([$recovered])['acknowledged'] === 0, 'The same recovered CAS must not acknowledge twice.');
     $crashRows = (int) $c->get_var("SELECT COUNT(*) FROM `{$table}` WHERE job_key='post:{$crashPostId}'");
     wp_fts_mutation_proof_assert($crashRows === 0, 'The recovered crash generation must leave no durable row.');
 
@@ -516,7 +516,7 @@ try {
     $postdeadlineAt = $recoveryAt + 100;
     $postdeadlinePostId = 44;
     $postdeadlinePostToken = 'guard:' . str_repeat('4', 32);
-    $postdeadlinePostPayload = ['index_options' => ['language' => 'pl']];
+    $postdeadlinePostPayload = ['index_options' => ['document_lang' => 'pl']];
     $qb->fence_post($postdeadlinePostId, $postdeadlinePostToken, $postdeadlineAt, ['source' => 'foreground']);
     $qc->enqueue_many([$postdeadlinePostId], $postdeadlineAt - 1, $postdeadlinePostPayload);
     $postdeadlineRecovered = $qc->claim_batch(1, $postdeadlineAt, 30)[0] ?? null;
@@ -538,12 +538,12 @@ try {
         'Late MySQL post promotion must publish a successor without replacing coalesced index options.'
     );
     wp_fts_mutation_proof_assert(
-        !$qc->acknowledge($postdeadlineRecovered, $postdeadlineAt + 2),
+        $qc->acknowledge_many([$postdeadlineRecovered])['acknowledged'] === 0,
         'The recovered MySQL post worker must not acknowledge the post-hook successor.'
     );
     $postdeadlinePostSuccessor = $qc->claim_batch(1, $postdeadlineAt + 2, 30)[0] ?? null;
     wp_fts_mutation_proof_assert(is_array($postdeadlinePostSuccessor), 'The MySQL post-hook successor should remain claimable.');
-    wp_fts_mutation_proof_assert($qc->acknowledge($postdeadlinePostSuccessor, $postdeadlineAt + 3), 'Only the MySQL post-hook successor should acknowledge.');
+    wp_fts_mutation_proof_assert($qc->acknowledge_many([$postdeadlinePostSuccessor])['acknowledged'] === 1, 'Only the MySQL post-hook successor should acknowledge.');
 
     $postdeadlineScopeKey = 'real-postdeadline-targeted';
     $postdeadlineScopeToken = 'guard:' . str_repeat('5', 32);
@@ -622,13 +622,13 @@ try {
         [$exactPostId => $exactPostToken],
         [],
         false,
-        ['reason' => 'exact'],
+        [],
         time()
     );
     $exactHandoffStatementCount = count($b->statements_since($exactMarker));
     wp_fts_mutation_proof_assert($exactHandoffStatementCount === 2, 'Exact handoff must use one canonical post UPSERT and one sentinel DELETE.');
     $exactState = (string) $b->get_var("SELECT state FROM `{$table}` WHERE job_key='post:{$exactPostId}'");
-    wp_fts_mutation_proof_assert($exactState === 'ready', 'Production SQL must release the owned post fence.');
+    wp_fts_mutation_proof_assert($exactState === 'ready', 'Relational SQL must release the owned post fence.');
     $exactScopeJob = 'scope:' . hash('sha256', $exactScopeKey);
     $exactScopeRows = (int) $b->get_var("SELECT COUNT(*) FROM `{$table}` WHERE job_key='{$exactScopeJob}'");
     wp_fts_mutation_proof_assert($exactScopeRows === 0, 'Exact handoff must remove its request sentinel.');
@@ -839,9 +839,9 @@ try {
 
     for ($offset = 0; $offset < 20; $offset++) {
         $loopPostId = 600 + $offset;
-        $loopPostToken = hash('sha256', 'post-' . $offset);
+        $loopPostToken = substr(hash('sha256', 'post-' . $offset), 0, 32);
         $loopScopeKey = 'real-exact-loop-' . $offset;
-        $loopScopeToken = hash('sha256', 'scope-' . $offset);
+        $loopScopeToken = substr(hash('sha256', 'scope-' . $offset), 0, 32);
         $qb->fence_post($loopPostId, $loopPostToken, $recoveryAt);
         $qb->fence_scope($loopScopeKey, $loopScopeToken, [], $recoveryAt);
         $qb->handoff_foreground_mutation_scope(
@@ -1672,7 +1672,7 @@ function wp_fts_mutation_proof_production_worker_cas(): array
     wp_fts_mutation_proof_assert(method_exists('WP_FTS_Index_Queue', 'is_post_job_key'), 'The installed queue lacks canonical post identity validation.');
 
     WP_FTS_Plugin::create_or_repair_schema();
-    $schema = WP_FTS_Plugin::storage(false)->verify_schema();
+    $schema = wp_fts_mutation_proof_storage_fixture(false)->verify_schema();
     wp_fts_mutation_proof_assert(($schema['valid'] ?? null) === true, 'The production-worker proof requires the exact current relational schema.');
 
     $workTable = (string) $wpdb->prefix . 'fts_work';
@@ -1731,10 +1731,10 @@ function wp_fts_mutation_proof_production_worker_cas(): array
         wp_fts_mutation_proof_assert($postId > 0, 'The production-worker fixture did not receive a post id.');
 
         $queue = new WP_FTS_Index_Queue($wpdb);
-        $olderToken = hash('sha256', 'older|' . $token);
-        $newerToken = hash('sha256', 'newer|' . $token);
+        $olderToken = substr(hash('sha256', 'older|' . $token), 0, 32);
+        $newerToken = substr(hash('sha256', 'newer|' . $token), 0, 32);
         $canonicalJobKey = 'post:' . $postId;
-        $payload = ['index_options' => ['language' => 'en']];
+        $payload = ['index_options' => ['document_lang' => 'en']];
         $recoveryAt = time() + 300;
 
         $queue->fence_post($postId, $olderToken, $recoveryAt, ['source' => 'older']);
@@ -1899,10 +1899,8 @@ function wp_fts_mutation_proof_production_worker_cas(): array
                 // Fixture teardown is intentionally outside the production
                 // factory. This explicitly unguarded instance is scoped to the
                 // disposable proof and followed by physical row checks.
-                $storage = new WP_FTS_Storage_Mysql($wpdb);
-                if ($storage->document_hashes([$postId]) !== []) {
-                    $storage->replace_prepared_documents([], [$postId]);
-                }
+                $storage = new WP_FTS_Relational_Storage($wpdb);
+                $storage->replace_prepared_documents([], [$postId]);
             } catch (Throwable $error) {
                 // Finish direct cleanup before surfacing a failed relational cleanup.
                 $storageCleanupError = $error;
@@ -2929,4 +2927,13 @@ function wp_fts_mutation_proof_capture_wordpress_queries(callable $operation): a
     }
 
     return ['result' => $result, 'queries' => $queries];
+}
+
+/** Reach the private production storage factory only from this fixture. */
+function wp_fts_mutation_proof_storage_fixture(bool $ensureSchema = false): WP_FTS_Relational_Storage
+{
+    $method = new ReflectionMethod(WP_FTS_Plugin::class, 'storage');
+    $method->setAccessible(true);
+
+    return $method->invoke(null, $ensureSchema);
 }

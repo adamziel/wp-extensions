@@ -5,9 +5,7 @@ require_once dirname(__DIR__) . '/bootstrap.php';
 
 $case = $argv[1] ?? '';
 try {
-    if ($case === 'reject') {
-        $evidence = wp_fts_lemma_sidecar_rejection_case();
-    } elseif ($case === 'indexed-document') {
+    if ($case === 'indexed-document') {
         $evidence = wp_fts_lemma_sidecar_indexed_document_case();
     } elseif ($case === 'indexed-query') {
         $evidence = wp_fts_lemma_sidecar_indexed_query_case();
@@ -20,7 +18,7 @@ try {
     } elseif ($case === 'configured-overflow') {
         $evidence = wp_fts_lemma_sidecar_configured_overflow_case();
     } else {
-        throw new InvalidArgumentException('Expected reject, indexed-document, indexed-query, maximum-document, maximum-query, configured-maximum-document, or configured-overflow fixture case.');
+        throw new InvalidArgumentException('Expected indexed-document, indexed-query, maximum-document, maximum-query, configured-maximum-document, or configured-overflow fixture case.');
     }
 
     echo json_encode($evidence, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), "\n";
@@ -30,73 +28,14 @@ try {
 }
 
 /** @return array<string,mixed> */
-function wp_fts_lemma_sidecar_rejection_case(): array
-{
-    $started = microtime(true);
-    $root = wp_fts_lemma_sidecar_fixture_root('reject');
-    try {
-        $fixture = wp_fts_lemma_sidecar_write_fixture($root, false);
-        $validator = new WP_FTS_AnalyzerPackValidator();
-        $ioBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
-        $constructionStarted = microtime(true);
-        $pack = null;
-        $error = null;
-        try {
-            $pack = WP_FTS_LanguageLemmaPack::from_manifest_file(
-                $fixture['manifest'],
-                $validator,
-                'qaa'
-            );
-        } catch (Throwable $caught) {
-            $error = $caught;
-        }
-        $constructionSeconds = microtime(true) - $constructionStarted;
-        $ioAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
-
-        // Never exercise the potentially explosive legacy lookup if construction
-        // regresses. The parent gate rejects a non-null pack and requires zero
-        // token calls, digest reads, and indexed payload reads.
-        $tokenLookupCalls = 0;
-        if ($pack instanceof WP_FTS_LanguageLemmaPack) {
-            $pack = null;
-        }
-
-        return [
-            'case' => 'reject',
-            'runtime_decoded_bytes' => $fixture['decoded_bytes'],
-        'runtime_compressed_bytes' => $fixture['runtime_compressed_bytes'],
-            'runtime_rows' => $fixture['rows'],
-            'sidecar_exists' => $fixture['sidecar_bytes'] > 0,
-            'document' => wp_fts_lemma_sidecar_document_identity($fixture),
-            'query' => wp_fts_lemma_sidecar_query_identity($fixture),
-            'construction' => [
-                'accepted' => $pack instanceof WP_FTS_LanguageLemmaPack,
-                'error_class' => $error instanceof Throwable ? get_class($error) : null,
-                'error_message' => $error instanceof Throwable ? $error->getMessage() : null,
-                'elapsed_seconds' => $constructionSeconds,
-                'token_lookup_calls' => $tokenLookupCalls,
-                'digest_attestation' => $validator->digest_attestation_stats(),
-                'indexed_io' => wp_fts_lemma_sidecar_diagnostic_delta($ioBefore, $ioAfter),
-            ],
-            'elapsed_seconds' => microtime(true) - $started,
-            'php_peak_bytes' => memory_get_peak_usage(true),
-            'proc_status' => wp_fts_lemma_sidecar_proc_status(),
-        ];
-    } finally {
-        wp_fts_lemma_sidecar_remove_tree($root);
-    }
-}
-
-/** @return array<string,mixed> */
 function wp_fts_lemma_sidecar_indexed_document_case(): array
 {
     $started = microtime(true);
     $root = wp_fts_lemma_sidecar_fixture_root('indexed-document');
     try {
-        $fixture = wp_fts_lemma_sidecar_write_fixture($root, true);
+        $fixture = wp_fts_lemma_sidecar_write_fixture($root);
         $analyzer = wp_fts_lemma_sidecar_analyzer($fixture['manifest']);
-        $storage = new WP_FTS_Storage_InMemory();
-        $indexer = new WP_FTS_Indexer($storage, $analyzer);
+        $indexer = new WP_FTS_Indexer($analyzer);
         $documentIoBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
         $fields = [];
         foreach (array_chunk($fixture['document_terms'], 128) as $fieldIndex => $terms) {
@@ -106,7 +45,7 @@ function wp_fts_lemma_sidecar_indexed_document_case(): array
                 'boost' => 1.0,
             ];
         }
-        $prepared = $indexer->prepare_document_fields(1, $fields, ['lang' => 'qaa']);
+        $prepared = $indexer->prepare_document_fields(1, $fields, ['document_lang' => 'qaa']);
         $documentIoAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
         $documentDigest = hash_init('sha256');
         foreach ($fixture['document_indexes'] as $index => $runtimeIndex) {
@@ -155,7 +94,7 @@ function wp_fts_lemma_sidecar_indexed_query_case(): array
     $started = microtime(true);
     $root = wp_fts_lemma_sidecar_fixture_root('indexed-query');
     try {
-        $fixture = wp_fts_lemma_sidecar_write_fixture($root, true);
+        $fixture = wp_fts_lemma_sidecar_write_fixture($root);
         $analyzer = wp_fts_lemma_sidecar_analyzer($fixture['manifest']);
         $query = implode(' ', $fixture['query_terms']);
         $ioBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
@@ -240,8 +179,8 @@ function wp_fts_lemma_sidecar_maximum_case(bool $queryCase): array
             foreach (array_chunk($fixture['document_terms'], 128) as $fieldIndex => $terms) {
                 $fields[] = ['name' => 'field_' . $fieldIndex, 'text' => implode(' ', $terms), 'boost' => 1.0];
             }
-            $prepared = (new WP_FTS_Indexer(new WP_FTS_Storage_InMemory(), $analyzer))
-                ->prepare_document_fields(2, $fields, ['lang' => 'qaa']);
+            $prepared = (new WP_FTS_Indexer($analyzer))
+                ->prepare_document_fields(2, $fields, ['document_lang' => 'qaa']);
             foreach ($fixture['document_indexes'] as $runtimeIndex) {
                 $expected = wp_fts_lemma_sidecar_lemma($runtimeIndex);
                 if (!isset($prepared['term_frequencies'][WP_FTS_TermNamespace::namespace_term('qaa', $expected)])) {
@@ -361,6 +300,7 @@ function wp_fts_lemma_sidecar_configured_maximum_case(): array
                 $fieldSources[] = $html;
                 $fields[] = [
                     'name' => $language . '_field_' . $fieldIndex,
+                    'text' => '',
                     'html' => $html,
                     'boost' => 1.0,
                 ];
@@ -368,8 +308,8 @@ function wp_fts_lemma_sidecar_configured_maximum_case(): array
         }
 
         $ioBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
-        $prepared = (new WP_FTS_Indexer(new WP_FTS_Storage_InMemory(), $analyzer))
-            ->prepare_document_fields(3, $fields, ['lang' => 'qaa']);
+        $prepared = (new WP_FTS_Indexer($analyzer))
+            ->prepare_document_fields(3, $fields, ['document_lang' => 'qaa']);
         $ioAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
         foreach ($expectedRows as $row) {
             $identity = WP_FTS_TermNamespace::namespace_term($row['language'], $row['lemma']);
@@ -467,12 +407,27 @@ function wp_fts_lemma_sidecar_configured_overflow_case(): array
                 throw new RuntimeException('Could not create configured-overflow copy directory.');
             }
             wp_fts_lemma_sidecar_copy_tree($firstRoot, $copyRoot);
-            $manifests[] = $copyRoot . '/manifest.json';
+            $copyManifestPath = $copyRoot . '/manifest.json';
+            $copyManifest = json_decode(
+                (string) file_get_contents($copyManifestPath),
+                true,
+                64,
+                JSON_THROW_ON_ERROR
+            );
+            $copyLanguage = $copy === 2 ? 'qab' : 'qac';
+            $copyManifest['language'] = $copyLanguage;
+            $copyManifest['pack_id'] = "{$copyLanguage}-maximum-fan-out-envelope";
+            $copyManifest['runtime']['normalization'] = "WP_FTS_Normalizer {$copyLanguage} with fold_diacritics=true";
+            file_put_contents(
+                $copyManifestPath,
+                json_encode($copyManifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n"
+            );
+            $manifests[] = $copyManifestPath;
         }
 
         $twoPackOptions = [
             'qaa' => $manifests[0],
-            'qaa-x-copy2' => $manifests[1],
+            'qab' => $manifests[1],
         ];
         $acceptedPipeline = new WP_FTS_LanguagePipeline(['lemma_packs_by_lang' => $twoPackOptions]);
         $statusMethod = new ReflectionMethod(WP_FTS_Plugin::class, 'analyzer_pack_statuses');
@@ -484,9 +439,8 @@ function wp_fts_lemma_sidecar_configured_overflow_case(): array
             throw new RuntimeException('Configured-overflow third copy has no lookup sidecar to corrupt.');
         }
         file_put_contents($thirdLookups[0], "malformed third-copy sidecar\n");
-        $threePackOptions = $twoPackOptions + ['qaa-x-copy3' => $manifests[2]];
+        $threePackOptions = $twoPackOptions + ['qac' => $manifests[2]];
 
-        $pipelineHeadersBefore = WP_FTS_LemmaPackLookupIndex::metadata_diagnostics();
         $pipelineIoBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
         $pipelineError = null;
         try {
@@ -494,10 +448,8 @@ function wp_fts_lemma_sidecar_configured_overflow_case(): array
         } catch (Throwable $caught) {
             $pipelineError = $caught;
         }
-        $pipelineHeadersAfter = WP_FTS_LemmaPackLookupIndex::metadata_diagnostics();
         $pipelineIoAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
 
-        $statusHeadersBefore = WP_FTS_LemmaPackLookupIndex::metadata_diagnostics();
         $statusIoBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
         $statusError = null;
         try {
@@ -505,7 +457,6 @@ function wp_fts_lemma_sidecar_configured_overflow_case(): array
         } catch (Throwable $caught) {
             $statusError = $caught;
         }
-        $statusHeadersAfter = WP_FTS_LemmaPackLookupIndex::metadata_diagnostics();
         $statusIoAfter = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
         unset($acceptedPipeline);
 
@@ -532,8 +483,8 @@ function wp_fts_lemma_sidecar_configured_overflow_case(): array
                 'reason_code' => $pipelineError instanceof WP_FTS_Analyzer_Config_Limit_Exceeded
                     ? $pipelineError->reason_code
                     : null,
-                'lookup_header_opens' => $pipelineHeadersAfter['lookup_header_opens']
-                    - $pipelineHeadersBefore['lookup_header_opens'],
+                'lookup_header_opens' => $pipelineIoAfter['lookup_header_opens']
+                    - $pipelineIoBefore['lookup_header_opens'],
                 'indexed_io' => wp_fts_lemma_sidecar_diagnostic_delta($pipelineIoBefore, $pipelineIoAfter),
             ],
             'status_overflow' => [
@@ -541,8 +492,8 @@ function wp_fts_lemma_sidecar_configured_overflow_case(): array
                 'reason_code' => $statusError instanceof WP_FTS_Analyzer_Config_Limit_Exceeded
                     ? $statusError->reason_code
                     : null,
-                'lookup_header_opens' => $statusHeadersAfter['lookup_header_opens']
-                    - $statusHeadersBefore['lookup_header_opens'],
+                'lookup_header_opens' => $statusIoAfter['lookup_header_opens']
+                    - $statusIoBefore['lookup_header_opens'],
                 'indexed_io' => wp_fts_lemma_sidecar_diagnostic_delta($statusIoBefore, $statusIoAfter),
             ],
             'elapsed_seconds' => microtime(true) - $started,
@@ -641,7 +592,6 @@ function wp_fts_lemma_sidecar_write_block_pack(
         $lookup = $runtime . '.lookup';
         $sidecar = WP_FTS_LemmaPackLookupIndex::build(
             $runtime,
-            WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
             (string) hash_file('sha256', $runtime),
             $lookup
         );
@@ -673,8 +623,6 @@ function wp_fts_lemma_sidecar_write_block_pack(
         'pack_id' => "{$language}-maximum-fan-out-envelope",
         'language' => $language,
         'version' => '1',
-        'fixture_only' => false,
-        'default_enabled' => false,
         'capabilities' => ['dictionary-lemmatizer', 'normalized-runtime-rows', 'indexed-runtime-lookups'],
         'runtime' => [
             'format' => WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV,
@@ -751,9 +699,9 @@ function wp_fts_lemma_sidecar_fixture_root(string $case): string
  *   query_indexes:int[]
  * }
  */
-function wp_fts_lemma_sidecar_write_fixture(string $root, bool $indexed): array
+function wp_fts_lemma_sidecar_write_fixture(string $root): array
 {
-    $decodedBytes = WP_FTS_LemmaPackLimits::MAX_RUNTIME_LOOKUP_DECODED_BYTES;
+    $decodedBytes = 8 * 1024 * 1024;
     $rows = 32768;
     $lineBytes = intdiv($decodedBytes, $rows);
     $blockRows = 2048;
@@ -803,46 +751,38 @@ function wp_fts_lemma_sidecar_write_fixture(string $root, bool $indexed): array
         wp_fts_lemma_sidecar_gzip_file($plain, $runtime);
         unlink($plain);
         $lookup = $runtime . '.lookup';
-        $sidecar = null;
-        if ($indexed) {
-            $sidecar = WP_FTS_LemmaPackLookupIndex::build(
-                $runtime,
-                WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
-                (string) hash_file('sha256', $runtime),
-                $lookup,
-                $blockRows
-            );
-        }
+        $sidecar = WP_FTS_LemmaPackLookupIndex::build(
+            $runtime,
+            (string) hash_file('sha256', $runtime),
+            $lookup,
+            $blockRows
+        );
 
         $runtimeEntry = [
             'path' => basename($runtime),
-            'sha256' => $sidecar['runtime_sha256'] ?? hash_file('sha256', $runtime),
+            'sha256' => $sidecar['runtime_sha256'],
             'rows' => $rowsPerShard,
             'first_surface' => wp_fts_lemma_sidecar_surface($firstIndex),
             'last_surface' => wp_fts_lemma_sidecar_surface($lastIndex),
             'compression' => WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
         ];
-        if (is_array($sidecar)) {
-            $runtimeEntry['lookup'] = [
-                'format' => $sidecar['format'],
-                'path' => basename($lookup),
-                'sha256' => $sidecar['sha256'],
-                'blocks' => $sidecar['blocks'],
-            ];
-            $sidecarBytes += (int) filesize($lookup);
-            $sidecarBlocks += $sidecar['blocks'];
-        }
+        $runtimeEntry['lookup'] = [
+            'format' => $sidecar['format'],
+            'path' => basename($lookup),
+            'sha256' => $sidecar['sha256'],
+            'blocks' => $sidecar['blocks'],
+        ];
+        $sidecarBytes += (int) filesize($lookup);
+        $sidecarBlocks += $sidecar['blocks'];
         $runtimeEntries[] = $runtimeEntry;
         $runtimeCompressedBytes += (int) filesize($runtime);
     }
 
     $manifest = [
         'schema_version' => 1,
-        'pack_id' => 'qaa-exact-eight-mib-' . ($indexed ? 'indexed' : 'unindexed'),
+        'pack_id' => 'qaa-exact-eight-mib-indexed',
         'language' => 'qaa',
         'version' => '1',
-        'fixture_only' => false,
-        'default_enabled' => false,
         'capabilities' => ['dictionary-lemmatizer', 'normalized-runtime-rows'],
         'runtime' => [
             'format' => WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV,
@@ -951,8 +891,8 @@ function wp_fts_lemma_sidecar_query_identity(array $fixture): array
 function wp_fts_lemma_sidecar_diagnostic_delta(array $before, array $after): array
 {
     $delta = [];
-    foreach ($after as $key => $value) {
-        $delta[$key] = max(0, (int) $value - (int) ($before[$key] ?? 0));
+    foreach (['runtime_file_opens', 'runtime_payload_reads', 'compressed_payload_bytes_read', 'decoded_payload_bytes_loaded', 'decoded_block_cache_hits'] as $key) {
+        $delta[$key] = max(0, (int) ($after[$key] ?? 0) - (int) ($before[$key] ?? 0));
     }
 
     return $delta;

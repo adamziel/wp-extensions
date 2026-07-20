@@ -85,7 +85,6 @@ function wp_fts_analyzer_source_lock_validate_manifest(array $manifest, string $
 
     wp_fts_analyzer_source_lock_required_bool($manifest, 'behavior.noop', $errors);
     wp_fts_analyzer_source_lock_required_bool($manifest, 'runtime.contains_third_party_data', $errors);
-    wp_fts_analyzer_source_lock_required_bool($manifest, 'release.default_enabled', $errors);
     wp_fts_analyzer_source_lock_required_int($manifest, 'runtime.row_count', $errors);
 
     if (wp_fts_analyzer_source_lock_get($manifest, 'schema_version') !== WP_FTS_ANALYZER_SOURCE_LOCK_SCHEMA_VERSION) {
@@ -154,8 +153,6 @@ function wp_fts_analyzer_source_lock_validate_manifest(array $manifest, string $
     $rowCount = wp_fts_analyzer_source_lock_get($manifest, 'runtime.row_count');
     $noop = wp_fts_analyzer_source_lock_get($manifest, 'behavior.noop');
     $containsThirdPartyData = wp_fts_analyzer_source_lock_get($manifest, 'runtime.contains_third_party_data');
-    $defaultEnabled = wp_fts_analyzer_source_lock_get($manifest, 'release.default_enabled');
-    $status = wp_fts_analyzer_source_lock_string($manifest, 'pack.status');
 
     if ($noop === true && $rowCount !== 0) {
         $errors[] = 'No-op manifests must declare runtime.row_count as 0.';
@@ -165,13 +162,6 @@ function wp_fts_analyzer_source_lock_validate_manifest(array $manifest, string $
         $errors[] = 'No-op manifests must declare runtime.contains_third_party_data as false.';
     }
 
-    if ($defaultEnabled === true && $status !== 'production_candidate') {
-        $errors[] = 'Only production_candidate packs may be default-enabled.';
-    }
-
-    if ($containsThirdPartyData === true && $defaultEnabled === true) {
-        $errors[] = 'Default-enabled third-party analyzer data requires a separate production approval gate.';
-    }
 }
 
 /**
