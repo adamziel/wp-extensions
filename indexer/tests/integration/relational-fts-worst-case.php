@@ -471,7 +471,6 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
     $batches = [];
     $totals = array_fill_keys([
         'attempted',
-        'processed',
         'committed',
         'superseded',
         'indexed',
@@ -508,7 +507,6 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
             'duration_ms' => wp_fts_wc_elapsed_ms($batchStarted),
             'status' => $summary['status'] ?? null,
             'attempted' => (int) ($summary['attempted'] ?? 0),
-            'processed' => (int) ($summary['processed'] ?? 0),
             'committed' => (int) ($summary['committed'] ?? 0),
             'analyzed' => (int) ($summary['analyzed'] ?? 0),
             'backfill_scanned' => (int) ($summary['backfill_scanned'] ?? 0),
@@ -574,7 +572,6 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
         + 5;
     $gates = [
         wp_fts_wc_gate('reindex_enqueue_constant_scope', $expectedInitial, $initial, $initial === $expectedInitial),
-        wp_fts_wc_gate('reindex_processed_documents', $expectedDocuments, $totals['processed'], $totals['processed'] === $expectedDocuments),
         wp_fts_wc_gate('reindex_committed_documents', $expectedCommittedDocuments, $totals['committed'], $totals['committed'] === $expectedCommittedDocuments),
         wp_fts_wc_gate('reindex_deleted_documents', $expectedDeletedDocuments, $totals['deleted'], $totals['deleted'] === $expectedDeletedDocuments),
         wp_fts_wc_gate('reindex_analyzed_documents', "{$expectedDocuments}..{$analysisCeiling}", $totals['analyzed'], $totals['analyzed'] >= $expectedDocuments && $totals['analyzed'] <= $analysisCeiling),
@@ -628,7 +625,7 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
         throw new RuntimeException('Asynchronous full-reindex drain failed: ' . implode(', ', wp_fts_wc_gate_failures($gates)));
     }
 
-    return ['status' => 'PASS', 'phase' => $evidence['phase'], 'documents' => $totals['processed'], 'batches' => count($batches)];
+    return ['status' => 'PASS', 'phase' => $initialIndex ? 'initial-index-drain' : 'reindex-drain', 'documents' => $totals['indexed'], 'batches' => count($batches)];
 }
 
 /**
@@ -1500,13 +1497,12 @@ function wp_fts_wc_validate(): array
     $canonicalIdentityShape = $casPostId > 0 && $casReadyKeys === [$canonicalCasKey];
     $gates[] = wp_fts_wc_gate(
         'mutation_fence_production_worker_canonical_generation',
-        [2, true, 1, 1, 1, 1, 1, []],
+        [2, true, 1, 1, 1, 1, []],
         [
             $productionWorkerCas['ready_generation'] ?? null,
             $productionWorkerCas['stale_promotion_rejected'] ?? null,
             $productionWorkerCas['analyzed'] ?? null,
             $productionWorkerCas['indexed'] ?? null,
-            $productionWorkerCas['processed'] ?? null,
             $productionWorkerCas['committed'] ?? null,
             $productionWorkerCas['queue_processed'] ?? null,
             $productionWorkerCas['remaining_job_keys'] ?? null,
@@ -1515,7 +1511,6 @@ function wp_fts_wc_validate(): array
             && ($productionWorkerCas['stale_promotion_rejected'] ?? null) === true
             && (int) ($productionWorkerCas['analyzed'] ?? -1) === 1
             && (int) ($productionWorkerCas['indexed'] ?? -1) === 1
-            && (int) ($productionWorkerCas['processed'] ?? -1) === 1
             && (int) ($productionWorkerCas['committed'] ?? -1) === 1
             && (int) ($productionWorkerCas['queue_processed'] ?? -1) === 1
             && ($productionWorkerCas['remaining_job_keys'] ?? null) === []
@@ -1703,7 +1698,6 @@ function wp_fts_wc_validate(): array
         'asynchronous full-reindex drain',
         [
             'reindex_enqueue_constant_scope',
-            'reindex_processed_documents',
             'reindex_committed_documents',
             'reindex_deleted_documents',
             'reindex_analyzed_documents',
@@ -2054,7 +2048,6 @@ function wp_fts_wc_dependency_lob(): array
         $rejectionPhaseOutcome = [
             'status' => $summary['status'] ?? null,
             'attempted' => (int) ($summary['attempted'] ?? -1),
-            'processed' => (int) ($summary['processed'] ?? -1),
             'committed' => (int) ($summary['committed'] ?? -1),
             'queue_processed' => (int) ($summary['queue_processed'] ?? -1),
             'indexed' => (int) ($summary['indexed'] ?? -1),
@@ -2070,7 +2063,6 @@ function wp_fts_wc_dependency_lob(): array
         $expectedRejectionPhaseOutcome = [
             'status' => 'failed',
             'attempted' => 1,
-            'processed' => 0,
             'committed' => 1,
             'queue_processed' => 1,
             'indexed' => 0,
@@ -2091,7 +2083,6 @@ function wp_fts_wc_dependency_lob(): array
         $acceptedSuccessorOutcome = [
             'status' => $acceptedSuccessorSummary['status'] ?? null,
             'attempted' => (int) ($acceptedSuccessorSummary['attempted'] ?? -1),
-            'processed' => (int) ($acceptedSuccessorSummary['processed'] ?? -1),
             'committed' => (int) ($acceptedSuccessorSummary['committed'] ?? -1),
             'queue_processed' => (int) ($acceptedSuccessorSummary['queue_processed'] ?? -1),
             'indexed' => (int) ($acceptedSuccessorSummary['indexed'] ?? -1),
@@ -2107,7 +2098,6 @@ function wp_fts_wc_dependency_lob(): array
         $expectedAcceptedSuccessorOutcome = [
             'status' => 'success',
             'attempted' => 1,
-            'processed' => 1,
             'committed' => 1,
             'queue_processed' => 1,
             'indexed' => 1,
@@ -2183,8 +2173,7 @@ WHERE pm.meta_id=%d",
             $growthValueSql,
             "LEFT(CAST(pm.meta_value AS BINARY), {$growthBucket})"
         ) && str_contains($growthValueSql, "WHERE pm.meta_id IN ({$growthSelectedMetaId})");
-        $growthDeferredWholeGeneration = (int) ($growthSummary['processed'] ?? -1) === 0
-            && (int) ($growthSummary['indexed'] ?? -1) === 0
+        $growthDeferredWholeGeneration = (int) ($growthSummary['indexed'] ?? -1) === 0
             && (int) ($growthSummary['committed'] ?? -1) === 0
             && (int) ($growthSummary['deferred'] ?? -1) === 1
             && is_array($growthWorkAfterDeferred)
@@ -2192,8 +2181,7 @@ WHERE pm.meta_id=%d",
             && (int) ($growthWorkAfterDeferred['generation'] ?? 0) > 0
             && (int) ($growthWorkAfterDeferred['claimed_generation'] ?? -1) === 0;
         $growthHiddenWhileDirty = $growthOldAfterDeferredIds === [] && $growthNewAfterDeferredIds === [];
-        $growthRetryCommitted = (int) ($growthRetrySummary['processed'] ?? -1) === 1
-            && (int) ($growthRetrySummary['indexed'] ?? -1) === 1
+        $growthRetryCommitted = (int) ($growthRetrySummary['indexed'] ?? -1) === 1
             && (int) ($growthRetrySummary['committed'] ?? -1) === 1
             && $growthWorkAfterRetry === 0;
         $growthRetryExact = is_string($growthStoredValue)
@@ -2250,7 +2238,7 @@ WHERE pm.meta_id=%d",
             wp_fts_wc_gate('dependency_lob_rss_peak_delta', '<= 16777216; conservative VmHWM-after minus VmRSS-before', (int) ($measurement['rss_peak_delta_bytes'] ?? PHP_INT_MAX), ($measurement['rss_peak_delta_attribution'] ?? null) === 'conservative_vmhwm_after_minus_vmrss_before' && is_int($measurement['rss_before_bytes'] ?? null) && is_int($measurement['rss_peak_bytes'] ?? null) && ($measurement['rss_peak_delta_bytes'] ?? null) === max(0, $measurement['rss_peak_bytes'] - $measurement['rss_before_bytes']) && $measurement['rss_peak_delta_bytes'] <= 16777216),
             wp_fts_wc_gate('dependency_lob_rss_peak', '0 < VmHWM <= 134217728', (int) ($measurement['rss_peak_bytes'] ?? PHP_INT_MAX), (int) ($measurement['rss_peak_bytes'] ?? 0) > 0 && (int) ($measurement['rss_peak_bytes'] ?? PHP_INT_MAX) <= 134217728),
             wp_fts_wc_gate('dependency_lob_sql_bytes', '<= 32768', max(strlen($measurementSql), strlen($valueSql)), max(strlen($measurementSql), strlen($valueSql)) <= 32768),
-            wp_fts_wc_gate('dependency_lob_growth_baseline_indexed', ['queued' => 1, 'processed' => 1, 'committed' => 1], ['queued' => $growthBaselineQueued, 'processed' => (int) ($growthBaselineSummary['processed'] ?? -1), 'committed' => (int) ($growthBaselineSummary['committed'] ?? -1)], $growthBaselineQueued === 1 && (int) ($growthBaselineSummary['processed'] ?? -1) === 1 && (int) ($growthBaselineSummary['committed'] ?? -1) === 1),
+            wp_fts_wc_gate('dependency_lob_growth_baseline_indexed', ['queued' => 1, 'indexed' => 1, 'committed' => 1], ['queued' => $growthBaselineQueued, 'indexed' => (int) ($growthBaselineSummary['indexed'] ?? -1), 'committed' => (int) ($growthBaselineSummary['committed'] ?? -1)], $growthBaselineQueued === 1 && (int) ($growthBaselineSummary['indexed'] ?? -1) === 1 && (int) ($growthBaselineSummary['committed'] ?? -1) === 1),
             wp_fts_wc_gate('dependency_lob_growth_baseline_searchable', [$growthId], $growthOldBeforeIds, $growthOldBeforeIds === [$growthId]),
             wp_fts_wc_gate('dependency_lob_growth_requeued', 1, $growthRequeued, $growthRequeued === 1),
             wp_fts_wc_gate('dependency_lob_growth_mutation_exactly_once', 1, (int) ($growthMeasurement['mutation_rows'] ?? -1), (int) ($growthMeasurement['mutation_rows'] ?? -1) === 1),
@@ -2260,9 +2248,9 @@ WHERE pm.meta_id=%d",
             wp_fts_wc_gate('dependency_lob_growth_current_value_bytes', strlen($growthNewValue), (int) ($growthProjection['current_value_bytes'] ?? -1), (int) ($growthProjection['current_value_bytes'] ?? -1) === strlen($growthNewValue)),
             wp_fts_wc_gate('dependency_lob_growth_projected_value_bytes', $growthBucket, (int) ($growthProjection['projected_value_bytes'] ?? -1), (int) ($growthProjection['projected_value_bytes'] ?? -1) === $growthBucket),
             wp_fts_wc_gate('dependency_lob_growth_transport_strictly_below_twice_measurement', '< ' . (2 * $growthOldBytes), $growthBucket, $growthBucket < 2 * $growthOldBytes),
-            wp_fts_wc_gate('dependency_lob_growth_generation_deferred', ['processed' => 0, 'indexed' => 0, 'committed' => 0, 'deferred' => 1, 'work_state' => 'ready'], ['processed' => (int) ($growthSummary['processed'] ?? -1), 'indexed' => (int) ($growthSummary['indexed'] ?? -1), 'committed' => (int) ($growthSummary['committed'] ?? -1), 'deferred' => (int) ($growthSummary['deferred'] ?? -1), 'work_state' => is_array($growthWorkAfterDeferred) ? ($growthWorkAfterDeferred['state'] ?? null) : null], $growthDeferredWholeGeneration),
+            wp_fts_wc_gate('dependency_lob_growth_generation_deferred', ['indexed' => 0, 'committed' => 0, 'deferred' => 1, 'work_state' => 'ready'], ['indexed' => (int) ($growthSummary['indexed'] ?? -1), 'committed' => (int) ($growthSummary['committed'] ?? -1), 'deferred' => (int) ($growthSummary['deferred'] ?? -1), 'work_state' => is_array($growthWorkAfterDeferred) ? ($growthWorkAfterDeferred['state'] ?? null) : null], $growthDeferredWholeGeneration),
             wp_fts_wc_gate('dependency_lob_growth_dirty_generation_hidden', ['old' => [], 'new' => []], ['old' => $growthOldAfterDeferredIds, 'new' => $growthNewAfterDeferredIds], $growthHiddenWhileDirty),
-            wp_fts_wc_gate('dependency_lob_growth_retry_committed', ['processed' => 1, 'indexed' => 1, 'committed' => 1, 'work' => 0], ['processed' => (int) ($growthRetrySummary['processed'] ?? -1), 'indexed' => (int) ($growthRetrySummary['indexed'] ?? -1), 'committed' => (int) ($growthRetrySummary['committed'] ?? -1), 'work' => $growthWorkAfterRetry], $growthRetryCommitted),
+            wp_fts_wc_gate('dependency_lob_growth_retry_committed', ['indexed' => 1, 'committed' => 1, 'work' => 0], ['indexed' => (int) ($growthRetrySummary['indexed'] ?? -1), 'committed' => (int) ($growthRetrySummary['committed'] ?? -1), 'work' => $growthWorkAfterRetry], $growthRetryCommitted),
             wp_fts_wc_gate('dependency_lob_growth_retry_exact_and_searchable', ['stored_sha256' => hash('sha256', $growthNewValue), 'old' => [], 'new' => [$growthId]], ['stored_sha256' => is_string($growthStoredValue) ? hash('sha256', $growthStoredValue) : null, 'old' => $growthOldAfterRetryIds, 'new' => $growthNewAfterRetryIds], $growthRetryExact),
             wp_fts_wc_gate('dependency_lob_growth_worker_ms', '<= 10000', (float) ($growthMeasurement['duration_ms'] ?? INF), (float) ($growthMeasurement['duration_ms'] ?? INF) <= 10000.0),
             wp_fts_wc_gate('dependency_lob_growth_php_peak_delta', '<= 16777216', (int) ($growthMeasurement['php_peak_delta_bytes'] ?? PHP_INT_MAX), (int) ($growthMeasurement['php_peak_delta_bytes'] ?? PHP_INT_MAX) <= 16777216),
@@ -3557,7 +3545,7 @@ VALUES (%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         $rssPeakAfter = wp_fts_wc_rss_bytes('VmHWM');
         $passes[] = [
             'duration_ms' => $duration,
-            'processed' => (int) ($summary['processed'] ?? 0),
+            'indexed' => (int) ($summary['indexed'] ?? 0),
             'failures' => (int) ($summary['last_batch_failures'] ?? 0),
             'skipped_locked' => !empty($summary['skipped_locked']),
             'statement_count' => count($queries),
@@ -3591,7 +3579,7 @@ VALUES (%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
     $workerRssPeakMax = max(array_column($passes, 'rss_peak_after_bytes') ?: [0]);
     $phpPeak = max($phpLifetimePeak, memory_get_peak_usage(true));
     $rssPeak = wp_fts_wc_rss_bytes('VmHWM');
-    $processed = array_sum(array_column($passes, 'processed'));
+    $workerIndexed = array_sum(array_column($passes, 'indexed'));
     $unknownStatements = array_sum(array_column($passes, 'unknown_statement_count'));
     $passCount = count($passes);
     $sourceBindingValid = array_keys($sourceBinding) === ['source_sha', 'zip_sha256', 'harness_sha256', 'lane_id', 'engine', 'profile', 'manifest_sha256', 'validation_evidence_sha256']
@@ -3607,7 +3595,7 @@ VALUES (%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
     $gates = [
         wp_fts_wc_gate('max_valid_setup_source_binding', 'complete source binding and Linux process identity', ['binding' => $sourceBinding, 'process_identity' => $processIdentity], $sourceBindingValid && wp_fts_wc_process_identity_valid($processIdentity)),
         wp_fts_wc_gate('max_valid_setup_enqueue_bound', ['statements' => 1, 'max_bytes' => '<= 1048576', 'duration_ms' => '<= 5000'], ['statements' => count($enqueue['queries']), 'max_bytes' => $enqueueMaxBytes, 'duration_ms' => $enqueueDuration], count($enqueue['queries']) === 1 && $enqueueMaxBytes > 0 && $enqueueMaxBytes <= 1048576 && $enqueueDuration >= 0.0 && $enqueueDuration <= 5000.0),
-        wp_fts_wc_gate('max_valid_setup_worker_progress', ['processed' => 20, 'passes' => '1..100', 'failures' => 0, 'skipped_locked' => false], ['processed' => $processed, 'passes' => $passCount, 'failures' => array_sum(array_column($passes, 'failures')), 'skipped_locked' => count(array_filter(array_column($passes, 'skipped_locked')))], $processed === 20 && $passCount > 0 && $passCount <= 100 && array_sum(array_column($passes, 'failures')) === 0 && count(array_filter(array_column($passes, 'skipped_locked'))) === 0),
+        wp_fts_wc_gate('max_valid_setup_worker_progress', ['indexed' => 20, 'passes' => '1..100', 'failures' => 0, 'skipped_locked' => false], ['indexed' => $workerIndexed, 'passes' => $passCount, 'failures' => array_sum(array_column($passes, 'failures')), 'skipped_locked' => count(array_filter(array_column($passes, 'skipped_locked')))], $workerIndexed === 20 && $passCount > 0 && $passCount <= 100 && array_sum(array_column($passes, 'failures')) === 0 && count(array_filter(array_column($passes, 'skipped_locked'))) === 0),
         wp_fts_wc_gate('max_valid_setup_worker_statement_bound', ['per_pass' => '<= 20', 'unknown' => 0], ['max' => $workerStatementCountMax, 'unknown' => $unknownStatements], $workerStatementCountMax > 0 && $workerStatementCountMax <= 20 && $unknownStatements === 0),
         wp_fts_wc_gate('max_valid_setup_worker_sql_bound', '<= 4194304', $workerStatementBytesMax, $workerStatementBytesMax > 0 && $workerStatementBytesMax <= 4194304),
         wp_fts_wc_gate('max_valid_setup_worker_duration_bound', '<= 30000 ms', $workerDurationMax, $workerDurationMax >= 0.0 && $workerDurationMax <= 30000.0),
@@ -5640,7 +5628,7 @@ function wp_fts_wc_write_path_proof(array $manifest): array
             wp_fts_wc_gate('unchanged_requeues_foreground_index_data_statements', 0, count($repeatDataStatements), $repeatDataStatements === []),
             wp_fts_wc_gate('unchanged_requeues_coalesced_work_rows', 100, $workRowsQueued, $workRowsQueued === 100),
             wp_fts_wc_gate('unchanged_requeues_worker_attempted', 100, (int) ($unchangedSummary['attempted'] ?? -1), (int) ($unchangedSummary['attempted'] ?? -1) === 100),
-            wp_fts_wc_gate('unchanged_requeues_worker_not_reindexed', ['processed' => 0, 'indexed' => 0], ['processed' => (int) ($unchangedSummary['processed'] ?? -1), 'indexed' => (int) ($unchangedSummary['indexed'] ?? -1)], (int) ($unchangedSummary['processed'] ?? -1) === 0 && (int) ($unchangedSummary['indexed'] ?? -1) === 0),
+            wp_fts_wc_gate('unchanged_requeues_worker_not_reindexed', 0, (int) ($unchangedSummary['indexed'] ?? -1), (int) ($unchangedSummary['indexed'] ?? -1) === 0),
             wp_fts_wc_gate('unchanged_requeues_worker_acknowledged', ['committed' => 100, 'queue_processed' => 100], ['committed' => (int) ($unchangedSummary['committed'] ?? -1), 'queue_processed' => (int) ($unchangedSummary['queue_processed'] ?? -1)], (int) ($unchangedSummary['committed'] ?? -1) === 100 && (int) ($unchangedSummary['queue_processed'] ?? -1) === 100),
             wp_fts_wc_gate('unchanged_requeues_worker_unchanged', 100, (int) ($unchangedSummary['unchanged'] ?? -1), (int) ($unchangedSummary['unchanged'] ?? -1) === 100),
             wp_fts_wc_gate('unchanged_requeues_worker_analyzed', 0, (int) ($unchangedSummary['analyzed'] ?? -1), (int) ($unchangedSummary['analyzed'] ?? -1) === 0),
@@ -7097,7 +7085,6 @@ function wp_fts_wc_concurrency_setup(): array
         $drainBatches[] = [
             'work_rows_before' => $remainingBefore,
             'work_rows_after' => $remainingAfter,
-            'processed' => (int) ($summary['processed'] ?? 0),
             'indexed' => (int) ($summary['indexed'] ?? 0),
             'committed' => (int) ($summary['committed'] ?? 0),
             'queue_processed' => (int) ($summary['queue_processed'] ?? 0),
@@ -7694,13 +7681,13 @@ function wp_fts_wc_concurrent_writer(): array
             ]);
             $batches[] = [
                 'duration_ms' => wp_fts_wc_elapsed_ms($batchStarted),
-                'processed' => (int) ($summary['processed'] ?? 0),
+                'indexed' => (int) ($summary['indexed'] ?? 0),
                 'skipped_locked' => !empty($summary['skipped_locked']),
                 'failures' => (int) ($summary['last_batch_failures'] ?? 0),
                 'queued' => count($postIds),
             ];
         } catch (Throwable $error) {
-            $batches[] = ['duration_ms' => wp_fts_wc_elapsed_ms($batchStarted), 'processed' => 0, 'skipped_locked' => false, 'failures' => 1, 'error' => $error->getMessage()];
+            $batches[] = ['duration_ms' => wp_fts_wc_elapsed_ms($batchStarted), 'indexed' => 0, 'skipped_locked' => false, 'failures' => 1, 'error' => $error->getMessage()];
         }
         $iteration++;
         usleep(20000);
@@ -7719,7 +7706,7 @@ function wp_fts_wc_concurrent_writer(): array
         'shared_window' => $window,
         'measured_overlap_seconds' => max(0.0, (min($finishedNs, $deadlineNs) - max($startedNs, (int) $window['start_monotonic_ns'])) / 1000000000),
         'batches' => $batches,
-        'processed' => array_sum(array_column($batches, 'processed')),
+        'indexed' => array_sum(array_column($batches, 'indexed')),
         'lease_acquired_batches' => count(array_filter($batches, static fn(array $batch): bool => empty($batch['skipped_locked']))),
         'lease_skipped_batches' => count(array_filter($batches, static fn(array $batch): bool => !empty($batch['skipped_locked']))),
         'assigned_post_ids' => $postIds,
@@ -7733,7 +7720,7 @@ function wp_fts_wc_concurrent_writer(): array
         throw new RuntimeException("Concurrent writer {$worker} recorded {$result['failures']} failed batches.");
     }
 
-    return ['status' => 'PASS', 'phase' => 'concurrent-writer', 'worker' => $worker, 'processed' => $result['processed'], 'failures' => 0];
+    return ['status' => 'PASS', 'phase' => 'concurrent-writer', 'worker' => $worker, 'indexed' => $result['indexed'], 'failures' => 0];
 }
 
 /**
@@ -11183,8 +11170,8 @@ ORDER BY OCTET_LENGTH(post_content) DESC,ID ASC LIMIT 100",
         static fn(array $batch): bool => (int) ($batch['total_statement_count'] ?? PHP_INT_MAX) > 20
     )) === 0;
 
-    $maxProcessed = max(array_column($batches, 'processed') ?: [0]);
-    $fullBatchCount = count(array_filter($batches, static fn(array $batch): bool => (int) ($batch['processed'] ?? 0) === 100));
+    $maxIndexed = max(array_column($batches, 'indexed') ?: [0]);
+    $fullBatchCount = count(array_filter($batches, static fn(array $batch): bool => (int) ($batch['indexed'] ?? 0) === 100));
     $failures = array_sum(array_column($batches, 'failures'));
     $result = [
         'schema' => 'relational-fts-drain-v6',
@@ -11195,7 +11182,7 @@ ORDER BY OCTET_LENGTH(post_content) DESC,ID ASC LIMIT 100",
             && $allBatchesHaveBoundedTotal
             && $changedRoleContract
             && (int) ($changedBatch['attempted'] ?? -1) === 100
-            && (int) ($changedBatch['processed'] ?? -1) === 100
+            && (int) ($changedBatch['indexed'] ?? -1) === 100
             && (int) ($changedBatch['analyzed'] ?? -1) === 100
             && (int) ($changedBatch['unchanged'] ?? -1) === 0
             && $changedHashes === 100
@@ -11207,8 +11194,8 @@ ORDER BY OCTET_LENGTH(post_content) DESC,ID ASC LIMIT 100",
         'phase' => 'drain',
         'elapsed_ms' => wp_fts_wc_elapsed_ms($started),
         'batches' => $batches,
-        'processed' => array_sum(array_column($batches, 'processed')),
-        'max_processed' => $maxProcessed,
+        'indexed' => array_sum(array_column($batches, 'indexed')),
+        'max_indexed' => $maxIndexed,
         'full_100_document_batches' => $fullBatchCount,
         'changed_100_document_batch' => [
             'post_ids' => $fixtureIds,
@@ -11245,7 +11232,7 @@ ORDER BY OCTET_LENGTH(post_content) DESC,ID ASC LIMIT 100",
         throw new RuntimeException('Final work-drain proof failed.');
     }
 
-    return ['status' => 'PASS', 'phase' => 'drain', 'processed' => $result['processed'], 'batches' => count($batches)];
+    return ['status' => 'PASS', 'phase' => 'drain', 'indexed' => $result['indexed'], 'batches' => count($batches)];
 }
 
 /**
@@ -11357,7 +11344,7 @@ function wp_fts_wc_mixed_scope_changed_batch(
         && (int) ($documentTurn['total_statement_count'] ?? PHP_INT_MAX) <= 20
         && (int) ($documentTurn['bounded_data_statement_count'] ?? PHP_INT_MAX) <= 15
         && (int) ($documentTurn['attempted'] ?? -1) === 100
-        && (int) ($documentTurn['processed'] ?? -1) === 100
+        && (int) ($documentTurn['indexed'] ?? -1) === 100
         && (int) ($documentTurn['analyzed'] ?? -1) === 100
         && (int) ($documentTurn['unchanged'] ?? -1) === 0
         && (int) ($documentTurn['deferred'] ?? -1) === 0
@@ -11432,7 +11419,7 @@ function wp_fts_wc_mixed_scope_changed_batch(
         && (int) ($scopeTurn['total_statement_count'] ?? PHP_INT_MAX) <= 20
         && (int) ($scopeTurn['bounded_data_statement_count'] ?? PHP_INT_MAX) <= 15
         && (int) ($scopeTurn['attempted'] ?? -1) === 0
-        && (int) ($scopeTurn['processed'] ?? -1) === 0
+        && (int) ($scopeTurn['indexed'] ?? -1) === 0
         && (int) ($scopeTurn['analyzed'] ?? -1) === 0
         && (int) ($scopeTurn['deferred'] ?? -1) === 100
         && $postRowsAfterScopeTurn >= 100
@@ -11644,7 +11631,7 @@ function wp_fts_wc_composed_maximum_worker_path(array &$queueClaimPlans): array
         );
         $oldPostingCounts = wp_fts_wc_document_posting_kind_counts($maximumPostId);
         $oldHashes = wp_fts_wc_document_hashes($documents, [$maximumPostId]);
-        $setupPassed = (int) ($setupBatch['processed'] ?? -1) === 1
+        $setupPassed = (int) ($setupBatch['indexed'] ?? -1) === 1
             && (int) ($setupBatch['analyzed'] ?? -1) === 1
             && (int) ($setupBatch['failures'] ?? -1) === 0
             && (int) ($setupBatch['total_statement_count'] ?? PHP_INT_MAX) <= 20
@@ -12240,7 +12227,6 @@ function wp_fts_wc_instrumented_worker_batch(
         'worker_mode' => $scheduled ? 'cron_' . $scheduledEventState : 'manual',
         'duration_ms' => $batchDurationMs,
         'attempted' => (int) ($summary['attempted'] ?? 0),
-        'processed' => (int) ($summary['processed'] ?? 0),
         'committed' => (int) ($summary['committed'] ?? 0),
         'queue_processed' => (int) ($summary['queue_processed'] ?? 0),
         'superseded' => (int) ($summary['superseded'] ?? 0),
@@ -12607,7 +12593,7 @@ function wp_fts_wc_finalize(): array
         $concurrentGates[] = wp_fts_wc_gate("concurrent_reader_{$worker}_overlap_seconds", ">= {$concurrencySeconds}", $reader['measured_overlap_seconds'] ?? null, is_numeric($reader['measured_overlap_seconds'] ?? null) && (float) $reader['measured_overlap_seconds'] >= $concurrencySeconds);
     }
 
-    $writerProcessed = 0;
+    $writerIndexed = 0;
     $writerFailures = 0;
     $writerPeaks = [];
     $writerEvidence = [];
@@ -12616,9 +12602,9 @@ function wp_fts_wc_finalize(): array
         $writerEvidence[$worker] = $writer;
         $rawBatches = is_array($writer['batches'] ?? null) ? array_values($writer['batches']) : [];
         $batches = array_values(array_filter($rawBatches, 'is_array'));
-        $batchProcessed = array_sum(array_map(static fn(array $batch): int => (int) ($batch['processed'] ?? 0), $batches));
+        $batchIndexed = array_sum(array_map(static fn(array $batch): int => (int) ($batch['indexed'] ?? 0), $batches));
         $batchFailures = array_sum(array_map(static fn(array $batch): int => (int) ($batch['failures'] ?? 0), $batches));
-        $writerProcessed += (int) ($writer['processed'] ?? 0);
+        $writerIndexed += (int) ($writer['indexed'] ?? 0);
         $writerFailures += (int) ($writer['failures'] ?? 0);
         $writerPeaks[] = (int) ($writer['rss_peak_bytes'] ?? 0);
         $batchesValid = $rawBatches !== [] && count($rawBatches) === count($batches);
@@ -12626,8 +12612,8 @@ function wp_fts_wc_finalize(): array
             $batchesValid = $batchesValid
                 && is_numeric($batch['duration_ms'] ?? null)
                 && (float) $batch['duration_ms'] >= 0.0
-                && is_int($batch['processed'] ?? null)
-                && (int) $batch['processed'] >= 0
+                && is_int($batch['indexed'] ?? null)
+                && (int) $batch['indexed'] >= 0
                 && is_int($batch['failures'] ?? null)
                 && (int) $batch['failures'] >= 0;
         }
@@ -12660,7 +12646,7 @@ function wp_fts_wc_finalize(): array
             && ($writer['phase'] ?? null) === 'concurrent-writer'
             && ($writer['worker'] ?? null) === $worker
             && $batchesValid
-            && ($writer['processed'] ?? null) === $batchProcessed
+            && ($writer['indexed'] ?? null) === $batchIndexed
             && ($writer['failures'] ?? null) === $batchFailures
             && $windowIdentity === $sharedWindowIdentity
             && $startNs >= (int) ($writerWindow['start_monotonic_ns'] ?? PHP_INT_MAX)
@@ -12669,7 +12655,7 @@ function wp_fts_wc_finalize(): array
             && (float) $writer['measured_overlap_seconds'] >= $concurrencySeconds;
         $concurrentGates[] = wp_fts_wc_gate("concurrent_writer_{$worker}_artifact", 'complete PASS writer artifact', [$writer['schema'] ?? null, $writer['status'] ?? null, $writer['phase'] ?? null, $writer['worker'] ?? null, count($rawBatches)], $writerShape);
         $concurrentGates[] = wp_fts_wc_gate("concurrent_writer_{$worker}_overlap_seconds", ">= {$concurrencySeconds}", $writer['measured_overlap_seconds'] ?? null, is_numeric($writer['measured_overlap_seconds'] ?? null) && (float) $writer['measured_overlap_seconds'] >= $concurrencySeconds);
-        $concurrentGates[] = wp_fts_wc_gate("concurrent_writer_{$worker}_independent_progress", ['processed' => '> 0', 'lease_acquired_batches' => '> 0'], ['processed' => $writer['processed'] ?? null, 'lease_acquired_batches' => $writer['lease_acquired_batches'] ?? null], (int) ($writer['processed'] ?? 0) > 0 && (int) ($writer['lease_acquired_batches'] ?? 0) > 0);
+        $concurrentGates[] = wp_fts_wc_gate("concurrent_writer_{$worker}_independent_progress", ['indexed' => '> 0', 'lease_acquired_batches' => '> 0'], ['indexed' => $writer['indexed'] ?? null, 'lease_acquired_batches' => $writer['lease_acquired_batches'] ?? null], (int) ($writer['indexed'] ?? 0) > 0 && (int) ($writer['lease_acquired_batches'] ?? 0) > 0);
         $concurrentGates[] = wp_fts_wc_gate("concurrent_writer_{$worker}_final_index_parity", 20, count($parityRows), count($parityRows) === 20);
     }
 
@@ -12689,7 +12675,7 @@ function wp_fts_wc_finalize(): array
         'requests' => $readerRequests,
         'errors' => $errors,
         'latency_ms' => $latency,
-        'writer_processed' => $writerProcessed,
+        'writer_indexed' => $writerIndexed,
         'writer_failures' => $writerFailures,
         'reader_rss_peak_bytes' => max($readerPeaks ?: [0]),
         'writer_rss_peak_bytes' => max($writerPeaks ?: [0]),
@@ -12707,7 +12693,7 @@ function wp_fts_wc_finalize(): array
         wp_fts_wc_gate('concurrent_requests', '> 0', $readerRequests, $readerRequests > 0),
         wp_fts_wc_gate('concurrent_errors', 0, count($errors), $errors === []),
         wp_fts_wc_gate('concurrent_writer_failures', 0, $writerFailures, $writerFailures === 0),
-        wp_fts_wc_gate('concurrent_writer_progress', '> 0', $writerProcessed, $writerProcessed > 0),
+        wp_fts_wc_gate('concurrent_writer_progress', '> 0', $writerIndexed, $writerIndexed > 0),
         wp_fts_wc_gate('concurrent_shared_window_identity', 'one exact run/start/deadline/minimum tuple', $sharedWindowIdentity, is_array($sharedWindowIdentity) && ($sharedWindowIdentity[0] ?? null) === ($baseline['concurrency_run_id'] ?? null)),
         wp_fts_wc_gate('concurrent_all_worker_intersection_seconds', ">= {$concurrencySeconds}", $measuredIntersectionSeconds, $measuredIntersectionSeconds >= $concurrencySeconds),
         wp_fts_wc_gate('concurrent_p95_ms', '<= 1000', $latency['p95'], $latency['p95'] <= 1000.0),
@@ -12804,7 +12790,7 @@ function wp_fts_wc_finalize(): array
         wp_fts_wc_gate('worker_changed_fixture_enqueue_statements', 1, (int) ($changedWorker['enqueue_statement_count'] ?? -1), (int) ($changedWorker['enqueue_statement_count'] ?? -1) === 1),
         wp_fts_wc_gate('worker_changed_fixture_queued', 100, (int) ($changedWorker['queued'] ?? -1), (int) ($changedWorker['queued'] ?? -1) === 100 && (int) ($changedWorker['work_rows_before_batch'] ?? -1) === 100),
         wp_fts_wc_gate('worker_changed_batch_attempted', 100, (int) ($changedWorkerBatch['attempted'] ?? -1), (int) ($changedWorkerBatch['attempted'] ?? -1) === 100),
-        wp_fts_wc_gate('worker_changed_batch_processed', 100, (int) ($changedWorkerBatch['processed'] ?? -1), (int) ($changedWorkerBatch['processed'] ?? -1) === 100),
+        wp_fts_wc_gate('worker_changed_batch_indexed', 100, (int) ($changedWorkerBatch['indexed'] ?? -1), (int) ($changedWorkerBatch['indexed'] ?? -1) === 100),
         wp_fts_wc_gate('worker_changed_batch_analyzed', 100, (int) ($changedWorkerBatch['analyzed'] ?? -1), (int) ($changedWorkerBatch['analyzed'] ?? -1) === 100),
         wp_fts_wc_gate('worker_changed_batch_unchanged', 0, (int) ($changedWorkerBatch['unchanged'] ?? -1), (int) ($changedWorkerBatch['unchanged'] ?? -1) === 0),
         wp_fts_wc_gate('worker_changed_batch_hashes_rewritten', 100, (int) ($changedWorker['changed_hashes'] ?? -1), (int) ($changedWorker['changed_hashes'] ?? -1) === 100),
@@ -12815,14 +12801,14 @@ function wp_fts_wc_finalize(): array
         wp_fts_wc_gate('worker_changed_batch_transaction_controls', ['transaction_start', 'transaction_commit'], array_values(array_filter(is_array($changedWorkerBatch['statement_roles'] ?? null) ? $changedWorkerBatch['statement_roles'] : [], static fn(string $role): bool => str_starts_with($role, 'transaction_'))), (int) ($changedWorkerBatch['worker_transaction_control_statement_count'] ?? -1) === 2 && array_values(array_filter(is_array($changedWorkerBatch['statement_roles'] ?? null) ? $changedWorkerBatch['statement_roles'] : [], static fn(string $role): bool => str_starts_with($role, 'transaction_'))) === ['transaction_start', 'transaction_commit']),
         wp_fts_wc_gate('worker_changed_batch_statement_roles', 'all recognized in production order', ['ordered' => $changedWorkerBatch['statement_roles_ordered'] ?? null, 'unclassified' => $changedWorkerBatch['unclassified_statement_count'] ?? null, 'roles' => $changedWorkerBatch['statement_roles'] ?? null], ($changedWorkerBatch['statement_roles_ordered'] ?? false) === true && (int) ($changedWorkerBatch['unclassified_statement_count'] ?? -1) === 0),
         wp_fts_wc_gate('worker_mixed_active_artifact', 'PASS active corpus alternation', [$mixedActive['status'] ?? null, $mixedActive['case'] ?? null, $mixedActive['scope_was_exhausted'] ?? null], ($mixedActive['status'] ?? null) === 'PASS' && ($mixedActive['case'] ?? null) === 'active-scope' && ($mixedActive['scope_was_exhausted'] ?? null) === false),
-        wp_fts_wc_gate('worker_mixed_active_maximum_documents', ['work_rows' => 101, 'attempted' => 100, 'analyzed' => 100, 'changed_hashes' => 100, 'total_statements' => '<= 20'], ['work_rows' => $mixedActive['work_rows_before_document_turn'] ?? null, 'attempted' => $mixedActiveDocumentTurn['attempted'] ?? null, 'analyzed' => $mixedActiveDocumentTurn['analyzed'] ?? null, 'changed_hashes' => $mixedActive['document_turn_changed_hashes'] ?? null, 'total_statements' => $mixedActiveDocumentTurn['total_statement_count'] ?? null], (int) ($mixedActive['work_rows_before_document_turn'] ?? -1) === 101 && (int) ($mixedActiveDocumentTurn['attempted'] ?? -1) === 100 && (int) ($mixedActiveDocumentTurn['processed'] ?? -1) === 100 && (int) ($mixedActiveDocumentTurn['analyzed'] ?? -1) === 100 && (int) ($mixedActiveDocumentTurn['unchanged'] ?? -1) === 0 && (int) ($mixedActive['document_turn_changed_hashes'] ?? -1) === 100 && (int) ($mixedActiveDocumentTurn['total_statement_count'] ?? PHP_INT_MAX) <= 20),
+        wp_fts_wc_gate('worker_mixed_active_maximum_documents', ['work_rows' => 101, 'attempted' => 100, 'indexed' => 100, 'analyzed' => 100, 'changed_hashes' => 100, 'total_statements' => '<= 20'], ['work_rows' => $mixedActive['work_rows_before_document_turn'] ?? null, 'attempted' => $mixedActiveDocumentTurn['attempted'] ?? null, 'indexed' => $mixedActiveDocumentTurn['indexed'] ?? null, 'analyzed' => $mixedActiveDocumentTurn['analyzed'] ?? null, 'changed_hashes' => $mixedActive['document_turn_changed_hashes'] ?? null, 'total_statements' => $mixedActiveDocumentTurn['total_statement_count'] ?? null], (int) ($mixedActive['work_rows_before_document_turn'] ?? -1) === 101 && (int) ($mixedActiveDocumentTurn['attempted'] ?? -1) === 100 && (int) ($mixedActiveDocumentTurn['indexed'] ?? -1) === 100 && (int) ($mixedActiveDocumentTurn['analyzed'] ?? -1) === 100 && (int) ($mixedActiveDocumentTurn['unchanged'] ?? -1) === 0 && (int) ($mixedActive['document_turn_changed_hashes'] ?? -1) === 100 && (int) ($mixedActiveDocumentTurn['total_statement_count'] ?? PHP_INT_MAX) <= 20),
         wp_fts_wc_gate('worker_mixed_active_document_roles', 'scope-free maximum protocol plus one durable scope yield', $mixedActiveDocumentTurn['statement_roles'] ?? null, ($mixedActiveDocumentTurn['statement_roles'] ?? null) === ($mixedActive['document_turn_expected_roles'] ?? null) && ($mixedActiveDocumentTurn['statement_roles_ordered'] ?? false) === true && (int) ($mixedActiveDocumentTurn['unclassified_statement_count'] ?? -1) === 0),
         wp_fts_wc_gate('worker_mixed_active_continuous_arrival', ['queued' => 100, 'work_rows' => 101, 'deferred' => 100, 'documents_ready' => '>= 100'], ['queued' => $mixedActive['continuous_arrival']['queued'] ?? null, 'work_rows' => $mixedActive['work_rows_before_scope_turn'] ?? null, 'deferred' => $mixedActiveScopeTurn['deferred'] ?? null, 'documents_ready' => $mixedActive['post_rows_after_scope_turn'] ?? null], (int) ($mixedActive['continuous_arrival']['queued'] ?? -1) === 100 && (int) ($mixedActive['work_rows_before_scope_turn'] ?? -1) === 101 && (int) ($mixedActiveScopeTurn['deferred'] ?? -1) === 100 && (int) ($mixedActive['post_rows_after_scope_turn'] ?? -1) >= 100),
-        wp_fts_wc_gate('worker_mixed_active_scope_progress', ['processed' => 0, 'scope_completed' => false, 'cursor' => 'advanced', 'total_statements' => '<= 20'], ['processed' => $mixedActiveScopeTurn['processed'] ?? null, 'scope_completed' => $mixedActiveScopeTurn['scope_completed'] ?? null, 'cursor_before' => $mixedActive['initial_cursor_post_id'] ?? null, 'cursor_after' => $mixedActive['scope_after_scope_turn']['cursor_post_id'] ?? null, 'total_statements' => $mixedActiveScopeTurn['total_statement_count'] ?? null], (int) ($mixedActiveScopeTurn['processed'] ?? -1) === 0 && ($mixedActiveScopeTurn['scope_completed'] ?? true) === false && (int) ($mixedActive['scope_after_scope_turn']['cursor_post_id'] ?? 0) > (int) ($mixedActive['initial_cursor_post_id'] ?? PHP_INT_MAX) && (int) ($mixedActiveScopeTurn['total_statement_count'] ?? PHP_INT_MAX) <= 20 && in_array('post_batch_release', is_array($mixedActiveScopeTurn['statement_roles'] ?? null) ? $mixedActiveScopeTurn['statement_roles'] : [], true) && in_array('scope_page_advance', is_array($mixedActiveScopeTurn['statement_roles'] ?? null) ? $mixedActiveScopeTurn['statement_roles'] : [], true)),
+        wp_fts_wc_gate('worker_mixed_active_scope_progress', ['indexed' => 0, 'scope_completed' => false, 'cursor' => 'advanced', 'total_statements' => '<= 20'], ['indexed' => $mixedActiveScopeTurn['indexed'] ?? null, 'scope_completed' => $mixedActiveScopeTurn['scope_completed'] ?? null, 'cursor_before' => $mixedActive['initial_cursor_post_id'] ?? null, 'cursor_after' => $mixedActive['scope_after_scope_turn']['cursor_post_id'] ?? null, 'total_statements' => $mixedActiveScopeTurn['total_statement_count'] ?? null], (int) ($mixedActiveScopeTurn['indexed'] ?? -1) === 0 && ($mixedActiveScopeTurn['scope_completed'] ?? true) === false && (int) ($mixedActive['scope_after_scope_turn']['cursor_post_id'] ?? 0) > (int) ($mixedActive['initial_cursor_post_id'] ?? PHP_INT_MAX) && (int) ($mixedActiveScopeTurn['total_statement_count'] ?? PHP_INT_MAX) <= 20 && in_array('post_batch_release', is_array($mixedActiveScopeTurn['statement_roles'] ?? null) ? $mixedActiveScopeTurn['statement_roles'] : [], true) && in_array('scope_page_advance', is_array($mixedActiveScopeTurn['statement_roles'] ?? null) ? $mixedActiveScopeTurn['statement_roles'] : [], true)),
         wp_fts_wc_gate('worker_mixed_exhausted_artifact', 'PASS exhausted corpus alternation', [$mixedExhausted['status'] ?? null, $mixedExhausted['case'] ?? null, $mixedExhausted['scope_was_exhausted'] ?? null], ($mixedExhausted['status'] ?? null) === 'PASS' && ($mixedExhausted['case'] ?? null) === 'exhausted-corpus-scope' && ($mixedExhausted['scope_was_exhausted'] ?? null) === true),
-        wp_fts_wc_gate('worker_mixed_exhausted_maximum_documents', ['work_rows' => 101, 'attempted' => 100, 'analyzed' => 100, 'changed_hashes' => 100, 'total_statements' => '<= 20'], ['work_rows' => $mixedExhausted['work_rows_before_document_turn'] ?? null, 'attempted' => $mixedExhaustedDocumentTurn['attempted'] ?? null, 'analyzed' => $mixedExhaustedDocumentTurn['analyzed'] ?? null, 'changed_hashes' => $mixedExhausted['document_turn_changed_hashes'] ?? null, 'total_statements' => $mixedExhaustedDocumentTurn['total_statement_count'] ?? null], (int) ($mixedExhausted['work_rows_before_document_turn'] ?? -1) === 101 && (int) ($mixedExhaustedDocumentTurn['attempted'] ?? -1) === 100 && (int) ($mixedExhaustedDocumentTurn['processed'] ?? -1) === 100 && (int) ($mixedExhaustedDocumentTurn['analyzed'] ?? -1) === 100 && (int) ($mixedExhaustedDocumentTurn['unchanged'] ?? -1) === 0 && (int) ($mixedExhausted['document_turn_changed_hashes'] ?? -1) === 100 && (int) ($mixedExhaustedDocumentTurn['total_statement_count'] ?? PHP_INT_MAX) <= 20),
+        wp_fts_wc_gate('worker_mixed_exhausted_maximum_documents', ['work_rows' => 101, 'attempted' => 100, 'indexed' => 100, 'analyzed' => 100, 'changed_hashes' => 100, 'total_statements' => '<= 20'], ['work_rows' => $mixedExhausted['work_rows_before_document_turn'] ?? null, 'attempted' => $mixedExhaustedDocumentTurn['attempted'] ?? null, 'indexed' => $mixedExhaustedDocumentTurn['indexed'] ?? null, 'analyzed' => $mixedExhaustedDocumentTurn['analyzed'] ?? null, 'changed_hashes' => $mixedExhausted['document_turn_changed_hashes'] ?? null, 'total_statements' => $mixedExhaustedDocumentTurn['total_statement_count'] ?? null], (int) ($mixedExhausted['work_rows_before_document_turn'] ?? -1) === 101 && (int) ($mixedExhaustedDocumentTurn['attempted'] ?? -1) === 100 && (int) ($mixedExhaustedDocumentTurn['indexed'] ?? -1) === 100 && (int) ($mixedExhaustedDocumentTurn['analyzed'] ?? -1) === 100 && (int) ($mixedExhaustedDocumentTurn['unchanged'] ?? -1) === 0 && (int) ($mixedExhausted['document_turn_changed_hashes'] ?? -1) === 100 && (int) ($mixedExhaustedDocumentTurn['total_statement_count'] ?? PHP_INT_MAX) <= 20),
         wp_fts_wc_gate('worker_mixed_exhausted_continuous_arrival', ['queued' => 100, 'work_rows' => 101, 'deferred' => 100, 'documents_ready' => 100], ['queued' => $mixedExhausted['continuous_arrival']['queued'] ?? null, 'work_rows' => $mixedExhausted['work_rows_before_scope_turn'] ?? null, 'deferred' => $mixedExhaustedScopeTurn['deferred'] ?? null, 'documents_ready' => $mixedExhausted['post_rows_after_scope_turn'] ?? null], (int) ($mixedExhausted['continuous_arrival']['queued'] ?? -1) === 100 && (int) ($mixedExhausted['work_rows_before_scope_turn'] ?? -1) === 101 && (int) ($mixedExhaustedScopeTurn['deferred'] ?? -1) === 100 && (int) ($mixedExhausted['post_rows_after_scope_turn'] ?? -1) === 100),
-        wp_fts_wc_gate('worker_mixed_exhausted_scope_completion', ['processed' => 0, 'scope_completed_global' => true, 'scope_row' => null, 'total_statements' => '<= 20'], ['processed' => $mixedExhaustedScopeTurn['processed'] ?? null, 'scope_completed_global' => $mixedExhaustedScopeTurn['scope_completed_global'] ?? null, 'scope_row' => $mixedExhausted['scope_after_scope_turn'] ?? null, 'total_statements' => $mixedExhaustedScopeTurn['total_statement_count'] ?? null], (int) ($mixedExhaustedScopeTurn['processed'] ?? -1) === 0 && ($mixedExhaustedScopeTurn['scope_completed'] ?? false) === true && ($mixedExhaustedScopeTurn['scope_completed_global'] ?? false) === true && array_key_exists('scope_after_scope_turn', $mixedExhausted) && $mixedExhausted['scope_after_scope_turn'] === null && (int) ($mixedExhaustedScopeTurn['total_statement_count'] ?? PHP_INT_MAX) <= 20 && in_array('post_batch_release', is_array($mixedExhaustedScopeTurn['statement_roles'] ?? null) ? $mixedExhaustedScopeTurn['statement_roles'] : [], true) && in_array('scope_acknowledgement', is_array($mixedExhaustedScopeTurn['statement_roles'] ?? null) ? $mixedExhaustedScopeTurn['statement_roles'] : [], true)),
+        wp_fts_wc_gate('worker_mixed_exhausted_scope_completion', ['indexed' => 0, 'scope_completed_global' => true, 'scope_row' => null, 'total_statements' => '<= 20'], ['indexed' => $mixedExhaustedScopeTurn['indexed'] ?? null, 'scope_completed_global' => $mixedExhaustedScopeTurn['scope_completed_global'] ?? null, 'scope_row' => $mixedExhausted['scope_after_scope_turn'] ?? null, 'total_statements' => $mixedExhaustedScopeTurn['total_statement_count'] ?? null], (int) ($mixedExhaustedScopeTurn['indexed'] ?? -1) === 0 && ($mixedExhaustedScopeTurn['scope_completed'] ?? false) === true && ($mixedExhaustedScopeTurn['scope_completed_global'] ?? false) === true && array_key_exists('scope_after_scope_turn', $mixedExhausted) && $mixedExhausted['scope_after_scope_turn'] === null && (int) ($mixedExhaustedScopeTurn['total_statement_count'] ?? PHP_INT_MAX) <= 20 && in_array('post_batch_release', is_array($mixedExhaustedScopeTurn['statement_roles'] ?? null) ? $mixedExhaustedScopeTurn['statement_roles'] : [], true) && in_array('scope_acknowledgement', is_array($mixedExhaustedScopeTurn['statement_roles'] ?? null) ? $mixedExhaustedScopeTurn['statement_roles'] : [], true)),
         wp_fts_wc_gate('worker_composed_maximum_artifact', 'PASS complete composed lifecycle', [$composedMaximumWorker['status'] ?? null, count(is_array($composedMaximumWorker['path_batches'] ?? null) ? $composedMaximumWorker['path_batches'] : [])], ($composedMaximumWorker['status'] ?? null) === 'PASS' && is_array($composedMaximumWorker['path_batches'] ?? null) && $composedMaximumWorker['path_batches'] !== []),
         wp_fts_wc_gate('worker_composed_maximum_fixture', ['posts' => 6, 'tokens' => 4096, 'old/new/later' => ['lexical' => 4096, 'surface' => 4096, 'total' => 8192], 'dependency_rows' => 1, 'recovery_rows' => [1, 1]], ['posts' => $composedFixture['post_count'] ?? null, 'tokens' => $composedFixture['maximum_source_distinct_tokens'] ?? null, 'old' => $composedFixture['old_posting_counts'] ?? null, 'new' => $composedFixture['new_posting_counts'] ?? null, 'later' => $composedFixture['later_event_posting_counts'] ?? null, 'dependency_rows' => $composedFixture['selected_dependency_rows'] ?? null, 'recovery_rows' => [$composedFixture['recovery_conditioned_rows'] ?? null, $composedFixture['later_event_recovery_conditioned_rows'] ?? null]], (int) ($composedFixture['post_count'] ?? -1) === 6 && (int) ($composedFixture['maximum_source_distinct_tokens'] ?? -1) === 4096 && ($composedFixture['old_posting_counts'] ?? null) === ['lexical' => 4096, 'surface' => 4096, 'total' => 8192] && ($composedFixture['new_posting_counts'] ?? null) === ['lexical' => 4096, 'surface' => 4096, 'total' => 8192] && ($composedFixture['later_event_posting_counts'] ?? null) === ['lexical' => 4096, 'surface' => 4096, 'total' => 8192] && (int) ($composedFixture['selected_dependency_rows'] ?? -1) === 1 && (int) ($composedFixture['recovery_conditioned_rows'] ?? -1) === 1 && (int) ($composedFixture['later_event_recovery_conditioned_rows'] ?? -1) === 1 && ($composedFixture['hash_changed'] ?? false) === true && ($composedFixture['later_event_hash_changed'] ?? false) === true),
         wp_fts_wc_gate('worker_composed_source_overflow', ['aggregate' => '> 8388608', 'each_near_limit' => 1900000], ['aggregate' => $composedFixture['aggregate_source_bytes'] ?? null, 'limit' => $composedFixture['source_snapshot_limit_bytes'] ?? null, 'each_near_limit' => $composedFixture['near_limit_source_bytes_each'] ?? null], (int) ($composedFixture['aggregate_source_bytes'] ?? 0) > (int) ($composedFixture['source_snapshot_limit_bytes'] ?? PHP_INT_MAX) && (int) ($composedFixture['source_snapshot_limit_bytes'] ?? -1) === WP_FTS_Index_Queue::MAX_SOURCE_SNAPSHOT_BYTES && (int) ($composedFixture['near_limit_source_bytes_each'] ?? -1) === 1900000),
@@ -13138,7 +13124,7 @@ function wp_fts_wc_finalize(): array
     $maxValidIds = is_array($maxValidSetup['post_ids'] ?? null) ? array_values($maxValidSetup['post_ids']) : [];
     $maxValidPasses = is_array($maxValidSetup['worker_passes'] ?? null) ? array_values($maxValidSetup['worker_passes']) : [];
     $maxValidPassesValid = $maxValidPasses !== [];
-    $setupProcessed = 0;
+    $setupIndexed = 0;
     $setupStatementCounts = [];
     $setupStatementMaxBytes = [];
     $setupDurations = [];
@@ -13156,7 +13142,7 @@ function wp_fts_wc_finalize(): array
         $statementHashes = is_array($pass['statement_sha256'] ?? null) ? array_values($pass['statement_sha256']) : [];
         $statementRoles = is_array($pass['statement_roles'] ?? null) ? array_values($pass['statement_roles']) : [];
         $duration = $pass['duration_ms'] ?? null;
-        $processed = $pass['processed'] ?? null;
+        $indexed = $pass['indexed'] ?? null;
         $phpUsage = $pass['php_usage_before_bytes'] ?? null;
         $phpPeak = $pass['php_peak_after_reset_bytes'] ?? null;
         $phpDelta = $pass['php_peak_delta_bytes'] ?? null;
@@ -13164,13 +13150,13 @@ function wp_fts_wc_finalize(): array
         $rssPeak = $pass['rss_peak_after_bytes'] ?? null;
         $rssDelta = $pass['rss_peak_delta_bytes'] ?? null;
         $passValid = array_keys($pass) === [
-            'duration_ms', 'processed', 'failures', 'skipped_locked',
+            'duration_ms', 'indexed', 'failures', 'skipped_locked',
             'statement_count', 'statement_bytes', 'statement_sha256', 'max_statement_bytes', 'statement_roles', 'unknown_statement_count',
             'php_usage_before_bytes', 'php_peak_after_reset_bytes', 'php_peak_delta_bytes',
             'rss_before_bytes', 'rss_peak_after_bytes', 'rss_peak_delta_bytes',
         ]
             && is_numeric($duration) && (float) $duration >= 0.0 && (float) $duration <= 30000.0
-            && is_int($processed) && $processed >= 0
+            && is_int($indexed) && $indexed >= 0
             && ($pass['failures'] ?? null) === 0
             && ($pass['skipped_locked'] ?? null) === false
             && is_int($statementCount) && $statementCount > 0 && $statementCount <= 20
@@ -13190,7 +13176,7 @@ function wp_fts_wc_finalize(): array
             && is_int($rssDelta) && $rssDelta === max(0, $rssPeak - $rssBefore) && $rssDelta <= 33554432;
         $maxValidPassesValid = $maxValidPassesValid && $passValid;
         if ($passValid) {
-            $setupProcessed += $processed;
+            $setupIndexed += $indexed;
             $setupStatementCounts[] = $statementCount;
             $setupStatementMaxBytes[] = (int) $pass['max_statement_bytes'];
             $setupDurations[] = (float) $duration;
@@ -13227,7 +13213,7 @@ function wp_fts_wc_finalize(): array
         && (float) $maxValidSetup['enqueue_duration_ms'] >= 0.0
         && (float) $maxValidSetup['enqueue_duration_ms'] <= 5000.0
         && $maxValidPassesValid
-        && $setupProcessed === 20
+        && $setupIndexed === 20
         && ($maxValidSetup['worker_statement_count_max'] ?? null) === max($setupStatementCounts ?: [0])
         && ($maxValidSetup['worker_max_statement_bytes'] ?? null) === max($setupStatementMaxBytes ?: [0])
         && ($maxValidSetup['worker_duration_ms_max'] ?? null) === max($setupDurations ?: [0.0])
