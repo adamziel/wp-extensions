@@ -429,6 +429,14 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
         $expectedDocuments = (int) ($preparation['documents'] ?? 0);
     }
     wp_fts_wc_assert($expectedDocuments > 0, 'The asynchronous reindex drain has no target documents.');
+    $expectedCommittedDocuments = $initialIndex
+        ? $expectedDocuments
+        : wp_fts_wc_checked_count(
+            "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type='post' AND post_status IN ('publish','draft','pending','future','private')",
+            'canonical documents selected by the filtered reindex scope'
+        );
+    $expectedDeletedDocuments = $expectedCommittedDocuments - $expectedDocuments;
+    wp_fts_wc_assert($expectedDeletedDocuments >= 0, 'The filtered reindex scope selected fewer rows than the indexable corpus.');
     $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
     $initial = [
         'post' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='post'", 'post work after the WP-CLI reindex enqueue'),
@@ -544,20 +552,19 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
     // are not terminal failures when every document is eventually committed.
     $analysisCeiling = $expectedDocuments + $totals['deferred'];
     $terminalFailures = $totals['superseded']
-        + $totals['unchanged']
-        + $totals['deleted']
         + $totals['permanently_rejected']
         + $totals['retryable_failures']
         + $totals['last_batch_failures'];
     // Scope scans and document writes take separate worker turns. Bound both
     // from the measured rows, then allow setup and terminal cleanup turns.
     $workerPassCeiling = (int) ceil($totals['backfill_scanned'] / 100)
-        + (int) ceil($totals['processed'] / 100)
+        + (int) ceil($totals['committed'] / 100)
         + 5;
     $gates = [
         wp_fts_wc_gate('reindex_enqueue_constant_scope', $expectedInitial, $initial, $initial === $expectedInitial),
         wp_fts_wc_gate('reindex_processed_documents', $expectedDocuments, $totals['processed'], $totals['processed'] === $expectedDocuments),
-        wp_fts_wc_gate('reindex_committed_documents', $expectedDocuments, $totals['committed'], $totals['committed'] === $expectedDocuments),
+        wp_fts_wc_gate('reindex_committed_documents', $expectedCommittedDocuments, $totals['committed'], $totals['committed'] === $expectedCommittedDocuments),
+        wp_fts_wc_gate('reindex_deleted_documents', $expectedDeletedDocuments, $totals['deleted'], $totals['deleted'] === $expectedDeletedDocuments),
         wp_fts_wc_gate('reindex_analyzed_documents', "{$expectedDocuments}..{$analysisCeiling}", $totals['analyzed'], $totals['analyzed'] >= $expectedDocuments && $totals['analyzed'] <= $analysisCeiling),
         wp_fts_wc_gate('reindex_indexed_documents', $expectedDocuments, $totals['indexed'], $totals['indexed'] === $expectedDocuments),
         wp_fts_wc_gate('reindex_scope_completion', 1, $scopeCompletions, $scopeCompletions === 1),
@@ -589,6 +596,8 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
         'source_sha' => wp_fts_wc_required_env('WP_FTS_SOURCE_SHA'),
         'profile' => wp_fts_wc_required_env('WP_FTS_WC_PROFILE'),
         'expected_documents' => $expectedDocuments,
+        'expected_committed_documents' => $expectedCommittedDocuments,
+        'expected_deleted_documents' => $expectedDeletedDocuments,
         'initial_work' => $initial,
         'elapsed_ms' => wp_fts_wc_elapsed_ms($started),
         'batch_count' => count($batches),
@@ -1681,6 +1690,7 @@ function wp_fts_wc_validate(): array
             'reindex_enqueue_constant_scope',
             'reindex_processed_documents',
             'reindex_committed_documents',
+            'reindex_deleted_documents',
             'reindex_analyzed_documents',
             'reindex_indexed_documents',
             'reindex_scope_completion',
