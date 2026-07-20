@@ -1698,7 +1698,7 @@ run_wpcli_php_phase() {
     shift
     local options=()
     while IFS= read -r option; do options+=("${option}"); done < <(env_options "${phase}")
-    timed_compose "wpcli-php-${phase}" "$(phase_timeout_seconds "${phase}")" run --rm "${options[@]}" "$@" wpcli --url=http://wordpress --user=admin eval-file /proof/relational-fts-worst-case.php
+    timed_compose "wpcli-php-${phase}" "$(phase_timeout_seconds "${phase}")" run --rm "${options[@]}" "$@" wpcli --url=http://wordpress --user=admin eval 'require "/proof/relational-fts-worst-case.php";'
 }
 
 record_installed_tree_binding() {
