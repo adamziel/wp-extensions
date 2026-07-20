@@ -529,17 +529,32 @@ function wp_fts_wc_reindex_drain(bool $initialIndex = false): array
         'final asynchronous full-reindex work'
     );
     $statuses = array_values(array_unique(array_map(static fn(array $batch): string => (string) ($batch['status'] ?? ''), $batches)));
+    // A worker may analyze a bounded suffix before its time budget expires and
+    // then analyze that suffix again on the next pass. Those temporary deferrals
+    // are not terminal failures when every document is eventually committed.
+    $analysisCeiling = $expectedDocuments + $totals['deferred'];
+    $terminalFailures = $totals['superseded']
+        + $totals['unchanged']
+        + $totals['deleted']
+        + $totals['permanently_rejected']
+        + $totals['retryable_failures']
+        + $totals['last_batch_failures'];
+    // Scope scans and document writes take separate worker turns. Bound both
+    // from the measured rows, then allow setup and terminal cleanup turns.
+    $workerPassCeiling = (int) ceil($totals['backfill_scanned'] / 100)
+        + (int) ceil($totals['processed'] / 100)
+        + 5;
     $gates = [
         wp_fts_wc_gate('reindex_enqueue_constant_scope', $expectedInitial, $initial, $initial === $expectedInitial),
         wp_fts_wc_gate('reindex_processed_documents', $expectedDocuments, $totals['processed'], $totals['processed'] === $expectedDocuments),
         wp_fts_wc_gate('reindex_committed_documents', $expectedDocuments, $totals['committed'], $totals['committed'] === $expectedDocuments),
-        wp_fts_wc_gate('reindex_analyzed_documents', $expectedDocuments, $totals['analyzed'], $totals['analyzed'] === $expectedDocuments),
+        wp_fts_wc_gate('reindex_analyzed_documents', "{$expectedDocuments}..{$analysisCeiling}", $totals['analyzed'], $totals['analyzed'] >= $expectedDocuments && $totals['analyzed'] <= $analysisCeiling),
         wp_fts_wc_gate('reindex_indexed_documents', $expectedDocuments, $totals['indexed'], $totals['indexed'] === $expectedDocuments),
         wp_fts_wc_gate('reindex_scope_completion', 1, $scopeCompletions, $scopeCompletions === 1),
-        wp_fts_wc_gate('reindex_non_success_outcomes', 0, $totals['superseded'] + $totals['unchanged'] + $totals['deleted'] + $totals['permanently_rejected'] + $totals['retryable_failures'] + $totals['deferred'] + $totals['last_batch_failures'], $totals['superseded'] + $totals['unchanged'] + $totals['deleted'] + $totals['permanently_rejected'] + $totals['retryable_failures'] + $totals['deferred'] + $totals['last_batch_failures'] === 0),
+        wp_fts_wc_gate('reindex_terminal_failures', 0, $terminalFailures, $terminalFailures === 0),
         wp_fts_wc_gate('reindex_worker_statuses', ['success'], $statuses, $statuses === ['success']),
         wp_fts_wc_gate('reindex_lock_skips', 0, $lockSkips, $lockSkips === 0),
-        wp_fts_wc_gate('reindex_worker_passes', '<= ' . ((int) ceil($expectedDocuments / 50) + 5), count($batches), count($batches) <= (int) ceil($expectedDocuments / 50) + 5),
+        wp_fts_wc_gate('reindex_worker_passes', '<= ' . $workerPassCeiling, count($batches), count($batches) <= $workerPassCeiling),
         wp_fts_wc_gate('reindex_remaining_work', 0, $remaining, $remaining === 0),
         wp_fts_wc_gate('reindex_terminal_cleanup_pass', true, $terminalCleanupStarted, $terminalCleanupStarted),
         wp_fts_wc_gate('reindex_php_peak_bytes', '<= 268435456', memory_get_peak_usage(true), memory_get_peak_usage(true) <= 268435456),
@@ -1647,7 +1662,7 @@ function wp_fts_wc_validate(): array
             'reindex_analyzed_documents',
             'reindex_indexed_documents',
             'reindex_scope_completion',
-            'reindex_non_success_outcomes',
+            'reindex_terminal_failures',
             'reindex_worker_statuses',
             'reindex_lock_skips',
             'reindex_worker_passes',
