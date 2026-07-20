@@ -918,7 +918,7 @@ test_case('relational direct mutation methods reject set-oriented storage before
 
     $firstWorkMarkers = [
         'index_post' => 'return $this->index_prepared_document',
-        'index_document' => 'if ($doc_id < 0)',
+        'index_document' => 'if ($doc_id <= 0)',
         'index_document_fields' => 'return $this->index_prepared_document',
         'delete_document' => '$existing = $this->storage->get_doc',
     ];
