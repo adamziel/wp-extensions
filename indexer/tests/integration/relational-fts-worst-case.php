@@ -29,6 +29,18 @@ const WP_FTS_WC_PERFORMANCE_SCHEMA_HISTORY_LONG_EVENTS = 2048;
 const WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_HISTORY_EVENTS = 0;
 const WP_FTS_WC_PERFORMANCE_SCHEMA_DIGESTS = 0;
 const WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES = 128;
+const WP_FTS_WC_UNUSED_PERFORMANCE_SCHEMA_CAPACITIES = [
+    'accounts' => 0,
+    'hosts' => 0,
+    'users' => 0,
+    'session_connect_attrs' => 0,
+    'stages_history_long' => 0,
+    'stages_history' => 0,
+    'transactions_history_long' => 0,
+    'transactions_history' => 0,
+    'waits_history_long' => 0,
+    'waits_history' => 0,
+];
 const WP_FTS_WC_FAILED_SEARCH_MIN_CONTROL_STATEMENTS = 2;
 const WP_FTS_WC_FAILED_SEARCH_MAX_CONTROL_STATEMENTS = 4;
 const WP_FTS_WC_FAILED_SEARCH_MAX_PLUGIN_STATEMENTS = 5;
@@ -1630,7 +1642,6 @@ function wp_fts_wc_validate(): array
         'dependency_lob_value_rows_sent',
         'dependency_lob_value_rows_examined',
         'dependency_lob_tmp_disk_tables',
-        'dependency_lob_no_index_flags',
         'dependency_lob_sort_merge_passes',
         'dependency_lob_measurement_uses_post_id_index',
         'dependency_lob_value_uses_primary_index',
@@ -1780,29 +1791,32 @@ function wp_fts_wc_validate(): array
     array_push($gates, ...$corpusFrequencyEvidence['gates'], ...$surfaceStorageEvidence['gates']);
 
     wp_fts_wc_assert_runtime();
-    $runtimeEvidence = wp_fts_wc_runtime_evidence();
+    $runtimeRecord = wp_fts_wc_runtime_evidence();
     $expectedConsumers = [
         'events_statements_current' => 'YES',
         'events_statements_history' => 'NO',
         'events_statements_history_long' => 'YES',
     ];
     $runtimeIntegrity = [
-        'performance_schema_statement_consumers' => $runtimeEvidence['performance_schema_statement_consumers'] ?? null,
-        'performance_schema_max_thread_instances' => $runtimeEvidence['performance_schema_max_thread_instances'] ?? null,
-        'performance_schema_instrumented_threads' => $runtimeEvidence['performance_schema_instrumented_threads'] ?? null,
-        'performance_schema_thread_instances_lost' => $runtimeEvidence['performance_schema_thread_instances_lost'] ?? null,
+        'performance_schema_statement_consumers' => $runtimeRecord['performance_schema_statement_consumers'] ?? null,
+        'performance_schema_max_thread_instances' => $runtimeRecord['performance_schema_max_thread_instances'] ?? null,
+        'performance_schema_unused_capacities' => $runtimeRecord['performance_schema_unused_capacities'] ?? null,
+        'performance_schema_instrumented_threads' => $runtimeRecord['performance_schema_instrumented_threads'] ?? null,
+        'performance_schema_thread_instances_lost' => $runtimeRecord['performance_schema_thread_instances_lost'] ?? null,
     ];
     $gates[] = wp_fts_wc_gate(
         'runtime_performance_schema_integrity',
         [
             'performance_schema_statement_consumers' => $expectedConsumers,
             'performance_schema_max_thread_instances' => WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES,
+            'performance_schema_unused_capacities' => WP_FTS_WC_UNUSED_PERFORMANCE_SCHEMA_CAPACITIES,
             'performance_schema_instrumented_threads' => '< ' . WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES,
             'performance_schema_thread_instances_lost' => 0,
         ],
         $runtimeIntegrity,
         ($runtimeIntegrity['performance_schema_statement_consumers'] ?? null) === $expectedConsumers
             && ($runtimeIntegrity['performance_schema_max_thread_instances'] ?? null) === WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES
+            && ($runtimeIntegrity['performance_schema_unused_capacities'] ?? null) === WP_FTS_WC_UNUSED_PERFORMANCE_SCHEMA_CAPACITIES
             && is_int($runtimeIntegrity['performance_schema_instrumented_threads'] ?? null)
             && $runtimeIntegrity['performance_schema_instrumented_threads'] < WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES
             && ($runtimeIntegrity['performance_schema_thread_instances_lost'] ?? null) === 0
@@ -1840,7 +1854,7 @@ function wp_fts_wc_validate(): array
         'lane_id' => wp_fts_wc_required_env('WP_FTS_WC_LANE_ID'),
         'completed' => false,
         'engine' => wp_fts_wc_required_env('WP_FTS_WC_ENGINE'),
-        'runtime' => $runtimeEvidence,
+        'runtime' => $runtimeRecord,
         'runtime_profile_parity' => $runtimeParity,
         'mutation_fence_concurrency' => $mutationFence,
         'actual_wpcli_adapter' => $wpcliAdapter,
@@ -1975,11 +1989,11 @@ function wp_fts_wc_dependency_lob(): array
 
         $measurementSql = is_string($measurement['measurement_sql'] ?? null) ? $measurement['measurement_sql'] : '';
         $valueSql = is_string($measurement['value_sql'] ?? null) ? $measurement['value_sql'] : '';
-        $measurementExplain = $measurementSql === '' ? [] : wp_fts_wc_explain_dependency_sql($measurementSql, ['postmeta']);
+        $measurementExplain = $measurementSql === '' ? [] : wp_fts_wc_explain_dependency_sql($measurementSql, ['pm', 'postmeta']);
         $valueExplain = $valueSql === '' ? [] : wp_fts_wc_explain_dependency_sql($valueSql, ['pm', 'postmeta']);
         $measurementAccess = is_array($measurementExplain['matched_table_access'] ?? null) ? $measurementExplain['matched_table_access'] : [];
         $valueAccess = is_array($valueExplain['matched_table_access'] ?? null) ? $valueExplain['matched_table_access'] : [];
-        $measurementIndexed = count($measurementAccess) >= 2
+        $measurementIndexed = count($measurementAccess) === 1
             && count(array_filter($measurementAccess, static fn(array $row): bool => strtoupper((string) ($row['access_type'] ?? '')) === 'ALL' || (string) ($row['key'] ?? '') !== 'post_id')) === 0;
         $valueIndexed = count($valueAccess) >= 1
             && count(array_filter($valueAccess, static fn(array $row): bool => strtoupper((string) ($row['access_type'] ?? '')) === 'ALL' || (string) ($row['key'] ?? '') !== 'PRIMARY')) === 0;
@@ -2217,7 +2231,6 @@ WHERE pm.meta_id=%d",
             wp_fts_wc_gate('dependency_lob_value_rows_sent', 1, (int) ($valueMetrics['rows_sent'] ?? -1), (int) ($valueMetrics['rows_sent'] ?? -1) === 1),
             wp_fts_wc_gate('dependency_lob_value_rows_examined', '<= 8', (int) ($valueMetrics['rows_examined'] ?? PHP_INT_MAX), (int) ($valueMetrics['rows_examined'] ?? PHP_INT_MAX) <= 8),
             wp_fts_wc_gate('dependency_lob_tmp_disk_tables', 0, (int) ($measurementMetrics['created_tmp_disk_tables'] ?? 1) + (int) ($valueMetrics['created_tmp_disk_tables'] ?? 1), (int) ($measurementMetrics['created_tmp_disk_tables'] ?? 1) + (int) ($valueMetrics['created_tmp_disk_tables'] ?? 1) === 0),
-            wp_fts_wc_gate('dependency_lob_no_index_flags', 0, (int) ($measurementMetrics['no_index_used'] ?? 1) + (int) ($measurementMetrics['no_good_index_used'] ?? 1) + (int) ($valueMetrics['no_index_used'] ?? 1) + (int) ($valueMetrics['no_good_index_used'] ?? 1), (int) ($measurementMetrics['no_index_used'] ?? 1) + (int) ($measurementMetrics['no_good_index_used'] ?? 1) + (int) ($valueMetrics['no_index_used'] ?? 1) + (int) ($valueMetrics['no_good_index_used'] ?? 1) === 0),
             wp_fts_wc_gate('dependency_lob_sort_merge_passes', 0, (int) ($measurementMetrics['sort_merge_passes'] ?? 1) + (int) ($valueMetrics['sort_merge_passes'] ?? 1), (int) ($measurementMetrics['sort_merge_passes'] ?? 1) + (int) ($valueMetrics['sort_merge_passes'] ?? 1) === 0),
             wp_fts_wc_gate('dependency_lob_measurement_uses_post_id_index', true, $measurementIndexed, $measurementIndexed),
             wp_fts_wc_gate('dependency_lob_value_uses_primary_index', true, $valueIndexed, $valueIndexed),
@@ -14164,7 +14177,7 @@ function wp_fts_wc_resource_artifact_gates(array $resources, array $validationEv
     $preCorpusMemory = is_array($databaseMemory['pre_corpus'] ?? null) ? $databaseMemory['pre_corpus'] : [];
     $finalMemory = is_array($databaseMemory['final_checkpoint'] ?? null) ? $databaseMemory['final_checkpoint'] : [];
     $memoryCheckpoints = is_array($databaseMemory['checkpoints'] ?? null) ? array_values($databaseMemory['checkpoints']) : [];
-    $expectedMemoryCheckpointLabels = ['pre-corpus'];
+    $expectedMemoryCheckpointLabels = ['pre-corpus', 'post-reindex'];
     foreach (['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout'] as $caseId) {
         for ($sample = 0; $sample < WP_FTS_WC_COLD_SAMPLE_COUNT; $sample++) {
             $expectedMemoryCheckpointLabels[] = "pre-cold-restart-{$caseId}-{$sample}";
@@ -14372,7 +14385,7 @@ function wp_fts_wc_resource_artifact_gates(array $resources, array $validationEv
 function wp_fts_wc_database_memory_evidence_is_exact(array $memory, array $databaseEvidence): bool
 {
     $checkpoints = is_array($memory['checkpoints'] ?? null) ? array_values($memory['checkpoints']) : [];
-    $expectedLabels = ['pre-corpus'];
+    $expectedLabels = ['pre-corpus', 'post-reindex'];
     foreach (['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout'] as $caseId) {
         for ($sample = 0; $sample < WP_FTS_WC_COLD_SAMPLE_COUNT; $sample++) {
             $expectedLabels[] = "pre-cold-restart-{$caseId}-{$sample}";
@@ -15994,7 +16007,7 @@ function wp_fts_wc_assert_runtime(): void
     if (!isset($wpdb) || !is_object($wpdb)) {
         throw new RuntimeException('WordPress loaded without $wpdb.');
     }
-    $row = $wpdb->get_row('SELECT VERSION() AS version, @@version_comment AS comment, @@innodb_buffer_pool_size AS buffer_pool, @@tmp_table_size AS tmp_table_size, @@max_heap_table_size AS max_heap_table_size, @@max_connections AS max_connections, @@innodb_flush_log_at_trx_commit AS flush_mode, @@performance_schema_max_sql_text_length AS performance_schema_sql_bytes, @@performance_schema_events_statements_history_long_size AS performance_schema_history_long_events, @@performance_schema_events_statements_history_size AS performance_schema_thread_history_events, @@performance_schema_digests_size AS performance_schema_digests, @@performance_schema_max_thread_instances AS performance_schema_thread_capacity');
+    $row = $wpdb->get_row('SELECT VERSION() AS version, @@version_comment AS comment, @@innodb_buffer_pool_size AS buffer_pool, @@tmp_table_size AS tmp_table_size, @@max_heap_table_size AS max_heap_table_size, @@max_connections AS max_connections, @@innodb_flush_log_at_trx_commit AS flush_mode, @@performance_schema_max_sql_text_length AS performance_schema_sql_bytes, @@performance_schema_events_statements_history_long_size AS performance_schema_history_long_events, @@performance_schema_events_statements_history_size AS performance_schema_thread_history_events, @@performance_schema_digests_size AS performance_schema_digests, @@performance_schema_max_thread_instances AS performance_schema_thread_capacity, @@performance_schema_accounts_size AS performance_schema_accounts, @@performance_schema_hosts_size AS performance_schema_hosts, @@performance_schema_users_size AS performance_schema_users, @@performance_schema_session_connect_attrs_size AS performance_schema_session_connect_attrs, @@performance_schema_events_stages_history_long_size AS performance_schema_stages_history_long, @@performance_schema_events_stages_history_size AS performance_schema_stages_history, @@performance_schema_events_transactions_history_long_size AS performance_schema_transactions_history_long, @@performance_schema_events_transactions_history_size AS performance_schema_transactions_history, @@performance_schema_events_waits_history_long_size AS performance_schema_waits_history_long, @@performance_schema_events_waits_history_size AS performance_schema_waits_history');
     if (!is_object($row)) {
         throw new RuntimeException('Could not read the MySQL/MariaDB runtime: ' . (string) $wpdb->last_error);
     }
@@ -16048,6 +16061,10 @@ function wp_fts_wc_assert_runtime(): void
         'Performance Schema must reserve exactly 128 instrumented thread instances.'
     );
     wp_fts_wc_assert(
+        wp_fts_wc_unused_performance_schema_capacities($row) === WP_FTS_WC_UNUSED_PERFORMANCE_SCHEMA_CAPACITIES,
+        'Performance Schema must not reserve histories or identity summaries that the proof never reads.'
+    );
+    wp_fts_wc_assert(
         function_exists('wp_convert_hr_to_bytes') && wp_convert_hr_to_bytes((string) ini_get('memory_limit')) === 134217728,
         'PHP memory_limit must be exactly 128 MiB.'
     );
@@ -16078,6 +16095,23 @@ function wp_fts_wc_assert_runtime(): void
             && (int) $lostThreads->Value === 0,
         'Performance Schema lost an instrumented thread; statement attribution is incomplete.'
     );
+}
+
+/** @return array<string,int> */
+function wp_fts_wc_unused_performance_schema_capacities(object $row): array
+{
+    return [
+        'accounts' => (int) ($row->performance_schema_accounts ?? -1),
+        'hosts' => (int) ($row->performance_schema_hosts ?? -1),
+        'users' => (int) ($row->performance_schema_users ?? -1),
+        'session_connect_attrs' => (int) ($row->performance_schema_session_connect_attrs ?? -1),
+        'stages_history_long' => (int) ($row->performance_schema_stages_history_long ?? -1),
+        'stages_history' => (int) ($row->performance_schema_stages_history ?? -1),
+        'transactions_history_long' => (int) ($row->performance_schema_transactions_history_long ?? -1),
+        'transactions_history' => (int) ($row->performance_schema_transactions_history ?? -1),
+        'waits_history_long' => (int) ($row->performance_schema_waits_history_long ?? -1),
+        'waits_history' => (int) ($row->performance_schema_waits_history ?? -1),
+    ];
 }
 
 /** @return array<string,string> */
@@ -16342,7 +16376,7 @@ function wp_fts_wc_alpha_id(int $value): string
     return $letters;
 }
 
-/** Install the exact public adapters, scope, and prefix settings under proof. */
+/** Install the exact public adapters, scope, prefix, and dependency settings under proof. */
 function wp_fts_wc_enable_search_settings(): void
 {
     $settings = get_option(WP_FTS_Plugin::SETTINGS_OPTION, []);
@@ -16356,6 +16390,7 @@ function wp_fts_wc_enable_search_settings(): void
     $settings['result_limit'] = 20;
     $settings['index_post_types'] = WP_FTS_WC_INDEX_POST_TYPES;
     update_option(WP_FTS_Plugin::SETTINGS_OPTION, $settings, false);
+    update_option(WP_FTS_PostContentExtractor::CUSTOM_FIELDS_OPTION, ['selected_signal'], false);
 }
 
 /**
@@ -16683,7 +16718,7 @@ function wp_fts_wc_runtime_evidence(): array
 {
     global $wpdb;
 
-    $row = $wpdb->get_row('SELECT VERSION() AS version, @@version_comment AS comment, @@innodb_buffer_pool_size AS buffer_pool, @@tmp_table_size AS tmp_table_size, @@max_heap_table_size AS max_heap_table_size, @@max_connections AS max_connections, @@innodb_flush_log_at_trx_commit AS flush_mode, @@performance_schema_max_sql_text_length AS performance_schema_sql_bytes, @@performance_schema_events_statements_history_long_size AS performance_schema_history_long_events, @@performance_schema_events_statements_history_size AS performance_schema_thread_history_events, @@performance_schema_digests_size AS performance_schema_digests, @@performance_schema_max_thread_instances AS performance_schema_thread_capacity');
+    $row = $wpdb->get_row('SELECT VERSION() AS version, @@version_comment AS comment, @@innodb_buffer_pool_size AS buffer_pool, @@tmp_table_size AS tmp_table_size, @@max_heap_table_size AS max_heap_table_size, @@max_connections AS max_connections, @@innodb_flush_log_at_trx_commit AS flush_mode, @@performance_schema_max_sql_text_length AS performance_schema_sql_bytes, @@performance_schema_events_statements_history_long_size AS performance_schema_history_long_events, @@performance_schema_events_statements_history_size AS performance_schema_thread_history_events, @@performance_schema_digests_size AS performance_schema_digests, @@performance_schema_max_thread_instances AS performance_schema_thread_capacity, @@performance_schema_accounts_size AS performance_schema_accounts, @@performance_schema_hosts_size AS performance_schema_hosts, @@performance_schema_users_size AS performance_schema_users, @@performance_schema_session_connect_attrs_size AS performance_schema_session_connect_attrs, @@performance_schema_events_stages_history_long_size AS performance_schema_stages_history_long, @@performance_schema_events_stages_history_size AS performance_schema_stages_history, @@performance_schema_events_transactions_history_long_size AS performance_schema_transactions_history_long, @@performance_schema_events_transactions_history_size AS performance_schema_transactions_history, @@performance_schema_events_waits_history_long_size AS performance_schema_waits_history_long, @@performance_schema_events_waits_history_size AS performance_schema_waits_history');
     $consumerState = wp_fts_wc_performance_schema_consumer_state();
     $instrumentedThreads = $wpdb->get_var('SELECT COUNT(*) FROM performance_schema.threads');
     $lostThreads = $wpdb->get_row("SHOW GLOBAL STATUS LIKE 'Performance_schema_thread_instances_lost'");
@@ -16701,6 +16736,7 @@ function wp_fts_wc_runtime_evidence(): array
         'performance_schema_events_statements_history_size' => (int) ($row->performance_schema_thread_history_events ?? 0),
         'performance_schema_digests_size' => (int) ($row->performance_schema_digests ?? -1),
         'performance_schema_max_thread_instances' => (int) ($row->performance_schema_thread_capacity ?? 0),
+        'performance_schema_unused_capacities' => wp_fts_wc_unused_performance_schema_capacities($row),
         'performance_schema_statement_consumers' => $consumerState,
         'performance_schema_instrumented_threads' => is_numeric($instrumentedThreads) ? (int) $instrumentedThreads : null,
         'performance_schema_thread_instances_lost' => is_object($lostThreads) && is_numeric($lostThreads->Value ?? null)

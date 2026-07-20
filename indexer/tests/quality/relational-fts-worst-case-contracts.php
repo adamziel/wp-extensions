@@ -1539,6 +1539,16 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         '--performance-schema-events-statements-history-long-size=2048',
         '--performance-schema-events-statements-history-size=0',
         '--performance-schema-digests-size=0',
+        '--performance-schema-accounts-size=0',
+        '--performance-schema-hosts-size=0',
+        '--performance-schema-users-size=0',
+        '--performance-schema-session-connect-attrs-size=0',
+        '--performance-schema-events-stages-history-long-size=0',
+        '--performance-schema-events-stages-history-size=0',
+        '--performance-schema-events-transactions-history-long-size=0',
+        '--performance-schema-events-transactions-history-size=0',
+        '--performance-schema-events-waits-history-long-size=0',
+        '--performance-schema-events-waits-history-size=0',
         '--performance-schema-max-thread-instances=128',
         'db_data:/var/lib/mysql',
         '${EVIDENCE_DIR}:/evidence',
@@ -1569,6 +1579,11 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         'event_value /sys/fs/cgroup/memory.events oom_kill',
         'event_value /sys/fs/cgroup/memory/memory.oom_control oom_kill',
         'capture_database_memory_checkpoint "pre-cold-restart-${case_id}-${sample}"',
+        'capture_database_memory_checkpoint post-reindex',
+        '$databaseMemoryCheckpointLabels[] = "post-reindex";',
+        'exact ordered 43-checkpoint inventory',
+        'timed_compose validation-database-restart 300 restart db',
+        'configure_performance_schema_consumers validation-performance-schema-enable',
         'configure_performance_schema_consumers "cold-performance-schema-enable-${case_id}-${sample}"',
         'capture_database_memory_checkpoint final-workload',
         'capture_wordpress_memory_checkpoint pre-corpus',
@@ -1599,7 +1614,7 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         assert_contains($lane, $runner, "runner should retain the clean acceptance lane: {$lane}");
     }
     assert_same(count($expectedLanes), substr_count($runner, ') LANE_ID="'), 'runner must expose exactly four clean profile/engine lane identities');
-    assert_same(3, substr_count($runner, 'configure_performance_schema_consumers'), 'the exact Performance Schema consumers must be configured initially and after every cold restart through one implementation');
+    assert_same(4, substr_count($runner, 'configure_performance_schema_consumers'), 'the exact Performance Schema consumers must be configured initially and after every database restart through one implementation');
     $laneMap = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_expected_lane_id');
     foreach ([
         "'50k/mariadb-10.11' => 'mariadb1011-50k'",
@@ -1641,14 +1656,26 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         'const WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_HISTORY_EVENTS = 0;',
         'const WP_FTS_WC_PERFORMANCE_SCHEMA_DIGESTS = 0;',
         'const WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES = 128;',
+        'const WP_FTS_WC_UNUSED_PERFORMANCE_SCHEMA_CAPACITIES = [',
         '@@performance_schema_events_statements_history_long_size AS performance_schema_history_long_events',
         '@@performance_schema_events_statements_history_size AS performance_schema_thread_history_events',
         '@@performance_schema_digests_size AS performance_schema_digests',
         '@@performance_schema_max_thread_instances AS performance_schema_thread_capacity',
+        '@@performance_schema_accounts_size AS performance_schema_accounts',
+        '@@performance_schema_hosts_size AS performance_schema_hosts',
+        '@@performance_schema_users_size AS performance_schema_users',
+        '@@performance_schema_session_connect_attrs_size AS performance_schema_session_connect_attrs',
+        '@@performance_schema_events_stages_history_long_size AS performance_schema_stages_history_long',
+        '@@performance_schema_events_stages_history_size AS performance_schema_stages_history',
+        '@@performance_schema_events_transactions_history_long_size AS performance_schema_transactions_history_long',
+        '@@performance_schema_events_transactions_history_size AS performance_schema_transactions_history',
+        '@@performance_schema_events_waits_history_long_size AS performance_schema_waits_history_long',
+        '@@performance_schema_events_waits_history_size AS performance_schema_waits_history',
         "'performance_schema_events_statements_history_long_size'",
         "'performance_schema_events_statements_history_size'",
         "'performance_schema_digests_size'",
         "'performance_schema_max_thread_instances'",
+        "'performance_schema_unused_capacities'",
         "'performance_schema_statement_consumers'",
         "'performance_schema_instrumented_threads'",
         "'performance_schema_thread_instances_lost'",
@@ -1680,6 +1707,11 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         '(int) $row->performance_schema_thread_capacity === WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES',
         $runtimeAssertion,
         'runtime validation must require the exact bounded thread-instrumentation reserve'
+    );
+    assert_contains(
+        'wp_fts_wc_unused_performance_schema_capacities($row) === WP_FTS_WC_UNUSED_PERFORMANCE_SCHEMA_CAPACITIES',
+        $runtimeAssertion,
+        'runtime validation must reject unused Performance Schema memory reservoirs'
     );
     assert_contains(
         '(int) $instrumentedThreads < WP_FTS_WC_PERFORMANCE_SCHEMA_THREAD_INSTANCES',
@@ -2237,7 +2269,7 @@ AND work_row.generation = claim_driver.generation";
         'matches_expected' => true,
     ];
     assert_true(wp_fts_wc_resource_cgroup_is_exact($v1CgroupFixture, 536870912), 'cgroup v1 raw memsw must derive zero effective swap from raw memsw minus memory');
-    $databaseLabels = ['pre-corpus'];
+    $databaseLabels = ['pre-corpus', 'post-reindex'];
     foreach (['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout'] as $caseId) {
         for ($sample = 0; $sample < WP_FTS_WC_COLD_SAMPLE_COUNT; $sample++) {
             $databaseLabels[] = "pre-cold-restart-{$caseId}-{$sample}";
@@ -2409,7 +2441,7 @@ AND work_row.generation = claim_driver.generation";
         $mutate($mutated);
         assert_true(!wp_fts_wc_wordpress_memory_evidence_is_exact($mutated, $wordpressFixture), "WordPress cgroup evidence must reject {$description}");
     }
-    foreach (['cgroup peak must be at most 768 MiB', 'exact ordered 42-checkpoint inventory', 'restart therefore cannot erase', 'requires zero OOM and OOM-kill events', 'no tighter cache-sensitive threshold', 'relational-fts-resources-v2', 'relational-fts-database-cgroup-memory-v2', 'relational-fts-wordpress-cgroup-memory-v3', 'SHA-256(raw) === raw_sha256', 'missing, empty, independently changed, or', 'structured-inconsistent raw probe fails acceptance'] as $required) {
+    foreach (['cgroup peak must be at most 768 MiB', 'exact ordered 43-checkpoint inventory', 'restart therefore cannot erase', 'requires zero OOM and OOM-kill events', 'no tighter cache-sensitive threshold', 'relational-fts-resources-v2', 'relational-fts-database-cgroup-memory-v2', 'relational-fts-wordpress-cgroup-memory-v3', 'SHA-256(raw) === raw_sha256', 'missing, empty, independently changed, or', 'structured-inconsistent raw probe fails acceptance'] as $required) {
         assert_contains($required, $acceptance, "constrained-host acceptance must document actual peak/OOM semantics: {$required}");
     }
     foreach ([
@@ -3250,6 +3282,7 @@ test_case('relational worst-case proves actual huge postmeta containment on both
         'WP_FTS_WC_DEPENDENCY_LOB_BYTES = 262144',
         'WP_FTS_WC_DEPENDENCY_ACCEPTED_UNSELECTED_ROWS = 511',
         'WP_FTS_WC_DEPENDENCY_OVERFLOW_UNSELECTED_ROWS = 512',
+        "update_option(WP_FTS_PostContentExtractor::CUSTOM_FIELDS_OPTION, ['selected_signal'], false)",
         "'dependency-lob' => wp_fts_wc_dependency_lob()",
         'REPEAT(%s,%d)',
         'performance_schema.events_statements_history_long',
@@ -3259,6 +3292,8 @@ test_case('relational worst-case proves actual huge postmeta containment on both
         'dependency_lob_value_rows_sent',
         'dependency_lob_value_rows_examined',
         'dependency_lob_tmp_disk_tables',
+        "wp_fts_wc_explain_dependency_sql(\$measurementSql, ['pm', 'postmeta'])",
+        'count($measurementAccess) === 1',
         'dependency_lob_measurement_uses_post_id_index',
         'dependency_lob_value_uses_primary_index',
         'dependency_lob_accepted_selected_value_searchable',
@@ -3277,6 +3312,7 @@ test_case('relational worst-case proves actual huge postmeta containment on both
     ] as $required) {
         assert_contains($required, $integration, "actual dependency LOB proof should retain {$required}");
     }
+    assert_true(!str_contains($integration, 'dependency_lob_no_index_flags'), 'bounded derived-table scans must not be mistaken for unindexed base-table access');
     assert_contains('run_php_phase dependency-lob', $runner, 'every real database profile should execute the dependency LOB proof');
     assert_true(strpos($runner, 'run_php_phase dependency-lob') < strpos($runner, 'run_php_phase validate'), 'dependency LOB gates must exist before final validation evidence is assembled');
     foreach (['real `wp_postmeta` table', '511 unselected 256 KiB values', 'return 1,027 measurement rows', 'strictly below twice', 'between measurement and hydration', 'dirty and invisible', 'A fake database or small placeholder value'] as $required) {

@@ -454,6 +454,7 @@ foreach($lines as $line){
     $checkpoints[]=$checkpoint;
 }
 $expectedLabels=["pre-corpus"];
+$expectedLabels[]="post-reindex";
 foreach(["common_or","max_valid_or_prefix","rare_anchor_and","prefix_fanout"] as $case){
     for($sample=0;$sample<10;$sample++){$expectedLabels[]="pre-cold-restart-{$case}-{$sample}";}
 }
@@ -478,7 +479,7 @@ foreach(["database","wordpress","wpcli"] as $role){
     $expectedMemory=$role==="database"?1073741824:536870912;
     if(!$effectiveCgroupMatches($cgroup,$expectedMemory)){$failures[]="{$role} effective cgroup raw probe does not match its structured evidence";}
 }
-if($malformed||$actualLabels!==$expectedLabels||($memory["expected_checkpoint_labels"]??null)!==$expectedLabels){$failures[]="database cgroup memory checkpoints do not match the exact ordered 42-checkpoint inventory";}
+if($malformed||$actualLabels!==$expectedLabels||($memory["expected_checkpoint_labels"]??null)!==$expectedLabels){$failures[]="database cgroup memory checkpoints do not match the exact ordered 43-checkpoint inventory";}
 if(count($versions)!==1||($versions[0]??null)!==($effectiveCgroup["version"]??null)){$failures[]="database cgroup memory checkpoint versions do not match the effective cgroup";}
 if($first!==$pre){$failures[]="database pre-corpus cgroup memory checkpoint changed before finalization";}
 if(!is_int($wholePeak)||$wholePeak<1||$limit!==1073741824||$wholePeak>$limit){$failures[]="database whole-run cgroup peak is outside the hard 1 GiB limit";}
@@ -1093,6 +1094,19 @@ ${DB_ENV}
       # history or digest summaries for the 32-KiB statement payload.
       - --performance-schema-events-statements-history-size=0
       - --performance-schema-digests-size=0
+      # Only current statements, global statement history, and thread identity
+      # are read by the proof. Do not reserve account, host, user, connection,
+      # stage, transaction, or wait histories that the proof never queries.
+      - --performance-schema-accounts-size=0
+      - --performance-schema-hosts-size=0
+      - --performance-schema-users-size=0
+      - --performance-schema-session-connect-attrs-size=0
+      - --performance-schema-events-stages-history-long-size=0
+      - --performance-schema-events-stages-history-size=0
+      - --performance-schema-events-transactions-history-long-size=0
+      - --performance-schema-events-transactions-history-size=0
+      - --performance-schema-events-waits-history-long-size=0
+      - --performance-schema-events-waits-history-size=0
       # Twenty-four client connections plus the pinned engines' internal
       # threads fit well below this reserve. Runtime gates fail if any thread
       # cannot be instrumented, so this cannot silently weaken attribution.
@@ -1557,6 +1571,7 @@ if (!$wordpressPreCorpusValid) {
     $gates[] = "WordPress pre-corpus cgroup memory must stay within 512 MiB without a limit or OOM event";
 }
 $databaseMemoryCheckpointLabels = ["pre-corpus"];
+$databaseMemoryCheckpointLabels[] = "post-reindex";
 foreach (["common_or", "max_valid_or_prefix", "rare_anchor_and", "prefix_fanout"] as $case) {
     for ($sample = 0; $sample < 10; $sample++) {
         $databaseMemoryCheckpointLabels[] = "pre-cold-restart-{$case}-{$sample}";
@@ -2060,6 +2075,15 @@ if (( INDEX_EXIT != 0 )); then
     echo "FAIL: production WP-CLI reindex enqueue or bounded worker drain failed; see ${EVIDENCE_DIR}/reindex.log" >&2
     exit 1
 fi
+
+# The forced rebuild is the lane's write-heavy boundary. Preserve its cgroup
+# counters, then release database process state before the read-side proofs.
+# Otherwise page and statement caches accumulated by the rebuild can consume
+# the no-swap lane's remaining headroom without measuring search behavior.
+capture_database_memory_checkpoint post-reindex
+timed_compose validation-database-restart 300 restart db >/dev/null
+wait_for_database
+configure_performance_schema_consumers validation-performance-schema-enable
 
 set_run_stage "validation-and-boundaries"
 run_wpcli_php_phase wpcli-adapter > "${EVIDENCE_DIR}/wpcli-adapter.log"

@@ -1026,7 +1026,9 @@ on all ten pages, so final validation independently reconstructs all twenty
 
 - MariaDB 10.11 or MySQL 8.0: 1 CPU, 1 GiB RAM, no swap, 256 MiB InnoDB buffer pool,
   32 MiB temporary tables, 24 connections, normal fsync durability, and
-  Performance Schema statement history;
+  Performance Schema current/global statement history. Account, host, user,
+  connection-attribute, stage, transaction, and wait histories are disabled
+  because no acceptance check reads them;
 - WordPress/PHP: 1 CPU, 512 MiB container, no swap, 128 MiB PHP memory;
 - a persistent database volume, never tmpfs;
 - source-bound direct-install ZIP, image digests, corpus manifest hash, database
@@ -1069,9 +1071,12 @@ structured-inconsistent raw probe fails acceptance.
 schema because its own fields did not change.
 
 The runner also records database usage, cumulative peak, limit events, OOM
-events, and OOM kills immediately before all 40 planned cold-cache database
-restarts (four cases × ten samples) and once after the final measured workload.
-Together with the pre-corpus sample, the finalizer requires the exact ordered 42-checkpoint inventory;
+events, and OOM kills after the forced rebuild, immediately before all 40
+planned cold-cache database restarts (four cases × ten samples), and once after
+the final measured workload. The post-rebuild checkpoint precedes a database
+restart so the read-side proofs do not inherit process and page-cache pressure
+from the write-heavy rebuild. Together with the pre-corpus sample, the finalizer
+requires the exact ordered 43-checkpoint inventory;
 deleting or reordering one checkpoint fails. A restart therefore cannot erase the preceding
 cgroup segment's high-water mark or failure counters.
 cgroup v2 reads `memory.current`, `memory.peak`, and `memory.events`; cgroup v1
@@ -1273,7 +1278,10 @@ Every required MariaDB and MySQL lane also creates three adversarial rows in the
 real `wp_postmeta` table. The accepted row has 511 unselected 256 KiB values
 followed by one selected value; the overflow row has 512 such unselected values
 followed by one selected value. Their selected values contain exact multibyte
-bytes, not ASCII-only placeholders. The production worker must index and make
+bytes, not ASCII-only placeholders. The selected key is configured before the
+initial corpus index; the fixture cannot change index configuration on a ready
+corpus and then bypass the resulting full-rebuild requirement. The production
+worker must index and make
 the accepted selected value searchable, preserve its byte-for-byte value,
 explicitly reject and acknowledge the 513-row document, and drain both work
 generations. The first measured batch must isolate its permanent-rejection
