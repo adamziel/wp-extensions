@@ -20436,7 +20436,7 @@ ORDER BY p.ID ASC",
     {
         return implode(' + ', array_map(
             static fn(string $column): string => "OCTET_LENGTH(COALESCE({$alias}.{$column}, ''))",
-            WP_FTS_Storage_Mysql::CANONICAL_POST_COLUMNS
+            WP_FTS_Index_Queue::CANONICAL_POST_COLUMNS
         ));
     }
 

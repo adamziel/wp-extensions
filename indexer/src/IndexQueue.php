@@ -30,6 +30,31 @@ final class WP_FTS_Index_Queue
     public const MAX_LEASE_SECONDS = 3600;
     /** Maximum canonical source materialized by one claim confirmation. */
     public const MAX_SOURCE_SNAPSHOT_BYTES = 8388608;
+    public const CANONICAL_POST_COLUMNS = [
+        'ID',
+        'post_author',
+        'post_date',
+        'post_date_gmt',
+        'post_content',
+        'post_title',
+        'post_excerpt',
+        'post_status',
+        'comment_status',
+        'ping_status',
+        'post_password',
+        'post_name',
+        'to_ping',
+        'pinged',
+        'post_modified',
+        'post_modified_gmt',
+        'post_content_filtered',
+        'post_parent',
+        'guid',
+        'menu_order',
+        'post_type',
+        'post_mime_type',
+        'comment_count',
+    ];
     public const BASE_BACKOFF_SECONDS = 300;
     public const MAX_BACKOFF_SECONDS = 3600;
     /** Legacy compatibility only; failures are no longer terminal. */
@@ -1358,7 +1383,7 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
     {
         return implode(' + ', array_map(
             static fn(string $column): string => "OCTET_LENGTH(COALESCE({$alias}.{$column}, ''))",
-            WP_FTS_Storage_Mysql::CANONICAL_POST_COLUMNS
+            self::CANONICAL_POST_COLUMNS
         ));
     }
 

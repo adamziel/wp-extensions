@@ -7787,7 +7787,7 @@ final class WP_FTS_Test_WPDB
     private function v4_canonical_post_bytes(object $post): int
     {
         $bytes = 0;
-        foreach (WP_FTS_Storage_Mysql::CANONICAL_POST_COLUMNS as $column) {
+        foreach (WP_FTS_Index_Queue::CANONICAL_POST_COLUMNS as $column) {
             $value = $post->{$column} ?? null;
             if ($value !== null) {
                 $bytes += strlen((string) $value);

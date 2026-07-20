@@ -137,31 +137,6 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Set_Oriented_Search_Storage, 
     // logical groups * (1 + maximum recency strength). Keep it decimal text so
     // this bound and cursor boundaries remain exact on 32-bit PHP.
     private const MAX_CURSOR_SCORE = '2359260000000';
-    public const CANONICAL_POST_COLUMNS = [
-        'ID',
-        'post_author',
-        'post_date',
-        'post_date_gmt',
-        'post_content',
-        'post_title',
-        'post_excerpt',
-        'post_status',
-        'comment_status',
-        'ping_status',
-        'post_password',
-        'post_name',
-        'to_ping',
-        'pinged',
-        'post_modified',
-        'post_modified_gmt',
-        'post_content_filtered',
-        'post_parent',
-        'guid',
-        'menu_order',
-        'post_type',
-        'post_mime_type',
-        'comment_count',
-    ];
 
     private object $wpdb;
     private string $termsTable;
@@ -2443,7 +2418,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             }
             if ($includeCanonicalPostRow && is_object($detail)) {
                 $postRow = [];
-                foreach (self::CANONICAL_POST_COLUMNS as $column) {
+                foreach (WP_FTS_Index_Queue::CANONICAL_POST_COLUMNS as $column) {
                     $alias = 'canonical_post_' . $column;
                     $postRow[$column] = $detail->{$alias} ?? '';
                 }
@@ -2597,7 +2572,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             array_push($select, 'wp_h.post_type', 'wp_h.post_status', 'wp_h.post_date_gmt', 'wp_h.post_title', 'wp_h.post_excerpt');
         }
         if ($includeCanonicalPostRow) {
-            foreach (self::CANONICAL_POST_COLUMNS as $column) {
+            foreach (WP_FTS_Index_Queue::CANONICAL_POST_COLUMNS as $column) {
                 $select[] = "wp_h.{$column} AS canonical_post_{$column}";
             }
         }
@@ -3166,7 +3141,7 @@ LIMIT %d";
                 ? static fn(string $column): string => "LENGTH(CAST(wp_size.{$column} AS BLOB))"
                 : static fn(string $column): string => "OCTET_LENGTH(wp_size.{$column})";
             $measuredColumns = $includeCanonicalPostRow
-                ? self::CANONICAL_POST_COLUMNS
+                ? WP_FTS_Index_Queue::CANONICAL_POST_COLUMNS
                 : ['post_type', 'post_status', 'post_date_gmt', 'post_title', 'post_excerpt'];
             $canonicalBytes = implode(' + ', array_map(
                 static fn(string $column): string => 'COALESCE(' . $lengthFunction($column) . ',0)',
