@@ -1420,7 +1420,7 @@ test_case('surface-prefix architecture stays bounded and documents its irreducib
         'one document admits 4096 lexical and 4096 bounded surface rows',
         'surface SQL cost-selects one bounded AND-prefix driver',
         'surface planning gates and costs every final-prefix range once',
-        'legacy collection APIs are absent while bounded document diagnostics stay post-first',
+        'point collection APIs are absent while bounded page diagnostics stay post-first',
         "!in_array('term_hash', \$termIndexes, true)",
     ] as $required) {
         assert_contains($required, $surface, "surface containment should retain hard invariant: {$required}");
@@ -3462,9 +3462,9 @@ test_case('worker ceiling quality contracts retain hard composed and ambiguous o
         "strtoupper(trim(\$sql)) === 'COMMIT'",
         "strtoupper(trim(\$sql)) === 'ROLLBACK'",
         "'stale_writer_lease_recovered'",
-        "assert_same(0, \$takeover['processed']",
+        "assert_same(0, \$takeover['indexed']",
         'count($takeoverQueries) <= 5',
-        "assert_same(1, \$ordinary['processed']",
+        "assert_same(1, \$ordinary['indexed']",
     ] as $required) {
         assert_contains($required, $lateCommit, "ambiguous COMMIT/stale takeover contract should retain: {$required}");
     }
