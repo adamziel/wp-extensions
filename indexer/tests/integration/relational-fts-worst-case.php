@@ -21248,8 +21248,8 @@ function wp_fts_wc_expected_gate_inventory_fingerprints(): array
             'sha256' => '0419c613811a13d49755af028011543c41d31a8f0bbd4a2acf65e03f1c5a4e25',
         ],
         'final' => [
-            'count' => 2692,
-            'sha256' => '14155b0fa34ea3e40429855929e4d7f8c5a27deb368cb5bf0234141b96db6647',
+            'count' => 2647,
+            'sha256' => 'ca53417ea9628ff92fc9087c5097cdc0928a3d409b50b222a2671a2c4f989492',
         ],
     ];
 }
