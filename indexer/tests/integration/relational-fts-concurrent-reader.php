@@ -6,8 +6,8 @@ const WP_FTS_READER_MAX_UNAVAILABLE_RETRIES = 3;
 /**
  * Lightweight REST client for the relational concurrency workload.
  *
- * Reader clients run beside Apache in the constrained WordPress cgroup, but do
- * not bootstrap a second WordPress runtime merely to issue an HTTP request.
+ * Reader clients run as ephemeral load generators on the same Docker network,
+ * but do not bootstrap WordPress merely to issue an HTTP request.
  */
 
 try {

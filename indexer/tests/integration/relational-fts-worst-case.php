@@ -63,37 +63,40 @@ const WP_FTS_WC_DENSE_PREFIX_COMPLETIONS = [
 const WP_FTS_WC_WORK_TYPE_POST = 'post';
 
 try {
-    wp_fts_wc_bootstrap_wordpress();
     $phase = wp_fts_wc_required_env('WP_FTS_WC_PHASE');
-    $result = match ($phase) {
-        'setup' => wp_fts_wc_setup(),
-        'indexing-prepare' => wp_fts_wc_indexing_prepare(),
-        'initial-index-drain' => wp_fts_wc_reindex_drain(true),
-        'reindex-drain' => wp_fts_wc_reindex_drain(),
-        'runtime-profile' => wp_fts_wc_runtime_profile(),
-        'wpcli-adapter' => wp_fts_wc_wpcli_adapter(),
-        'cold-ready-request' => wp_fts_wc_cold_ready_request(),
-        'validate' => wp_fts_wc_validate(),
-        'concurrency-setup' => wp_fts_wc_concurrency_setup(),
-        'idle-http' => wp_fts_wc_idle_http(),
-        'cold-prepare' => wp_fts_wc_cold_prepare(),
-        'cold-sample' => wp_fts_wc_cold_sample(),
-        'cold-cleanup' => wp_fts_wc_cold_cleanup(),
-        'concurrent-writer' => wp_fts_wc_concurrent_writer(),
-        'scope-ddl-writer' => wp_fts_wc_scope_ddl_writer(),
-        'scope-proof' => wp_fts_wc_scope_proof(),
-        'transaction-crash' => wp_fts_wc_transaction_crash(),
-        'verify-transaction-crash' => wp_fts_wc_verify_transaction_crash(),
-        'dependency-lob' => wp_fts_wc_dependency_lob(),
-        'writer-aggregate' => wp_fts_wc_writer_aggregate(),
-        'max-valid-seed' => wp_fts_wc_max_valid_seed(),
-        'max-valid-setup' => wp_fts_wc_max_valid_setup(),
-        'max-valid-search' => wp_fts_wc_max_valid_search(),
-        'search-memory-sample' => wp_fts_wc_search_memory_sample(),
-        'drain' => wp_fts_wc_drain(),
-        'finalize' => wp_fts_wc_finalize(),
-        default => throw new RuntimeException("Unknown worst-case phase: {$phase}"),
-    };
+    if ($phase === 'scope-ddl-writer') {
+        $result = wp_fts_wc_scope_ddl_writer();
+    } else {
+        wp_fts_wc_bootstrap_wordpress();
+        $result = match ($phase) {
+            'setup' => wp_fts_wc_setup(),
+            'indexing-prepare' => wp_fts_wc_indexing_prepare(),
+            'initial-index-drain' => wp_fts_wc_reindex_drain(true),
+            'reindex-drain' => wp_fts_wc_reindex_drain(),
+            'runtime-profile' => wp_fts_wc_runtime_profile(),
+            'wpcli-adapter' => wp_fts_wc_wpcli_adapter(),
+            'cold-ready-request' => wp_fts_wc_cold_ready_request(),
+            'validate' => wp_fts_wc_validate(),
+            'concurrency-setup' => wp_fts_wc_concurrency_setup(),
+            'idle-http' => wp_fts_wc_idle_http(),
+            'cold-prepare' => wp_fts_wc_cold_prepare(),
+            'cold-sample' => wp_fts_wc_cold_sample(),
+            'cold-cleanup' => wp_fts_wc_cold_cleanup(),
+            'concurrent-writer' => wp_fts_wc_concurrent_writer(),
+            'scope-proof' => wp_fts_wc_scope_proof(),
+            'transaction-crash' => wp_fts_wc_transaction_crash(),
+            'verify-transaction-crash' => wp_fts_wc_verify_transaction_crash(),
+            'dependency-lob' => wp_fts_wc_dependency_lob(),
+            'writer-aggregate' => wp_fts_wc_writer_aggregate(),
+            'max-valid-seed' => wp_fts_wc_max_valid_seed(),
+            'max-valid-setup' => wp_fts_wc_max_valid_setup(),
+            'max-valid-search' => wp_fts_wc_max_valid_search(),
+            'search-memory-sample' => wp_fts_wc_search_memory_sample(),
+            'drain' => wp_fts_wc_drain(),
+            'finalize' => wp_fts_wc_finalize(),
+            default => throw new RuntimeException("Unknown worst-case phase: {$phase}"),
+        };
+    }
     echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) . "\n";
 } catch (Throwable $error) {
     fwrite(STDERR, 'FAIL: relational FTS worst-case proof: ' . $error->getMessage() . "\n");
@@ -9334,7 +9337,7 @@ WHERE n<=300001"
             "CREATE INDEX `" . WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME . "` ON `{$relationships}`(`term_taxonomy_id`,`object_id`)",
             "CREATE INDEX `" . WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME . "` ON `{$posts}`(`post_type`,`post_status`,`ID`)",
         ];
-        $coordinationFilter = static function (string $sql) use ($expectedDdl): string {
+        $coordinationFilter = static function (string $sql) use ($expectedDdl, $posts, $relationships): string {
             $position = array_search($sql, $expectedDdl, true);
             if (!is_int($position)) {
                 return $sql;
@@ -9345,6 +9348,7 @@ WHERE n<=300001"
                 'schema' => 'relational-fts-scope-ddl-start-v1',
                 'ordinal' => $ordinal,
                 'sql_sha256' => hash('sha256', $sql),
+                'tables' => ['posts' => $posts, 'relationships' => $relationships],
                 'published_monotonic_ns' => hrtime(true),
             ]);
             foreach (['insert', 'update'] as $operation) {
@@ -9446,6 +9450,7 @@ WHERE n<=300001"
         $writerClientDurations = [];
         $writerServerDurations = [];
         $writerLockDurations = [];
+        $writerPids = [];
         foreach ([1, 2] as $ordinal) {
             $ddlHash = hash('sha256', $expectedDdl[$ordinal - 1]);
             $ddlEvent = $ddlEventsByHash[$ddlHash] ?? [];
@@ -9464,11 +9469,14 @@ WHERE n<=300001"
                     && ($writer['status'] ?? null) === 'PASS'
                     && ($writer['ordinal'] ?? null) === $ordinal
                     && ($writer['operation'] ?? null) === $operation
+                    && (int) ($writer['pid'] ?? 0) > 0
+                    && ($writer['wordpress_bootstrapped'] ?? null) === false
                     && ($writer['sql_sha256'] ?? null) === hash('sha256', $expectedWrite)
                     && (int) ($writer['affected_rows'] ?? -1) === 1
                     && ($writer['performance_schema_sql_sha256'] ?? null) === hash('sha256', $expectedWrite);
                 $writerValid = $writerValid && $valid;
                 $writerOverlap = $writerOverlap && $overlap;
+                $writerPids[] = (int) ($writer['pid'] ?? 0);
                 $writerClientDurations[] = (float) ($writer['client_duration_ms'] ?? INF);
                 $writerServerDurations[] = (float) ($writer['server_duration_ms'] ?? INF);
                 $writerLockDurations[] = (float) ($writer['server_lock_ms'] ?? INF);
@@ -9479,6 +9487,7 @@ WHERE n<=300001"
         $maxWriterClientDuration = max($writerClientDurations ?: [INF]);
         $maxWriterServerDuration = max($writerServerDurations ?: [INF]);
         $maxWriterLockDuration = max($writerLockDurations ?: [INF]);
+        $distinctWriterPids = array_values(array_unique($writerPids));
 
         $afterBytes = wp_fts_wc_scope_fixture_bytes($posts, $relationships);
         $afterIndexes = [
@@ -9526,7 +9535,7 @@ WHERE n<=300001"
             wp_fts_wc_gate('scope_index_repair_performance_schema_attribution', $queryHashes, $eventHashes, count($ddlEvents) === 2 && $eventHashes === $queryHashes),
             wp_fts_wc_gate('scope_index_repair_wall_duration_ms', '<= 180000', $wallDuration, $wallDuration <= 180000.0),
             wp_fts_wc_gate('scope_index_repair_server_duration_ms', ['max_ms' => '<= 120000', 'total_ms' => '<= 180000'], ['max_ms' => $maxServerDuration, 'total_ms' => $totalServerDuration], count($ddlEvents) === 2 && $maxServerDuration <= 120000.0 && $totalServerDuration <= 180000.0),
-            wp_fts_wc_gate('scope_index_repair_concurrent_writes', '4 exact successful canonical writes', $writerEvidence, $writerValid && count($writerClientDurations) === 4),
+            wp_fts_wc_gate('scope_index_repair_concurrent_writes', '4 exact successful canonical writes from 1 persistent lightweight process', $writerEvidence, $writerValid && count($writerClientDurations) === 4 && count($distinctWriterPids) === 1),
             wp_fts_wc_gate('scope_index_repair_write_overlap', 'every INSERT/UPDATE server interval overlaps its CREATE INDEX', $writerEvidence, $writerValid && $writerOverlap),
             wp_fts_wc_gate('scope_index_repair_write_duration_ms', ['client_max' => '<= 5000', 'server_max' => '<= 5000'], ['client_max' => $maxWriterClientDuration, 'server_max' => $maxWriterServerDuration, 'lock_max' => $maxWriterLockDuration], $writerValid && $maxWriterClientDuration <= 5000.0 && $maxWriterServerDuration <= 5000.0),
             wp_fts_wc_gate('scope_index_repair_storage_delta', '0 < index byte delta <= 134217728', ['before' => $beforeBytes, 'after' => $afterBytes, 'index_bytes_delta' => $indexBytesDelta], $indexBytesDelta > 0 && $indexBytesDelta <= 134217728),
@@ -9556,6 +9565,7 @@ WHERE n<=300001"
                 'ddl_sql_sha256' => $queryHashes,
                 'performance_schema_sql_sha256' => $eventHashes,
                 'performance_schema_events' => $ddlEvents,
+                'concurrent_writer_pids' => $distinctWriterPids,
                 'ownership_mutation_positions' => $ownershipMutationPositions,
                 'ddl_positions' => $ddlPositions,
                                 'scope_index_ownership' => ['keys' => $afterOwnership, 'autoload' => $ownershipAutoload],
@@ -9604,25 +9614,56 @@ WHERE n<=300001"
 }
 
 /**
- * Issue one canonical core-table write on a separate connection while a
- * populated current-schema CREATE INDEX is active. Two runner processes each
- * cover one operation for both indexes; Performance Schema timer intervals prove overlap.
+ * Issue canonical core-table writes on a separate lightweight connection while
+ * a populated current-schema CREATE INDEX is active. One PHP process covers
+ * both operations and both indexes without loading a second WordPress runtime;
+ * Performance Schema timer intervals prove overlap.
  *
  * @return array<string,mixed>
  */
 function wp_fts_wc_scope_ddl_writer(): array
 {
-    global $wpdb;
-
     wp_fts_wc_assert_disposable_guard();
-    wp_fts_wc_require_plugin();
-    $operation = strtolower(wp_fts_wc_required_env('WP_FTS_WC_DDL_OPERATION'));
-    wp_fts_wc_assert(in_array($operation, ['insert', 'update'], true), 'Scope DDL writer operation must be INSERT or UPDATE.');
-    $posts = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_repair_posts');
-    $relationships = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_repair_relationships');
+    wp_fts_wc_assert(!defined('ABSPATH') && !function_exists('get_option'), 'The lightweight scope DDL writer must run before WordPress bootstrap.');
+    wp_fts_wc_assert(class_exists(mysqli::class), 'The lightweight scope DDL writer requires mysqli.');
+    $databaseHost = wp_fts_wc_required_env('WORDPRESS_DB_HOST');
+    $databasePort = 3306;
+    $portSeparator = strrpos($databaseHost, ':');
+    if ($portSeparator !== false) {
+        $port = substr($databaseHost, $portSeparator + 1);
+        wp_fts_wc_assert(
+            $port !== ''
+                && strspn($port, '0123456789') === strlen($port)
+                && (int) $port > 0
+                && (int) $port <= 65535,
+            'The lightweight scope DDL writer received an invalid database port.'
+        );
+        $databasePort = (int) $port;
+        $databaseHost = substr($databaseHost, 0, $portSeparator);
+    }
+    wp_fts_wc_assert($databaseHost !== '', 'The lightweight scope DDL writer received an empty database host.');
+    mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+    $database = new mysqli(
+        $databaseHost,
+        wp_fts_wc_required_env('WORDPRESS_DB_USER'),
+        wp_fts_wc_required_env('WORDPRESS_DB_PASSWORD'),
+        wp_fts_wc_required_env('WORDPRESS_DB_NAME'),
+        $databasePort
+    );
+    $database->set_charset('utf8mb4');
     $directory = wp_fts_wc_evidence_dir();
     $results = [];
     $totalDuration = 0.0;
+    $tables = null;
+    $pid = (int) getmypid();
+    wp_fts_wc_assert($pid > 0, 'Could not identify the persistent scope DDL writer process.');
+    $threadResult = $database->query(
+        'SELECT THREAD_ID FROM performance_schema.threads WHERE PROCESSLIST_ID = CONNECTION_ID()'
+    );
+    $threadRow = $threadResult->fetch_assoc();
+    $threadResult->free();
+    $threadId = is_array($threadRow) ? (int) ($threadRow['THREAD_ID'] ?? 0) : 0;
+    wp_fts_wc_assert($threadId > 0, 'Could not map the scope DDL writer to Performance Schema.');
     foreach ([1, 2] as $ordinal) {
         $start = wp_fts_wc_wait_for_json_file(
             $directory . "/scope-ddl-start-{$ordinal}.json",
@@ -9634,13 +9675,30 @@ function wp_fts_wc_scope_ddl_writer(): array
                 && ($start['ordinal'] ?? null) === $ordinal,
             'Scope DDL writer received a malformed start capability.'
         );
-        wp_fts_wc_write_json($directory . "/scope-ddl-ready-{$ordinal}-{$operation}.json", [
-            'schema' => 'relational-fts-scope-ddl-ready-v1',
-            'ordinal' => $ordinal,
-            'operation' => $operation,
-            'pid' => getmypid(),
-            'published_monotonic_ns' => hrtime(true),
-        ]);
+        $startTables = is_array($start['tables'] ?? null) ? $start['tables'] : [];
+        wp_fts_wc_assert(
+            array_keys($startTables) === ['posts', 'relationships']
+                && is_string($startTables['posts'])
+                && is_string($startTables['relationships']),
+            'Scope DDL writer start capability omitted its exact core-table names.'
+        );
+        $currentTables = [
+            'posts' => wp_fts_wc_identifier((string) $startTables['posts']),
+            'relationships' => wp_fts_wc_identifier((string) $startTables['relationships']),
+        ];
+        if ($tables === null) {
+            $tables = $currentTables;
+        }
+        wp_fts_wc_assert($currentTables === $tables, 'Scope DDL writer core-table names changed between index builds.');
+        foreach (['insert', 'update'] as $operation) {
+            wp_fts_wc_write_json($directory . "/scope-ddl-ready-{$ordinal}-{$operation}.json", [
+                'schema' => 'relational-fts-scope-ddl-ready-v1',
+                'ordinal' => $ordinal,
+                'operation' => $operation,
+                'pid' => $pid,
+                'published_monotonic_ns' => hrtime(true),
+            ]);
+        }
         $release = wp_fts_wc_wait_for_json_file(
             $directory . "/scope-ddl-release-{$ordinal}.json",
             120.0,
@@ -9656,63 +9714,75 @@ function wp_fts_wc_scope_ddl_writer(): array
         // the server timer intervals below prove that rather than assuming it.
         usleep(2000);
 
-        $sql = wp_fts_wc_scope_ddl_writer_statement($ordinal, $operation, $posts, $relationships);
-        $threadId = (int) $wpdb->get_var(
-            'SELECT THREAD_ID FROM performance_schema.threads WHERE PROCESSLIST_ID = CONNECTION_ID()'
-        );
-        wp_fts_wc_assert($threadId > 0, 'Could not map the scope DDL writer to Performance Schema.');
-        $beforeEvent = (int) $wpdb->get_var($wpdb->prepare(
-            'SELECT COALESCE(MAX(EVENT_ID),0) FROM performance_schema.events_statements_history_long WHERE THREAD_ID=%d',
-            $threadId
-        ));
-        $started = hrtime(true);
-        $affected = $wpdb->query($sql);
-        $clientDuration = wp_fts_wc_elapsed_ms($started);
-        $events = $wpdb->get_results($wpdb->prepare(
-            'SELECT EVENT_ID,SQL_TEXT,TIMER_START,TIMER_END,TIMER_WAIT,LOCK_TIME,ROWS_EXAMINED,ROWS_AFFECTED FROM performance_schema.events_statements_history_long WHERE THREAD_ID=%d AND EVENT_ID>%d ORDER BY EVENT_ID',
-            $threadId,
-            $beforeEvent
-        ), ARRAY_A) ?: [];
-        $events = array_values(array_filter(
-            $events,
-            static fn(array $event): bool => (string) ($event['SQL_TEXT'] ?? '') === $sql
-        ));
-        $event = count($events) === 1 ? $events[0] : [];
-        $serverDuration = $event === []
-            ? INF
-            : max(0.0, (float) ($event['TIMER_WAIT'] ?? 0) / 1000000000.0);
-        $serverLock = $event === []
-            ? INF
-            : max(0.0, (float) ($event['LOCK_TIME'] ?? 0) / 1000000000.0);
-        $passed = $affected === 1 && count($events) === 1;
-        $result = [
-            'schema' => 'relational-fts-scope-ddl-writer-v1',
-            'status' => $passed ? 'PASS' : 'FAIL',
-            'phase' => 'scope-ddl-writer',
-            'ordinal' => $ordinal,
-            'operation' => $operation,
-            'affected_rows' => $affected,
-            'client_duration_ms' => $clientDuration,
-            'server_duration_ms' => $serverDuration,
-            'server_lock_ms' => $serverLock,
-            'sql_sha256' => hash('sha256', $sql),
-            'performance_schema_sql_sha256' => $event === []
-                ? null
-                : hash('sha256', (string) ($event['SQL_TEXT'] ?? '')),
-            'performance_schema_event' => $event,
-        ];
-        wp_fts_wc_write_json($directory . "/scope-ddl-writer-{$ordinal}-{$operation}.json", $result);
-        if (!$passed) {
-            throw new RuntimeException("Concurrent scope DDL {$operation} writer failed for index {$ordinal}.");
+        foreach (['insert', 'update'] as $operation) {
+            $sql = wp_fts_wc_scope_ddl_writer_statement(
+                $ordinal,
+                $operation,
+                $tables['posts'],
+                $tables['relationships']
+            );
+            $beforeEventResult = $database->query(
+                "SELECT COALESCE(MAX(EVENT_ID),0) AS event_id FROM performance_schema.events_statements_history_long WHERE THREAD_ID={$threadId}"
+            );
+            $beforeEventRow = $beforeEventResult->fetch_assoc();
+            $beforeEventResult->free();
+            $beforeEvent = is_array($beforeEventRow) ? (int) ($beforeEventRow['event_id'] ?? 0) : 0;
+            $started = hrtime(true);
+            $database->query($sql);
+            $affected = $database->affected_rows;
+            $clientDuration = wp_fts_wc_elapsed_ms($started);
+            $eventResult = $database->query(
+                "SELECT EVENT_ID,SQL_TEXT,TIMER_START,TIMER_END,TIMER_WAIT,LOCK_TIME,ROWS_EXAMINED,ROWS_AFFECTED FROM performance_schema.events_statements_history_long WHERE THREAD_ID={$threadId} AND EVENT_ID>{$beforeEvent} ORDER BY EVENT_ID"
+            );
+            $events = $eventResult->fetch_all(MYSQLI_ASSOC);
+            $eventResult->free();
+            $events = array_values(array_filter(
+                $events,
+                static fn(array $event): bool => (string) ($event['SQL_TEXT'] ?? '') === $sql
+            ));
+            $event = count($events) === 1 ? $events[0] : [];
+            $serverDuration = $event === []
+                ? INF
+                : max(0.0, (float) ($event['TIMER_WAIT'] ?? 0) / 1000000000.0);
+            $serverLock = $event === []
+                ? INF
+                : max(0.0, (float) ($event['LOCK_TIME'] ?? 0) / 1000000000.0);
+            $passed = $affected === 1 && count($events) === 1;
+            $result = [
+                'schema' => 'relational-fts-scope-ddl-writer-v1',
+                'status' => $passed ? 'PASS' : 'FAIL',
+                'phase' => 'scope-ddl-writer',
+                'pid' => $pid,
+                'wordpress_bootstrapped' => false,
+                'ordinal' => $ordinal,
+                'operation' => $operation,
+                'affected_rows' => $affected,
+                'client_duration_ms' => $clientDuration,
+                'server_duration_ms' => $serverDuration,
+                'server_lock_ms' => $serverLock,
+                'sql_sha256' => hash('sha256', $sql),
+                'performance_schema_sql_sha256' => $event === []
+                    ? null
+                    : hash('sha256', (string) ($event['SQL_TEXT'] ?? '')),
+                'performance_schema_event' => $event,
+            ];
+            wp_fts_wc_write_json($directory . "/scope-ddl-writer-{$ordinal}-{$operation}.json", $result);
+            if (!$passed) {
+                throw new RuntimeException("Concurrent scope DDL {$operation} writer failed for index {$ordinal}.");
+            }
+            $results[(string) $ordinal][$operation] = $result;
+            $totalDuration += $clientDuration;
         }
-        $results[(string) $ordinal] = $result;
-        $totalDuration += $clientDuration;
     }
+    $database->close();
 
     return [
         'status' => 'PASS',
         'phase' => 'scope-ddl-writer',
-        'operation' => $operation,
+        'pid' => $pid,
+        'wordpress_bootstrapped' => false,
+        'php_peak_bytes' => memory_get_peak_usage(true),
+        'rss_peak_bytes' => wp_fts_wc_rss_bytes('VmHWM'),
         'ordinals' => $results,
         'duration_ms' => $totalDuration,
     ];

@@ -117,6 +117,7 @@ REPRO_BUILD_DIR="${PROOF_ROOT}/repro-build"
 ZIP_PATH="${PROOF_ROOT}/wp-fts-indexer.zip"
 REPRO_ZIP_PATH="${PROOF_ROOT}/wp-fts-indexer-repro.zip"
 PHP_INI="${PROOF_ROOT}/worst-case.ini"
+APACHE_MPM_CONF="${PROOF_ROOT}/apache-mpm-prefork.conf"
 SOURCE_ROOT="${REPO_ROOT}"
 SOURCE_SHA=""
 WORKTREE_CREATED=0
@@ -1007,6 +1008,15 @@ max_execution_time=0
 display_errors=1
 log_errors=1
 INI
+cat > "${APACHE_MPM_CONF}" <<'APACHE'
+# Keep exactly the eight measured REST readers serviceable without Apache's
+# default five-to-ten idle children consuming the constrained server cgroup.
+StartServers 2
+MinSpareServers 1
+MaxSpareServers 2
+MaxRequestWorkers 8
+MaxConnectionsPerChild 0
+APACHE
 
 if [[ "${DB_KIND}" == "mariadb" ]]; then
     DB_ENV=$(cat <<'YAML'
@@ -1108,6 +1118,7 @@ ${DB_ENV}
       - ${OLD_POSTING_FRONTIER_SCRIPT}:/proof/old-posting-frontier.php:ro
       - ${EVIDENCE_DIR}:/evidence
       - ${PHP_INI}:/usr/local/etc/php/conf.d/zzz-wp-fts-worst-case.ini:ro
+      - ${APACHE_MPM_CONF}:/etc/apache2/mods-available/mpm_prefork.conf:ro
   wpcli:
     image: ${WPCLI_RUN_IMAGE}
     cpus: "1.0"
@@ -1181,6 +1192,15 @@ if ! timed_compose wordpress-config-final-probe 30 exec -T wordpress test -f /va
 fi
 if ! timed_compose wordpress-timeout-probe 30 exec -T wordpress sh -c 'command -v timeout >/dev/null 2>&1'; then
     echo "BLOCKED: the pinned WordPress image does not provide the external timeout required by failure and infinite-tokenizer proofs." >&2
+    exit 1
+fi
+capture_compose ACTIVE_APACHE_MPM wordpress-apache-mpm-config 30 exec -T wordpress cat /etc/apache2/mods-available/mpm_prefork.conf
+if [[ "${ACTIVE_APACHE_MPM}" != "$(cat "${APACHE_MPM_CONF}")" ]]; then
+    echo "BLOCKED: the active Apache prefork limits differ from the constrained eight-reader configuration." >&2
+    exit 1
+fi
+if ! timed_compose wordpress-apache-mpm-module 30 exec -T wordpress sh -c "apache2ctl -M 2>/dev/null | grep -q 'mpm_prefork_module'"; then
+    echo "BLOCKED: the constrained WordPress service is not using Apache prefork." >&2
     exit 1
 fi
 
@@ -1679,11 +1699,11 @@ run_concurrent_reader_phase() {
     local worker="$1"
     local options=()
     while IFS= read -r option; do options+=("${option}"); done < <(env_options concurrent-reader)
-    timed_compose "php-concurrent-reader-${worker}" "$(phase_timeout_seconds concurrent-reader)" exec -T \
+    timed_compose "php-concurrent-reader-${worker}" "$(phase_timeout_seconds concurrent-reader)" run --rm --no-deps -T --entrypoint php \
       "${options[@]}" \
       -e "WP_FTS_WC_OUTPUT_DIR=/evidence" \
       -e "WP_FTS_WC_WORKER=${worker}" \
-      wordpress php /proof/relational-fts-concurrent-reader.php
+      wordpress /proof/relational-fts-concurrent-reader.php
 }
 
 run_wpcli_php_phase() {
@@ -2218,32 +2238,20 @@ configure_performance_schema_consumers scope-performance-schema-enable
 
 rm -f "${EVIDENCE_DIR}"/scope-ddl-{start,release}-*.json \
       "${EVIDENCE_DIR}"/scope-ddl-{ready,writer}-*.json
-scope_ddl_writer_pids=()
-for operation in insert update; do
-    # Each process stays alive for both indexes. Loading four complete
-    # WordPress runtimes at once would exceed the 512 MiB container contract
-    # before the core-table writes reached the database.
-    run_php_phase scope-ddl-writer \
-      -e "WP_FTS_WC_DDL_OPERATION=${operation}" \
-      > "${EVIDENCE_DIR}/scope-ddl-writer-${operation}.log" 2>&1 &
-    scope_ddl_writer_pids+=("$!")
-done
+# One lightweight process stays alive for both operations and both indexes.
+# It skips a duplicate WordPress bootstrap so the four measured core-table
+# writes cannot breach the 512 MiB container contract before reaching MariaDB.
+run_php_phase scope-ddl-writer \
+  > "${EVIDENCE_DIR}/scope-ddl-writer.log" 2>&1 &
+scope_ddl_writer_pid=$!
 if ! run_php_phase scope-proof > "${EVIDENCE_DIR}/scope-proof.log"; then
-    for pid in "${scope_ddl_writer_pids[@]}"; do
-        kill "${pid}" >/dev/null 2>&1 || true
-    done
-    wait "${scope_ddl_writer_pids[@]}" 2>/dev/null || true
+    kill "${scope_ddl_writer_pid}" >/dev/null 2>&1 || true
+    wait "${scope_ddl_writer_pid}" 2>/dev/null || true
     echo "FAIL: populated scope-index proof failed while concurrent core-table writers were active." >&2
     exit 1
 fi
-SCOPE_DDL_WRITER_FAILURE=0
-for pid in "${scope_ddl_writer_pids[@]}"; do
-    if ! wait "${pid}"; then
-        SCOPE_DDL_WRITER_FAILURE=1
-    fi
-done
-if (( SCOPE_DDL_WRITER_FAILURE != 0 )); then
-    echo "FAIL: at least one concurrent scope-index DDL writer failed." >&2
+if ! wait "${scope_ddl_writer_pid}"; then
+    echo "FAIL: the concurrent scope-index DDL writer failed." >&2
     exit 1
 fi
 run_php_phase drain > "${EVIDENCE_DIR}/drain.log"

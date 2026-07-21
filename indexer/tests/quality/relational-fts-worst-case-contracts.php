@@ -3687,7 +3687,15 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     assert_true(!str_contains($reader, 'wp_fts_wc_bootstrap_wordpress'), 'REST reader clients must not bootstrap a second WordPress runtime');
     assert_true(!str_contains($integration, "'concurrent-reader' =>"), 'the main database harness must not retain a second reader implementation');
     assert_contains('run_concurrent_reader_phase "${worker}"', $runner, 'the runner should launch each lightweight REST reader');
+    assert_contains('run --rm --no-deps -T --entrypoint php', $runner, 'REST load generators should run outside the persistent WordPress server cgroup');
+    assert_contains('wordpress /proof/relational-fts-concurrent-reader.php', $runner, 'REST load generators should reuse the pinned WordPress image without its server entrypoint');
     assert_true(!str_contains($runner, 'run_php_phase concurrent-reader'), 'the runner must not launch full WordPress CLI readers');
+    foreach (['StartServers 2', 'MinSpareServers 1', 'MaxSpareServers 2', 'MaxRequestWorkers 8', 'MaxConnectionsPerChild 0'] as $directive) {
+        assert_contains($directive, $runner, "the constrained Apache prefork configuration should retain {$directive}");
+    }
+    assert_contains('ACTIVE_APACHE_MPM', $runner, 'the runner should compare the mounted Apache prefork configuration after startup');
+    assert_contains('Apache prefork capped at eight request workers', $acceptance, 'the server resource contract should name the exact concurrent request capacity');
+    assert_contains('ephemeral containers on the same Docker network', $acceptance, 'the server memory contract should not charge load-generator clients to Apache');
 
     $indexingPrepare = strpos($runner, 'run_php_phase indexing-prepare');
     $timedIndex = strpos($runner, 'INDEX_STARTED=', $indexingPrepare === false ? 0 : $indexingPrepare);
@@ -3851,8 +3859,15 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
     }
     assert_same(2, substr_count($integration, "'taxonomy_scope_active_surface_range_gated'"), 'the gated surface-range proof must be emitted once and consumed once during finalization');
     assert_contains('old-posting-frontier|scope-ddl-writer|scope-proof', $runner, 'the populated scope-index DDL phase should retain its 1,800-second external kill');
-    assert_contains('scope_ddl_writer_pids', $runner, 'the populated scope-index proof should launch separate concurrent core-table writers');
-    assert_contains('for operation in insert update; do', $runner, 'the populated scope-index proof should reuse two WordPress writer processes across both indexes');
+    assert_same(1, substr_count($runner, 'run_php_phase scope-ddl-writer'), 'the populated scope-index proof should load one persistent lightweight writer process');
+    assert_contains('scope_ddl_writer_pid=$!', $runner, 'the populated scope-index proof should supervise its one persistent writer process');
+    assert_contains("'pid' => \$pid", $integration, 'all four populated scope-index writes should identify their one persistent writer process');
+    $scopeWriterDispatch = strpos($integration, "if (\$phase === 'scope-ddl-writer')");
+    $wordpressBootstrapDispatch = strpos($integration, 'wp_fts_wc_bootstrap_wordpress();');
+    assert_true(is_int($scopeWriterDispatch) && is_int($wordpressBootstrapDispatch) && $scopeWriterDispatch < $wordpressBootstrapDispatch, 'the lightweight DDL writer should run before the WordPress bootstrap branch');
+    assert_contains("'wordpress_bootstrapped' => false", $integration, 'all four populated scope-index writes should record the lightweight runtime boundary');
+    assert_contains('4 exact successful canonical writes from 1 persistent lightweight process', $integration, 'the populated scope-index gate should reject extra writer runtimes');
+    assert_true(!str_contains($runner, 'WP_FTS_WC_DDL_OPERATION='), 'the DDL proof must not load one WordPress runtime per operation');
     assert_true(!str_contains($runner, 'WP_FTS_WC_DDL_ORDINAL=${ordinal}'), 'the DDL proof must not load one WordPress runtime per index and operation');
     foreach ([
         'resumes an interrupted two-index install without duplicate DDL',
@@ -3894,7 +3909,7 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         'populated repair proof',
         'regions plus one explicit cursor sentinel',
         'canonical `CREATE INDEX` statements',
-        'Four separate WordPress processes synchronize',
+        'One persistent lightweight core-table writer process synchronizes',
         'server-timer interval that overlaps',
         '180,000 ms total client ceiling',
         'positive index-byte delta',

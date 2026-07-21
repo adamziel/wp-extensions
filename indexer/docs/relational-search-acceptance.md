@@ -977,7 +977,8 @@ on all ten pages, so final validation independently reconstructs all twenty
   Performance Schema current/global statement history. Account, host, user,
   connection-attribute, stage, transaction, and wait histories are disabled
   because no acceptance check reads them;
-- WordPress/PHP: 1 CPU, 512 MiB container, no swap, 128 MiB PHP memory;
+- WordPress/PHP: 1 CPU, 512 MiB container, no swap, 128 MiB PHP memory, and
+  Apache prefork capped at eight request workers with one to two spare children;
 - a persistent database volume, never tmpfs;
 - source-bound direct-install ZIP, image digests, corpus manifest hash, database
   variables, and effective cgroup limits in evidence.
@@ -1048,15 +1049,24 @@ Because that container is never restarted, its final cumulative high-water
 mark is the whole measured-workload peak. It must remain within the hard 512-MiB/no-swap
 limit with exact remaining headroom and zero limit, OOM, and OOM-kill events at
 both checkpoints. This covers Apache and every simultaneous `docker exec` PHP
-worker in the persistent service. Ephemeral WP-CLI containers are separate and
-remain fail-closed through their process exit and PHP limits. The 128-MiB PHP
+writer in the persistent service. Ephemeral WP-CLI and HTTP load-generator
+containers are separate and remain fail-closed through their process exit and
+PHP limits. The 128-MiB PHP
 limit is a per-process allocator ceiling, not a claim that aggregate container
 RSS is below 128 MiB; no tighter cache-sensitive WordPress-container peak is
 invented. The final checkpoint covers all measured workloads and precedes the
 report-assembly PHP process, which still cannot publish PASS if it fails.
-The eight REST clients use a source-hashed standalone cURL harness in that same
-cgroup, so only Apache loads WordPress for reader requests; the two writers
-still load the production queue and indexing runtime in independent processes.
+The eight REST clients use a source-hashed standalone cURL harness in separate
+ephemeral containers on the same Docker network, so client memory is not
+misreported as server memory and only Apache loads WordPress for reader
+requests. Each artifact retains its own PHP and RSS peaks. The two writers
+still load the production queue and indexing runtime in independent processes
+inside the persistent server cgroup.
+The runner compares the mounted prefork configuration byte-for-byte after
+startup. Its eight-worker maximum serves every measured reader concurrently,
+while one to two spare children replace Apache's default five-to-ten idle
+children instead of spending the low-resource server budget on unused PHP
+runtimes.
 
 Finalization revalidates the complete raw image/cgroup artifact, including its
 empty failure list. A dirty local smoke is explicitly marked
@@ -1866,13 +1876,16 @@ canonical `CREATE INDEX` statements, persist nonautoloaded ownership before the
 first, keep the schema version unchanged, and verify both definitions.
 Completed Performance Schema events must match both wpdb DDL hashes exactly.
 
-Four separate WordPress processes synchronize at those query boundaries. A
-canonical INSERT and UPDATE against each populated core clone must have a
-server-timer interval that overlaps the corresponding `CREATE INDEX`, affect
-exactly one row, and finish within 5,000 ms on both client and server clocks.
-Their reported Performance Schema lock time is retained rather than inferred
-from total DDL time. This measures whether synchronous repair blocks normal
-core writes; it does not describe a 60-second ceiling without concurrent work.
+One persistent lightweight core-table writer process synchronizes at both query
+boundaries and reuses its database connection for all four writes without
+bootstrapping a second WordPress runtime. A canonical INSERT and UPDATE
+against each populated core clone
+must have a server-timer interval that overlaps the corresponding `CREATE INDEX`,
+affect exactly one row, and finish
+within 5,000 ms on both client and server clocks. Their reported Performance
+Schema lock time is retained rather than inferred from total DDL time. This
+measures whether synchronous repair blocks normal core writes; it does not
+describe a 60-second ceiling without concurrent work.
 
 That populated repair has a 180,000 ms total client ceiling, a 120,000 ms
 per-statement and 180,000 ms aggregate database-server ceiling, at most 64 wpdb
@@ -2241,8 +2254,10 @@ Each required lane performs the same fail-closed sequence:
    100,000-member targeted fixture, maximum 32-lane filtered fixture, and
    100,000-row corpus gap. Before those reads, run the actual current-schema repair
    against populated 100,001-post/300,001-relationship canonical InnoDB clones
-   while four synchronized INSERT/UPDATE processes measure write overlap and
-   blocking. Retain exact DDL timing, attribution, storage, memory, publication,
+   while one persistent lightweight writer process performs four synchronized
+   INSERT/UPDATE operations to measure write overlap and blocking. Retain
+   exact DDL timing,
+   attribution, storage, memory, publication,
    and readiness evidence. Prove visibility against a separate 100,000-row dirty backlog and a
    51,200,000-row relationship table that plan/rank must never reference; exercise
    unchanged work plus the intentionally changed largest-source worker batch.
