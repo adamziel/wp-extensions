@@ -1817,19 +1817,19 @@ function wp_fts_mutation_proof_production_worker_cas(): array
         $transactionStartIndex = $ackTransaction['start_index'];
         $ackSequence = [
             (string) ($queries[$transactionStartIndex] ?? ''),
-            (string) ($queries[$ackIndex - 1] ?? ''),
             $ackSql,
             (string) ($queries[$ackIndex + 1] ?? ''),
+            (string) ($queries[$ackIndex + 2] ?? ''),
         ];
         $ackSequenceValid = $ackTransaction['valid']
-            && wp_fts_mutation_proof_epoch_upsert_valid($ackSequence[1], $workTable);
+            && wp_fts_mutation_proof_epoch_upsert_valid($ackSequence[2], $workTable);
         $ackExcludesWriterLease = !str_contains($ackSql, WP_FTS_Plugin::INDEX_LOCK_OPTION)
             && !str_contains($ackUpper, 'LOCK_ROW')
             && !str_contains($ackUpper, 'LEFT JOIN');
         $ackCasValid = wp_fts_mutation_proof_ack_generation_cas_valid($ackSql, $canonicalJobKey, $workTable)
             && $ackExcludesWriterLease;
         $writerLeaseReleasedAfterCommit = count($writerLeaseDeleteIndexes) === 1
-            && $writerLeaseDeleteIndexes[0] > $ackIndex + 1;
+            && $writerLeaseDeleteIndexes[0] > $ackIndex + 2;
         $writerLeaseDeleteSql = count($writerLeaseDeleteIndexes) === 1
             ? (string) ($queries[$writerLeaseDeleteIndexes[0]] ?? '')
             : '';
@@ -1841,7 +1841,7 @@ function wp_fts_mutation_proof_production_worker_cas(): array
                 WP_FTS_Plugin::INDEX_LOCK_OPTION,
                 (string) ($writerLeasePayloads[0] ?? '')
             );
-        wp_fts_mutation_proof_assert($ackSequenceValid, 'Atomic acknowledgement must remain inside one worker transaction immediately after the epoch UPSERT and before COMMIT.');
+        wp_fts_mutation_proof_assert($ackSequenceValid, 'Atomic acknowledgement must remain inside one worker transaction immediately before the epoch UPSERT and COMMIT.');
         wp_fts_mutation_proof_assert($ackCasValid, 'The atomic acknowledgement DELETE must CAS only the canonical work generation.');
         wp_fts_mutation_proof_assert($writerLeaseReleasedAfterCommit, 'The exact writer lease must remain owned through the work acknowledgement COMMIT.');
         wp_fts_mutation_proof_assert($writerLeaseDeleteCasValid, 'The post-COMMIT writer lease DELETE must compare both its exact option name and serialized payload.');
@@ -1861,8 +1861,8 @@ function wp_fts_mutation_proof_production_worker_cas(): array
             'lang' => 'en',
             'mode' => 'OR',
             'limit' => 10,
-            'post_type' => ['post'],
-            'post_status' => ['publish'],
+            'post_types' => ['post'],
+            'post_statuses' => ['publish'],
             'prefix_matching' => false,
             'include_snippets' => false,
         ]);
@@ -1885,7 +1885,7 @@ function wp_fts_mutation_proof_production_worker_cas(): array
             'atomic_ack_statement_count' => count($ackIndexes),
             'atomic_ack_sql_bytes' => strlen($ackSql),
             'atomic_ack_sql_sha256' => hash('sha256', $ackSql),
-            'atomic_ack_sequence' => ['START TRANSACTION', 'bounded writes then epoch UPSERT', 'generation CAS DELETE', 'COMMIT'],
+            'atomic_ack_sequence' => ['START TRANSACTION', 'bounded writes then generation CAS DELETE', 'epoch UPSERT', 'COMMIT'],
             'atomic_ack_sequence_valid' => $ackSequenceValid,
             'atomic_ack_generation_cas_valid' => $ackCasValid,
             'atomic_ack_excludes_writer_lease' => $ackExcludesWriterLease,
@@ -2007,29 +2007,29 @@ function wp_fts_mutation_proof_ack_transaction_sequence_self_check(): void
         'SELECT writer lease',
         'START TRANSACTION',
         'UPDATE bounded rows',
-        "INSERT INTO wp_fts_work (job_key,generation) VALUES ('meta:search-epoch',1) ON DUPLICATE KEY UPDATE generation=generation+1",
         'DELETE /* wp_fts:atomic-worker-ack */ FROM work',
+        "INSERT INTO wp_fts_work (job_key,generation) VALUES ('meta:search-epoch',1) ON DUPLICATE KEY UPDATE generation=generation+1",
         'COMMIT',
         'DELETE writer lease',
     ];
     wp_fts_mutation_proof_assert(
-        wp_fts_mutation_proof_ack_transaction_sequence($valid, 4)['valid'],
+        wp_fts_mutation_proof_ack_transaction_sequence($valid, 3)['valid'],
         'The atomic acknowledgement transaction-control self-check rejected the canonical sequence.'
     );
 
     $invalid = [
-        ['intermediate COMMIT', ['START TRANSACTION', 'UPDATE bounded rows', 'COMMIT', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
-        ['intermediate ROLLBACK', ['START TRANSACTION', 'UPDATE bounded rows', 'ROLLBACK', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
-        ['nested START', ['START TRANSACTION', 'UPDATE bounded rows', 'START TRANSACTION', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
-        ['savepoint control', ['START TRANSACTION', 'SAVEPOINT hidden', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 3],
-        ['ALTER TABLE', ['START TRANSACTION', 'UPDATE bounded rows', 'ALTER TABLE work ADD hidden INT', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
-        ['LOCK TABLES', ['START TRANSACTION', 'UPDATE bounded rows', 'LOCK TABLES work WRITE', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
-        ['SET SESSION autocommit', ['START TRANSACTION', 'UPDATE bounded rows', 'SET SESSION autocommit=1', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
-        ['SET @@session.autocommit', ['START TRANSACTION', 'UPDATE bounded rows', 'SET @@session.autocommit=1', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
-        ['leading-comment COMMIT', ['START TRANSACTION', 'UPDATE bounded rows', "/* hidden */ -- boundary\nCOMMIT", 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 4],
-        ['multi-statement DML', ['START TRANSACTION', 'UPDATE bounded rows; DELETE FROM work', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 3],
-        ['non-adjacent COMMIT', ['START TRANSACTION', 'INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'SELECT after ack', 'COMMIT'], 2],
-        ['missing START', ['INSERT epoch', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'COMMIT'], 1],
+        ['intermediate COMMIT', ['START TRANSACTION', 'UPDATE bounded rows', 'COMMIT', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'INSERT epoch', 'COMMIT'], 3],
+        ['intermediate ROLLBACK', ['START TRANSACTION', 'UPDATE bounded rows', 'ROLLBACK', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'INSERT epoch', 'COMMIT'], 3],
+        ['nested START', ['START TRANSACTION', 'UPDATE bounded rows', 'START TRANSACTION', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'INSERT epoch', 'COMMIT'], 3],
+        ['savepoint control', ['START TRANSACTION', 'SAVEPOINT hidden', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'INSERT epoch', 'COMMIT'], 2],
+        ['ALTER TABLE', ['START TRANSACTION', 'UPDATE bounded rows', 'ALTER TABLE work ADD hidden INT', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'INSERT epoch', 'COMMIT'], 3],
+        ['LOCK TABLES', ['START TRANSACTION', 'UPDATE bounded rows', 'LOCK TABLES work WRITE', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'INSERT epoch', 'COMMIT'], 3],
+        ['SET SESSION autocommit', ['START TRANSACTION', 'UPDATE bounded rows', 'SET SESSION autocommit=1', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'INSERT epoch', 'COMMIT'], 3],
+        ['SET @@session.autocommit', ['START TRANSACTION', 'UPDATE bounded rows', 'SET @@session.autocommit=1', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'INSERT epoch', 'COMMIT'], 3],
+        ['leading-comment COMMIT', ['START TRANSACTION', 'UPDATE bounded rows', "/* hidden */ -- boundary\nCOMMIT", 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'INSERT epoch', 'COMMIT'], 3],
+        ['multi-statement DML', ['START TRANSACTION', 'UPDATE bounded rows; DELETE FROM work', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'INSERT epoch', 'COMMIT'], 2],
+        ['non-adjacent COMMIT', ['START TRANSACTION', 'DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'INSERT epoch', 'SELECT after epoch', 'COMMIT'], 1],
+        ['missing START', ['DELETE /* wp_fts:atomic-worker-ack */ FROM work', 'INSERT epoch', 'COMMIT'], 0],
     ];
     foreach ($invalid as [$context, $queries, $ackIndex]) {
         wp_fts_mutation_proof_assert(
@@ -2038,7 +2038,7 @@ function wp_fts_mutation_proof_ack_transaction_sequence_self_check(): void
         );
     }
 
-    $epochUpsert = $valid[3];
+    $epochUpsert = $valid[4];
     wp_fts_mutation_proof_assert(
         wp_fts_mutation_proof_epoch_upsert_valid($epochUpsert, 'wp_fts_work'),
         'The epoch UPSERT self-check rejected the exact singleton increment.'
@@ -2198,10 +2198,10 @@ function wp_fts_mutation_proof_ack_transaction_sequence(array $queries, int $ack
         && $startIndex < $ackIndex
         && ($controls[1]['control'] ?? null) === 'COMMIT'
         && wp_fts_mutation_proof_sql_tokens_are_exact_keywords(
-            $tokensByIndex[$ackIndex + 1] ?? [],
+            $tokensByIndex[$ackIndex + 2] ?? [],
             ['COMMIT']
         )
-        && ($controls[1]['index'] ?? null) === $ackIndex + 1
+        && ($controls[1]['index'] ?? null) === $ackIndex + 2
         && wp_fts_mutation_proof_sql_comment_count(
             $commentsByIndex[$ackIndex] ?? [],
             'wp_fts:atomic-worker-ack'
@@ -2210,7 +2210,7 @@ function wp_fts_mutation_proof_ack_transaction_sequence(array $queries, int $ack
         return ['valid' => false, 'start_index' => $startIndex];
     }
 
-    for ($index = $startIndex + 1; $index <= $ackIndex; $index++) {
+    for ($index = $startIndex + 1; $index <= $ackIndex + 1; $index++) {
         if (!wp_fts_mutation_proof_sql_tokens_are_single_dml($tokensByIndex[$index] ?? [])) {
             return ['valid' => false, 'start_index' => $startIndex];
         }
@@ -2219,7 +2219,7 @@ function wp_fts_mutation_proof_ack_transaction_sequence(array $queries, int $ack
     return ['valid' => true, 'start_index' => $startIndex];
 }
 
-/** Prove the pre-ACK statement increments the singleton epoch in the work table. */
+/** Prove the post-ACK statement increments the singleton epoch in the work table. */
 function wp_fts_mutation_proof_epoch_upsert_valid(string $sql, string $workTable): bool
 {
     $tokens = wp_fts_mutation_proof_sql_tokens($sql);

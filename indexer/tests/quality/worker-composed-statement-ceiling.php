@@ -32,8 +32,8 @@ test_case('maximum mixed worker composition stays inside the complete statement 
         'posting_replacement',
         'document_replacement',
         'scope_yield_and_post_batch_release',
-        'search_epoch_advance',
         'atomic_worker_ack',
+        'search_epoch_advance',
         'transaction_commit',
         'lease_release',
     ], $roles, 'the strongest successful worker protocol must remain exact and ordered');

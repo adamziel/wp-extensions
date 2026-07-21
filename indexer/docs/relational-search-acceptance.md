@@ -96,9 +96,10 @@ invariants.
     4,096-byte public search ceiling.
 12. Perform no `SHOW`, `DESCRIBE`, `information_schema`, schema inspection, or
     repair work during normal readiness/search.
-13. Keep every valid worst-case search statement at or below 32 KiB, PHP
-    allocation, live RSS, and Linux high-water RSS deltas at or below 16 MiB,
-    and both PHP peak and absolute Linux `VmHWM` at or below 128 MiB.
+13. Keep every valid worst-case search statement at or below 32 KiB. Ordinary
+    PHP allocation, live RSS, and Linux high-water RSS deltas stay at or below
+    16 MiB. The distinct 3.8-MiB maximum-valid canonical page stays at or below
+    24 MiB. PHP peak and absolute Linux `VmHWM` stay at or below 128 MiB.
 14. Reject source text above 2 MiB, more than 20,000 analyzed occurrences,
     more than 4,096 distinct terms per document, a lexical run above 4 KiB,
     query text above 4 KiB, or a query plan above 12 groups/12 alternatives
@@ -945,17 +946,21 @@ memory after earlier adversaries have raised that process high-water mark.
 Twenty additional posts carry exactly 1.9 MB of canonical source each. Their
 padding is valid ignored HTML comment content, so the analyzer sees one bounded
 visible token rather than a forbidden lexical run. Indexing must accept all
-twenty. `relational-fts-max-valid-setup-v2` binds that setup to the source,
-package, preliminary report, and one Linux process, and retains every worker
-pass's exact statement count, ordered byte/hash/role vectors, duration, and
-conservative PHP/`VmHWM` attribution. Setup runs in one fresh phase process:
-PHP's peak counter is reset before each worker pass, while Linux `VmHWM` remains
-a conservative lifetime high-water mark. The retained aggregate peak must
-dominate every per-pass peak. Housekeeping passes may acknowledge older durable
-work before the target rows progress; the aggregate must still index all twenty
-rows in at most 100 passes. Every pass executes at most 20 recognized statements
-with no statement above 4 MiB, finishes within 30 seconds,
-add at most 32 MiB PHP and RSS, and remain below 128 MiB absolute PHP and RSS.
+twenty. `relational-fts-max-valid-setup-v3` binds that setup to the source,
+package, preliminary report, and distinct Linux seed/worker process identities.
+Source construction finishes in the seed process. The worker checks the exact
+ID, byte-count, and source-hash handoff against the database before consuming
+it, then releases that validation state before enqueueing and measuring work.
+Every worker pass retains its exact statement count, ordered byte/hash/role
+vectors, duration, PHP peak delta, and conservative Linux RSS peak delta. PHP's
+peak counter is reset before each pass. Linux attribution remains `VmHWM` after
+minus live `VmRSS` before in the fresh worker process, never high-water mark
+minus an older high-water mark. The retained aggregate peak must dominate every
+per-pass peak. Housekeeping passes may acknowledge older durable work before
+the target rows progress; the aggregate must still index all twenty rows in at
+most 100 passes. Every pass executes at most 20 recognized statements and emits
+no statement above 4 MiB. Those passes finish within 30 seconds and
+add at most 32 MiB PHP and RSS while remaining below 128 MiB absolute PHP and RSS.
 The one enqueue is at most 1 MiB and five seconds. Fresh-process front-end
 cursor traversal must then return every complete, hash-identical body without
 truncation while respecting the 4-MiB hydration transport bound. Its v2
@@ -1016,11 +1021,13 @@ schema because its own fields did not change.
 The runner also records database usage, cumulative peak, limit events, OOM
 events, and OOM kills after the isolated maximum replacement frontier, after
 the forced rebuild, immediately before all 40 planned cold-cache database
-restarts (four cases × ten samples), and once after the final measured
-workload. Both phase checkpoints precede database restarts so later workloads
-do not inherit process and page-cache pressure from earlier write-heavy work.
+restarts (four cases × ten samples), before the cold restart that isolates the
+populated scope-index DDL proof, and once after the final measured workload.
+Each restart boundary has a preceding checkpoint so later workloads do not
+inherit process and page-cache pressure from earlier write-heavy work without
+first retaining that segment's cumulative counters.
 Together with the pre-corpus sample, the finalizer requires the
-exact ordered 44-checkpoint inventory;
+exact ordered 45-checkpoint inventory;
 deleting or reordering one checkpoint fails. A restart therefore cannot erase the preceding
 cgroup segment's high-water mark or failure counters.
 cgroup v2 reads `memory.current`, `memory.peak`, and `memory.events`; cgroup v1
@@ -1047,6 +1054,9 @@ limit is a per-process allocator ceiling, not a claim that aggregate container
 RSS is below 128 MiB; no tighter cache-sensitive WordPress-container peak is
 invented. The final checkpoint covers all measured workloads and precedes the
 report-assembly PHP process, which still cannot publish PASS if it fails.
+The eight REST clients use a source-hashed standalone cURL harness in that same
+cgroup, so only Apache loads WordPress for reader requests; the two writers
+still load the production queue and indexing runtime in independent processes.
 
 Finalization revalidates the complete raw image/cgroup artifact, including its
 empty failure list. A dirty local smoke is explicitly marked
@@ -1082,6 +1092,12 @@ seconds so the measured intersection of all ten workers must still be at least
 reader must remain on its frozen result oracle. Each writer must acquire the
 real lease in at least one batch, process work, and finish with the exact last
 canonical excerpt, indexed timestamp/state, and no pending assigned work.
+An epoch change between the plan and rank statements intentionally returns the
+typed `wp_fts_search_unavailable` 503 rather than a mixed publication snapshot.
+Each standalone client may retry only that exact response three times. It
+records every HTTP attempt, each completed sample includes its retry count and
+full end-to-end latency, terminal errors remain zero, and aggregate publication
+retries may not exceed the number of completed logical requests.
 Every process records its own elapsed time plus start, finish, overlap, samples,
 and progress; the
 finalizer rejects a short, non-overlapping, incomplete, or zero-progress
@@ -1114,7 +1130,9 @@ conditioned cold samples uses the same formula and absolute gates in its own
 source-bound process, with an exact forty-file and forty-process inventory.
 The ten-page maximum-valid front-end traversal likewise uses its complete fresh
 process lifetime, records the raw before/after values, and is self-hashed and
-source-bound. Long-lived dependency-LOB and populated scope-index-repair
+source-bound. Its two complete 1.9-MiB rows require at most 24 MiB PHP/RSS
+growth while retaining the same 128-MiB absolute caps. Long-lived
+dependency-LOB and populated scope-index-repair
 measurements cannot reset Linux high water, so they deliberately use the same
 conservative `VmHWM`-after minus `VmRSS`-before attribution plus the positive
 128 MiB absolute ceiling.
@@ -1161,6 +1179,7 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | cold maximum: valid 12-group OR+prefix | <=4,000 ms |
 | concurrent mixed HTTP p95 / p99 | <=1,000 / <=1,500 ms |
 | concurrent errors, timeouts, wrong result sets | 0 |
+| concurrent typed publication retries | <= logical requests; <=3 per request |
 | concurrent p95 degradation | <=2× idle HTTP |
 | plugin-owned search statements | <=3; impossible AND <=1 |
 | missing-table request on every public adapter | exactly 1 failed plan and 0 rank/hydrate; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 total plugin-owned statements; unhealthy/latch/single-event repair state present before harness restoration |
@@ -1173,7 +1192,7 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | one requested identity with 4,096 unrelated dictionary identities | exactly 1 plan row; `term_identity` access |
 | deleted-identity stale cursor statements | exactly 1 plan / 0 rank / 0 hydrate |
 | injected non-transactional engine | rejected; 1 drop; restored InnoDB; 1 bounded global-corpus recovery scope (harness-only state restoration is fixture cleanup) |
-| authoritative search PHP allocation, live RSS, PHP peak delta, and Linux `VmHWM`-after minus `VmRSS`-before | each <=16 MiB in every one of 13 fresh case processes, all 40 cold processes, and the maximum-valid front-end process |
+| authoritative search PHP allocation, live RSS, PHP peak delta, and Linux `VmHWM`-after minus `VmRSS`-before | each <=16 MiB in every one of 13 fresh case processes and all 40 cold processes; <=24 MiB for the two-row maximum-valid canonical page |
 | PHP peak and absolute Linux `VmHWM` | each positive and <=128 MiB in those source-bound processes |
 | twenty 1.9-MiB maximum-valid setup rows | one <=1-MiB/5-second enqueue; every worker pass <=20 recognized statements, <=4-MiB SQL, <=30 seconds, <=32-MiB PHP/RSS delta, and <=128-MiB absolute PHP/RSS |
 | 100k nested tags / 1.8 MiB language attribute | typed rejection; 0 SQL; <=1 second; <=16 MiB PHP allocation delta; <=128 MiB RSS |
@@ -1401,11 +1420,13 @@ must use the declared work indexes without a production-table full scan.
 
 The statement and five-second transaction gates are measured on an intentionally
 changed batch, not whatever queue happens to remain after concurrency. After
-draining prior work, the proof selects the 100 largest public corpus sources,
-mutates their canonical excerpts, records all pre-write hashes, enqueues them in
-one statement, and runs exactly one 100-document worker pass. That pass must
-report 100 attempted, processed, and analyzed documents, zero unchanged
-documents and failures, 100 rewritten hashes, and an empty queue.
+draining prior work, the proof selects the 100 smallest public corpus sources
+to isolate the document-count ceiling from the separately measured aggregate
+posting and term ceilings. It mutates their canonical excerpts, records all
+pre-write hashes, enqueues them in one statement, and runs exactly one
+100-document worker pass. That pass must report 100 attempted, processed, and
+analyzed documents, zero unchanged documents and failures, 100 rewritten
+hashes, and an empty queue.
 
 That isolated batch is not allowed to hide composition cost. The drain then
 builds two real corpus-scope collisions with **100** newly changed direct documents,
@@ -1658,9 +1679,10 @@ preservation of a completed targeted scope, and zero non-epoch metadata rows
 after twenty exact requests. The worker commit must leave the canonical key
 absent and the content searchable. On both engines, captured production SQL
 must contain exactly one marked acknowledgement inside the writer-owned
-transaction: `START TRANSACTION`, bounded writes, the singleton epoch UPSERT,
-one generation/token-CAS `DELETE` covering only the canonical job key, then
-`COMMIT`. The acknowledgement must not join or delete the writer lease; the
+transaction: `START TRANSACTION`, bounded writes, one generation/token-CAS
+`DELETE` covering only the canonical job key, the singleton epoch UPSERT, then
+`COMMIT`. The queue-row-first order matches foreground enqueue and prevents an
+inverse work-row/epoch lock cycle. The acknowledgement must not join or delete the writer lease; the
 same exact lease remains owned through `COMMIT` and is deleted once afterward
 by a CAS on both its option name and serialized payload.
 `relational-fts-mutation-generation-cas-v4` also retains the complete ordered
@@ -1888,19 +1910,22 @@ lane before one selected post. The selected post and exhaustion are reached in
 two statements, not 1,002 raw-ID scans. The maximum shape selects eight types
 and four statuses: exactly 32 `wp_fts_type_status_id` branches, each capped at
 100 rows, feed an at-most-3,200-row derived relation and an outer 100-row limit.
-The proof traverses all 3,200 known matches in 32 data pages plus exhaustion;
-each page examines at most 6,600 rows, sorts at most 3,200, sends at most 100,
-uses no disk temporary table or merge pass, stays below 32 KiB, and completes
-within 250 ms per clock. A valid-looking 11-by-3 filter cross-product is rejected
-before SQL because it exceeds the 32-lane contract.
+The proof traverses all 3,200 known matches in 32 data pages plus exhaustion.
+MariaDB counts those bounded lane rows in the source, `UNION`, and grouping
+passes, plus the final output, so each page examines at most 9,700 rows. It
+sorts at most 3,200, sends at most 100, uses no disk temporary table or merge
+pass, stays below 32 KiB, and completes within 250 ms per clock. A valid-looking
+11-by-3 filter cross-product is rejected before SQL because it exceeds the 32-lane contract.
 
 Only corpus reconciliation is intentionally proportional to the complete
 corpus. Its fixture walks the entire 100,000-ineligible-post gap in 1,000 raw
 pages, then the eligible page and exhaustion. Each statement reads at most 100
 posts and 100 retained documents through separate PRIMARY keysets and merges an
-at-most-200-row derived relation. Per page it examines at most 400 rows, sorts
-at most 200, and creates no disk temporary table or merge pass. An in-memory
-temporary table or bounded outer filesort is allowed for this global merge.
+at-most-200-row derived relation. Counting both source keysets, both inner
+derived scans, the grouped relation, and final output, each statement
+examines at most 900 rows. It sorts at most 200 and creates no disk temporary table or merge
+pass. An in-memory temporary table or bounded outer filesort is allowed for
+this global merge.
 
 Every workflow issues exactly one tagged data selector per page. Immediately
 before a targeted or filtered selector it also validates the exact named index:
@@ -2209,7 +2234,8 @@ Each required lane performs the same fail-closed sequence:
    `relational-fts-transaction-crash-v3` accepts rollback and the subsequent
    search only when that exact SIGKILL receipt validates.
    Then run conditioned buffer-pool-cold samples,
-   release all ten ready processes into one shared eight-reader/two-writer
+   release eight lightweight REST clients and two production writer processes
+   into one shared eight-reader/two-writer
    window, and prove a >=60-second all-worker intersection plus independent
    progress and final-state parity for both writers. Then traverse the complete
    100,000-member targeted fixture, maximum 32-lane filtered fixture, and

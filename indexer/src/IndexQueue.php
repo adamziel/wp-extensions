@@ -941,6 +941,8 @@ claim_token = CASE WHEN {$owned} THEN '' ELSE claim_token END",
             );
             $globalScopeReleased = $this->delete_foreground_global_scope($scope_key, $mutation_token);
             // Active targeted fences are redundant once corpus work exists.
+            // Already-ready scopes remain because an empty token cannot prove
+            // that a concurrent request has not advanced their generation.
             $this->discard_owned_scope_fences($scopeTokens);
         } else {
             if ($ids === []) {
@@ -1320,8 +1322,8 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
             $token,
             $token
         ), 'confirm claimed FTS work batch');
-        if ($claimed_count > self::MAX_CLAIM_POSTS + 1 || count($rows) !== $claimed_count) {
-            throw $this->malformed_claim_row('the confirmation row count does not match the claim write');
+        if ($claimed_count > self::MAX_CLAIM_POSTS + 1 || count($rows) > $claimed_count) {
+            throw $this->malformed_claim_row('the confirmation row count exceeds the claim write');
         }
 
         $claims = [];
@@ -1703,6 +1705,10 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
         $states = $recover_guarded_fences
             ? ['guarded', 'ready', 'retry', 'leased']
             : ['ready', 'retry', 'leased'];
+        // Foreground enqueue inserts PRIMARY and secondary-index records in
+        // that order. Skip its uncommitted rows instead of holding a candidate
+        // range while waiting back on PRIMARY, which would invert that order.
+        $candidate_lock = $this->is_sqlite_runtime() ? '' : ' FOR UPDATE SKIP LOCKED';
         $arms = [];
         $args = [];
         foreach ($states as $state) {
@@ -1723,7 +1729,7 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
         WHERE kind = '{$kind}' AND state = '{$state}'
           AND {$duePredicate}
         ORDER BY {$innerOrder}
-        LIMIT {$limit}
+        LIMIT {$limit}{$candidate_lock}
     ) {$alias}";
             $args[] = $now;
             if ($state === 'leased') {
@@ -1863,7 +1869,6 @@ WHERE job_key = %s AND claim_token = %s
         $now = $this->timestamp($now);
         $this->control_query('START TRANSACTION', 'start FTS scope acknowledgement transaction');
         try {
-            $this->advance_search_epoch();
             $deleted = $this->query($this->wpdb->prepare(
                 "DELETE FROM {$this->table}
 WHERE job_key = %s AND claim_token = %s
@@ -1875,6 +1880,7 @@ WHERE job_key = %s AND claim_token = %s
             ), 'acknowledge FTS scope work');
             $deleted = $this->bounded_affected_rows($deleted, 1, 'FTS scope acknowledgement');
             if ($deleted === 1) {
+                $this->advance_search_epoch();
                 $this->control_query('COMMIT', 'commit FTS scope acknowledgement transaction');
                 return true;
             }
@@ -2119,7 +2125,6 @@ STRAIGHT_JOIN {$this->table} work_target
 
         $this->control_query('START TRANSACTION', 'start FTS acknowledgement transaction');
         try {
-            $this->advance_search_epoch();
             $deleted = $this->query($this->wpdb->prepare(
                 $deleteSql,
                 ...$deleteArgs
@@ -2130,6 +2135,7 @@ STRAIGHT_JOIN {$this->table} work_target
                 'FTS indexing batch acknowledgement'
             );
             if ($deleted > 0) {
+                $this->advance_search_epoch();
                 $this->control_query('COMMIT', 'commit FTS acknowledgement transaction');
             } else {
                 // A superseding generation remains dirty. Do not invalidate

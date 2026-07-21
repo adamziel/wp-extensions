@@ -18824,6 +18824,9 @@ ORDER BY p.ID ASC",
                     continue;
                 }
                 $post_id = (int) $row->ID;
+                // wpdb returns numeric columns as strings, while pure post
+                // preparation requires a native identifier.
+                $row->ID = $post_id;
                 if (!isset($source_budgets[$post_id])) {
                     continue;
                 }
@@ -21129,7 +21132,6 @@ STRAIGHT_JOIN {$work_table} work_row
         try {
             self::assert_index_writer_ownership();
             if ($uses_storage_transaction) {
-                $storage->advance_epoch_before_capability_retirement();
                 $transaction_started = true;
             } else {
                 $started = $wpdb->query('START TRANSACTION');
@@ -21137,14 +21139,21 @@ STRAIGHT_JOIN {$work_table} work_row
                     throw new RuntimeException('Could not start the atomic FTS acknowledgement transaction.');
                 }
                 $transaction_started = true;
-                // Even an all-unchanged batch changes search visibility when
-                // its dirty rows disappear. Advance the cursor epoch in this
-                // same transaction before publishing that membership change.
-                self::index_queue(false)->advance_search_epoch();
             }
+            // Foreground enqueue locks work rows before the singleton epoch.
+            // Retire claims in that same order so a producer and worker cannot
+            // deadlock while crossing one atomic visibility boundary.
             $result = $wpdb->query($statement);
             if ($result === false || (isset($wpdb->last_error) && trim((string) $wpdb->last_error) !== '')) {
                 throw new RuntimeException('Could not atomically acknowledge the FTS batch.');
+            }
+            // Even an all-unchanged batch changes search visibility when its
+            // dirty rows disappear. Advance the cursor epoch in this same
+            // transaction before publishing that membership change.
+            if ($uses_storage_transaction) {
+                $storage->advance_epoch_before_capability_retirement();
+            } else {
+                self::index_queue(false)->advance_search_epoch();
             }
             if ($uses_storage_transaction) {
                 // The exact option lease remains owned through COMMIT. This is

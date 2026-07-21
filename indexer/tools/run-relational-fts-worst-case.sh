@@ -413,6 +413,7 @@ $expectedLabels=["pre-corpus","post-frontier","post-reindex"];
 foreach(["common_or","max_valid_or_prefix","rare_anchor_and","prefix_fanout"] as $case){
     for($sample=0;$sample<10;$sample++){$expectedLabels[]="pre-cold-restart-{$case}-{$sample}";}
 }
+$expectedLabels[]="pre-scope-restart";
 $expectedLabels[]="final-workload";
 $actualLabels=array_column($checkpoints,"checkpoint");
 $database=is_array($resources["database"]??null)?$resources["database"]:[];
@@ -434,7 +435,7 @@ foreach(["database","wordpress","wpcli"] as $role){
     $expectedMemory=$role==="database"?1073741824:536870912;
     if(!$effectiveCgroupMatches($cgroup,$expectedMemory)){$failures[]="{$role} effective cgroup raw probe does not match its structured evidence";}
 }
-if($malformed||$actualLabels!==$expectedLabels||($memory["expected_checkpoint_labels"]??null)!==$expectedLabels){$failures[]="database cgroup memory checkpoints do not match the exact ordered 44-checkpoint inventory";}
+if($malformed||$actualLabels!==$expectedLabels||($memory["expected_checkpoint_labels"]??null)!==$expectedLabels){$failures[]="database cgroup memory checkpoints do not match the exact ordered 45-checkpoint inventory";}
 if(count($versions)!==1||($versions[0]??null)!==($effectiveCgroup["version"]??null)){$failures[]="database cgroup memory checkpoint versions do not match the effective cgroup";}
 if($first!==$pre){$failures[]="database pre-corpus cgroup memory checkpoint changed before finalization";}
 if(!is_int($wholePeak)||$wholePeak<1||$limit!==1073741824||$wholePeak>$limit){$failures[]="database whole-run cgroup peak is outside the hard 1 GiB limit";}
@@ -823,6 +824,7 @@ if [[ "${SOURCE_REF}" != "HEAD" || "${ALLOW_DIRTY}" == "0" ]]; then
     WORKTREE_CREATED=1
 fi
 TEST_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/relational-fts-worst-case.php"
+CONCURRENT_READER_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/relational-fts-concurrent-reader.php"
 MUTATION_PROOF_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/mutation-fence-concurrency.php"
 ISOLATED_BOUNDARIES_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/relational-fts-isolated-boundaries.php"
 OLD_POSTING_FRONTIER_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/old-posting-frontier.php"
@@ -836,6 +838,10 @@ if (( SOURCE_DIRTY == 1 && ALLOW_DIRTY == 0 )); then
 fi
 if [[ ! -f "${TEST_SCRIPT}" ]]; then
     echo "BLOCKED: missing integration proof script: ${TEST_SCRIPT}" >&2
+    exit 1
+fi
+if [[ ! -f "${CONCURRENT_READER_SCRIPT}" ]]; then
+    echo "BLOCKED: missing lightweight concurrent-reader script: ${CONCURRENT_READER_SCRIPT}" >&2
     exit 1
 fi
 if [[ ! -f "${MUTATION_PROOF_SCRIPT}" ]]; then
@@ -854,6 +860,7 @@ initialize_and_attest_jieba_source \
     current "${SOURCE_ROOT}" "components/full-text-search/resources/sources/jieba" \
     "${EVIDENCE_DIR}/jieba-source-current.json"
 TEST_SCRIPT_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${TEST_SCRIPT}")"
+CONCURRENT_READER_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${CONCURRENT_READER_SCRIPT}")"
 MUTATION_PROOF_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${MUTATION_PROOF_SCRIPT}")"
 ISOLATED_BOUNDARIES_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${ISOLATED_BOUNDARIES_SCRIPT}")"
 OLD_POSTING_FRONTIER_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${OLD_POSTING_FRONTIER_SCRIPT}")"
@@ -1095,6 +1102,7 @@ ${DB_ENV}
       - wp_data:/var/www/html
       - ${ZIP_PATH}:/proof/wp-fts-indexer.zip:ro
       - ${TEST_SCRIPT}:/proof/relational-fts-worst-case.php:ro
+      - ${CONCURRENT_READER_SCRIPT}:/proof/relational-fts-concurrent-reader.php:ro
       - ${MUTATION_PROOF_SCRIPT}:/proof/mutation-fence-concurrency.php:ro
       - ${ISOLATED_BOUNDARIES_SCRIPT}:/proof/relational-fts-isolated-boundaries.php:ro
       - ${OLD_POSTING_FRONTIER_SCRIPT}:/proof/old-posting-frontier.php:ro
@@ -1120,6 +1128,7 @@ ${DB_ENV}
       - wp_data:/var/www/html
       - ${ZIP_PATH}:/proof/wp-fts-indexer.zip:ro
       - ${TEST_SCRIPT}:/proof/relational-fts-worst-case.php:ro
+      - ${CONCURRENT_READER_SCRIPT}:/proof/relational-fts-concurrent-reader.php:ro
       - ${MUTATION_PROOF_SCRIPT}:/proof/mutation-fence-concurrency.php:ro
       - ${ISOLATED_BOUNDARIES_SCRIPT}:/proof/relational-fts-isolated-boundaries.php:ro
       - ${OLD_POSTING_FRONTIER_SCRIPT}:/proof/old-posting-frontier.php:ro
@@ -1136,7 +1145,7 @@ phase_timeout_seconds() {
         # Full validation traverses the complete corpus and exceeds thirty
         # minutes on the constrained 50k and 100k hosted lanes.
         setup|indexing-prepare|initial-index-drain|reindex-drain|validate|drain) printf '7200\n' ;;
-        cold-prepare|dependency-lob|max-valid-setup|max-valid-search|search-memory-sample|writer-aggregate|old-posting-frontier|scope-ddl-writer|scope-proof) printf '1800\n' ;;
+        cold-prepare|dependency-lob|max-valid-seed|max-valid-setup|max-valid-search|search-memory-sample|writer-aggregate|old-posting-frontier|scope-ddl-writer|scope-proof) printf '1800\n' ;;
         concurrent-reader|concurrent-writer) printf '%s\n' "$((CONCURRENCY_SECONDS + 180))" ;;
         *) printf '600\n' ;;
     esac
@@ -1533,6 +1542,7 @@ foreach (["common_or", "max_valid_or_prefix", "rare_anchor_and", "prefix_fanout"
         $databaseMemoryCheckpointLabels[] = "pre-cold-restart-{$case}-{$sample}";
     }
 }
+$databaseMemoryCheckpointLabels[] = "pre-scope-restart";
 $databaseMemoryCheckpointLabels[] = "final-workload";
 $packageReproducibility = json_decode((string) file_get_contents($argv[31]), true, 512, JSON_THROW_ON_ERROR);
 $data = [
@@ -1647,6 +1657,7 @@ env_options() {
       -e "WP_FTS_SOURCE_SHA=${ACTIVE_SOURCE_SHA}" \
       -e "WP_FTS_ZIP_SHA256=${ACTIVE_ZIP_SHA256}" \
       -e "WP_FTS_HARNESS_SHA256=${TEST_SCRIPT_SHA256}" \
+      -e "WP_FTS_WC_CONCURRENT_READER_SHA256=${CONCURRENT_READER_SHA256}" \
       -e "WP_FTS_SOURCE_DIRTY=${ACTIVE_SOURCE_DIRTY}" \
       -e "WP_FTS_WC_ALLOW_DIRTY=${ACTIVE_ALLOW_DIRTY}" \
       -e "WP_FTS_WC_PROFILE=${PROFILE}" \
@@ -1662,6 +1673,17 @@ run_php_phase() {
     local options=()
     while IFS= read -r option; do options+=("${option}"); done < <(env_options "${phase}")
     timed_compose "php-${phase}" "$(phase_timeout_seconds "${phase}")" exec -T "${options[@]}" "$@" wordpress php /proof/relational-fts-worst-case.php
+}
+
+run_concurrent_reader_phase() {
+    local worker="$1"
+    local options=()
+    while IFS= read -r option; do options+=("${option}"); done < <(env_options concurrent-reader)
+    timed_compose "php-concurrent-reader-${worker}" "$(phase_timeout_seconds concurrent-reader)" exec -T \
+      "${options[@]}" \
+      -e "WP_FTS_WC_OUTPUT_DIR=/evidence" \
+      -e "WP_FTS_WC_WORKER=${worker}" \
+      wordpress php /proof/relational-fts-concurrent-reader.php
 }
 
 run_wpcli_php_phase() {
@@ -2081,6 +2103,9 @@ for case_id in "${SEARCH_MEMORY_CASES[@]}"; do
       > "${EVIDENCE_DIR}/search-memory-${case_id}.log"
 done
 run_php_phase writer-aggregate > "${EVIDENCE_DIR}/writer-aggregate.log"
+run_php_phase max-valid-seed > "${EVIDENCE_DIR}/max-valid-seed.log"
+# The worker gets a fresh PHP lifetime after constructing forty MiB of source
+# rows, so source construction cannot raise its PHP or RSS high-water marks.
 run_php_phase max-valid-setup > "${EVIDENCE_DIR}/max-valid-setup.log"
 # This must be a separate PHP process: its resettable PHP peak and Linux RSS
 # high-water evidence would be meaningless after indexing forty MiB of sources.
@@ -2163,7 +2188,7 @@ foreach($gates as $gate){if(!$gate["passed"]){fwrite(STDERR,"WP-CLI cursor gate 
 rm -f "${EVIDENCE_DIR}"/concurrency-ready-*.json "${EVIDENCE_DIR}/concurrency-window.json"
 pids=()
 for worker in $(seq 0 7); do
-    run_php_phase concurrent-reader -e "WP_FTS_WC_WORKER=${worker}" > "${EVIDENCE_DIR}/concurrent-reader-${worker}.log" 2>&1 &
+    run_concurrent_reader_phase "${worker}" > "${EVIDENCE_DIR}/concurrent-reader-${worker}.log" 2>&1 &
     pids+=("$!")
 done
 for worker in 0 1; do
@@ -2182,17 +2207,26 @@ if (( CONCURRENCY_FAILURE != 0 )); then
     exit 1
 fi
 
+# Retain the concurrency segment's cumulative counters, then start the
+# populated DDL proof with a cold 256 MiB buffer pool. Without this boundary,
+# cache left by the search fanout can make the same 1 GiB lane fail or pass
+# according to page-reclaim timing rather than the indexed write contract.
+capture_database_memory_checkpoint pre-scope-restart
+timed_compose scope-database-restart 300 restart db >/dev/null
+wait_for_database
+configure_performance_schema_consumers scope-performance-schema-enable
+
 rm -f "${EVIDENCE_DIR}"/scope-ddl-{start,release}-*.json \
       "${EVIDENCE_DIR}"/scope-ddl-{ready,writer}-*.json
 scope_ddl_writer_pids=()
-for ordinal in 1 2; do
-    for operation in insert update; do
-        run_php_phase scope-ddl-writer \
-          -e "WP_FTS_WC_DDL_ORDINAL=${ordinal}" \
-          -e "WP_FTS_WC_DDL_OPERATION=${operation}" \
-          > "${EVIDENCE_DIR}/scope-ddl-writer-${ordinal}-${operation}.log" 2>&1 &
-        scope_ddl_writer_pids+=("$!")
-    done
+for operation in insert update; do
+    # Each process stays alive for both indexes. Loading four complete
+    # WordPress runtimes at once would exceed the 512 MiB container contract
+    # before the core-table writes reached the database.
+    run_php_phase scope-ddl-writer \
+      -e "WP_FTS_WC_DDL_OPERATION=${operation}" \
+      > "${EVIDENCE_DIR}/scope-ddl-writer-${operation}.log" 2>&1 &
+    scope_ddl_writer_pids+=("$!")
 done
 if ! run_php_phase scope-proof > "${EVIDENCE_DIR}/scope-proof.log"; then
     for pid in "${scope_ddl_writer_pids[@]}"; do

@@ -73,6 +73,12 @@ final class WP_FTS_IB_Infinite_Cjk_Tokenizer
     public int $calls = 0;
     public int $yields = 0;
 
+    /** Keep the injected tokenizer's index behavior identity explicit. */
+    public function index_signature(): string
+    {
+        return 'wp-fts-isolated-infinite-cjk-tokenizer-v1';
+    }
+
     /** Never terminate on its own; only the analyzer's occurrence guard may stop it. */
     public function __invoke(string $run, string $language): Generator
     {
@@ -97,16 +103,14 @@ final class WP_FTS_IB_Distinct_Term_Analyzer
     ) {
     }
 
-    /** @return array<int,array{term:string,lang:string,weight:float}> */
-    public function analyze_plain_content(string $text, array $options = []): array
+    /** @return array<int,array<int,array{term:string,lang:string,weight:float}>> */
+    public function analyze_document_fields(array $fields, array $options = []): array
     {
-        return $this->occurrences($options);
-    }
+        if (!array_is_list($fields) || count($fields) !== 1) {
+            throw new LogicException('Distinct-term boundary analysis requires one field.');
+        }
 
-    /** @return array<int,array{term:string,lang:string,weight:float}> */
-    public function analyze_content(string $html, array $options = []): array
-    {
-        return $this->occurrences($options);
+        return [$this->occurrences($options)];
     }
 
     /** Keep fixture output deterministic across the isolated boundary cases. */
@@ -793,8 +797,6 @@ function wp_fts_ib_case_logical_plans(WP_FTS_Relational_Storage $storage, array 
         $term = 'wpftsibalternative' . chr(97 + $index) . chr(97 + $index);
         $alternative_candidates[] = [
             'key' => WP_FTS_TermNamespace::namespace_term('en', $term),
-            'lang' => 'en',
-            'term' => $term,
             'rank' => $index,
         ];
     }

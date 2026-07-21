@@ -236,6 +236,27 @@ test_case('generation-aware queue accepts only canonical database integer string
     assert_same(false, $claim['source_exists'] ?? null, 'canonical zero flags should become native booleans');
 });
 
+test_case('generation-aware queue accepts a claim superseded before confirmation', function (): void {
+    $fake = new WP_FTS_Test_WPDB();
+    $queue = new WP_FTS_Index_Queue($fake);
+    $postId = 7815;
+    $queue->enqueue_many([$postId], 1000);
+    $fake->afterQueueClaimWriteObserver = static function () use ($queue, $postId): void {
+        $queue->enqueue_many([$postId], 1001);
+    };
+
+    assert_same([], $queue->claim_batch(1, 1000, 30), 'confirmation must omit a generation superseded after the claim write');
+    assert_same(2, $fake->queue[$postId]['generation'] ?? null, 'the concurrent enqueue must retain its newer generation');
+    assert_same('ready', $fake->queue[$postId]['state'] ?? null, 'the newer generation must remain ready for another worker');
+    assert_same('', $fake->queue[$postId]['claim_token'] ?? null, 'the superseding enqueue must clear the obsolete lease');
+    $claimSql = array_values(array_filter(
+        $fake->queries,
+        static fn(mixed $sql): bool => is_string($sql) && str_contains($sql, 'wp_fts:claim-batch')
+    ));
+    assert_same(1, count($claimSql), 'the supersession race must execute one bounded claim mutation');
+    assert_contains('FOR UPDATE SKIP LOCKED', $claimSql[0], 'relational candidates must skip uncommitted enqueue rows instead of inverting index lock order');
+});
+
 test_case('generation-aware queue rejects malformed settlement capabilities before SQL', function (): void {
     $fake = new WP_FTS_Test_WPDB();
     $queue = new WP_FTS_Index_Queue($fake);
@@ -703,6 +724,7 @@ test_case('generation-aware queue snapshots an under-budget claim and safely fal
     $ids = range(7601, 7605);
     foreach ($ids as $postId) {
         $post = wp_fts_test_backfill_post($postId, 'post', 'publish', 'S' . $postId);
+        $post->ID = (string) $postId;
         $post->post_content = str_repeat('x', WP_FTS_Analysis_Limits::MAX_SOURCE_BYTES - strlen($post->post_title));
         $GLOBALS['wp_fts_test_posts'][$postId] = $post;
     }
@@ -746,6 +768,7 @@ test_case('generation-aware queue snapshots an under-budget claim and safely fal
         $load = new ReflectionMethod(WP_FTS_Plugin::class, 'load_posts_for_indexing');
         $posts = $load->invoke(null, $ids, $measurements, []);
         foreach (array_slice($ids, 0, 4) as $postId) {
+            assert_same($postId, $posts[$postId]->ID ?? null, "fallback should normalize wpdb ID {$postId} to a native integer");
             assert_same(
                 WP_FTS_Analysis_Limits::MAX_SOURCE_BYTES,
                 strlen((string) ($posts[$postId]->post_title ?? '')) + strlen((string) ($posts[$postId]->post_content ?? '')),
@@ -858,6 +881,31 @@ test_case('generation-aware queue acknowledgement cannot erase a newer save', fu
     assert_same(2, $second['generation'] ?? null, 'the next worker should claim the newer generation');
     assert_same(1, $queue->acknowledge_many([$second])['acknowledged'], 'the current generation owner should acknowledge its work');
     assert_same(0, $queue->count(), 'the row should disappear only after its latest generation finishes');
+});
+
+test_case('generation-aware queue locks acknowledgement rows before the cursor epoch', function (): void {
+    $wpdb = new WP_FTS_Test_WPDB();
+    $queue = new WP_FTS_Index_Queue($wpdb);
+    $queue->enqueue_many([142], 1000);
+    $claim = $queue->claim_batch(1, 1000, 30)[0] ?? null;
+    assert_true(is_array($claim), 'the lock-order probe requires one owned generation');
+
+    $wpdb->queries = [];
+    assert_same(1, $queue->acknowledge_many([$claim])['acknowledged'], 'the owned generation should acknowledge');
+    $delete = null;
+    $epoch = null;
+    foreach ($wpdb->queries as $offset => $sql) {
+        if (is_string($sql) && str_contains($sql, 'wp_fts:acknowledge-batch')) {
+            $delete = $offset;
+        }
+        if (is_string($sql) && str_contains($sql, "kind = 'meta', post_id = 0, state = 'meta'")) {
+            $epoch = $offset;
+        }
+    }
+    assert_true(
+        is_int($delete) && is_int($epoch) && $delete < $epoch,
+        'queue retirement must lock work rows before the shared cursor epoch'
+    );
 });
 
 test_case('generation-aware queue recovers expired claims without accepting stale acknowledgement', function (): void {
