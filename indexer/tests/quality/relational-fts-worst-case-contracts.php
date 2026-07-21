@@ -551,7 +551,7 @@ test_case('relational worst-case worker probes follow current SQL contracts', fu
     $root = dirname(__DIR__, 2);
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
-    foreach (['wp_fts_wc_sql_token_stream', 'wp_fts_wc_queue_claim_statement_kinds'] as $functionName) {
+    foreach (['wp_fts_wc_sql_token_stream', 'wp_fts_wc_queue_claim_statement_kinds', 'wp_fts_wc_scope_index_probe_role'] as $functionName) {
         if (!function_exists($functionName)) {
             eval(wp_fts_wc_contract_function_source($integration, $functionName));
         }
@@ -561,6 +561,24 @@ test_case('relational worst-case worker probes follow current SQL contracts', fu
     assert_same(['scope', 'post'], wp_fts_wc_queue_claim_statement_kinds($currentClaim), 'the aliased current claim should expose both bounded work kinds');
     assert_same(['scope'], wp_fts_wc_queue_claim_statement_kinds("UPDATE /* wp_fts:claim-batch */ wp_fts_work SET state='leased' WHERE kind='scope'"), 'a scope-only current claim should expose only scope work');
     assert_same([], wp_fts_wc_queue_claim_statement_kinds("UPDATE wp_fts_work SET state='leased' WHERE kind='post'"), 'an untagged update must not masquerade as the production claim');
+
+    $hadWpdb = array_key_exists('wpdb', $GLOBALS);
+    $oldWpdb = $GLOBALS['wpdb'] ?? null;
+    $GLOBALS['wpdb'] = (object) [
+        'term_relationships' => 'wp_term_relationships',
+        'posts' => 'wp_posts',
+    ];
+    try {
+        assert_same('targeted_scope_index_probe', wp_fts_wc_scope_index_probe_role("SHOW INDEX FROM `wp_term_relationships` WHERE Key_name = 'wp_fts_term_object'"), 'the exact targeted-scope metadata read should retain its worker role');
+        assert_same('filtered_scope_index_probe', wp_fts_wc_scope_index_probe_role("SHOW INDEX FROM `wp_posts` WHERE Key_name = 'wp_fts_type_status_id'"), 'the exact filtered-scope metadata read should retain its worker role');
+        assert_same(null, wp_fts_wc_scope_index_probe_role("SHOW INDEX FROM `wp_posts` WHERE Key_name = 'wrong'"), 'a different index metadata read must not inherit the bounded scope role');
+    } finally {
+        if ($hadWpdb) {
+            $GLOBALS['wpdb'] = $oldWpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
 
     foreach ([
         'wp_fts_wc_scope_index_probe_role',
@@ -1355,6 +1373,7 @@ test_case('production search requires relational storage', function (): void {
         $rejected = true;
     }
     assert_true($rejected, 'the public constructor must reject storage without the relational contract');
+    assert_true(!method_exists(WP_FTS_Indexer::class, 'optimize'), 'the component indexer must not retain plugin storage maintenance');
 
     $root = dirname(__DIR__, 2);
     $productionSources = [];
@@ -1372,27 +1391,6 @@ test_case('production search requires relational storage', function (): void {
     $pipelineSource = (string) file_get_contents(dirname($root) . '/components/full-text-search/src/LanguagePipeline.php');
     assert_true(!str_contains($analyzerSource, 'detect_lemma_pack_language'), 'query language detection must not probe every enabled lemma pack');
     assert_true(!str_contains($pipelineSource, 'detect_lemma_pack_language'), 'the cross-pack dictionary router must not remain callable');
-});
-
-test_case('set-oriented indexing rejects unsupported storage maintenance', function (): void {
-    $storage = new class implements WP_FTS_Set_Oriented_Search_Storage {
-        public function search_page(array $groups, array $options): array
-        {
-            return ['results' => [], 'has_more' => false];
-        }
-    };
-    $rejected = null;
-    try {
-        (new WP_FTS_Indexer($storage, new WP_FTS_Analyzer()))->optimize();
-    } catch (LogicException $error) {
-        $rejected = $error;
-    }
-
-    assert_same(
-        'The storage backend does not support optimization.',
-        $rejected?->getMessage(),
-        'set-oriented storage must not silently skip requested maintenance'
-    );
 });
 
 test_case('production component bootstrap cannot autoload test storage fixtures', function (): void {
@@ -4357,6 +4355,7 @@ test_case('worker option classification decodes quoted identifiers and exact nam
         'wp_fts_wc_sql_token_stream',
         'wp_fts_wc_sql_references_physical_table',
         'wp_fts_wc_sql_references_named_option',
+        'wp_fts_wc_scope_index_probe_role',
         'wp_fts_wc_worker_statement_role',
     ] as $function) {
         if (!function_exists($function)) {

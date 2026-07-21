@@ -20704,14 +20704,18 @@ function wp_fts_wc_worker_statement_role(string $sql): string
 /** Identify the exact metadata read that authenticates one forced scope index. */
 function wp_fts_wc_scope_index_probe_role(string $sql): ?string
 {
-    global $wpdb;
-
     $values = [];
     foreach (wp_fts_wc_sql_token_stream($sql, true) as $token) {
         $values[] = (string) ($token['value'] ?? '');
     }
     $prefix = ['show', 'index', 'from'];
     $suffix = ['where', 'key_name', '='];
+    if (array_slice($values, 0, 3) !== $prefix || array_slice($values, 4, 3) !== $suffix || count($values) !== 8) {
+        return null;
+    }
+
+    global $wpdb;
+
     $contracts = [
         'targeted_scope_index_probe' => [
             ...$prefix,
