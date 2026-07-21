@@ -4334,10 +4334,20 @@ test_case('physical schema classification streams maximum worker statements', fu
     }
 
     $statement = 'INSERT INTO `wp_fts_postings` VALUES ' . str_repeat('(1,2,3),', 524288) . '(1,2,3)';
-    memory_reset_peak_usage();
-    $before = memory_get_usage(true);
+    $peakPadding = null;
+    if (function_exists('memory_reset_peak_usage')) {
+        memory_reset_peak_usage();
+    } else {
+        // PHP 8.1 cannot reset the suite's process-wide peak. Lift current
+        // usage back to that peak so allocations made by classification still
+        // establish a measurable new high-water mark.
+        $paddingBytes = max(0, memory_get_peak_usage(true) - memory_get_usage(true));
+        $peakPadding = $paddingBytes > 0 ? str_repeat('p', $paddingBytes) : null;
+    }
+    $peakBaseline = memory_get_peak_usage(true);
     assert_true(!wp_fts_wc_is_physical_schema_statement($statement), 'a maximum-width posting write must remain data rather than schema work');
-    $peakDelta = max(0, memory_get_peak_usage(true) - $before);
+    $peakDelta = max(0, memory_get_peak_usage(true) - $peakBaseline);
+    unset($peakPadding);
     assert_true($peakDelta <= 4194304, "streamed schema classification should add at most four MiB; observed {$peakDelta}");
     assert_true(wp_fts_wc_is_physical_schema_statement('CREATE INDEX `bounded` ON `wp_posts` (`ID`)'), 'an executable CREATE must remain physical schema work');
     assert_true(wp_fts_wc_is_physical_schema_statement('SELECT TABLE_NAME FROM information_schema.TABLES'), 'an information_schema relation must remain physical schema work');
