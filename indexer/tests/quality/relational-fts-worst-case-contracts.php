@@ -3434,6 +3434,14 @@ test_case('relational worst-case composes maximum document work with fair scope 
     }
 });
 
+test_case('relational worst-case generation fence uses the current queue claim API', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $generationFence = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_generation_fence_proof');
+
+    assert_same(2, substr_count($generationFence, '->claim_batch('), 'both generation-fence claims should use the current bounded API');
+    assert_true(!str_contains($generationFence, '->claim('), 'the real database proof must not call the removed queue API');
+});
+
 test_case('worker ceiling quality contracts retain hard composed and ambiguous outcome assertions', function (): void {
     $root = dirname(__DIR__, 2);
     $quality = dirname(__DIR__);

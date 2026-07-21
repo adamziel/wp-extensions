@@ -17042,7 +17042,7 @@ function wp_fts_wc_generation_fence_proof(WP_FTS_Index_Queue $queue, int $postId
     $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
     $now = time();
     $queue->enqueue($postId, $now);
-    $old = $queue->claim(1, $now, 60)[0] ?? null;
+    $old = $queue->claim_batch(1, $now, 60)[0] ?? null;
     wp_fts_wc_assert(is_array($old) && (int) ($old['post_id'] ?? 0) === $postId, 'Could not claim the old generation fence fixture.');
     $queue->enqueue($postId, $now + 1);
     $ready = $wpdb->get_row($wpdb->prepare(
@@ -17058,7 +17058,7 @@ function wp_fts_wc_generation_fence_proof(WP_FTS_Index_Queue $queue, int $postId
         "SELECT generation,state,claim_token,claimed_generation,available_at FROM `{$work}` WHERE post_id=%d",
         $postId
     ), ARRAY_A);
-    $new = $queue->claim(1, $now + 1, 60)[0] ?? null;
+    $new = $queue->claim_batch(1, $now + 1, 60)[0] ?? null;
     wp_fts_wc_assert(is_array($new) && (int) ($new['generation'] ?? 0) === 2, 'Advanced generation was not immediately claimable.');
     $newToken = (string) ($new['token'] ?? '');
 
