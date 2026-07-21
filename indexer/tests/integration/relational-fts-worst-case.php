@@ -11038,6 +11038,8 @@ WHERE job_key=%s AND kind='post' AND post_id=%d AND state='ready'",
         $firstBatch = wp_fts_wc_instrumented_worker_batch(
             'worst-case-composed-cron-no-event',
             $queueClaimPlans,
+            true,
+            'without_preexisting_event',
             true
         );
         $successorScheduled = function_exists('wp_next_scheduled')
@@ -11146,7 +11148,8 @@ WHERE job_key=%s AND kind='post' AND post_id=%d AND state='ready'",
             'wc-composed-cron-later-existing-event',
             $queueClaimPlans,
             true,
-            'with_later_existing_event'
+            'with_later_existing_event',
+            true
         );
         $laterEventAfter = function_exists('wp_next_scheduled')
             ? wp_next_scheduled(WP_FTS_Plugin::CRON_HOOK)
@@ -11364,6 +11367,12 @@ WHERE job_key=%s AND kind='post' AND post_id=%d AND state='ready'",
             ? 'PASS'
             : 'FAIL';
 
+        unset($firstBatch['statements'], $laterEventBatch['statements']);
+        foreach ($pathBatches as &$pathBatch) {
+            unset($pathBatch['statements']);
+        }
+        unset($pathBatch);
+
         return [
             'status' => $status,
             'fixture' => [
@@ -11499,7 +11508,8 @@ function wp_fts_wc_instrumented_worker_batch(
     string $source,
     array &$queueClaimPlans,
     bool $scheduled = false,
-    string $scheduledEventState = 'without_preexisting_event'
+    string $scheduledEventState = 'without_preexisting_event',
+    bool $retainStatements = false
 ): array
 {
     global $wpdb;
@@ -11521,6 +11531,12 @@ function wp_fts_wc_instrumented_worker_batch(
     $batchDurationMs = wp_fts_wc_elapsed_ms($batchStarted);
     $summary = is_array($recorded['result']) ? $recorded['result'] : [];
     $queries = $recorded['queries'];
+    $statementHashes = [];
+    $statementBytes = [];
+    foreach ($queries as $sql) {
+        $statementHashes[] = hash('sha256', $sql);
+        $statementBytes[] = strlen($sql);
+    }
     $queryStartedMs = array_map('floatval', $recorded['query_started_ms']);
     $roles = wp_fts_wc_worker_statement_roles($queries);
     $ftsQueries = array_values(array_filter($recorded['queries'], 'wp_fts_wc_is_search_statement'));
@@ -11557,7 +11573,7 @@ function wp_fts_wc_instrumented_worker_batch(
     }
     $databaseMs = array_sum(array_column($statementEvents, 'duration_ms'));
 
-    return [
+    $batch = [
         'statement_scope' => 'all_wpdb_including_transaction_control',
         'worker_mode' => $scheduled ? 'cron_' . $scheduledEventState : 'manual',
         'duration_ms' => $batchDurationMs,
@@ -11599,8 +11615,9 @@ function wp_fts_wc_instrumented_worker_batch(
         'performance_schema_statements' => $statementEvents,
         'database_statement_ms' => $databaseMs,
         'non_database_ms' => max(0.0, $batchDurationMs - $databaseMs),
-        'max_statement_bytes' => $queries === [] ? 0 : max(array_map('strlen', $queries)),
-        'statements' => $queries,
+        'max_statement_bytes' => $statementBytes === [] ? 0 : max($statementBytes),
+        'statement_sha256' => $statementHashes,
+        'statement_bytes' => $statementBytes,
         'failures' => (int) ($summary['last_batch_failures'] ?? 0),
         'error_class' => is_scalar($summary['error_class'] ?? null) ? (string) $summary['error_class'] : '',
         'error_message' => is_scalar($summary['error_message'] ?? null) ? (string) $summary['error_message'] : '',
@@ -11608,6 +11625,11 @@ function wp_fts_wc_instrumented_worker_batch(
         'resolved_failure_records' => !empty($summary['resolved_failure_records']),
         'skipped_locked' => !empty($summary['skipped_locked']),
     ];
+    if ($retainStatements) {
+        $batch['statements'] = $queries;
+    }
+
+    return $batch;
 }
 
 /** A worker pass advances either an acknowledged generation or one scope page. */
@@ -20433,6 +20455,8 @@ function wp_fts_wc_worker_statement_roles(array $statements): array
 /** Assign one exact semantic role to a production-worker statement. */
 function wp_fts_wc_worker_statement_role(string $sql): string
 {
+    global $wpdb;
+
     $trimmed = trim($sql);
     $normalized = strtoupper(rtrim($trimmed, "; \t\n\r\0\x0B"));
     if (in_array($normalized, ['START TRANSACTION', 'BEGIN'], true)) {
@@ -20534,11 +20558,23 @@ function wp_fts_wc_worker_statement_role(string $sql): string
     }
     if (
         str_starts_with($normalized, 'UPDATE ')
-        && str_contains($lower, 'options')
-        && str_contains($lower, WP_FTS_Plugin::INDEX_HEALTH_OPTION)
-        && str_contains($lower, 'option_value')
+        && wp_fts_wc_sql_references_named_option(
+            $sql,
+            (string) $wpdb->options,
+            WP_FTS_Plugin::INDEX_HEALTH_OPTION
+        )
     ) {
         return 'health_state_cas';
+    }
+    if (
+        str_starts_with($normalized, 'SELECT ')
+        && wp_fts_wc_sql_references_named_option(
+            $sql,
+            (string) $wpdb->options,
+            WP_FTS_Plugin::INDEX_HEALTH_OPTION
+        )
+    ) {
+        return 'health_state_read';
     }
     if (
         str_starts_with($normalized, 'SELECT ')
@@ -20548,10 +20584,7 @@ function wp_fts_wc_worker_statement_role(string $sql): string
     ) {
         return 'option_cache_reload';
     }
-    if (
-        str_contains($lower, 'options')
-        && str_contains($lower, "option_name = 'cron'")
-    ) {
+    if (wp_fts_wc_sql_references_named_option($sql, (string) $wpdb->options, 'cron')) {
         return str_starts_with($normalized, 'SELECT ')
             ? 'cron_schedule_probe'
             : 'cron_schedule_write';
@@ -20561,6 +20594,36 @@ function wp_fts_wc_worker_statement_role(string $sql): string
     }
 
     return 'unknown';
+}
+
+/** Match one exact option table and name through decoded SQL tokens. */
+function wp_fts_wc_sql_references_named_option(string $sql, string $table, string $optionName): bool
+{
+    if (!wp_fts_wc_sql_references_physical_table($sql, $table)) {
+        return false;
+    }
+
+    $optionName = strtolower($optionName);
+    $window = [];
+    foreach (wp_fts_wc_sql_token_stream($sql, true) as $token) {
+        $window[] = $token;
+        if (count($window) > 3) {
+            array_shift($window);
+        }
+        if (
+            count($window) === 3
+            && in_array($window[0]['type'] ?? null, ['word', 'identifier'], true)
+            && ($window[0]['value'] ?? null) === 'option_name'
+            && ($window[1]['type'] ?? null) === 'symbol'
+            && ($window[1]['value'] ?? null) === '='
+            && ($window[2]['type'] ?? null) === 'string'
+            && ($window[2]['value'] ?? null) === $optionName
+        ) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /** @param string[] $roles */
@@ -20580,6 +20643,7 @@ function wp_fts_wc_worker_roles_are_ordered(array $roles): bool
         'replacement_frontier' => 7,
         'post_batch_failure' => 7,
         'lease_heartbeat' => 7,
+        'health_state_read' => 8,
         'health_state_cas' => 8,
         'transaction_start' => 8,
         'scope_page_advance' => 9,

@@ -4267,6 +4267,96 @@ test_case('physical schema classification streams maximum worker statements', fu
     assert_true(!str_contains($source, 'wp_fts_wc_sql_tokens($sql)'), 'physical schema classification must not materialize maximum-width DML tokens');
 });
 
+test_case('worker option classification decodes quoted identifiers and exact names', function (): void {
+    global $wpdb;
+
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    foreach ([
+        'wp_fts_wc_sql_token_stream',
+        'wp_fts_wc_sql_references_physical_table',
+        'wp_fts_wc_sql_references_named_option',
+        'wp_fts_wc_worker_statement_role',
+    ] as $function) {
+        if (!function_exists($function)) {
+            eval(wp_fts_wc_contract_function_source($integration, $function));
+        }
+    }
+
+    $hadWpdb = array_key_exists('wpdb', $GLOBALS);
+    $oldWpdb = $wpdb ?? null;
+    $wpdb = (object) ['options' => 'wp_options'];
+    try {
+        assert_same(
+            'cron_schedule_write',
+            wp_fts_wc_worker_statement_role("UPDATE `wp_options` SET `option_value` = 'payload' WHERE `option_name` = 'cron'"),
+            'a backtick-quoted WordPress cron update must remain scheduling control'
+        );
+        assert_same(
+            'cron_schedule_probe',
+            wp_fts_wc_worker_statement_role("SELECT option_value FROM wp_options WHERE option_name='cron' LIMIT 1"),
+            'an unquoted WordPress cron read must remain scheduling control'
+        );
+        assert_same(
+            'health_state_read',
+            wp_fts_wc_worker_statement_role("SELECT option_value FROM wp_options WHERE option_name = 'wp_fts_index_health' LIMIT 1"),
+            'an uncached index Health read must remain explicit worker data control'
+        );
+        assert_same(
+            'health_state_cas',
+            wp_fts_wc_worker_statement_role("UPDATE `wp_options` SET `option_value` = 'payload' WHERE `option_name` = 'wp_fts_index_health'"),
+            'a quoted index Health update must remain explicit worker data control'
+        );
+        assert_same(
+            'unknown',
+            wp_fts_wc_worker_statement_role("UPDATE wp_shadow_options SET option_value='payload' WHERE option_name='cron'"),
+            'a different option table must not impersonate the WordPress cron control plane'
+        );
+        assert_same(
+            'unknown',
+            wp_fts_wc_worker_statement_role("UPDATE wp_options SET option_value='option_name = cron' WHERE option_name='not-cron'"),
+            'cron-like text inside a value must not impersonate the exact option predicate'
+        );
+    } finally {
+        if ($hadWpdb) {
+            $wpdb = $oldWpdb;
+        } else {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+
+    $classifier = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_sql_references_named_option');
+    assert_contains('wp_fts_wc_sql_token_stream($sql, true)', $classifier, 'named-option classification must decode identifier and string tokens');
+    assert_true(!str_contains($classifier, 'preg_'), 'named-option classification must not use regular-expression parsing');
+    $workerRole = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_worker_statement_role');
+    assert_contains('wp_fts_wc_sql_references_named_option', $workerRole, 'cron roles must use the structured named-option classifier');
+    assert_contains("return 'health_state_read';", $workerRole, 'index Health reads must retain their exact worker role');
+});
+
+test_case('instrumented worker batches discard raw SQL unless composition inspects it', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $batch = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_instrumented_worker_batch');
+    foreach ([
+        'bool $retainStatements = false',
+        "'statement_sha256' => \$statementHashes",
+        "'statement_bytes' => \$statementBytes",
+        'if ($retainStatements)',
+        "\$batch['statements'] = \$queries;",
+    ] as $required) {
+        assert_contains($required, $batch, "worker batch compaction must retain: {$required}");
+    }
+    assert_true(!str_contains($batch, "'statements' => \$queries"), 'ordinary worker batches must not retain raw SQL unconditionally');
+
+    $composed = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_composed_maximum_worker_path');
+    foreach ([
+        "'without_preexisting_event',\n            true",
+        "'with_later_existing_event',\n            true",
+        "unset(\$firstBatch['statements'], \$laterEventBatch['statements']);",
+        "unset(\$pathBatch['statements']);",
+    ] as $required) {
+        assert_contains($required, $composed, "composed-worker inspection must remain bounded through: {$required}");
+    }
+});
+
 test_case('search relation scanning retains every physical table across STRAIGHT_JOIN', function (): void {
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     foreach ([
