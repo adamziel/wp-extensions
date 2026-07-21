@@ -41,7 +41,7 @@ Settings > Full-Text Search provides Health, Settings, Sandbox, Indexed content,
 and Analyzer packs tabs. It manages the indexed post types, automatic indexing,
 search replacement surfaces, search-provider compatibility, highlighting,
 snippets, prefix matching, optional public REST search, result limits, field
-ranking weights, an optional recency ranking boost, language fallback defaults,
+ranking weights, an optional recency ranking boost, single-plan language routing,
 schema status, and a Health tab schema repair action. The Analyzer packs tab can
 enable or disable bundled runtime lemma packs when PHP gzip support is
 available; custom analyzer-pack paths and custom field selection still use the
@@ -69,19 +69,31 @@ development-only Composer path repository points to the adjacent
 Developers working in the monorepo can build the same standalone package with
 `php indexer/tools/build-release-zip.php` as described in
 [`docs/release-packaging.md`](docs/release-packaging.md).
+Release ZIPs contain only the importer and documented pack-management tools
+listed there. Composer development scripts and every other `tools/` command
+require a complete source checkout.
 
 Activation creates or repairs the `fts_*` tables and schedules the bounded
-runtime queue processor. Run a first reindex to backfill existing posts that
-the wp-admin Posts list replacement can search:
+runtime queue processor. Reindex stores one filtered durable scope and returns;
+it never selects or indexes the matching posts in the CLI request. WP-Cron
+drains that scope in bounded worker passes:
 
 ```sh
-wp fts reindex --post_type=post --batch_size=200
+wp fts reindex --post_type=post --format=json
+```
+
+When an operator cannot wait for WP-Cron, run one bounded worker pass explicitly
+and repeat only as needed:
+
+```sh
+wp fts process-batch --batch_size=100 --time_budget=20 --format=json
 ```
 
 The default post status scope for `wp fts reindex` is
 `publish,draft,pending,future,private`, matching the admin Posts list search
-surface for `post`. Normal front-end search replacement still returns published
-content only; use `--post_status=publish` for a public-only backfill.
+surface for every configured searchable post type. Normal front-end search
+replacement still returns published content only; use
+`--post_status=publish` for a public-only backfill.
 
 Run a search with the language you expect:
 
@@ -89,24 +101,25 @@ Run a search with the language you expect:
 wp fts search "example query" --lang=en --limit=5
 ```
 
-The output includes WordPress post IDs, BM25 scores, totals, stored metadata,
-and optional snippets. `score` is relative to the current query and language
-partition; it is not a percentage and should not be compared across unrelated
-queries.
+The output includes WordPress post IDs, deterministic relational scores,
+cursor-page state, stored metadata, and optional snippets. Interactive totals
+are deliberately unknown. `score` is relative to the current query; it is not a
+percentage and should not be compared across unrelated queries.
 
 ## Ranking Field Weights
 
 Settings > Full-Text Search > Settings includes ranking weights for the
 WordPress post fields extracted into the index: title, main content, excerpt,
-taxonomy terms, selected custom fields, and rendered-only content. The controls
+taxonomy terms, selected custom fields, and the legacy rendered-only field. The controls
 accept whole numbers from `1` through `100`; higher numbers make matches in that
 field count more strongly during ranking. To exclude a field entirely, remove
 it with the `wp_fts_post_index_fields` filter instead of assigning a zero weight.
 
 The defaults match the extractor defaults: title `5.0`, content `1.0`, excerpt
 `2.0`, taxonomy terms `2.0`, selected custom fields `1.0`, and rendered-only
-content `1.0`. Dynamic block rendering is disabled by default; the rendered
-weight applies only when a caller deliberately enables it. These are index-time
+content `1.0`. The bounded relational worker rejects dynamic block, shortcode,
+and callback rendering before execution; the rendered weight remains only for
+legacy in-memory/file component callers. These are index-time
 weights stored with indexed content, so
 changed weights fully affect existing content only after it is reindexed.
 Saving changed weights marks stale reindex debt in Health/status; it does not
@@ -117,29 +130,30 @@ It is off by default (`0`). When enabled, query-time ranking gives newer posts a
 small bounded lift using indexed `post_date_gmt` metadata. Changing the strength
 or half-life does not require reindexing when the date metadata is already in
 the index. Missing, empty, or invalid dates are ignored safely, and search
-explain diagnostics report whether the boost was enabled and how many candidate
-documents received it.
+explain diagnostics report the bounded relational plan used for the page.
 
 ## Word Beginnings
 
 Word beginnings can be enabled or disabled from Settings > Full-Text Search.
 When enabled, exact analyzer and lemma matches still rank before prefix-only
-alternatives. The saved `prefix_min_length` default is `4`; lowering it broadens
-matches for shorter searched words, which can be slower or noisier. The saved
-`prefix_max_terms` default is `64`; lowering it caps broad-prefix cost more
-aggressively, while raising it can include more alternatives.
+alternatives. Prefix matching applies only to the final source word and stays
+as one complete indexed `kind=1` normalized-surface range inside SQL. If that
+final source word is filtered from exact analysis, prefix matching is disabled
+rather than silently falling back to an earlier word. The saved
+`prefix_min_length` default is `4`; lowering it broadens matches for shorter
+searched words, which can be slower or noisier.
 
-The saved thresholds apply to front-end replacement, wp-admin Posts search
+The saved minimum applies to front-end replacement, wp-admin Posts search
 replacement, the Sandbox, and `WP_FTS_Plugin::search()`. `wp fts search`
-accepts `--prefix_matching`, `--prefix_min_length` / `--prefix-min-length`, and
-`--prefix_max_terms` / `--prefix-max-terms` for explicit CLI searches. Direct
-searcher callers can still use the existing `WP_FTS_PREFIX_MIN_LENGTH` and
-`WP_FTS_PREFIX_MAX_TERMS` constants for code-level overrides.
+accepts `--prefix_matching` and `--prefix_min_length` / `--prefix-min-length`.
+There is no relational completion cap: truncating the range would make valid
+matches depend on vocabulary order, while enumerating it would recreate the
+fanout this backend is designed to avoid.
 
 Public REST search is a separate opt-in setting and is absent by default. Its
 word-beginning expansion is also off by default and cannot be enabled by a
 request parameter. See [Operations](docs/operations.md#public-rest-search) for
-the endpoint's stricter work, rate, and cache limits.
+the fixed query shape and deployment guidance.
 
 ## Architecture
 
@@ -149,19 +163,27 @@ the endpoint's stricter work, rate, and cache limits.
 - WordPress activation, post-save/status/delete hooks, cron, optional REST, and WP-CLI
   live in the plugin adapter and wire WordPress posts into the component.
 - `WP_FTS_PostContentExtractor` extracts title, content, excerpt, taxonomy terms,
-  configured custom fields, and optional rendered block deltas into weighted
-  fields plus bounded result metadata.
+  and configured custom fields from the worker's authoritative attached
+  snapshot into weighted fields plus bounded result metadata. The relational
+  path rejects dynamic rendering before extraction.
 - `WP_FTS_Analyzer` strips non-visible HTML, normalizes and tokenizes text,
   routes language gaps, and stems or lemmatizes through the language pipeline.
-- Terms are stored under language namespaces, so the baseline top-10 routed
-  languages plus Polish, German, Russian, and other explicit partitions do not
-  share collection statistics by accident.
-- `WP_FTS_Searcher` scores matches with BM25 and can filter by stored WordPress
-  metadata such as post type, status, and date.
-- MySQL storage is the normal WordPress backend, including WordPress Playground
-  when the SQLite integration presents a `$wpdb`-compatible database. File
-  storage remains in the component as a small local and test backend for
-  non-WordPress contexts.
+- Terms are stored under language namespaces and query occurrences use one
+  primary language plan; enabling more packs does not add search passes.
+- MySQL keeps a dictionary, compact row postings with precomputed impact,
+  bounded document sidecars, and a durable generation-fenced work table. Each
+  document stores analyzed lexical identities as `kind=0` and one complete
+  normalized identity per distinct source surface as `kind=1`; it does not
+  materialize every proper prefix.
+- Search analyzes once, plans once, ranks once in SQL, and optionally hydrates
+  one page. Current WordPress visibility and dirty work are applied before its
+  score order and limit.
+- MySQL/MariaDB storage is the supported WordPress production backend. The same
+  relational code has a `$wpdb`-compatible SQLite path for a single-request
+  WordPress Playground smoke; multi-connection generation-CAS interleavings are
+  validated only on the supported production database families. File storage
+  remains in the component as a small local and test backend for non-WordPress
+  contexts.
 
 The index is derived state. Rebuild it after content imports, analyzer changes,
 language-routing changes, or environment moves where the FTS tables were not
@@ -179,10 +201,16 @@ before completion. Each sweep records its highest retained document ID so posts
 indexed after the sweep begins are handled once by their queue/backfill path
 rather than extending the sweep indefinitely. A scope change reconciles every
 retained live index row, not only rows in the new scope, so removed post types
-and deleted source posts are tombstoned. Activation also starts this retained-row
+and deleted source posts are physically removed. Activation also starts this retained-row
 reconciliation whenever index data already exists. This covers content changed
-while the plugin was inactive and a reinstall after uninstall retained the
-derived tables but removed their old profile state.
+while the plugin was inactive. Deactivation retains the derived index;
+uninstall is the explicit destructive boundary and removes current and legacy
+FTS tables. Before the DROP, uninstall stores one non-autoloaded, one-byte fence
+under the shared writer lease and retains it after success or partial failure.
+Preloaded cron, schema-repair, save-hook, and scheduling callbacks remain inert
+behind that fence. Installing the ZIP again while inactive does not remove it;
+only explicit site or network activation clears each site's fence under a
+writer lease, repairs the four-table schema, and queues reconciliation.
 
 The same Health/status surfaces include a read-only queue processor schedule.
 `scheduled` means WordPress has a `wp_fts_process_index_queue` event waiting;
@@ -214,63 +242,58 @@ and failure diagnostics rather than force-unlocking. This slice intentionally
 does not provide a force-unlock control, because deleting an active lock can
 allow overlapping index writes.
 
-The Health tab shows whether the schema is current, missing, stale, or
-physically damaged. Status inspects every required table, column, and index;
-the version option is only the ordered migration cursor. Its repair button runs
-the same idempotent migration and verification path as `wp fts repair`, and the
-new version is stored only after the physical contract passes. Repair touches
-schema and table definitions only and does not index content or create sample
-posts. Network activation provisions the current site and starts a cursor-driven
-cron chain that repairs at most ten existing sites per event; new sites use the
-same provisioning path.
+The Health tab reports stored schema/readiness state without inspecting physical
+tables. Explicit support snapshots and `wp fts diagnose` add bounded read-only
+physical verification; the repair button runs the same idempotent migration and
+verification path as `wp fts repair`, and the new version is stored only after
+the physical contract passes. Repair touches schema and table definitions only
+and does not index content or create sample posts. Network activation provisions
+the current site and starts a cursor-driven cron chain that repairs exactly one
+existing site per event; new sites use the same provisioning path.
 
 ## Feature Summary
 
 | Area | Current support |
 | --- | --- |
-| Indexing | Builds derived `fts_*` tables from WordPress posts, including title, content, excerpt, taxonomy terms, selected custom fields, optional rendered block deltas, boosts, and bounded result metadata. |
-| Lifecycle updates | Activation repairs schema, WP-Cron drains bounded runtime work, save/status/taxonomy/selected-meta hooks queue eligible updates, status/delete hooks tombstone posts that leave searchable scopes, explicit dependency invalidation covers opted-in dynamic output, and `wp fts reindex` can rebuild a scoped corpus. |
-| Language routing | Terms are stored in language namespaces. Explicit `--lang`, the wp-admin `FTS Language` field, Polylang/WPML metadata, and HTML `lang`/`xml:lang` scopes route content before conservative detector fallback. |
-| Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. The PHP and REST helpers resolve every candidate against current WordPress post/password/capability state before ranking, so hidden rows cannot consume the result window and explain totals use the same readable corpus. |
-| Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
+| Indexing | Builds derived `fts_*` tables from WordPress posts, including title, static content, excerpt, batch-preloaded taxonomy terms and selected custom fields, boosts, and bounded result metadata. Dynamic rendering is rejected before callbacks run. |
+| Lifecycle updates | Activation repairs schema, WP-Cron drains bounded runtime work, save/status/taxonomy/selected-meta hooks coalesce durable generations, scope changes reconcile in keyset batches, documents that leave the corpus are physically removed, and `wp fts reindex` rebuilds through the same worker. |
+| Language routing | Terms are stored in language namespaces. Explicit `--lang`, the batch-preloaded wp-admin `FTS Language` field, set-oriented Polylang/WPML assignment snapshots, and HTML `lang`/`xml:lang` scopes route worker content before conservative detector fallback. No per-post multilingual API runs in the worker loop. |
+| Search | Exact `OR`/`AND`, final-word prefix ranges, morphology, field impact, optional recency, and signed adjacent cursors use at most planning, ranking, and page-hydration statements. Current canonical visibility and pending work are filtered before `LIMIT`; totals remain unknown. |
+| Snippets | Search can return snippets from bounded content-only sidecars, with analyzer-aware highlighting performed for the returned page only. |
 | Surfaces | WP-CLI is the main operational surface. The plugin also provides an explicitly enabled REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
-| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query surfaces and analyzed terms, retrieval mode, scoring, recency boost status, per-result and field-specific match details, performance-budget status, a bounded `posts_pre_query` hook pipeline around Language FTS, and redacted SQL query summaries when the environment already collects `$wpdb->queries`; they are request-local diagnostics rather than persistent logs. |
+| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. Their bounded relational explain reports storage, logical groups and resolved alternatives, the selected AND anchor, final-prefix range use, statement count, unknown-total semantics, and recency state without a second result-posting pass. Traces also include performance-budget status, a bounded `posts_pre_query` hook pipeline around Language FTS, and redacted SQL summaries when the environment already collects `$wpdb->queries`; they are request-local rather than persistent logs. |
 
-## Exact Retrieval And Explicit Candidate Caps
+## Exact Relational Pages
 
-Exact search is the correctness-first default for every query. The searcher
-considers every matching candidate document, which preserves recall, ranking,
-and total-count exactness regardless of document-id order.
+The WordPress/MySQL path never retrieves posting lists into PHP and has no
+candidate-cap mode. One dictionary statement resolves exact alternatives and,
+for a final-word prefix, sums `doc_freq` across one surface range without
+reading postings or returning completions to PHP. One set-oriented statement
+ranks exact membership. Multi-group prefix `AND` compares that range cost with
+the resolved exact groups and anchors the cheapest logical group. Exact groups
+use indexed candidate/key probes; a selected prefix anchor streams its matching
+postings and probes the other groups by `(post_id,term_id)`, while a non-anchor
+prefix intersects rare exact candidates. Neither shape scans unrelated
+per-document postings. One optional statement hydrates only the returned page.
 
-Programmatic callers may explicitly request approximate candidate-capped
-retrieval with the legacy `fast_top_k` or `approximate_top_k` option. The cap
-takes a deterministic document-id prefix from each posting list; it is not a
-ranking-aware top-K algorithm and can omit the highest-scoring document. The
-plugin therefore never selects this mode automatically.
+Exact broad `OR` and single broad prefixes still have to examine their matching
+posting rows to rank the exact top page. They remain a fixed plan/rank/hydrate
+shape with page-sized PHP memory, but database work is proportional to matching
+postings; sites beyond that small/medium-site tradeoff should use a dedicated
+search service.
 
-Candidate-capped retrieval always returns a payload, even when `include_total`
-is omitted, with these status fields:
+Pages return `has_more`, signed forward/reverse cursors, `total: null`, and
+`total_relation: unknown`. Numbered deep offsets and synchronous exact totals
+would require repeated or exhaustive work. Valid WordPress query shapes with
+unsupported membership, projection, ordering, page-size, or numbered-pagination
+constraints remain on core search. Once FTS owns an otherwise-supported search,
+an unavailable index or malformed/oversized adapter input fails closed instead
+of silently running an unindexed core `LIKE`/`OFFSET` query.
 
-- `retrieval_mode` is `candidate_capped` rather than `exact`;
-- `total_is_exact` is `false`;
-- `results_may_be_incomplete` is `true`, meaning matches may be omitted before
-  normal limit/offset pagination;
-- `candidate_cap` reports the applied limit.
-
-Callers can set `candidate_cap` or `max_candidates` for the request. When an
-explicit approximate request omits both, the default cap is `1000`; the legacy
-`WP_FTS_FAST_MODE_CANDIDATE_CAP` constant can change that explicit-mode default.
-The former automatic threshold and enable constants no longer switch searches
-away from exact retrieval.
-
-The `exact_top_k`, `exact`, and explicit false `fast_top_k` options remain
-accepted for callers that already send them, but exact retrieval no longer
-requires an override.
-
-When diagnostics are active, the Debug Bar panel or Health-tab fallback shows
-whether exact retrieval or an explicit approximate candidate cap was used. The
-same trace reports a bounded human-readable reason, the candidate cap, and
-whether the result total is exact or approximate.
+Legacy candidate options remain component compatibility inputs for local
+in-memory/file adapters. The plugin rejects them before relational planning;
+they cannot alter membership, add posting reads, or select another production
+path.
 
 Those traces also show a Performance budget row for completed search timing
 data. By default, total search time is compared with a `100ms` budget and the
@@ -289,9 +312,13 @@ automatically and does not create persistent SQL logs.
 Language routing is explicit-first. Use `wp fts reindex --lang=...`,
 `wp fts search --lang=...`, or the sandbox language selector when you know the
 language. In wp-admin, the `FTS Language` post field can pin indexing for a
-post. HTML `lang`/`xml:lang` scopes, Polylang/WPML metadata, and custom analyzer
-resolvers are also honored, with HTML scopes able to route individual visible
-segments.
+post. It is loaded with the worker's set-oriented metadata snapshot. HTML
+`lang`/`xml:lang` scopes and custom analyzer resolvers are also honored, with
+HTML scopes able to route individual visible segments. The bounded worker reads
+each active Polylang/WPML assignment table once for the claimed batch and does
+not install or invoke provider-backed document/query resolvers. Explicit custom
+resolver callbacks remain a framework-neutral extension surface; their I/O is
+caller-owned and outside the plugin's fixed SQL contract.
 
 Automatic detection is conservative, deterministic gap filling, not statistical
 or ML language detection. It only runs for untagged visible text groups after
@@ -302,9 +329,9 @@ morphology, so text split across nested inline tags is analyzed as the reader
 sees it.
 
 If no language can be detected, analysis falls back instead of failing.
-Documents fall back through the primary document language, post metadata, site
-locale, and the analyzer default. Queries fall back through the selected or
-current query language, site locale, and the analyzer default. In Playground,
+Documents fall back through the primary document language, detector evidence,
+site locale, and the analyzer default. Queries fall back through explicit
+language, detector evidence, site locale, and the analyzer default. In Playground,
 that usually means `en-US`/`en` unless you choose another language.
 
 Terms are stored in language partitions such as `pl:chrzastka` or `en:search`,
@@ -327,7 +354,7 @@ morphology lane.
 | Polish (`pl`) | The WordPress runtime keeps the bundled Polish lemmatizer behavior by default: it uses the compressed full Polish runtime pack when gzip support is available and falls back to the bundled fixture pack otherwise. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases to replace or disable that default. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
 | English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Bundled source-backed UniMorph analyzer packs are available as opt-in gzip-sharded lemma packs from Settings > Full-Text Search > Analyzer packs, or through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. | Packs are CC BY-SA-family or upstream-declared data, default-disabled for production runtime, and not synonym, phrase, or cross-language expansion. Built-in Snowball/baseline/no-op behavior remains the fallback when no pack is configured. |
 | Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Optional Wamania-backed Snowball support when Composer dependencies are installed and the compliance harness accepts them. | Dutch now has a source-backed UniMorph pack when configured; the Wamania path is only the no-pack fallback. Other Wamania languages are treated as no-ops unless they become verified. |
-| Chinese (`zh`) | Deterministic CJK fallback plus optional Jieba dictionary segmentation from the pinned `indexer/resources/sources/jieba` submodule via `segmenter_packs_by_lang`. | Jieba is MIT source data, default-disabled outside the sandbox, and is segmentation only. Fallback n-grams remain enabled for unknown/subword recall. |
+| Chinese (`zh`) | Deterministic CJK fallback plus optional Jieba dictionary segmentation from the curated pinned runtime, or the initialized source checkout during development, via `segmenter_packs_by_lang`. | Release ZIPs carry only the verified MIT dictionary, license, and attested lookup. Source-only custom dictionaries are fixture-only and omitted by the WordPress runtime. Fallback n-grams remain enabled. |
 | Japanese (`ja`), Korean (`ko`) | Deterministic CJK/Hangul fallback tokenization with selectable/detectable language partitions. | No Japanese or Korean runtime lemma pack is committed because the current PHP pipeline has no source-backed word segmenter for those languages. Pinned UniMorph source submodules are retained for future external-pack work. |
 | Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common plural-oblique forms. | UniMorph Urdu imports technically, but the upstream `unimorph/urd` repository has no license evidence, so no generated Urdu pack is committed. |
 | Generic packs | `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` accept local manifest-backed packs with matching `language` values. | Missing, invalid, disabled, or language-mismatched packs fall back safely. |
@@ -341,21 +368,24 @@ top-language readiness, run
 `php tools/audit-top-language-lemma-packs.php --pack-root=/path --json --require-pack-backed`.
 Languages reported as missing, fixture-only, or license-blocked are not ready to
 claim pack-backed quality. Chinese, Japanese, and Korean are tokenizer lanes
-rather than missing UniMorph lemma packs; their optional or future source data is
-kept as git submodules, not copied dictionary rows in this repository.
+rather than missing UniMorph lemma packs. The source tree keeps their optional
+or future source data as gitlinks; the WordPress release builder additionally
+stages the verified Jieba dictionary, license, and lookup under its runtime path.
 
 The analyzer also provides CJK fallback tokenization with one-character runs
 kept as-is and longer runs emitted as character unigrams plus deterministic
-overlapping n-grams up to 4 characters. Initialize optional Jieba source data
-with:
+overlapping n-grams up to 4 characters. Release ZIPs contain the curated Jieba
+runtime. For a source checkout, initialize the optional Jieba source with:
 
 ```sh
-git submodule update --init --recursive indexer/resources/sources/jieba
+git submodule update --init --recursive components/full-text-search/resources/sources/jieba
 ```
 
-The runtime verifies `jieba/dict.txt` against the pinned SHA-256 before using
-it. Missing, uninitialized, or hash-mismatched source data falls back to CJK
-n-grams. The plugin does not currently ship Thai dictionary segmentation.
+The runtime uses an attested first-codepoint lookup and verifies each dictionary
+range when first read instead of hashing the 5-MiB source per request. Missing,
+uninitialized, or mismatched data falls back to CJK n-grams. Production custom
+Jieba dictionaries are not currently supported. The plugin does not currently
+ship Thai dictionary segmentation.
 
 ## Snippets And Highlighting
 
@@ -373,16 +403,21 @@ lemmatizer equivalence.
 ## Common Commands
 
 ```sh
-# Index admin-searchable post statuses for posts using site, post, or multilingual-plugin language hints.
+# Index admin-searchable post statuses using site or batch-preloaded post language hints.
 wp fts reindex
 
 # Index public posts and pages into an explicit language partition.
 wp fts reindex --post_type=post,page --post_status=publish --lang=pl-PL
 
-# Limit a smoke or catch-up run.
-wp fts reindex --limit=100 --batch_size=25
+# Queue a scope that will discover at most 100 matching posts.
+wp fts reindex --limit=100 --format=json
 
-# Inspect lifecycle status without indexing or mutating state.
+# Run one bounded worker pass without turning reindex into a synchronous drain.
+wp fts process-batch --batch_size=25 --time_budget=20 --format=json
+
+# Inspect stored lifecycle status without indexing, physical schema probes, or
+# corpus counts. Use `wp fts diagnose` when bounded physical verification and
+# query explain data are needed; it still does not count the corpus.
 wp fts status
 wp fts status --format=json
 
@@ -393,9 +428,11 @@ wp fts schedule-queue --format=json
 # If status reports last_batch_failures, fix the affected post or environment
 # issue and rerun a bounded batch or scoped reindex.
 
-# Clear only derived FTS index data and runtime indexing state. Requires
-# confirmation and preserves WordPress posts, plugin settings, analyzer options,
-# and schema version.
+# Atomically replace only the derived FTS generation and runtime indexing state.
+# Requires confirmation, reports unknown rather than scanned row counts, and
+# preserves WordPress posts, plugin settings, analyzer options, and schema
+# version. It automatically queues one complete background reconciliation; do
+# not add a manual filtered reindex. process-batch can advance the queued scope.
 wp fts reset-index --yes
 wp fts reset-index --yes --format=json
 
@@ -414,21 +451,24 @@ wp fts search "fast durable search" --post_type=post,page --post_status=publish 
 # Give recent posts a bounded query-time lift using indexed post_date_gmt metadata.
 wp fts search "fast durable search" --recency_boost=0.3 --recency_boost_half_life_days=30
 
-# Tombstone one document and compact tombstones later.
+# Reconcile one missing/ineligible canonical post. Eligible canonical posts are
+# rejected because deleting only their derived row would be self-reversing.
 wp fts delete 123
+
+# Remove one indexed page of at most 1,000 zero-frequency dictionary rows.
 wp fts optimize
 ```
 
 ## Documentation
 
 - [Configuration](docs/configuration.md) covers languages, analyzers,
-  stemmers, content extraction, and BM25 options.
+  stemmers, content extraction, and relational ranking options.
 - [Operations](docs/operations.md) covers schema creation, reindexing,
   optimization, backups, restores, and sizing notes.
 - [Limitations](docs/limitations.md) lists current behavior that production
   operators need to account for.
-- [Testing](docs/testing.md) documents the PHP, Snowball, BM25, and conditional
-  integration test harnesses.
+- [Testing](docs/testing.md) documents the PHP, analyzer, relevance, and
+  constrained real-database integration harnesses.
 - [Release packaging](docs/release-packaging.md) describes what should ship in
   a plugin archive and how the component dependency is handled.
 - [Snowball compliance](docs/snowball-compliance.md) explains the dedicated
@@ -459,21 +499,39 @@ enabling it on live traffic.
 
 Current caveats:
 
-- front-end search replacement is enabled by default and runs late in the
-  WordPress search hooks so configured front-end searches are owned by FTS. The
-  provider compatibility setting defaults to Prefer Language FTS; switch it to
-  keep another search provider's results when Jetpack Search, SearchWP,
-  Relevanssi, a theme filter, or custom search code appears to win or lose and
-  should answer first. The Health and Settings tabs show a read-only advisory
+- front-end search replacement is enabled by default for ordinary supported
+  search archives. A non-null result from an earlier `posts_pre_query` provider
+  is always preserved. The default **Use Language FTS when providers abstain**
+  mode accepts only a null handoff from an earlier provider; the stricter
+  **Keep provider-integrated searches on WordPress** mode leaves the whole
+  query on core whenever a third-party provider callback is registered. SQL
+  shaping, request-stage, later-provider, and post-result membership callbacks
+  already registered before ranking also keep valid searches on core with zero
+  FTS statements. If one first appears during the bounded relational page, the
+  ranked page is discarded and the already-owned query fails closed with later
+  result filters suppressed; it never falls through to core LIKE after FTS SQL.
+  Fresh settings index post, page, and attachment so stock unscoped searches
+  have the same built-in type surface as core. A deliberately saved scope that
+  omits any currently searchable type keeps unscoped searches on core. Feed, embed,
+  preview, singular, and other non-search-archive routes remain on WordPress.
+  The Health and Settings tabs show a read-only advisory
   when common providers such as Jetpack Search/Jetpack, SearchWP, Relevanssi, or
   ElasticPress are detected from safe activation/option/class/function signals;
   that advisory does not call provider APIs and is not certification that those
   products have been tested end to end. Request diagnostics can also show a
   bounded `posts_pre_query` hook pipeline with callback labels and priorities,
-  without executing callbacks or including provider result payloads;
+  without executing callbacks or including provider result payloads. The stock
+  WordPress comment-state `the_posts` callback is recognized as membership
+  neutral; foreign `the_posts` callbacks are not;
 - wp-admin Posts list search replacement is enabled for safe main-list searches
   over indexed supported admin post statuses and uses the same provider
-  compatibility setting. The `wp_fts_replace_frontend_search` and
+  compatibility setting. Its pre-LIMIT gate follows each registered post
+  type's capability map: other authors' draft/pending rows require
+  `edit_others_posts`, future rows also require `edit_published_posts`, and
+  private rows require `read_private_posts`; an unrepresentable scope and valid
+  numbered admin pagination stay on WordPress. A supported FTS-owned shape still
+  fails closed if the relational index becomes unavailable. The
+  `wp_fts_replace_frontend_search` and
   `wp_fts_replace_admin_post_search` filters can still disable a whole
   replacement surface;
 - Settings > Full-Text Search covers operational search/index defaults, but
@@ -481,6 +539,6 @@ Current caveats:
 - custom field indexing must be configured;
 - shortcode rendering is opt-in;
 - no Thai dictionary segmentation;
-- Chinese Jieba dictionary segmentation is optional and requires the pinned
-  submodule source to be initialized and hash-valid;
+- Chinese Jieba dictionary segmentation is optional; releases carry the curated
+  runtime, while source checkouts require the pinned submodule to be initialized;
 - no phrase search unless an extension supplies that backend.

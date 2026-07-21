@@ -87,9 +87,9 @@ final class WP_FTS_LanguageDetector
      */
     public function index_signature(): string
     {
-        return 'wp-fts-language-detector-v6:' . sha1($this->stableJson([
+        return 'wp-fts-language-detector-v7:' . sha1($this->stableJson([
             'contract' => 'wp-fts-language-detector',
-            'version' => 6,
+            'version' => 7,
             'unicode_normalizer' => $this->normalizer->index_signature(),
             'minimum_score' => $this->minimumScore,
             'minimum_lead' => $this->minimumLead,
@@ -225,6 +225,15 @@ final class WP_FTS_LanguageDetector
             'es_accent' => ['lang' => 'es', 'pattern' => '/[Ññ]/u', 'score' => 2],
             'fr' => ['pattern' => '/[ÀÂÆÇÈÉÊËÎÏÔŒÙÛŸàâæçèéêëîïôœùûÿ]/u', 'score' => 2],
             'pl' => ['pattern' => '/[ĄĆĘŁŃÓŚŹŻąćęłńóśźż]/u', 'score' => 3],
+            // Productive -uj- verbs and -alnia/-elnia/-ajnia nouns remain
+            // distinctive after a user omits Polish diacritics. Dictionary
+            // membership alone is not language evidence: large morphology
+            // packs contain many short words shared with other languages.
+            'pl_ascii_inflection' => [
+                'lang' => 'pl',
+                'pattern' => '/(?:^|[^\p{L}\p{M}])(?:[\p{L}\p{M}]{3,}uj(?:e|esz|emy|ecie|a)|[\p{L}\p{M}]{2,}(?:aj|al|el)nia)(?:$|[^\p{L}\p{M}])/u',
+                'score' => 3,
+            ],
             'pt' => ['pattern' => '/[ÃÕãõ]/u', 'score' => 2],
             'tr' => ['pattern' => '/[ĞİŞğıış]/u', 'score' => 3],
         ];

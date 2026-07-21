@@ -430,7 +430,7 @@ test_case('quality disposable upgrade smoke builds bounded upgrade WP-CLI comman
                 if (str_contains($joined, "\nfts\nrepair")) {
                     return ['exit' => 0, 'stdout' => wp_fts_upgrade_contract_json(wp_fts_upgrade_contract_status_payload()), 'stderr' => ''];
                 }
-                if (str_contains($joined, "\nfts\nprocess_batch")) {
+                if (str_contains($joined, "\nfts\nprocess-batch")) {
                     return ['exit' => 0, 'stdout' => wp_fts_upgrade_contract_json([
                         'processed' => 1,
                         'queue_processed' => 1,
@@ -479,7 +479,7 @@ test_case('quality disposable upgrade smoke builds bounded upgrade WP-CLI comman
             wp_fts_upgrade_contract_same('custom-wp', $command[0], 'WP_FTS_WP_CLI should override the wp binary');
             wp_fts_upgrade_contract_true(in_array('--path=' . $canonicalWpRoot, $command, true), 'each WP-CLI command should include the canonical --path');
         }
-        foreach ([['plugin', 'install'], ['fts', 'status'], ['fts', 'repair'], ['fts', 'search'], ['fts', 'process_batch']] as [$first, $second]) {
+        foreach ([['plugin', 'install'], ['fts', 'status'], ['fts', 'repair'], ['fts', 'search'], ['fts', 'process-batch']] as [$first, $second]) {
             wp_fts_upgrade_contract_true(
                 is_array(wp_fts_upgrade_contract_find_command($commands, $first, $second)),
                 "upgrade smoke should run wp {$first} {$second}"
@@ -551,7 +551,7 @@ test_case('quality disposable upgrade smoke records passed multisite runtime pro
                 if (str_contains($joined, "\nfts\nrepair")) {
                     return ['exit' => 0, 'stdout' => wp_fts_upgrade_contract_json(wp_fts_upgrade_contract_status_payload()), 'stderr' => ''];
                 }
-                if (str_contains($joined, "\nfts\nprocess_batch")) {
+                if (str_contains($joined, "\nfts\nprocess-batch")) {
                     return ['exit' => 0, 'stdout' => wp_fts_upgrade_contract_json([
                         'processed' => 1,
                         'queue_processed' => 1,

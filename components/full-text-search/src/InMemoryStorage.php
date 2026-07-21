@@ -2,10 +2,12 @@
 declare(strict_types=1);
 
 /**
- * Volatile storage backend used by tests and embedded in-process indexing.
+ * Legacy volatile storage backend for component tests and local demos only.
  *
  * State lives in PHP arrays, supports rollback logs, and mirrors the
- * language-aware storage contract without any persistence layer.
+ * language-aware storage contract without any persistence layer. It is not a
+ * production WordPress search backend and cannot satisfy the set-oriented
+ * query-count or page-sized-memory contract.
  */
 final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_Budgeted_Postings_Storage, WP_FTS_Document_Terms_Storage, WP_FTS_Prefix_Term_Storage, WP_FTS_Resettable_Storage
 {

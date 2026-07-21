@@ -19,25 +19,29 @@ plugin installs, downloads, service calls, or API integrations:
 
 - `theme_custom_earlier_respect_existing`: a theme/custom earlier
   `posts_pre_query` provider returns results in `respect_existing` mode. The
-  matrix expects Language FTS to stand down, preserve the earlier result, and
-  attribute final ownership to the earlier provider.
+  matrix expects the registered integration to keep the query on core before
+  Language FTS inspects provider payloads.
 - `searchwp_shaped_earlier_prefer_fts`: a repo-owned SearchWP-shaped callback
-  returns earlier results in `prefer_fts` mode. The matrix expects Language FTS
-  to replace that result and report incoming provider counts plus the prior
-  replacement count.
+  returns earlier results in `prefer_fts` mode. The matrix expects the non-null
+  result to remain unchanged and attributes ownership to the earlier provider.
 - `relevanssi_shaped_later_provider`: a repo-owned Relevanssi-shaped callback
-  runs after the Language FTS priority. The matrix expects final ownership to
-  report that a later provider changed the FTS output.
+  runs after the Language FTS priority. The matrix expects Language FTS to
+  leave the query on core before ranking, so the later provider owns the result
+  without changing an already-limited FTS page.
 - `jetpack_elasticpress_advisory_signals`: safe option/plugin-signal
   simulations exercise bounded Jetpack Search / Jetpack and ElasticPress
-  advisory labels. The report includes only family labels and counts, not raw
-  plugin basenames or option payloads.
+  advisory labels. This scenario invokes the operator advisory explicitly,
+  outside the search trace; the hot search trace does not perform provider
+  discovery. The report includes only family labels and counts, not raw plugin
+  basenames or option payloads.
 
 Each scenario reports a stable scenario id, simulated provider-family labels,
 compatibility mode, trace status, final ownership status, bounded counts,
-bounded post IDs and compact hashes, and a pass flag. Raw provider objects,
-content titles, raw plugin basenames, option payloads, `.env`, SSH paths, and
-PEM-like values are intentionally excluded from the JSON evidence.
+bounded post IDs and compact hashes, whether provider discovery appeared in the
+hot trace, and a pass flag. A separate `provider_advisory` section is populated
+only for the explicit advisory scenario. Raw provider objects, content titles,
+raw plugin basenames, option payloads, `.env`, SSH paths, and PEM-like values
+are intentionally excluded from the JSON evidence.
 
 ## Deterministic Quality Contract
 
@@ -64,14 +68,39 @@ network access, or real third-party search plugins.
 
 The contract proves these deterministic cases and the matrix output contract:
 
-- `respect_existing` mode returns an earlier non-null provider result unchanged.
-- `prefer_fts` mode lets Language FTS replace an earlier provider result.
-- A later callback after the Language FTS priority can change the final result,
-  and final ownership diagnostics report that bounded state.
-- Later callbacks that preserve the incoming result do not cause diagnostics to
-  overclaim provider ownership.
+- `respect_existing` mode keeps a registered provider integration on core even
+  when the provider returns `null`.
+- `prefer_fts` mode accepts a null handoff from an earlier provider but always
+  preserves an earlier non-null result.
+- A callback at or after the Language FTS priority keeps the query on core
+  before any FTS ranking statement, even if that callback would return its
+  input unchanged.
+- A result callback that first appears during bounded relational execution
+  causes the ranked page to be discarded. The already-owned query returns an
+  empty page with later result filters suppressed, never core LIKE after FTS.
+- Every supported `WP_Query` SQL clause/request hook and post-result membership
+  hook is conservatively classified, with only WordPress's stock comment-state
+  `the_posts` callback treated as membership neutral.
+- Valid `WP_Query` shapes with uncompiled membership predicates—including
+  zero-valued parent/menu/comment filters, password filters, legacy page-size
+  overrides, meta/tax/date/ID arrays, and custom post-type query vars—remain on
+  core with no FTS statement. Quoted phrases and token-leading exclusions also
+  remain core-owned; ordinary internal hyphens do not trigger that stand-down.
+- Fresh settings cover `post`, `page`, and `attachment`, so stock unscoped
+  frontend searches can be owned without narrowing core's built-in type scope.
+  Deliberately saved scopes that omit a searchable type remain authoritative
+  and leave unscoped searches on core.
+- Replacement policy and shape ownership are evaluated once per replacement
+  boundary. Unavailable and exception paths use that retained decision instead
+  of invoking a stateful or failing policy filter again.
 - Final ownership evidence is bounded to status, owner, counts, post ID samples,
-  and compact hashes. It does not dump raw post objects.
+  and compact hashes. Array signatures inspect at most 64 items and 4,096
+  signature bytes; larger provider results report comparison as truncated and
+  unavailable rather than copying or hashing the complete array. Diagnostics
+  do not dump raw post objects.
+- Hook-pipeline diagnostics inspect at most 32 priority buckets/callbacks and
+  display at most eight. Larger hook maps report truncated, at-least counts;
+  they are neither copied into a sortable bucket list nor fully traversed.
 - Diagnostics do not expose raw provider payloads, raw plugin basenames,
   unknown provider option payloads, private post titles, `.env`, SSH material,
   or PEM-like values.
@@ -81,6 +110,9 @@ The contract proves these deterministic cases and the matrix output contract:
   callback labels. They are not promoted to certified provider families.
 - The provider interference matrix exposes stable scenario IDs, bounded family
   labels, and redacted evidence without requiring a live WordPress install.
+- Provider discovery is not performed while collecting a hot search trace; the
+  advisory scenario proves the same labels through a separate explicit
+  operator-advisory call.
 
 ## Optional WordPress Smoke
 
@@ -121,10 +153,11 @@ For disposable roots where a marker file is inconvenient, set
 
 When configured, the smoke creates one generated post fixture, repairs FTS
 schema, processes the bounded indexing queue for that fixture, and runs the
-provider interference matrix described above. It captures replacement,
-stand-down, final ownership, known-provider family labels, and bounded result
-evidence. It restores request-local hook state, deletes the generated fixture,
-and restores the plugin settings and simulated advisory options before exiting.
+provider interference matrix described above. It captures null handoff,
+stand-down, final ownership, hot-trace discovery absence, explicit known-provider
+advisory labels, and bounded result evidence. It restores request-local hook
+state, deletes the generated fixture, and restores the plugin settings and
+simulated advisory options before exiting.
 
 Do not run the write-enabled smoke against production or shared staging data.
 It does not download plugins, make external network calls, or require real
@@ -136,6 +169,9 @@ Known-provider detection is advisory. It recognizes bounded family labels for
 Jetpack Search / Jetpack, SearchWP, Relevanssi, and ElasticPress from safe
 activation, network-active plugin, option, class, and function signals. Unknown
 plugins, themes, and custom callbacks appear as generic bounded hook labels.
+Provider discovery runs only on an explicit operator/advisory surface; ordinary
+per-search diagnostics retain compatibility mode and hook ownership without
+reading provider activation or option signals.
 
 The matrix is not a broad version-by-version certification of Jetpack Search,
 Jetpack, SearchWP, Relevanssi, ElasticPress, themes, or custom providers. It is

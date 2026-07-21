@@ -37,6 +37,11 @@ This verifies the fallback paths used when shared optional extensions are
 missing. Some PHP builds compile zlib or other capabilities into the binary, so
 the deterministic gzip-unavailable contract also uses the generator's existing
 capability seam instead of assuming `php -n` removed a compiled-in extension.
+The real-SQL regression adapter is test-only and requires PDO SQLite. A `php -n`
+binary without that driver reports each affected adapter case as `[SKIP]` and
+includes it in the summary's `skipped` count; extension-enabled lanes must load
+the driver and fail rather than silently losing those regressions. Production
+indexing continues through WordPress `$wpdb` and has no PDO dependency.
 
 ## Provider Compatibility Evidence
 
@@ -280,6 +285,7 @@ touch /path/to/wordpress/.wp-fts-lifecycle-smoke
 WP_FTS_WP_PATH=/path/to/wordpress \
 WP_FTS_WP_CLI=wp \
 WP_FTS_LIFECYCLE_SMOKE_ALLOW=1 \
+WP_FTS_LIFECYCLE_SMOKE_REINSTALL_ZIP=/path/to/source-bound-indexer.zip \
 php tools/smoke-disposable-wordpress-lifecycle.php
 composer test:smoke:lifecycle
 ```
@@ -287,11 +293,23 @@ composer test:smoke:lifecycle
 The smoke proves that activation creates the FTS schema, repair restores a
 missing plugin table, activation and repair do not index pre-existing content
 or create demo posts, `wp fts status --format=json` and
-`wp fts repair --format=json` report schema state, deactivation clears
-scheduled queue processing while retaining index tables/data. It proves
-deactivation clears scheduled queue processing, and uninstall clears plugin-owned operational options and queue state and retains the `fts_*` tables and data. It
-does not build a ZIP, does not create
-public-submission artifacts, and is not public-submission readiness.
+`wp fts repair --format=json` report schema state, deactivation clears scheduled queue processing
+while retaining index tables/data, and uninstall removes all plugin-owned current/legacy FTS tables
+and operational options while leaving
+canonical WordPress content untouched. The Docker wrapper network-activates the
+plugin, creates a real subsite, seeds all twelve distinct legacy/recoverable
+table names on both sites, and requires all sixteen distinct current/legacy
+table names to be absent from both site prefixes after uninstall. The only
+retained plugin state on each site must be one non-autoloaded
+`wp_fts_uninstall_fence` row containing the exact one-byte string `1`; all
+content, settings, health, and lock options remain absent. The wrapper builds a
+temporary source-bound reinstallation ZIP inside the disposable directory,
+installs it inactive to prove files alone do not cross that fence, then
+network-reactivates it and runs one bounded site-provisioning page. Both fences
+must disappear, exactly four current tables must return on each site, and no
+legacy table may return. The temporary ZIP is destroyed with the stack; the
+lane does not create public-submission artifacts and is not public-submission
+readiness.
 
 The release evidence collector records this Docker lifecycle lane as skipped by
 default:
@@ -302,9 +320,10 @@ php tools/collect-release-evidence.php \
   --run-docker-lifecycle-smokes
 ```
 
-Multisite lifecycle proof is explicitly not run by this lane. The command and
-collector record that boundary instead of treating single-site proof as
-multisite evidence.
+The wrapper and release evidence collector require
+`multisite_evidence.status=passed`, destructive table removal, the exact
+bounded uninstall fence, and successful all-site network reactivation; a
+single-site or lifecycle-status-only report cannot pass this Docker lane.
 
 ## Docker Disposable Upgrade/Multisite Smoke
 
@@ -382,7 +401,7 @@ signature changes when the verified source hash changes. The same focused lane
 covers the current Bengali and Urdu light suffix baselines, their analyzer
 signatures, and language-partition isolation.
 
-## Native BM25 Reference Gate
+## Legacy Component BM25 Reference Fixture
 
 The deterministic BM25 gate is included in the main PHP harness and can also be
 run directly for a focused JSON report:
@@ -392,11 +411,11 @@ php tests/bm25-reference-gate.php --json
 composer test:bm25-reference
 ```
 
-It indexes a fixed four-document field fixture through the production native
-indexer/searcher and compares weighted postings, OR rankings, AND narrowing, and
-scores against a local Lucene-style BM25 oracle. This proves the native scoring
-boundary for a small auditable case; it does not replace the broader native
-relevance fixture or the optional external Python/library reference.
+It indexes a fixed four-document field fixture through the component's legacy
+in-memory indexer/searcher and compares weighted postings, OR rankings, AND
+narrowing, and scores against a local Lucene-style BM25 oracle. This preserves
+the reusable component fixture; it does not exercise or certify the WordPress
+relational impact ranker.
 
 ## Cranfield Relevance Quality Gate
 
@@ -420,7 +439,7 @@ Without local data the standalone command exits with pending/NO-GO status `2`.
 The main harness verifies that explicit response but does not claim the full
 external corpus ran.
 
-Build a reusable native relevance suite JSON from local source files when a CI
+Build a reusable component relevance suite JSON from local source files when a CI
 or review lane wants to separate import from scoring:
 
 ```sh
@@ -432,17 +451,18 @@ php tests/cranfield-relevance-gate.php \
   --json
 ```
 
-The gate indexes the parsed corpus through the production analyzer, indexer,
-storage, and searcher path, then compares native rankings with a local
+The gate indexes the parsed corpus through the component analyzer/indexer and
+legacy in-memory searcher, then compares those fixture rankings with a local
 Lucene-style BM25 reference over the same analyzer terms. It reports nDCG@10,
-MAP, and P@5 for both native and reference results plus absolute deltas.
+MAP, and P@5 for both fixture and reference results plus absolute deltas. It is
+not evidence for the production relational ranker.
 Allowed deltas default to `0.05` and can be overridden with
 `WP_FTS_CRANFIELD_MAX_NDCG_DELTA`, `WP_FTS_CRANFIELD_MAX_MAP_DELTA`, and
 `WP_FTS_CRANFIELD_MAX_PRECISION_AT_5_DELTA`, or the matching CLI flags.
 
-## Native Relevance Gold Benchmark
+## Legacy Component Relevance Gold Benchmark
 
-The main harness includes the committed native relevance fixture automatically.
+The main harness includes the committed component relevance fixture automatically.
 Run the evaluator directly when you need the per-query metrics table:
 
 ```sh
@@ -451,13 +471,14 @@ php tests/relevance-benchmark.php --suite=tests/fixtures/relevance/native-core.j
 php -n tests/relevance-benchmark.php --suite=tests/fixtures/relevance/native-core.json
 ```
 
-The fixture is a modest regression gate for the current analyzer/searcher
-contract. It reports recall@5, precision@5, MRR, nDCG@5, and cross-language
-false positives; it is not a production relevance-quality claim.
+The fixture is a modest regression gate for the legacy in-memory
+analyzer/searcher contract. It reports recall@5, precision@5, MRR, nDCG@5, and
+cross-language false positives; it does not exercise the production relational
+ranker and is not a production relevance-quality claim.
 
-## Native Production-Scale Generated Benchmark
+## Legacy Component Generated-Scale Benchmark
 
-The main harness includes the PR-safe native production-scale benchmark gates.
+The main harness includes PR-safe generated component benchmark gates.
 Run the benchmark directly when you need the indexed-document, token, postings,
 materialized-row, result-window hydration, memory-delta, and conservative
 index/search timing budget counters:
@@ -478,6 +499,89 @@ JSON reports a failed duration gate. This is pure-PHP generated evidence only:
 it does not use live MySQL, does not replay production traffic, does not certify
 public-submission readiness, and does not commit generated corpora, caches,
 logs, or archives.
+
+## Relational Search Worst-Case Acceptance
+
+The set-oriented relational backend has a separate destructive acceptance lane.
+Unlike the legacy component benchmark above, it builds the exact direct-install
+ZIP, installs it in disposable WordPress, uses a real constrained MariaDB or
+MySQL database, indexes 2,000, 50,000, or 100,000 canonical posts through the
+production WP-CLI path, and writes source-bound machine-readable evidence.
+
+The lane exercises common-term OR, rare-anchor AND, high-cardinality final-word
+prefixes, all active analyzer packs, hidden and dirty high-impact rows, poison
+queue recovery, concurrent readers/writers, SQL shape, rows examined, PHP RSS,
+database bytes, and latency distributions. It never reports a successful
+`SKIP` or `PENDING`; missing Docker, ineffective cgroup limits, missing
+Performance Schema metrics, an unavailable set-oriented backend, timeout, or
+incomplete evidence fails the command.
+
+Before the destructive lane, the focused bounds can be exercised directly:
+
+```sh
+php -d memory_limit=128M ../components/full-text-search/tests/jieba-scan-bounds.php
+php -d memory_limit=128M ../components/full-text-search/tests/jieba-line-bounds.php
+php -d memory_limit=128M ../components/full-text-search/tests/jieba-cache-bounds.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='Jieba dictionary giant line' php tests/run.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='Jieba 32-prefix fanout' php tests/run.php
+php ../components/full-text-search/tests/lemma-pack-limits.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='64-file lemma packs' php tests/run.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='bundled multi-file lemma pack' php tests/run.php
+WP_FTS_MIN_CHECKS=0 WP_FTS_TEST_FILTER='HTML markup' php -d memory_limit=128M tests/run.php
+for filter in \
+  'dependency value snapshot caps concurrent growth' \
+  'dependency value buckets are strict byte bounds' \
+  'dependency preload preserves exact multibyte' \
+  'an empty dependency transports zero bytes'; do
+  WP_FTS_MIN_CHECKS=0 WP_FTS_TEST_FILTER="$filter" php -d memory_limit=128M tests/run.php
+done
+```
+
+These are regression gates, not substitutes for the real lane. The Docker run
+repeats the HTML 100,000-tag/1.8-MiB-language-attribute rejects in fresh 128 MiB
+processes and executes the dependency measurement/growth/retry proof on both
+database families, retaining actual SQL, byte counts, time, RSS, and cleanup.
+
+For a local development smoke whose dirty source status is explicitly recorded:
+
+```sh
+tools/run-relational-fts-worst-case.sh \
+  --engine=mariadb-10.11 \
+  --profile=2k \
+  --allow-dirty \
+  --output=../.context/evidence/relational-2k.json
+```
+
+Required clean-source evidence:
+
+```sh
+tools/run-relational-fts-worst-case.sh \
+  --engine=mariadb-10.11 \
+  --profile=50k \
+  --output=../.context/evidence/relational-mariadb-50k.json
+
+tools/run-relational-fts-worst-case.sh \
+  --engine=mysql-8.0 \
+  --profile=50k \
+  --output=../.context/evidence/relational-mysql-50k.json
+
+tools/run-relational-fts-worst-case.sh \
+  --engine=mariadb-10.11 \
+  --profile=100k \
+  --output=../.context/evidence/relational-mariadb-100k.json
+
+tools/run-relational-fts-worst-case.sh \
+  --engine=mysql-8.0 \
+  --profile=100k \
+  --output=../.context/evidence/relational-mysql-100k.json
+```
+
+Do not add this multi-hour real-database lane to `tests/run.php`, reduce the
+document counts under the same profile names, replace it with a fake `$wpdb`, or
+turn infrastructure failures into skips. See
+[`relational-search-acceptance.md`](relational-search-acceptance.md) for the
+fixed corpus, resource limits, numerical gates, migration proof, and required
+before/after PR evidence.
 
 ## Large Search Corpus Generator
 
@@ -574,10 +678,10 @@ use deterministic fallback n-grams. Source repositories are pinned as git
 submodules, not copied dictionary rows:
 
 ```sh
-git submodule update --init --recursive indexer/resources/sources/jieba
-git -C indexer/resources/sources/jieba rev-parse HEAD
-sha256sum indexer/resources/sources/jieba/jieba/dict.txt
-wc -c indexer/resources/sources/jieba/jieba/dict.txt
+git submodule update --init --recursive components/full-text-search/resources/sources/jieba
+git -C components/full-text-search/resources/sources/jieba rev-parse HEAD
+sha256sum components/full-text-search/resources/sources/jieba/jieba/dict.txt
+wc -c components/full-text-search/resources/sources/jieba/jieba/dict.txt
 ```
 
 The expected commit is `67fa2e36e72f69d9134b8a1037b83fbb070b9775`, SHA-256 is
@@ -811,7 +915,7 @@ evidence, inserts a small multilingual post set, indexes through
 stemming/detection, German detection, explicit language override, and fallback
 behavior for text without detector evidence. It explicitly enables and covers
 the otherwise-disabled public REST search route (`q`, `query`, invalid
-`mode`, missing query, and visible result refill after hidden stale rows) plus
+`mode`, missing query, and pre-limit visibility with hidden stale rows) plus
 WP-CLI `wp fts reindex` and `wp fts search` when the Playground WP-CLI library
 is available.
 

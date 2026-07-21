@@ -14,9 +14,10 @@ interface WP_FTS_DocumentMetadataStorage
     /**
      * Store bounded product metadata for one active document.
      *
-     * @param array<string,mixed> $metadata Normalized or raw metadata. Backends
-     *        should normalize scalar fields and preserve structured extras such
-     *        as terms/custom fields where feasible.
+     * @param array<string,mixed> $metadata Normalized or raw metadata. An empty
+     *        array clears metadata for an existing document without creating a
+     *        document. Backends should normalize scalar fields and preserve
+     *        structured extras such as terms/custom fields where feasible.
      */
     public function put_doc_metadata(int $doc_id, array $metadata): void;
 

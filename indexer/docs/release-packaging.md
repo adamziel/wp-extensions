@@ -20,6 +20,16 @@ indexer/
     analyzer-packs/
   src/
   tools/
+    import-lemma-tsv-pack.php
+    import-conllu-lemma-pack.php
+    import-unimorph-lemma-pack.php
+    import-polish-polimorf-lemmatizer.php
+    validate-analyzer-pack.php
+    audit-top-language-lemma-packs.php
+    build-lemma-pack-lookup-index.php
+    build-polish-polimorf-external-pack.php
+    lemma-source-import-limits.php
+    lemma-chunk-merge.php
   vendor/
     wp-php-toolkit/full-text-search/
 ```
@@ -42,23 +52,32 @@ Ship:
 - `playground/*.json` and `playground/sqlite-smoke.php`;
 - `resources/analyzer-packs/` runtime manifests, notices, provenance, and
   runtime shards that the plugin can validate locally;
-- `tools/` importer, validator, audit, and external-pack helper scripts;
+- the ten `tools/` modules that back the shipped WP-CLI import commands and
+  documented pack validation, audit, lookup retrofit, and external PoliMorf
+  workflows;
 - runtime Composer dependencies under `vendor/`, including
   `wp-php-toolkit/full-text-search`, for release archives.
+- the curated Jieba runtime dictionary, MIT license, and compact lookup index
+  under `vendor/wp-php-toolkit/full-text-search/resources/runtime/jieba/`;
+  their exact bytes are attested during the build.
 
 Do not ship:
 
-- `.git`, `.gitignore`, or `.distignore`;
+- any `.git` file/directory, `.gitconfig`, `.git-credentials`, `.netrc`,
+  `.gitignore`, or `.distignore`;
 - nested dependency dotfiles such as `.gitattributes`, `.gitignore`, and
   `.distignore`;
 - `.cao/` task and review artifacts;
 - `review-artifacts/`;
 - `tests/`;
+- all other `tools/` source-checkout build, test, release, corpus-generation,
+  source-verification, and smoke utilities;
 - `goal.md`;
 - Composer auth files such as `indexer/auth.json` and
   `indexer/.composer/auth.json`;
-- `resources/sources/` raw upstream source submodules such as Jieba and
-  UniMorph checkouts;
+- `resources/sources/` raw upstream UniMorph source submodules and the
+  component dependency's `vendor/wp-php-toolkit/full-text-search/resources/sources/`
+  Jieba checkout;
 - generated preview/archive files such as `playground/indexer-preview.zip`;
 - `vendor/bin`;
 - dependency-internal test and coverage fixtures under `vendor/`, including
@@ -66,6 +85,9 @@ Do not ship:
 - local caches, logs, and temporary files.
 
 The `.distignore` file in this directory encodes that packaging boundary.
+The builder also excludes the component checkout's `.git` entry before
+Composer runs, rejects local VCS/Composer credential metadata in either staged
+source tree, and refuses ZIP creation if such metadata survives pruning.
 
 This package is a direct-install ZIP boundary only. It does not make the plugin
 ready for WordPress.org or SVN submission, which still needs complete
@@ -201,10 +223,17 @@ release/provider Docker lane builds a temporary direct-install ZIP and
 disposable WordPress/MariaDB stack so it can replace the host-environment skip
 with direct-install release/provider smoke evidence when Docker is available.
 The lifecycle Docker lane is direct-install/operator lifecycle evidence: it
-installs a source copy in a disposable WordPress/MariaDB stack, proves
-activation/repair/deactivation and uninstall retention boundaries, and does not build a public-submission artifact.
-Multisite lifecycle proof is explicitly not run by that lane, and the collector
-records that boundary.
+installs a source copy in a disposable WordPress/MariaDB multisite stack and
+proves activation/repair, reversible network deactivation, and destructive
+network uninstall. It seeds all recoverable legacy table names on the main site
+and a real subsite, then requires every current/legacy FTS table and operational
+option to be absent on both, with only the exact non-autoloaded one-byte
+uninstall fence retained per site. It installs a temporary source-bound ZIP
+inactive to prove that copying code cannot cross the fence, then network-
+reactivates it and requires the bounded provisioning chain to clear both fences
+and restore exactly four current tables per site without restoring legacy
+tables. The collector requires passed multisite, table-removal, fence, and
+reactivation flags. This lane does not build a public-submission artifact.
 
 The upgrade/multisite Docker lane is direct-install/operator upgrade evidence:
 it requires either `--previous-direct-package=/path/to/previous-wp-fts-indexer.zip`
@@ -218,7 +247,10 @@ home/auth, an existing local Composer package cache when available, network
 access disabled, and credential-capable environment variables scrubbed before
 the historical builder or nested Composer process can inherit them. Historical
 refs containing Composer auth files such as `indexer/auth.json` or
-`indexer/.composer/auth.json` are rejected before checkout/archive. The lane then
+`indexer/.composer/auth.json` are rejected before checkout/archive. Every
+symbolic link in the extracted historical source is also rejected before the
+archived PHP builder or Composer can execute, so a benign-looking path cannot
+escape to host credentials or code. The lane then
 builds the current ZIP in temporary storage, installs WordPress as a disposable
 multisite network, network-activates the previous package, upgrades to the
 current package, checks schema version/status after upgrade, repair idempotence
@@ -267,15 +299,28 @@ php indexer/tools/build-release-zip.php \
 
 The builder stages `indexer/` through `.distignore`, copies the local
 `components/full-text-search` package for Composer's path repository, runs
-`composer install --no-dev --optimize-autoloader` with a scrubbed Composer
-environment, removes vendor development directories such as `vendor/bin`,
-`test`, `tests`, `Tests`, and `coverage`. The builder prunes staged dotfiles anywhere in the package before ZIP creation,
+`composer install --no-dev --optimize-autoloader --no-plugins --no-scripts`
+with a fresh package-local Composer home and cache, fixed locale/time inputs,
+and no ambient authentication or global Composer configuration. The explicit
+`--no-plugins --no-scripts` boundary prevents dependency or global hooks from
+executing during packaging. Reusing a build directory still clears its
+package-local Composer home and default cache first; only an explicitly selected
+offline archive cache is retained for a historical source build. The build
+directory must remain outside both immutable source trees. The output ZIP and
+explicit Composer cache cannot overlap either source tree, either staged tree,
+or Composer home, and cannot overlap each other; invalid paths fail before
+staging can remove or overwrite source bytes. The builder removes vendor
+development directories such as `test`, `tests`, `Tests`, and `coverage`, plus
+`vendor/bin`. It prunes staged dotfiles anywhere in the package before ZIP creation,
 and refuses staged Composer auth files such as `indexer/auth.json` or
 `indexer/.composer/auth.json` before dependency installation so Composer cannot
-read source-tree credentials. This removes nested Composer dependency files such as
-`indexer/vendor/wamania/php-stemmer/.gitignore` before they can enter the
-archive. If multiple builds use the same `--build-dir`, they are serialized with
-the same advisory lock used by the readiness gate.
+read source-tree credentials. It rejects every staged symbolic link before
+Composer and repeats that check after dependency installation, so ZIP creation
+can never follow a link to bytes outside the source-bound staging tree. This
+removes nested Composer dependency files such as
+`indexer/vendor/wamania/php-stemmer/.gitignore` before they can enter the archive.
+If multiple builds use the same `--build-dir`, they are serialized with the same
+advisory lock used by the readiness gate.
 
 Inspect the archive contents:
 
@@ -283,13 +328,15 @@ Inspect the archive contents:
 php -r '$z=new ZipArchive(); $z->open($argv[1]); for ($i=0; $i<$z->numFiles; $i++) { echo $z->getNameIndex($i), PHP_EOL; }' "$BUILD/wp-fts-indexer.zip" | sed -n '1,120p'
 ```
 
-The listing should include `indexer/resources/analyzer-packs/`,
-`indexer/tools/`, and production `indexer/vendor/` dependencies. It should not
-include `.cao`, root `indexer/tests/`, dependency-internal vendor tests such as
+The listing should include `indexer/resources/analyzer-packs/`, the ten listed
+`indexer/tools/` modules, and production `indexer/vendor/` dependencies. It
+should not include `.cao`, root `indexer/tests/`, unlisted source-checkout
+`indexer/tools/` utilities, dependency-internal vendor tests such as
 `indexer/vendor/wp-php-toolkit/full-text-search/tests/*`, `indexer/vendor/bin/`,
 dependency dotfiles such as `indexer/vendor/wamania/php-stemmer/.gitignore`,
 Composer auth files such as `indexer/auth.json` or
-`indexer/.composer/auth.json`, `review-artifacts`, `resources/sources`, or the nested
+`indexer/.composer/auth.json`, `review-artifacts`, `resources/sources`,
+`indexer/vendor/wp-php-toolkit/full-text-search/resources/sources`, or the nested
 `playground/indexer-preview.zip` preview archive. The builder fails before ZIP
 creation if the staged package still contains Composer auth files, prohibited dotfiles, root tests,
 review artifacts, raw source checkouts, vendor binaries, or vendor test/coverage

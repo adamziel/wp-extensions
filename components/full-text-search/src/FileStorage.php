@@ -2,10 +2,10 @@
 declare(strict_types=1);
 
 /**
- * JSON-file storage backend for tests, demos, and small local indexes.
+ * Legacy JSON-file storage backend for tests and local demos only.
  *
  * The entire index remains memory-resident and every outer commit rewrites it,
- * so sizable or production indexes need a database backend. Cooperative file
+ * so every WordPress production index needs the set-oriented database backend. Cooperative file
  * writers are serialized through a sidecar lock; each transaction reloads
  * under that lock before changing state.
  */

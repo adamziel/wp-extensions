@@ -22,674 +22,674 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "a18d8300ced1923929125a149ccd3dd926ddcd8a814419af3822a208415d5ee5",
+                "sha256": "b286abbf47ecb038802a908ec41ea09485a87e182c4d34b07b748db3c630b7a2",
                 "rows": 100000,
                 "first_surface": "a",
                 "last_surface": "balkanskosciom",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0001.tsv.gz.lookup",
-                    "sha256": "1fb7c043a476bcc20446bb8554de7ccb726a92343d0340554efd0a92f38b8244",
-                    "blocks": 49
+                    "sha256": "92763b76da45e24f86a43bf6bee2bcb841d35d26288ad022877ab62ee2f5b282",
+                    "blocks": 143
                 }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "b49ecbb56f16109f2c11192f1ddf0c29bbe3b53606ed69d2f4d9af73ee3f3cbc",
+                "sha256": "89ef4086d7199691b256e07d482bbb02e97c83d9170e6829d569aa70e8fe51d2",
                 "rows": 100000,
                 "first_surface": "balkansku",
                 "last_surface": "burdonowosciom",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0002.tsv.gz.lookup",
-                    "sha256": "3f82bb56b7270965ebfbfb67fa9110be088b1894f34758c28d93ed76f50dba18",
-                    "blocks": 49
+                    "sha256": "ad4952e71391b54b3b9d92f4fb4ea76920139603607ab336c511ed8b93f53046",
+                    "blocks": 134
                 }
             },
             {
                 "path": "runtime/0003.tsv.gz",
-                "sha256": "e525a2aa9200dfd27a461ea9e98d8d9c27ae5f273dac316be02ad2bb4eb93b18",
+                "sha256": "13d883904f31eddba75f440bbc45f168bae462c56748021e8e548cdcde940e2d",
                 "rows": 100000,
                 "first_surface": "burdonowy",
                 "last_surface": "czynili",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0003.tsv.gz.lookup",
-                    "sha256": "3e3c867510bdb433a8b1e08b7d0613cdb83d115955a4d4bac3bdf2611cf64942",
-                    "blocks": 49
+                    "sha256": "7b24fa8465741fe892c3b018c9c917c6483e599be161c44983ffb40800dd4573",
+                    "blocks": 136
                 }
             },
             {
                 "path": "runtime/0004.tsv.gz",
-                "sha256": "1604566c2fb88136d93ef75d7c297704a07342dc667f91a5e69b2939327965fc",
+                "sha256": "408fdc9a97e40454734c43ec37ab179a6cd722ed56acb00fe11e61336ba94b82",
                 "rows": 100000,
                 "first_surface": "czyniliby",
                 "last_surface": "dotaskalbys",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0004.tsv.gz.lookup",
-                    "sha256": "bc404f64e157c3f0bdd7bed0eeae2cf5b7a955710f62ff7debb26c4c4009b700",
-                    "blocks": 49
+                    "sha256": "a6c0b3791900357fb0eadea2ae82f5bbdd40c5461a374952e49a1e78f8e034c9",
+                    "blocks": 143
                 }
             },
             {
                 "path": "runtime/0005.tsv.gz",
-                "sha256": "391b920a73d228f8f779e7683bf36511e104e53dd9cf20d1c22a14f93059528c",
+                "sha256": "b3c7ec78761e9dd545b02dd2248767aa8ebfbfe1344d76edc1de96e79fd5f271",
                 "rows": 100000,
                 "first_surface": "dotaskalem",
                 "last_surface": "eutanazyjnemu",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0005.tsv.gz.lookup",
-                    "sha256": "43f88fec8851d3cee983096999e5ac6de06393f54e1ed7266c1979e80a9dca2e",
-                    "blocks": 49
+                    "sha256": "5144ec2ba5c802666c9a0c2c2c9b66dd0fa48d0fea037132ce72ae642d9ba887",
+                    "blocks": 144
                 }
             },
             {
                 "path": "runtime/0006.tsv.gz",
-                "sha256": "5b5ef11edf0c9fee6f12f9ebbe917dc2b230c7a9aef624a38213bd133f71ac5a",
+                "sha256": "a3ca135f25b4bcd103723243a5d4d38909958beb5cab9982d11675bf73f67355",
                 "rows": 100000,
                 "first_surface": "eutanazyjni",
                 "last_surface": "golarn",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0006.tsv.gz.lookup",
-                    "sha256": "e1c6f8795efa8656d3e5c42ce2de2cc16d213c9729ffc44df3228a93fd6eae0c",
-                    "blocks": 49
+                    "sha256": "3177adf19118c44d3ecaca5a9979706411005b75286177cd306b5f0fed34a149",
+                    "blocks": 133
                 }
             },
             {
                 "path": "runtime/0007.tsv.gz",
-                "sha256": "5323ccd475a4dff92ebbc44e460daa5eee7083d4af15dbf8b9ba48dd4f93d074",
+                "sha256": "d77fb6d18468c73385b6e421b78c2187e6c260f68b0712182a579fcd189a413b",
                 "rows": 100000,
                 "first_surface": "golarni",
                 "last_surface": "inkwirentami",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0007.tsv.gz.lookup",
-                    "sha256": "021d95b24be7ab2f9b337e5e2f7f0045c4daf5a9afcb668f580b1df82b2a8ed5",
-                    "blocks": 49
+                    "sha256": "498f30a913e0c35440da274bbf4594d880d6cff4cf7fec78e5df57cc4113c05b",
+                    "blocks": 137
                 }
             },
             {
                 "path": "runtime/0008.tsv.gz",
-                "sha256": "3a5e4b362b1fdfed27e32a24a20ea0bc97a5cec5015bed63aeca5b5c4ee829eb",
+                "sha256": "3034bfe67e6e749b9b5a8b4466bd367dc573cce40f540c651d88d6e1fca476de",
                 "rows": 100000,
                 "first_surface": "inkwirentem",
                 "last_surface": "keru",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0008.tsv.gz.lookup",
-                    "sha256": "5457887fdc84660008a00ff2cbc150d0a2e8e7584282374f4c074344d84931f9",
-                    "blocks": 49
+                    "sha256": "bbe4d999c863bc11acb7944d686ce7c54689d328c1fe966d7c9190423fe5538a",
+                    "blocks": 139
                 }
             },
             {
                 "path": "runtime/0009.tsv.gz",
-                "sha256": "fa335171e378bbe2fed432db15e91b05079982251e6ffb26a6b85ccaa9d3f61f",
+                "sha256": "cce06c52ef539eb092f2461f04d22821300d011ed83ca54dc39dc2ec37fd1ae4",
                 "rows": 100000,
                 "first_surface": "kery",
                 "last_surface": "kremlinologiem",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0009.tsv.gz.lookup",
-                    "sha256": "2ace3a1b1a4aac80e027c7d61e87673efdf18a420d144869461c277ab427389c",
-                    "blocks": 49
+                    "sha256": "9f742f57596657cf738dae3274fa212d484e2f653613d41d93a4b102eecc7f83",
+                    "blocks": 139
                 }
             },
             {
                 "path": "runtime/0010.tsv.gz",
-                "sha256": "e483d4635eee408f212a5c8b4ea88a6b74db060deced49aa45f1bffc65ace843",
+                "sha256": "720d2c4d39de0ae141afc18286a1a3274c60a81365e71a392c76da9976bacfad",
                 "rows": 100000,
                 "first_surface": "kremlinologii",
                 "last_surface": "lopatacze",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0010.tsv.gz.lookup",
-                    "sha256": "2dc12c0aca3e4c387b866ce8bfe87eb654b2588b4063168904a331be80c0d216",
-                    "blocks": 49
+                    "sha256": "b6c25ee331b14515c22aeff6d323ec881b8995452beed1cc161953edd2ff7b72",
+                    "blocks": 129
                 }
             },
             {
                 "path": "runtime/0011.tsv.gz",
-                "sha256": "3112b27375d9383712053598b0daa1053134f8bb016a450e4acb56c75b727b08",
+                "sha256": "4d9f497bcdd02591ffbf24319700f5bcb385b7929b6e27d8906c9012dc681376",
                 "rows": 100000,
                 "first_surface": "lopataczem",
                 "last_surface": "milujac",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0011.tsv.gz.lookup",
-                    "sha256": "ad76a57f38a8748873c4e9e7979e788c70c4571c59980bf625d84ed4e85924c2",
-                    "blocks": 49
+                    "sha256": "ee426ca4111c122cdf8dae7a44106b50f46b97d2502358f49ab76b1f1a0a92b6",
+                    "blocks": 137
                 }
             },
             {
                 "path": "runtime/0012.tsv.gz",
-                "sha256": "4fcfd542518b427ebb78f39e2949a2287b04f3c5d2a89f5dd4e28a65e4b956e6",
+                "sha256": "a9c4c7f865348ebba5613492a0c453e7e677e97b2d7b5f176a342671aa7ab8c2",
                 "rows": 100000,
                 "first_surface": "milujaca",
                 "last_surface": "najuporczywsza",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0012.tsv.gz.lookup",
-                    "sha256": "25012eb842e7355b2410067a254d11eab8653ef809146c4e3770ecd6cbce8d43",
-                    "blocks": 49
+                    "sha256": "bb19e858ed4e969034ae8321a3149bee8bc8180add8f8f0be0fbc958971227f6",
+                    "blocks": 139
                 }
             },
             {
                 "path": "runtime/0013.tsv.gz",
-                "sha256": "e6291e8cb50b99ef466548cde066c854ff1b55b058a27d40084805fc18aeefb8",
+                "sha256": "fb181591845755c1a5ee09e94e7cf64d3cbb0bdc1a3c80cb3090c995c52fd2c9",
                 "rows": 100000,
                 "first_surface": "najuporczywsze",
                 "last_surface": "nieapollinskiego",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0013.tsv.gz.lookup",
-                    "sha256": "37df66e74cd3d82032f56cb53002231a5300847388649463d809f49845325882",
-                    "blocks": 49
+                    "sha256": "030a5cdb243c52ee6358449423f8fcd5d22378c2eba79e04b7c1b7d4510b1561",
+                    "blocks": 153
                 }
             },
             {
                 "path": "runtime/0014.tsv.gz",
-                "sha256": "3cb37e2317dc0c00fd26da5cd68bd35d7400fd34a4ab91b217fa97ecd84dbba4",
+                "sha256": "a655bf22e167a8a0d44575b9e8b4d2c2459c94a22b994da78ed1a571db80f1e5",
                 "rows": 100000,
                 "first_surface": "nieapollinskiej",
                 "last_surface": "niedniowkowi",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0014.tsv.gz.lookup",
-                    "sha256": "981336f902f700e9046178610197774598c7b099c6363eb72fd3210505456dca",
-                    "blocks": 49
+                    "sha256": "17187da9808b312ddefd9946b02e9fdcdd5091fec099c7af93c1cee0b01e942c",
+                    "blocks": 185
                 }
             },
             {
                 "path": "runtime/0015.tsv.gz",
-                "sha256": "589e8fc4ae7c5a8cca41e996708f4720fcbb2759d9db10e450ccade660af2ef0",
+                "sha256": "0de0e5133220cacf598023aba405ec0c3fbc5edd2b910dd8d6c663da4083a298",
                 "rows": 100000,
                 "first_surface": "niedniowkowosc",
                 "last_surface": "nieharnasiowy",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0015.tsv.gz.lookup",
-                    "sha256": "e7308a9acb8c3913f4f6c9469d6e82e78d15544b58ce780ba99a79665ef5e87f",
-                    "blocks": 49
+                    "sha256": "2d65fe7bf33aa864757cb406ab4c795b57bc00ace2680a3c23e4e9040be03466",
+                    "blocks": 182
                 }
             },
             {
                 "path": "runtime/0016.tsv.gz",
-                "sha256": "ac73b666f6942788eda7cf4eb81abcb7efc5b4d55a0a57c98efe727c7d56d03b",
+                "sha256": "26d2bf718b9355697a4c7e8a4bf05ae500d9f62b7b6eaa31fca569f868a58171",
                 "rows": 100000,
                 "first_surface": "nieharnasiowych",
                 "last_surface": "niekwapionosciach",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0016.tsv.gz.lookup",
-                    "sha256": "7cb73a0432944e853e8497e3eeeb49087d13b5533125f50712649f620131c9ef",
-                    "blocks": 49
+                    "sha256": "8660b09af718d7a08c61fdfe01f3c77d35a56c3e595688b4214854cdc454a992",
+                    "blocks": 189
                 }
             },
             {
                 "path": "runtime/0017.tsv.gz",
-                "sha256": "5595aa0302fd4272b4a0ad022174c73a1ff6870c95dc289eb236813a33a59b72",
+                "sha256": "1ee8d77e230f3931e7f3fd14bd7f4c38e4b5e251f9a6ebd47101559b5ebaf431",
                 "rows": 100001,
                 "first_surface": "niekwapionosciami",
                 "last_surface": "nienawiedzeni",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0017.tsv.gz.lookup",
-                    "sha256": "def209385140067f6e95902350dc3238bc2f9cf627f73a37604b144fd5c61d02",
-                    "blocks": 49
+                    "sha256": "b494449220b6d9e8b90cedd66723b80220681af5c2389cd894ba161fb5bee1cb",
+                    "blocks": 176
                 }
             },
             {
                 "path": "runtime/0018.tsv.gz",
-                "sha256": "ac7d0f11522cc86ab140c69d306d98efb97e8c33f7dcb148b37f5895d47c1c7d",
+                "sha256": "b4ebd5b78a4bf96f6507b9a4c1ecfb12a95063d0d983df13a0fa58d86c45d803",
                 "rows": 100000,
                 "first_surface": "nienawiedzenia",
                 "last_surface": "nieotepienne",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0018.tsv.gz.lookup",
-                    "sha256": "1ba17a1cc5abcb188ebd6ee4bf15158a7617ad3fd10798d1a141f4b6efa0effb",
-                    "blocks": 49
+                    "sha256": "5936dc14c28da6cf666643b4a71fb68f2ee2064e322ff905e11c2e983c3e47a2",
+                    "blocks": 169
                 }
             },
             {
                 "path": "runtime/0019.tsv.gz",
-                "sha256": "b6e7fd4c693f6bc9ceb82733bf8bf038281af392f814a642589dc43d3d4794c7",
+                "sha256": "08cbefa27ba879a2cb65eac012b72c29a6c14054445fb5e313ad065f7ced55fb",
                 "rows": 100000,
                 "first_surface": "nieotepiennego",
                 "last_surface": "nieporozswiecania",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0019.tsv.gz.lookup",
-                    "sha256": "e02802f9d0b2e86137928fc3e5e1f934cb1c52ff2949eaead396cc3494e8a63b",
-                    "blocks": 49
+                    "sha256": "004fba8225758d2d09957a61affcd9000b33d40698cbbeb1420f950a697d07e1",
+                    "blocks": 180
                 }
             },
             {
                 "path": "runtime/0020.tsv.gz",
-                "sha256": "2bfd626790e6a283090f5bb96b4f7b8cd2b9b45aab5bf39401fd32904dfb98e6",
+                "sha256": "cb977a503e071baff8251689be23c3c5978513e12a992e727a6614285ea8379d",
                 "rows": 100000,
                 "first_surface": "nieporozswiecaniach",
                 "last_surface": "nieprzyparta",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0020.tsv.gz.lookup",
-                    "sha256": "ea1c6422739f418f4e2f9cac1c338bfd03c887e553a69466e06d4c4830fc3a1f",
-                    "blocks": 49
+                    "sha256": "53b2edd59542d1013be5c469470e5d317f686e5a5fc88b65106f706df18101b1",
+                    "blocks": 191
                 }
             },
             {
                 "path": "runtime/0021.tsv.gz",
-                "sha256": "51dc4b171ab51ee0d55b02d652d64da8883861dd9027b41b3262bd1d154551b2",
+                "sha256": "b58b4e266255a1dcb5c86d819c5d42807638247ef1bf17344f3b3bacf28149fe",
                 "rows": 100000,
                 "first_surface": "nieprzyparte",
                 "last_surface": "niesielskosciami",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0021.tsv.gz.lookup",
-                    "sha256": "fab553c5db1bdd86a71fbeb6964096e6a570ad2236bcdce5f2e568b9bccfd86b",
-                    "blocks": 49
+                    "sha256": "14951e0ae94c3a9af2ec896e57bce2e8c1dc772c4c911d558ac765fb56cfec52",
+                    "blocks": 183
                 }
             },
             {
                 "path": "runtime/0022.tsv.gz",
-                "sha256": "c4c99351c3d60188dcecb9f3027e3010f64800ab3b357eed92626d87b68067f7",
+                "sha256": "394af2243236bc6078801a28c6b66bea5f43cdbbe1df9d75341f2da1cdcb088f",
                 "rows": 100000,
                 "first_surface": "niesielskosciom",
                 "last_surface": "nietrasowanemu",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0022.tsv.gz.lookup",
-                    "sha256": "35014afe984f90130bea55605914d56b28013d1d48f7ce1c30ec585d09627983",
-                    "blocks": 49
+                    "sha256": "a34a9c6aea4ba718cb634daaafad1a9ed44e7ac43a0791e4b277c4e90cde7094",
+                    "blocks": 181
                 }
             },
             {
                 "path": "runtime/0023.tsv.gz",
-                "sha256": "c34ab76053d9f7ecab4f73db830c5ad96073b7b0d1d2229df20897996bfe4638",
+                "sha256": "f9547173233633579c849b79c5eaecef60394f437c36728b3f57459e1902c360",
                 "rows": 100000,
                 "first_surface": "nietrasowani",
                 "last_surface": "niewroniego",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0023.tsv.gz.lookup",
-                    "sha256": "864990352c1954bc8d92c65a650b62acd8b481e82ec23f99ede2bfe01f658200",
-                    "blocks": 49
+                    "sha256": "bf5e026985760efe91302c2cf45341d7b23fd2a939231923c55e0ff6cb2d7f83",
+                    "blocks": 174
                 }
             },
             {
                 "path": "runtime/0024.tsv.gz",
-                "sha256": "cb3105a2295729b8a931fa9ca411314401d17a49ff27b91b905c385c8e9f7cd0",
+                "sha256": "fd00884d8921a178cba9fd06acc2e13ce1f520473b30853bed24ffd3cd224b48",
                 "rows": 100000,
                 "first_surface": "niewroniej",
                 "last_surface": "niezamszana",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0024.tsv.gz.lookup",
-                    "sha256": "e20267409b98bc5b0490597c042dcc58616c2caffe8a6b3430692f3c9c058ccc",
-                    "blocks": 49
+                    "sha256": "deff48a420fb0185fc1452092ec1d1660643a61844e8b277d3e7367eababa6a6",
+                    "blocks": 170
                 }
             },
             {
                 "path": "runtime/0025.tsv.gz",
-                "sha256": "47963fe521aeed6a7e16ca07b352e3aecfe2ae4f3e5061c52e9ddf3710f5c726",
+                "sha256": "55bf7efcfc25e3f524e0afca325b40c01f3d652667cf27ab3b7f2a6b72e4c226",
                 "rows": 100000,
                 "first_surface": "niezamszane",
                 "last_surface": "nowozelandczycy",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0025.tsv.gz.lookup",
-                    "sha256": "226ededee9b764a5058338b996842839d55f5c3951254adad8649a55333a2d40",
-                    "blocks": 49
+                    "sha256": "615f0f66b1ad20525d78c1c0d164f3c0d483e388ef4938d622160e888bdab6d6",
+                    "blocks": 165
                 }
             },
             {
                 "path": "runtime/0026.tsv.gz",
-                "sha256": "c2551823a9aff6355fc7a514528143474d123c3577ea850b961b657e322f47a6",
+                "sha256": "d529668ec2b1cc77c6994e4c0361a62353ecafeef62f47da7e4543edc07cc459",
                 "rows": 100000,
                 "first_surface": "nowozelandczyk",
                 "last_surface": "odludziu",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0026.tsv.gz.lookup",
-                    "sha256": "af1458ea3c246a068f899aae0bf081c09e5d564b67cc2fa15e0372c8802bcbc7",
-                    "blocks": 49
+                    "sha256": "5ff2554ba56e1837eb61711af756c7b118c159cfcf62dd8b526dde0bed7dfcc4",
+                    "blocks": 136
                 }
             },
             {
                 "path": "runtime/0027.tsv.gz",
-                "sha256": "60aab61bfdb9b0a7093f0250605c8351531a2231ca21fbeca1ccba8feaf6ca24",
+                "sha256": "61c70f39ab9410da82a8adc28d66aa6e6fe097d892d6b50553cc1d1cd7eaea15",
                 "rows": 100000,
                 "first_surface": "odludztw",
                 "last_surface": "opiesnilbys",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0027.tsv.gz.lookup",
-                    "sha256": "98186b59de8b11d08626da6965f635c9f01608c0c1aca4d1a3042bc3afc6eab8",
-                    "blocks": 49
+                    "sha256": "09092d5340d537c95f5d919edb12793bf57b121bff45901829c2dbc6c31e0d96",
+                    "blocks": 138
                 }
             },
             {
                 "path": "runtime/0028.tsv.gz",
-                "sha256": "c7828e5880c367bae24babdacdb7cc4bb308e4bbee283cbedc1fa427289f9197",
+                "sha256": "f86ebf55ddef1f57c87bd73eb4d2b771a6ac4ff6dc25fb5731ecba888c607300",
                 "rows": 100000,
                 "first_surface": "opiesnilem",
                 "last_surface": "pawiowym",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0028.tsv.gz.lookup",
-                    "sha256": "9f06cdd25e4674759630a0b198493c6d66ac714dadfd31f73b8c6e81de062220",
-                    "blocks": 49
+                    "sha256": "1abeb3bbdda92268b9b3dbd13755fcb2cf9c407cf4d6e76dbd187615a22573bc",
+                    "blocks": 135
                 }
             },
             {
                 "path": "runtime/0029.tsv.gz",
-                "sha256": "e8ec89105f0f3577f868ad62bb5d859cf3287dc342f0ab4565b46be300a10014",
+                "sha256": "e4a00e4975e80d3977f1f48c4f737e051007038b5c60704a618de381ec6b5b1f",
                 "rows": 100001,
                 "first_surface": "pawiowymi",
                 "last_surface": "podlesnymi",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0029.tsv.gz.lookup",
-                    "sha256": "557549ca7bc05b19ae6e9f353651286e98790bf4d77b9beeced4ce9533415753",
-                    "blocks": 49
+                    "sha256": "0c1da292eebd0f8453d4f6cfcce87ab2da57577019fb6f18c6c524ccddfce27d",
+                    "blocks": 140
                 }
             },
             {
                 "path": "runtime/0030.tsv.gz",
-                "sha256": "cc964597bbc5b47f88a81ab30baf32567e8dd344f653f05e176185a932fdb060",
+                "sha256": "f01ddbaebec1dca755a1b13c5f3cd82e7d12c18cc97566899f86593320acd6d3",
                 "rows": 100000,
                 "first_surface": "podleszczyk",
                 "last_surface": "ponawieszala",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0030.tsv.gz.lookup",
-                    "sha256": "959894ebbebb01bacef6bab4e5a80a9fbe93e9a9bcf834bb79f3dfd921073bc4",
-                    "blocks": 49
+                    "sha256": "9094d1259e0ae03ca3ed29bd1d3646389165e91dfa8a041477db71d75e0980e5",
+                    "blocks": 145
                 }
             },
             {
                 "path": "runtime/0031.tsv.gz",
-                "sha256": "4571701b46e93f569d98fb597b4fd94b548459624b5d5458c8830b49f99e5882",
+                "sha256": "61da044b7a1af8e642e3f64b09efcdf6e8c18615f257fe2b1f46483fa42867b9",
                 "rows": 100000,
                 "first_surface": "ponawieszalaby",
                 "last_surface": "powylatuj",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0031.tsv.gz.lookup",
-                    "sha256": "c8677137f89ea10faadc506ab24857cf5681a5c61a6045f78b67fb0d376f04e4",
-                    "blocks": 49
+                    "sha256": "6c949770e83f9e1cd80efbb13e366a0f618d148ca741df274e35379d4ff9ef38",
+                    "blocks": 148
                 }
             },
             {
                 "path": "runtime/0032.tsv.gz",
-                "sha256": "a4976487b6b35d9868f1df9ce868035a927f51c75e3464655bed76b3e9f99183",
+                "sha256": "1b4b03da54afccba1adabd0d5aee726a6fd4aec992777b618b006a3976aca129",
                 "rows": 100000,
                 "first_surface": "powylatuja",
                 "last_surface": "przedziurawieniom",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0032.tsv.gz.lookup",
-                    "sha256": "de68dbe39b7dff823b52d5f77246455b2b4325808c6901e87582ea3ec0c89408",
-                    "blocks": 49
+                    "sha256": "02f8153da31c303dad323d97e2bbace4de612a7eaabc3b638d3cc11dac60faa3",
+                    "blocks": 161
                 }
             },
             {
                 "path": "runtime/0033.tsv.gz",
-                "sha256": "e1afa05dc3f5753041942a7c27bed627bafec96c3753833326546c3871dc2bb9",
+                "sha256": "c6b8ffed9fe9337f97469ea4202f6552eb898a7775c625ff40ef48c40da6cb86",
                 "rows": 100000,
                 "first_surface": "przedziurawieniu",
                 "last_surface": "przyglodzilibysmy",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0033.tsv.gz.lookup",
-                    "sha256": "399cdbc30f92d4e014a0232338d4de4e1fe88fa93ec1baed113f7b2c179c0c05",
-                    "blocks": 49
+                    "sha256": "3ffe09ca9017017bed84dc6692a8320e6ef90db3677bdfc84ad4a34b340fc75c",
+                    "blocks": 167
                 }
             },
             {
                 "path": "runtime/0034.tsv.gz",
-                "sha256": "442ed9e64fa2722d500ab8f5835e429e62f959594779a377d90bdbcd1071dba4",
+                "sha256": "e31492b05487dcf69feb66ca20f6f9545bbc9b76300add5f0fe62ba611af1cf3",
                 "rows": 100000,
                 "first_surface": "przyglodziliscie",
                 "last_surface": "relikwiowi",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0034.tsv.gz.lookup",
-                    "sha256": "b03ca13821f28f3e8649e62abe974fa8c1fc106349fb2863c48352beae00a095",
-                    "blocks": 49
+                    "sha256": "4f0ff40b6344e5f6cc334c1dfb6fc3363ba373279562a150150f8450416b1eb0",
+                    "blocks": 151
                 }
             },
             {
                 "path": "runtime/0035.tsv.gz",
-                "sha256": "d26d91c4e6b7b741db102dc47aaf76a024093476b732de7c138a25dadff603c1",
+                "sha256": "a231bb1c758d843ca1e741e40fd2c31d3f58dedb8a9c4fbbf9dfe16f064cf5a2",
                 "rows": 100000,
                 "first_surface": "relikwiowo",
                 "last_surface": "rozprostowalem",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0035.tsv.gz.lookup",
-                    "sha256": "77293f6680d4e5b7912d76c335d101e5da4fd9e7a9223353ec3884293cc6a178",
-                    "blocks": 49
+                    "sha256": "fe429bb5e167dfff31b6978131a555222a82d643abf4310df7f146c446959047",
+                    "blocks": 151
                 }
             },
             {
                 "path": "runtime/0036.tsv.gz",
-                "sha256": "83f372126f2d615778bf24aff56ec456a67206be72deeab37bf0183ba0b2d1ba",
+                "sha256": "7ff2ef92987ee8b3dedecbe19e4bcd0a6c3fb0f8c267e3a396db0eae4bdeec7a",
                 "rows": 100000,
                 "first_surface": "rozprostowales",
                 "last_surface": "sepnosciom",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0036.tsv.gz.lookup",
-                    "sha256": "a5ef7cb8aad7e36f1095f865e3e3eb7f7d079a28f088363f789728aac6153a14",
-                    "blocks": 49
+                    "sha256": "e8111696740e2a201033e9dd61fcadbdc105faa4f51d7c54eed753adc4e1334f",
+                    "blocks": 143
                 }
             },
             {
                 "path": "runtime/0037.tsv.gz",
-                "sha256": "9956ffe2144ee5cdcbf8b2747bb8eaa27fd7dd4b6992f03011f88d294b1e6ad0",
+                "sha256": "9958db705d8f83356eae3dc438be20847519584e707e1f6c577e1d2292ab9ef1",
                 "rows": 100000,
                 "first_surface": "sepny",
                 "last_surface": "spektru",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0037.tsv.gz.lookup",
-                    "sha256": "c1ccc53caa4e1db6dd948e93320b0df2258400ef820ee4f0710b1e422aaeb8d8",
-                    "blocks": 49
+                    "sha256": "22c6e90926cf454d30b3405830398a7071f4418a6be88c5f004cb5b977f8ce29",
+                    "blocks": 137
                 }
             },
             {
                 "path": "runtime/0038.tsv.gz",
-                "sha256": "765aba2c64f3331d85837f4f0035c703e0606cf45e8fc1fd996060887340e920",
+                "sha256": "a518a12a9cd377a1986955c79d823d5f5e197b389a8734bf8564fe85a4d1609d",
                 "rows": 100000,
                 "first_surface": "spektrum",
                 "last_surface": "swiniarkach",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0038.tsv.gz.lookup",
-                    "sha256": "a8d87536ec8bd5e4d47247cbd6a3ba35e16a4592704e0048ecdcdd2a96177abd",
-                    "blocks": 49
+                    "sha256": "903e8470e835c614166e76aa29ad97fec12f1a2bf30b78fa66f32a5f208f37b6",
+                    "blocks": 143
                 }
             },
             {
                 "path": "runtime/0039.tsv.gz",
-                "sha256": "8a92f11f8add370953b4c3d6bc581888a5152e35eb72dc7569e23ececbeebc47",
+                "sha256": "d31f5ceaf06f574b86977d8a6befb8f808912290873383f5979b56bae23719ce",
                 "rows": 100000,
                 "first_surface": "swiniarkami",
                 "last_surface": "topor",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0039.tsv.gz.lookup",
-                    "sha256": "60588ada2ddd1a1aa16df2d70f3765a91f8241ad05533f202d94a3ed8cb51a43",
-                    "blocks": 49
+                    "sha256": "bf932c2bbfd6ae5e4007f59c0633ce0a2a9131a820020e7261a61e6774c3e7a4",
+                    "blocks": 137
                 }
             },
             {
                 "path": "runtime/0040.tsv.gz",
-                "sha256": "10ebbf8bc2ba8e89432c006c7816c14a91b9f26e0ab685047fdf17421f593966",
+                "sha256": "6946ca2d7b68ce68c13573c7a91f37be7bb8062395d2a2288eff8e591e3b1372",
                 "rows": 100000,
                 "first_surface": "topora",
                 "last_surface": "umawiajacymi",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0040.tsv.gz.lookup",
-                    "sha256": "fbc7bf6dd57843f0264d6b381eaec6639d06b24191c5b97d3fa6a1a5c1f81d03",
-                    "blocks": 49
+                    "sha256": "b50ff97eef75ffe0e37b0a6b7efe2845a5a4b67ee9abaf5e37b436b5c8739a42",
+                    "blocks": 138
                 }
             },
             {
                 "path": "runtime/0041.tsv.gz",
-                "sha256": "0f4a917aa7cdfa4e67b2c5a620b9bdb4d250412a76ab34cfd130bb0b84a41080",
+                "sha256": "b9d1b260d5c9c5d6ff23c874d08ba63b3bf222c88cdba68a12207623ea992d54",
                 "rows": 100000,
                 "first_surface": "umawiajcie",
                 "last_surface": "wasisci",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0041.tsv.gz.lookup",
-                    "sha256": "fef746aaa36e1f7df01b6721bae9dc39d12835d0cd64a15d9f4475c1b2c6f681",
-                    "blocks": 49
+                    "sha256": "11e714309f9fa04910feb05db5a53f831574876da0fa62c4600abb0b8ee31c05",
+                    "blocks": 139
                 }
             },
             {
                 "path": "runtime/0042.tsv.gz",
-                "sha256": "468ac7cc64d370133edc89909748306cb77612055ba99b9866b1eebf7593050a",
+                "sha256": "245bae8377df44093208b3a45ef0ed75142600dc02a1276b01ec15175519641b",
                 "rows": 100000,
                 "first_surface": "wasisk",
                 "last_surface": "wsiewalibyscie",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0042.tsv.gz.lookup",
-                    "sha256": "b29b48e7fe2abb582f80ab1e1258fcbd47a9707708a5447b731f78a6f2d15808",
-                    "blocks": 49
+                    "sha256": "01982be7cd2dd0d7bb63773fabd9661e92a64224d4176e3760f2a1ac13693b1f",
+                    "blocks": 135
                 }
             },
             {
                 "path": "runtime/0043.tsv.gz",
-                "sha256": "42b41b1fbc1de77c219b52543cffa266de942e63d307bcb51a5e22dd561d5aa2",
+                "sha256": "d43fa08f79b2dead40c4373b63952a615ebdcb005677c810f7f05c59ae3bb108",
                 "rows": 100000,
                 "first_surface": "wsiewalibysmy",
                 "last_surface": "wymazecie",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0043.tsv.gz.lookup",
-                    "sha256": "f5edbe00948b2427109a438c6a2aa6a142f0ba36b00c8439b550719683bb0413",
-                    "blocks": 49
+                    "sha256": "e4b13d1994735cfbd7d826c6fd7a954d7f0d4c609d47eb7f7bfb858a08308d6f",
+                    "blocks": 146
                 }
             },
             {
                 "path": "runtime/0044.tsv.gz",
-                "sha256": "1885ddec06f1975eb1f4771ac19b91d6970304f9893d112cbd6332566339e861",
+                "sha256": "38e68210e104af6656fbb4627fd8f56d7d06cbfc03f9d609430a8919d62c5c92",
                 "rows": 100000,
                 "first_surface": "wymazem",
                 "last_surface": "wzrodzilbys",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0044.tsv.gz.lookup",
-                    "sha256": "22edd2c90b50185985e33482722903be3e1ba3fdfe4a2e6f6eb33b439ef4e939",
-                    "blocks": 49
+                    "sha256": "75a79738972f27c7c81dce4e66a592bf0c1f95fe248820d6d3fe52a357fe06cd",
+                    "blocks": 144
                 }
             },
             {
                 "path": "runtime/0045.tsv.gz",
-                "sha256": "00cec484c6027022419ec9ae758362c23ff2e84479c402b3e915a294b19829bb",
+                "sha256": "78b8c0adcf14a0fcfa4a67ecb4b55d78b6ce89698fdb9e9fbc0be6703a34bc19",
                 "rows": 100000,
                 "first_surface": "wzrodzilem",
                 "last_surface": "zanitowano",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0045.tsv.gz.lookup",
-                    "sha256": "8e89247ca4a892ff2aeda201fd299b051c5a0df3c7a2b3f069878f29339fdaa7",
-                    "blocks": 49
+                    "sha256": "e0c9c4fa3b5eaee62cfe90a255ddb5744e8fbd5c8473cb7eca54ab02649f55fb",
+                    "blocks": 144
                 }
             },
             {
                 "path": "runtime/0046.tsv.gz",
-                "sha256": "737f82a0f3d59977ce8c4caee1c9088e297918f53494674e761968f1d094ce47",
+                "sha256": "592436a0e4fa11a47087e25b308e3aaa91f5a39f046f75ba922b5d693631b36e",
                 "rows": 100000,
                 "first_surface": "zanitowany",
                 "last_surface": "zdelabializowalabys",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0046.tsv.gz.lookup",
-                    "sha256": "c88464462d58d3adc911c7e7def3441fb2f33f36c2034598b0f3801ca2d5ebc1",
-                    "blocks": 49
+                    "sha256": "6313f71b06b3396b579203edce5f68aa2a9b9343c05ddc3de103c6ae24aed46a",
+                    "blocks": 142
                 }
             },
             {
                 "path": "runtime/0047.tsv.gz",
-                "sha256": "883235ccbaebc9534b0d627cad32c744f401e90cc741b412c0d0f5d4039cc711",
+                "sha256": "4b0c2a8ff5e777aaebc8bebc8e8f9952c2864eafacd9b6ec6ea2c271726029af",
                 "rows": 100000,
                 "first_surface": "zdelabializowalam",
                 "last_surface": "zollach",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0047.tsv.gz.lookup",
-                    "sha256": "22fd7b28896e2a5584e3c48449b9c2f051b94b26d597d3e05786ccfdcbe1834f",
-                    "blocks": 49
+                    "sha256": "089135b93e50c2548cddcd1cdb78906f551a588d6bd6f3a1a8beef92aea9cf45",
+                    "blocks": 143
                 }
             },
             {
                 "path": "runtime/0048.tsv.gz",
-                "sha256": "8ad649c240e91245687d365b1854f52b281b5ca71b6026d943466638e59c155b",
+                "sha256": "a0da8811b9a2e8bfd4c15d946c39406c5c707e1cdc2d1ec7cc516867562d5164",
                 "rows": 48646,
                 "first_surface": "zollami",
                 "last_surface": "zzyzniwszy",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0048.tsv.gz.lookup",
-                    "sha256": "835cfcb66064f56b83df87ca29a65ac2d9ad4763b0c8136efe1b70884da0ca53",
-                    "blocks": 24
+                    "sha256": "d6c835f5fc54487d7bbba880879cbc027150d4f34a3d43415c4d151b79c9625f",
+                    "blocks": 67
                 }
             }
         ]

@@ -15,7 +15,7 @@ if ($wp_fts_alc_direct) {
             private int $offset = -1;
 
             /**
-             * @param array<int,array{type:string,breadcrumbs?:string[],text?:string,attrs?:array<string,string>,closing?:bool}> $tokens
+             * @param array<int,array{type:string,tag?:string,breadcrumbs?:string[],text?:string,attrs?:array<string,string>,closing?:bool}> $tokens
              */
             public function __construct(private array $tokens)
             {
@@ -41,14 +41,41 @@ if ($wp_fts_alc_direct) {
                 return $this->current()['breadcrumbs'] ?? [];
             }
 
+            /** Derive stream depth without retaining a separate parser stack. */
+            public function get_current_depth(): int
+            {
+                return max(0, count($this->current()['breadcrumbs'] ?? []) - ($this->is_tag_closer() ? 1 : 0));
+            }
+
             public function get_modifiable_text(): string
             {
                 return (string) ($this->current()['text'] ?? '');
             }
 
+            /** Recover synthetic tags from breadcrumbs when the fixture omits one. */
+            public function get_tag(): ?string
+            {
+                $tag = $this->current()['tag'] ?? null;
+                if (!is_string($tag) || $tag === '') {
+                    $breadcrumbs = $this->current()['breadcrumbs'] ?? [];
+                    $tag = is_array($breadcrumbs) && $breadcrumbs !== [] ? end($breadcrumbs) : null;
+                }
+
+                return is_string($tag) && $tag !== '' && $tag[0] !== '#'
+                    ? strtoupper($tag)
+                    : null;
+            }
+
             public function is_tag_closer(): bool
             {
                 return (bool) ($this->current()['closing'] ?? false);
+            }
+
+            /** Match HTML void-element semantics in the synthetic event stream. */
+            public function expects_closer(): bool
+            {
+                return !$this->is_tag_closer()
+                    && !in_array($this->get_tag(), ['AREA', 'BASE', 'BR', 'COL', 'EMBED', 'HR', 'IMG', 'INPUT', 'LINK', 'META', 'PARAM', 'SOURCE', 'TRACK', 'WBR'], true);
             }
 
             public function get_attribute(string $name): mixed
@@ -57,7 +84,7 @@ if ($wp_fts_alc_direct) {
             }
 
             /**
-             * @return array{type?:string,breadcrumbs?:string[],text?:string,attrs?:array<string,string>,closing?:bool}
+             * @return array{type?:string,tag?:string,breadcrumbs?:string[],text?:string,attrs?:array<string,string>,closing?:bool}
              */
             private function current(): array
             {
@@ -321,18 +348,18 @@ test_case('quality corpus keeps processor extraction in parity with fallback ext
     $html = '<article lang=pl><h1>Wrocław</h1><p><span lang=en-GB>colour</span> Łódź</p>' .
         '<svg lang=de><text>secretvector</text></svg><p>powrót</p></article>';
     $tokens = [
-        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE'], 'attrs' => ['lang' => 'pl']],
-        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'H1']],
+        ['type' => '#tag', 'tag' => 'ARTICLE', 'breadcrumbs' => ['ARTICLE'], 'attrs' => ['lang' => 'pl']],
+        ['type' => '#tag', 'tag' => 'H1', 'breadcrumbs' => ['ARTICLE', 'H1']],
         ['type' => '#text', 'breadcrumbs' => ['ARTICLE', 'H1'], 'text' => 'Wrocław'],
-        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'P']],
-        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'P', 'SPAN'], 'attrs' => ['lang' => 'en-GB']],
+        ['type' => '#tag', 'tag' => 'P', 'breadcrumbs' => ['ARTICLE', 'P']],
+        ['type' => '#tag', 'tag' => 'SPAN', 'breadcrumbs' => ['ARTICLE', 'P', 'SPAN'], 'attrs' => ['lang' => 'en-GB']],
         ['type' => '#text', 'breadcrumbs' => ['ARTICLE', 'P', 'SPAN'], 'text' => 'colour'],
-        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'P', 'SPAN'], 'closing' => true],
+        ['type' => '#tag', 'tag' => 'SPAN', 'breadcrumbs' => ['ARTICLE', 'P', 'SPAN'], 'closing' => true],
         ['type' => '#text', 'breadcrumbs' => ['ARTICLE', 'P'], 'text' => ' Łódź'],
-        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'SVG'], 'attrs' => ['lang' => 'de']],
+        ['type' => '#tag', 'tag' => 'SVG', 'breadcrumbs' => ['ARTICLE', 'SVG'], 'attrs' => ['lang' => 'de']],
         ['type' => '#text', 'breadcrumbs' => ['ARTICLE', 'SVG', 'TEXT'], 'text' => 'secretvector'],
-        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'SVG'], 'closing' => true],
-        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'P']],
+        ['type' => '#tag', 'tag' => 'SVG', 'breadcrumbs' => ['ARTICLE', 'SVG'], 'closing' => true],
+        ['type' => '#tag', 'tag' => 'P', 'breadcrumbs' => ['ARTICLE', 'P']],
         ['type' => '#text', 'breadcrumbs' => ['ARTICLE', 'P'], 'text' => 'powrót'],
     ];
 
@@ -351,8 +378,8 @@ test_case('quality corpus keeps processor extraction in parity with fallback ext
 test_case('quality corpus tokenizes mixed scripts punctuation numbers emoji and invalid bytes', function (): void {
     $cases = [
         ['ja', 3, 'abc東京def', ['abc', '東', '京', '東京', 'def'], 'mixed Latin and Japanese'],
-        ['zh-Hans', 3, '中文搜索 日 x', ['中', '文', '搜', '索', '中文', '文搜', '搜索', '中文搜', '文搜索', '中文搜索', '日'], 'CJK n-grams bypass minimum length'],
-        ['zh-Hans', 3, '搜索系统', ['搜', '索', '系', '统', '搜索', '索系', '系统', '搜索系', '索系统', '搜索系统'], 'CJK bounded n-grams include longer query evidence'],
+        ['zh-Hans', 3, '中文搜索 日 x', ['中', '文', '中文', '搜', '文搜', '中文搜', '索', '搜索', '文搜索', '中文搜索', '日'], 'CJK n-grams stream in end-position order and bypass minimum length'],
+        ['zh-Hans', 3, '搜索系统', ['搜', '索', '搜索', '系', '索系', '搜索系', '统', '系统', '索系统', '搜索系统'], 'CJK bounded n-grams stream while retaining longer query evidence'],
         ['en', 2, "don't-stop re-enter", ['don', 'stop', 're', 'enter'], 'apostrophe and hyphen boundaries'],
         ['en', 2, 'v2_0 release42 🚀 emoji', ['v2_0', 'release42', 'emoji'], 'numbers underscores and emoji'],
         ['fr', 2, "Cafe\u{0301} deja\u{0300}", ['caf', 'dej'], 'Latin combining marks'],
@@ -431,6 +458,8 @@ test_case('quality corpus applies language-specific folding including no-mbstrin
         ['de', 'ÄRGER', 'aerger'],
         ['tr', 'ÇİĞ', 'cig'],
         ['fr', 'ÉCOLE', 'ecole'],
+        ['ru', 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'],
+        ['uk', 'ҐЄІЇ', 'ґєії'],
     ];
     foreach ($fallbackCases as [$lang, $input, $expected]) {
         record_check('no-mbstring uppercase fallback scenario: ' . $lang);
@@ -452,8 +481,8 @@ test_case('quality corpus exposes query occurrence output while preserving plain
         ['ar', 'الات الكم مفيدة للبحث', ['الات', 'الكم', 'مفيد', 'بحث']],
         ['bn', 'বইটিকে শিক্ষকদেরকে বিদ্যালয়ের সূচিতে', ['বই', 'শিক্ষক', $bengaliSchoolTerm, 'সূচি']],
         ['ur', 'دلوں لڑکیوں لڑکیاں لڑکے حالات معلومات', ['دلوں', 'لڑکی', 'لڑکی', 'لڑک', 'حال', 'معلوم']],
-        ['zh-Hans', '中文搜索', ['中', '文', '搜', '索', '中文', '文搜', '搜索', '中文搜', '文搜索', '中文搜索']],
-        ['zh-Hant', '繁體搜索', ['繁', '體', '搜', '索', '繁體', '體搜', '搜索', '繁體搜', '體搜索', '繁體搜索']],
+        ['zh-Hans', '中文搜索', ['中', '文', '中文', '搜', '文搜', '中文搜', '索', '搜索', '文搜索', '中文搜索']],
+        ['zh-Hant', '繁體搜索', ['繁', '體', '繁體', '搜', '體搜', '繁體搜', '索', '搜索', '體搜索', '繁體搜索']],
     ];
 
     foreach ($cases as [$lang, $query, $expectedTerms]) {
@@ -499,7 +528,7 @@ test_case('quality corpus exposes Bengali Urdu baseline signature changes', func
         'baseline Bengali Urdu stemmer signature should identify v2 suffix rules'
     );
     assert_true(
-        str_contains($pipeline->index_signature(), 'wp-fts-language-pipeline-v18:'),
+        str_contains($pipeline->index_signature(), 'wp-fts-language-pipeline-v20:'),
         'language pipeline signature should bump for Bengali Urdu baseline behavior'
     );
     assert_true(

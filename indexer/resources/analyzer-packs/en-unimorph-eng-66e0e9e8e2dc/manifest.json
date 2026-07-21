@@ -12,98 +12,98 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import",
-        "indexed-runtime-lookups"
+        "indexed-runtime-lookups",
+        "unimorph-source-import"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
-        "normalization": "WP_FTS_Normalizer NFKC en with fold_diacritics=true",
+        "normalization": "WP_FTS_Normalizer en with fold_diacritics=true",
         "ambiguity_policy": "ambiguous_surface_noop",
-        "total_rows": 566752,
-        "total_sha256": "4224435548bb7263b365f2cecad908a934d8b53333c2515e26b62325e49263f4",
+        "total_rows": 564805,
+        "total_sha256": "5c92e9fba1ead8d48693a9e5bb5a054f74dd5e8273a2d2ef154c1387af5231d2",
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "2f83a97fe1148ac457348ec6c392700815278d7b8585ae6e2247698093e46dbb",
-                "rows": 100001,
+                "sha256": "bb17b95dac47cc920ce22171dbaeae2b2935d08b4a7c4f7976e1b103387a803a",
+                "rows": 100000,
                 "first_surface": "0",
-                "last_surface": "confuzzled",
+                "last_surface": "confuzzle",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0001.tsv.gz.lookup",
-                    "sha256": "381ed3bcb76c9d2c806b96f047516e1937661f613c939487fdb86e342d81a0d4",
-                    "blocks": 49
+                    "sha256": "dbf28645f797160bf6d20fc0991734b21673844695530c48214d581e6073f5b0",
+                    "blocks": 131
                 }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "2ec4583bd22289bd86c3f850c448a2cf6f2698ed1a32ba0e14753bcb82e4c966",
-                "rows": 99998,
-                "first_surface": "confuzzlement",
-                "last_surface": "glomangiomyoma",
+                "sha256": "be4bd2aa5bbe00fa571878ce2a5d82917a86329abde62f0e3a7473a4c4abca53",
+                "rows": 100000,
+                "first_surface": "confuzzled",
+                "last_surface": "glycopyranoses",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0002.tsv.gz.lookup",
-                    "sha256": "532456a56df1d5d5d434f7b407f8e15e976a03b5e04bdaf9de3d774d1aaac831",
-                    "blocks": 49
+                    "sha256": "52654016f7b12e02616ef0fc999ce3808c7234f361d7414cdaa8e25f8b8d34e9",
+                    "blocks": 133
                 }
             },
             {
                 "path": "runtime/0003.tsv.gz",
-                "sha256": "6f50eebe31a459d10cce582c1c2c55927e5d726c697e49a020251696bd66284b",
-                "rows": 99997,
-                "first_surface": "glomangiomyomas",
-                "last_surface": "minireview",
+                "sha256": "412068d4ce68823c4d538fe8e9100008a7120d490718420a712c55b3ca303f39",
+                "rows": 100000,
+                "first_surface": "glycopyranoside",
+                "last_surface": "misconceptualizing",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0003.tsv.gz.lookup",
-                    "sha256": "684691cd950795b2610a2f6a38719a96944c5aa722ff1567b4fa236fc83058a5",
-                    "blocks": 49
+                    "sha256": "2e7cb262c8a7fddd28ba04bd4cd5424fd7e485be61a329b40747b075dd0c44f0",
+                    "blocks": 134
                 }
             },
             {
                 "path": "runtime/0004.tsv.gz",
-                "sha256": "8629fd7fe267307fd6eef6c37bfdec4a7753de63f72169a202bfc66d4ea38daa",
+                "sha256": "7b2d643a99859d0d1b76dfca9e34dcbb3e13fe19fb3467cf614092149356c993",
                 "rows": 100000,
-                "first_surface": "minireviews",
-                "last_surface": "prohypertrophic",
+                "first_surface": "misconcern",
+                "last_surface": "prosaccade",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0004.tsv.gz.lookup",
-                    "sha256": "39becfd3a44b2a4be8426372944a66a629aa35bd5903a6b03ab62aad59da769f",
-                    "blocks": 49
+                    "sha256": "5eb427e7a90e1d0465dbba6c35820ba37154b289daaeb9243d3bf3f1a2251a71",
+                    "blocks": 140
                 }
             },
             {
                 "path": "runtime/0005.tsv.gz",
-                "sha256": "10613c819bbf5b92cb1c1626446736957b92fef09b26251271865c243ca22ede",
+                "sha256": "1a80cf0877196507c38d558645f7b471c6c3b59fdc8927baaca0fc754eeca37f",
                 "rows": 100000,
-                "first_surface": "proictogenic",
-                "last_surface": "terguride",
+                "first_surface": "prosaccades",
+                "last_surface": "tetranitrobenzene",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0005.tsv.gz.lookup",
-                    "sha256": "6bb495e4764439aace5b51d059459a6b41fd8228383d2a0cb80bb258f032efba",
-                    "blocks": 49
+                    "sha256": "a03e8daf8ca6f482c0d25f3d43950e5bca53d07b604427ff37dd6cf55df04aff",
+                    "blocks": 130
                 }
             },
             {
                 "path": "runtime/0006.tsv.gz",
-                "sha256": "959430bc75bcc44f2aedab24d2e81d13b331940cacabb0429f01adb6bae433c3",
-                "rows": 66756,
-                "first_surface": "teriflunomide",
+                "sha256": "4ee71a05d0f28279160eaafa753a4dffde14a489e06b3b0823d2b135d5af5f67",
+                "rows": 64805,
+                "first_surface": "tetranitrobenzenes",
                 "last_surface": "ṛgvedic",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0006.tsv.gz.lookup",
-                    "sha256": "533b7bd864f1a95f2b6917394c147a98b7c5363197c9269d160c60d66e280b4f",
-                    "blocks": 33
+                    "sha256": "648c225d869d0a9d17fe064d9b464c91cad4758ab63451234f79a0f3388ffa5f",
+                    "blocks": 84
                 }
             }
         ]
@@ -133,16 +133,48 @@
         "parse_stats": {
             "source_path": "eng",
             "source_files": 1,
-            "files": [
-                "eng"
-            ],
+            "source_path_bytes": 3,
+            "source_entries": 1,
+            "source_max_depth": 0,
+            "source_physical_bytes": 18022905,
+            "source_physical_byte_limit": 67108864,
             "source_lines": 652477,
+            "source_line_limit": 8000000,
+            "source_decoded_bytes": 18022905,
+            "source_decoded_byte_limit": 536870912,
             "blank_lines": 0,
             "comment_lines": 5,
             "placeholder_rows": 0,
-            "invalid_runtime_token_rows": 24276,
-            "rows_with_features": 628196,
-            "accepted_rows": 628196
+            "invalid_runtime_token_rows": 24277,
+            "rows_with_features": 628195,
+            "accepted_rows": 628195,
+            "staged_tsv_bytes": 24106587,
+            "staged_row_limit": 1250000,
+            "staged_tsv_byte_limit": 67108864,
+            "accepted_source_rows": 628195,
+            "rows_with_tags": 628195,
+            "rows_with_source_notes": 628195,
+            "runtime_rows": 564805,
+            "unique_source_rows": 566757,
+            "deduplicated_rows": 61438,
+            "ambiguous_surfaces": 10993,
+            "unambiguous_surfaces": 542623,
+            "ambiguity_noop_surfaces": 2,
+            "ambiguity_noop_source_pairs": 1954,
+            "chunk_files": 3,
+            "chunk_merge_outputs": 0,
+            "chunk_merge_passes": 0,
+            "max_live_chunk_files": 3,
+            "max_chunk_merge_inputs": 3,
+            "chunk_merge_fan_in_limit": 64,
+            "max_chunk_lexical_bytes": 4218030,
+            "chunk_lexical_byte_limit": 8388608,
+            "runtime_decoded_bytes": 12243699,
+            "runtime_encoded_bytes": 2591298,
+            "lookup_index_bytes": 94487,
+            "lookup_blocks": 752,
+            "runtime_lookup_bytes": 2685785,
+            "runtime_lookup_byte_limit": 16777216
         }
     },
     "license": {

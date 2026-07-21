@@ -136,7 +136,8 @@ test_case('quality native relevance REST fixture runs through WordPress search s
         $idByNumeric = $maps['id_by_numeric'];
         $documentsById = $maps['by_id'];
 
-        $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), new WP_FTS_Analyzer());
+        $storage = wp_fts_test_unleased_storage();
+        $analyzer = new WP_FTS_Analyzer();
         foreach ($documentsById as $fixtureId => $document) {
             if (($document['family'] ?? '') !== 'rest-visible-hidden-ranking') {
                 continue;
@@ -147,7 +148,7 @@ test_case('quality native relevance REST fixture runs through WordPress search s
             if (isset($document['language']) && is_scalar($document['language'])) {
                 $opts['lang'] = (string) $document['language'];
             }
-            $indexer->index_post($post, $opts);
+            wp_fts_test_replace_post($storage, $post, $opts, $analyzer);
         }
 
         foreach ($suite['queries'] as $query) {
@@ -175,6 +176,12 @@ test_case('quality native relevance REST fixture runs through WordPress search s
             $response = WP_FTS_Plugin::rest_search($request);
             assert_true(is_array($response) && isset($response['results']) && is_array($response['results']), 'REST benchmark query should return a result array: ' . (string) $query['id']);
             $actualIds = wp_fts_nrgb_fixture_ids_from_plugin_rows($response['results'], $idByNumeric);
+            foreach ($actualIds as $fixtureId) {
+                $post = wp_fts_nrgb_post_from_document($documentsById[$fixtureId]);
+                assert_same('publish', $post->post_status, 'REST benchmark should return only published canonical rows: ' . (string) $query['id']);
+                assert_same('', $post->post_password, 'REST benchmark should exclude password-protected canonical rows: ' . (string) $query['id']);
+                assert_true(in_array($post->post_type, ['post', 'page'], true), 'REST benchmark should return only configured public post types: ' . (string) $query['id']);
+            }
 
             $expectedTopIds = isset($query['expect']['top_ids']) && is_array($query['expect']['top_ids'])
                 ? array_values(array_map('strval', $query['expect']['top_ids']))
@@ -189,8 +196,56 @@ test_case('quality native relevance REST fixture runs through WordPress search s
                 }
             }
             foreach (array_keys($query['judgments'] ?? []) as $fixtureId) {
-                assert_true(in_array((string) $fixtureId, $actualIds, true), 'REST benchmark should include relevant fixture id ' . (string) $fixtureId . ' for ' . (string) $query['id']);
+                $fixtureId = (string) $fixtureId;
+                $judgedPost = wp_fts_nrgb_post_from_document($documentsById[$fixtureId]);
+                $isPublishedCanonicalRow = $judgedPost->post_status === 'publish'
+                    && $judgedPost->post_password === ''
+                    && in_array($judgedPost->post_type, ['post', 'page'], true);
+                assert_same(
+                    $isPublishedCanonicalRow,
+                    in_array($fixtureId, $actualIds, true),
+                    'REST benchmark judgment should obey the published canonical scope for ' . $fixtureId . ' in ' . (string) $query['id']
+                );
             }
+        }
+
+        $privateFixtureId = 'rest-readable-private';
+        $privateNumericId = (int) $documentsById[$privateFixtureId]['numeric_id'];
+        $GLOBALS['wp_fts_test_caps'] = [
+            // A per-object grant cannot widen the SQL scope before LIMIT.
+            'read_post' => [$privateNumericId => true],
+        ];
+        $privateScopeRejected = false;
+        try {
+            WP_FTS_Plugin::search_page('shared refill', [
+                'lang' => 'en',
+                'mode' => 'AND',
+                'limit' => 10,
+                'post_type' => 'post',
+                'post_status' => 'private',
+            ]);
+        } catch (InvalidArgumentException) {
+            $privateScopeRejected = true;
+        }
+        assert_true($privateScopeRejected, 'PHP search should reject private SQL scope when only a per-object read grant exists');
+
+        $GLOBALS['wp_fts_test_caps']['read_private_posts'][0] = true;
+        $privateResponse = WP_FTS_Plugin::search_page('shared refill', [
+            'lang' => 'en',
+            'mode' => 'AND',
+            'limit' => 10,
+            'post_type' => 'post',
+            'post_status' => 'private',
+        ]);
+        $privateIds = wp_fts_nrgb_fixture_ids_from_plugin_rows($privateResponse['results'], $idByNumeric);
+        sort($privateIds, SORT_STRING);
+        assert_same(
+            ['rest-hidden-private', $privateFixtureId],
+            $privateIds,
+            'explicit type-wide PHP scope should retrieve all matching private fixtures rather than applying per-object grants after LIMIT'
+        );
+        foreach (['rest-password', 'rest-excluded-type', 'rest-public'] as $fixtureId) {
+            assert_true(!in_array($fixtureId, $privateIds, true), 'explicit private PHP scope should exclude fixture id ' . $fixtureId);
         }
     } finally {
         $wpdb = $oldWpdb;

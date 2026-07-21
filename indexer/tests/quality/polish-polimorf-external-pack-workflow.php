@@ -256,6 +256,18 @@ function wp_fts_ppew_case_builds_local_fixture_and_stays_offline(): array
         wp_fts_ppew_check(is_file((string) $summary['source_lock_path']), 'build summary should expose generated source lock path', $errors);
         wp_fts_ppew_check(($summary['runtime']['rows'] ?? null) === 6, 'external fixture build should generate six normalized runtime rows', $errors);
         wp_fts_ppew_check(($summary['runtime']['files'] ?? null) === 3, 'external fixture build should generate three runtime shards', $errors);
+        wp_fts_ppew_check(($summary['lookup']['format'] ?? null) === WP_FTS_LemmaPackLookupIndex::FORMAT, 'external fixture build should expose the indexed lookup format', $errors);
+        wp_fts_ppew_check(($summary['lookup']['files'] ?? null) === 3, 'external fixture build should generate one lookup sidecar per runtime shard', $errors);
+        wp_fts_ppew_check(($summary['lookup']['blocks'] ?? 0) >= 3, 'external fixture build should retain at least one lookup block per runtime shard', $errors);
+        wp_fts_ppew_check(($summary['lookup']['bytes'] ?? 0) > 0, 'external fixture build should report lookup-sidecar bytes', $errors);
+        wp_fts_ppew_check(($summary['runtime']['decoded_bytes'] ?? 0) > 0, 'external fixture build should report decoded runtime bytes', $errors);
+        wp_fts_ppew_check(($summary['runtime']['encoded_bytes'] ?? null) === ($summary['runtime']['bytes'] ?? null), 'external fixture build should identify encoded runtime bytes', $errors);
+        wp_fts_ppew_check(
+            ($summary['runtime_lookup_bytes'] ?? null) === ($summary['runtime']['encoded_bytes'] ?? 0) + ($summary['lookup']['bytes'] ?? 0),
+            'external fixture build should report exact runtime-plus-lookup bytes',
+            $errors
+        );
+        wp_fts_ppew_check(($summary['validation']['activatable'] ?? null) === true, 'external fixture build should certify runtime activation', $errors);
         wp_fts_ppew_check(($summary['runtime_network_access'] ?? null) === false, 'summary should declare no runtime network access', $errors);
         wp_fts_ppew_check(str_contains((string) $summary['package_boundary'], 'not committed or bundled'), 'summary should state package boundary', $errors);
         wp_fts_ppew_check(isset($summary['configuration_example']['polish_lemma_pack']), 'summary should include polish_lemma_pack example', $errors);
@@ -263,6 +275,10 @@ function wp_fts_ppew_case_builds_local_fixture_and_stays_offline(): array
 
         $validation = (new WP_FTS_AnalyzerPackValidator())->validate((string) $summary['manifest_path'], false);
         wp_fts_ppew_check(($validation['manifest']['pack_id'] ?? null) === 'pl-polimorf-external-fixture', 'generated external pack should validate', $errors);
+        foreach ($validation['manifest']['runtime']['files'] ?? [] as $runtimeFile) {
+            wp_fts_ppew_check(($runtimeFile['compression'] ?? null) === 'gzip', 'generated external runtime shards should use indexed gzip', $errors);
+            wp_fts_ppew_check(($runtimeFile['lookup']['format'] ?? null) === WP_FTS_LemmaPackLookupIndex::FORMAT, 'generated external runtime shards should declare lookup sidecars', $errors);
+        }
 
         WP_FTS_PPEW_Network_Trap_Stream::$opens = 0;
         $lemmatizer = WP_FTS_PolishMorfologikLemmatizer::from_manifest_file((string) $summary['manifest_path']);

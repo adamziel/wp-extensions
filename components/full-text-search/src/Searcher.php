@@ -18,11 +18,11 @@ final class WP_FTS_Search_Budget_Exceeded extends RuntimeException
 }
 
 /**
- * Scores indexed documents for a query using language-aware BM25.
+ * Searches a relational set-oriented index in production.
  *
- * The searcher builds a language-aware query plan, reads matching postings and
- * active document lengths per partition, then applies optional product-facing
- * filtering and result enrichment.
+ * `for_set_oriented_storage()` is the production boundary. The public
+ * constructor remains only for the component's legacy File/InMemory fixtures;
+ * WordPress runtime code must never use that posting-list implementation.
  */
 final class WP_FTS_Searcher
 {
@@ -32,6 +32,26 @@ final class WP_FTS_Searcher
     private const DEFAULT_MAX_QUERY_TERMS = 1024;
     private const DEFAULT_MAX_PREFIX_EXPANSIONS = 256;
     private const DEFAULT_MAX_CANDIDATE_ROWS = 100000;
+    private const MAX_SET_ORIENTED_QUERY_BYTES = 4096;
+    private const MAX_SET_ORIENTED_MODE_BYTES = 8;
+    private const MAX_SET_ORIENTED_LANGUAGE_BYTES = 64;
+    private const MAX_SET_ORIENTED_CURSOR_BYTES = 2048;
+    private const MAX_SET_ORIENTED_OCCURRENCE_TEXT_BYTES = 4096;
+    private const MAX_SET_ORIENTED_OCCURRENCE_POSITION_BYTES = 64;
+    private const MAX_SET_ORIENTED_OCCURRENCE_RANK_BYTES = 32;
+    private const MAX_SET_ORIENTED_SWITCH_BYTES = 16;
+    private const MAX_SET_ORIENTED_NUMERIC_BYTES = 64;
+    private const MAX_SET_ORIENTED_FILTER_VALUES = 32;
+    private const MAX_SET_ORIENTED_FILTER_VALUE_BYTES = 64;
+    private const MAX_SET_ORIENTED_FILTER_BYTES = 4096;
+    private const MAX_SET_ORIENTED_SNIPPET_LENGTH = 500;
+    private const MAX_SET_ORIENTED_SNIPPET_SOURCE_BYTES = 20000;
+    private const MAX_PUBLIC_OPTION_KEYS = 64;
+    private const MAX_PUBLIC_OPTION_NODES = 512;
+    private const MAX_PUBLIC_OPTION_BYTES = 65536;
+    private const MAX_SNIPPET_ANALYSIS_SOURCE_BYTES = 2048;
+    private const MAX_SNIPPET_ANALYSIS_OCCURRENCES = 3072;
+    private const MAX_SNIPPET_ANALYSIS_LANGUAGES = 2;
     private const BUDGET_GUARD_INTERVAL = 256;
     private const EXPLAIN_MAX_TERMS = 12;
     private const EXPLAIN_MAX_RESULT_ROWS = 20;
@@ -45,7 +65,7 @@ final class WP_FTS_Searcher
     private const DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS = 30.0;
     private const MIN_RECENCY_BOOST_HALF_LIFE_DAYS = 1.0;
     private const MAX_RECENCY_BOOST_HALF_LIFE_DAYS = 3650.0;
-    private const SNIPPET_TOKEN_PATTERN = '/[\p{L}\p{M}\p{N}_-]+/u';
+    private const SNIPPET_TOKEN_PATTERN = '/[\p{L}\p{M}\p{N}_]+/u';
     /** @var callable|null */
     private $activeRequestBudgetGuard = null;
     /** @var array<string,mixed> */
@@ -59,14 +79,28 @@ final class WP_FTS_Searcher
     private ?array $rankedResultCache = null;
 
     /**
-     * @param WP_FTS_Storage $storage Storage backend containing postings and
-     *        per-language metadata.
+     * Construct the only searcher shape supported by production WordPress.
+     *
+     * The parameter type makes a future storage-factory change fail closed
+     * instead of silently reactivating PHP posting-list ranking.
+     */
+    public static function for_set_oriented_storage(
+        WP_FTS_Set_Oriented_Search_Storage $storage,
+        object $analyzer,
+    ): self {
+        return new self($storage, $analyzer);
+    }
+
+    /**
+     * @param WP_FTS_Storage|WP_FTS_Set_Oriented_Search_Storage $storage
+     *        Relational production storage, or a legacy File/InMemory backend
+     *        used only by component fixtures.
      * @param object $analyzer Analyzer object exposing query analysis methods.
      * @param float $k1 BM25 term-frequency saturation parameter.
      * @param float $b BM25 document-length normalization parameter.
      */
     public function __construct(
-        private WP_FTS_Storage $storage,
+        private WP_FTS_Storage|WP_FTS_Set_Oriented_Search_Storage $storage,
         private object $analyzer,
         private float $k1 = 1.2,
         private float $b = 0.75,
@@ -77,9 +111,11 @@ final class WP_FTS_Searcher
      * Search the index for documents matching a query.
      *
      * `mode` may be `OR` or `AND`; `AND` requires every logical query term to
-     * have a posting for a document. `limit` is clamped to at least 1 and
-     * `offset` enables pagination. Language can be supplied with `query_lang`,
-     * `lang`, or `language` for the legacy single-partition path. `langs` or
+     * have a posting for a document. Legacy storage clamps `limit` to at least
+     * 1 and uses `offset` for pagination. Set-oriented storage instead clamps
+     * `limit` to 1..50, rejects positive offsets, and uses opaque cursors.
+     * Language can be supplied with `query_lang`, `lang`, or `language` for the
+     * legacy single-partition path. `langs` or
      * `languages` accepts a list of exact language partitions. Fallback search is
      * opt-in via `language_fallback`, `fallback_to_default_lang`,
      * `fallback_lang`, or `fallback_languages`, and can be disabled with
@@ -121,9 +157,15 @@ final class WP_FTS_Searcher
      * `max_query_terms`, `max_prefix_expansions`, and `max_candidate_rows`
      * impose request-wide work limits. `request_budget_guard` may stop work
      * between bounded storage/scoring steps by throwing or returning false.
+     * Set-oriented storage always returns an unknown-total cursor payload with
+     * `total => null`, `total_relation => 'unknown'`, `has_more`,
+     * `next_cursor`, `previous_cursor`, `query_lang`, and `results`. It owns
+     * prefix resolution, visibility, ranking, and hydration. That path always
+     * rejects more than 12 logical groups or 12 alternatives in total,
+     * regardless of the larger legacy `max_query_terms` default.
      *
      * @param array<string,mixed> $opts
-     * @return array<int,array<string,mixed>>|array{total:int,total_is_exact:bool,retrieval_mode:string,results_may_be_incomplete:bool,candidate_cap:?int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
+     * @return array<int,array<string,mixed>>|array{total:int,total_is_exact:bool,retrieval_mode:string,results_may_be_incomplete:bool,candidate_cap:?int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}|array{total:null,total_relation:string,query_lang:string,has_more:bool,next_cursor:?string,previous_cursor:?string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
      *         Results sorted by exact/fallback rank, descending score, and
      *         ascending doc id for ties, or a status payload when
      *         `include_total` or candidate-capped retrieval is active.
@@ -133,6 +175,7 @@ final class WP_FTS_Searcher
      */
     public function search(string $query, array $opts = []): array
     {
+        $this->assert_public_option_map_bounds($opts);
         $previousGuard = $this->activeRequestBudgetGuard;
         $previousOptions = $this->activeSearchOptions;
         $this->activeRequestBudgetGuard = is_callable($opts['request_budget_guard'] ?? null)
@@ -153,10 +196,14 @@ final class WP_FTS_Searcher
      * Execute one search while the caller's request budget is active.
      *
      * @param array<string,mixed> $opts
-     * @return array<int,array<string,mixed>>|array{total:int,total_is_exact:bool,retrieval_mode:string,results_may_be_incomplete:bool,candidate_cap:?int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
+     * @return array<int,array<string,mixed>>|array{total:int,total_is_exact:bool,retrieval_mode:string,results_may_be_incomplete:bool,candidate_cap:?int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}|array{total:null,total_relation:string,query_lang:string,has_more:bool,next_cursor:?string,previous_cursor:?string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
      */
     private function search_with_active_budget(string $query, array $opts): array
     {
+        if ($this->storage instanceof WP_FTS_Set_Oriented_Search_Storage) {
+            return $this->search_set_oriented_page($query, $opts);
+        }
+
         $candidateFilter = $this->candidate_doc_ids_filter($opts);
         $extensionResults = $this->extension_results($query, $opts, $candidateFilter !== null);
         if ($extensionResults !== null) {
@@ -164,7 +211,7 @@ final class WP_FTS_Searcher
             return $extensionResults;
         }
 
-        $mode = strtoupper((string) ($opts['mode'] ?? 'OR'));
+        $mode = $this->search_mode($opts);
         if (!in_array($mode, ['OR', 'AND'], true)) {
             throw new InvalidArgumentException('Search mode must be OR or AND.');
         }
@@ -177,23 +224,28 @@ final class WP_FTS_Searcher
         $queryPlan['match_mode'] = $mode;
         $groups = $queryPlan['groups'];
         $responseLang = $this->response_query_language($opts, $groups);
+        $fastMode = $this->resolve_fast_mode($opts, $limit + $offset, $candidateFilter !== null);
+        $explainPayloadRequested = $this->legacy_explain_payload_requested(
+            $opts,
+            $fastMode['candidate_cap']
+        );
         if ($groups === []) {
-            $explain = $this->explain_requested($opts)
-                ? $this->build_explain_payload($queryPlan, [
-                    'mode' => 'exact',
-                    'source' => 'empty_query',
-                    'estimated_candidates' => null,
-                    'threshold' => null,
-                    'candidate_cap' => null,
-                    'reason' => 'Empty query had no analyzed terms, so exact scoring was retained.',
-                ], $this->empty_score_stats(), $this->empty_recency_boost_stats($recencyBoost), [], 0, true)
+            $explain = $explainPayloadRequested
+                ? $this->build_explain_payload(
+                    $queryPlan,
+                    $fastMode,
+                    $this->empty_score_stats(),
+                    $this->empty_recency_boost_stats($recencyBoost),
+                    [],
+                    0,
+                    $fastMode['candidate_cap'] === null
+                )
                 : null;
 
-            return $this->format_response([], 0, $opts, $responseLang, $explain);
+            return $this->format_response([], 0, $opts, $responseLang, $explain, $fastMode['candidate_cap']);
         }
 
         $metadataFilter = $this->has_metadata_filters($opts) ? $this->metadata_filter_values($opts) : null;
-        $fastMode = $this->resolve_fast_mode($opts, $limit + $offset, $candidateFilter !== null);
         $this->guard_request_budget();
         $useBoundedTopK = !$recencyBoost['enabled']
             && $fastMode['candidate_cap'] === null
@@ -240,7 +292,7 @@ final class WP_FTS_Searcher
         $total = count($results);
         $page = $useBoundedTopK ? $results : array_slice($results, $offset, $limit);
         $resultExplain = [];
-        if ($this->explain_requested($opts) && $this->explain_result_matches_requested($opts)) {
+        if ($explainPayloadRequested && $this->explain_result_matches_requested($opts)) {
             $resultExplain = $this->explain_result_matches(
                 $this->filter_explain_result_page($page, $opts),
                 $groups
@@ -256,11 +308,1157 @@ final class WP_FTS_Searcher
 
         $this->strip_internal_rank($page);
 
-        $explain = $this->explain_requested($opts)
+        $explain = $explainPayloadRequested
             ? $this->build_explain_payload($queryPlan, $fastMode, $scoreStats, $recencyStats, $resultExplain, $total, $fastMode['candidate_cap'] === null)
             : null;
 
         return $this->format_response($page, $total, $opts, $responseLang, $explain, $fastMode['candidate_cap']);
+    }
+
+    /**
+     * Delegate one analyzed query plan to a set-oriented storage backend.
+     *
+     * This path deliberately does not reuse the legacy query-plan builder: that
+     * builder can analyze once per requested/fallback language and performs one
+     * storage prefix lookup per candidate. Set-oriented storage receives the
+     * analyzer's original logical groups and owns the single final-prefix lookup,
+     * visibility, ranking, and one-row lookahead in its database query.
+     *
+     * @param array<string,mixed> $opts
+     * @return array<string,mixed>
+     */
+    private function search_set_oriented_page(string $query, array $opts): array
+    {
+        $this->assert_set_oriented_option_keys($opts);
+        $this->assert_set_oriented_query_input($query, $opts);
+        $searchReadyIncarnation = $this->set_oriented_search_ready_incarnation($opts);
+        $searchReadyProfileHash = $this->set_oriented_search_ready_profile_hash($opts);
+        $mode = $this->search_mode($opts);
+        if (!in_array($mode, ['OR', 'AND'], true)) {
+            throw new InvalidArgumentException('Search mode must be OR or AND.');
+        }
+        if (max(0, (int) ($opts['offset'] ?? 0)) > 0) {
+            throw new InvalidArgumentException('Set-oriented search uses opaque cursors instead of offsets.');
+        }
+        if ($this->truthy_option($opts['phrase'] ?? false)) {
+            throw new InvalidArgumentException('Phrase search is not supported by the set-oriented storage contract.');
+        }
+
+        $pageSize = max(1, min(
+            WP_FTS_Set_Oriented_Search_Storage::MAX_PAGE_SIZE,
+            (int) ($opts['limit'] ?? 10)
+        ));
+        $explicitQueryLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['query_lang', 'lang', 'language']);
+        try {
+            $queryOccurrences = $this->analyze_query_once($query, $opts);
+        } catch (WP_FTS_Analysis_Limit_Exceeded $error) {
+            // Reaching an analyzer stop while planning visitor input is a
+            // typed query-complexity rejection, not a corrupt runtime that
+            // should latch search unavailable and schedule schema repair.
+            throw new WP_FTS_Search_Budget_Exceeded(
+                $error->reason_code === 'occurrences' ? 'analyzer occurrences' : 'query bytes'
+            );
+        }
+        if (count($queryOccurrences) > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_ALTERNATIVES) {
+            throw new WP_FTS_Search_Budget_Exceeded('analyzer occurrences');
+        }
+        $queryLang = $explicitQueryLang ?? $this->resolve_query_language($opts, $queryOccurrences);
+        $groups = $this->dedupe_query_groups($this->groups_from_occurrences(
+            $queryOccurrences,
+            $queryLang,
+            0,
+            $explicitQueryLang
+        ));
+        $this->assert_set_oriented_query_groups($groups);
+        if ($this->query_group_term_count($groups) > min(WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_ALTERNATIVES, $this->max_query_terms($opts))) {
+            throw new WP_FTS_Search_Budget_Exceeded('analyzed terms');
+        }
+
+        $responseLang = $this->response_query_language($opts, $groups);
+        if ($groups === []) {
+            [$cursor] = $this->set_oriented_cursor($opts);
+            if ($cursor !== null) {
+                throw new InvalidArgumentException('Search cursor cannot be used with an empty query plan.');
+            }
+            return $this->normalize_set_oriented_page([], $pageSize, $responseLang, $query, $groups, $opts, []);
+        }
+
+        $prefixSurface = $this->set_oriented_prefix_surface(
+            $queryOccurrences,
+            $groups[array_key_last($groups)],
+            $queryLang,
+            $explicitQueryLang
+        );
+        $prefixMatching = $this->prefix_matching_enabled($opts);
+        $storageOpts = $opts;
+        $storagePrefixSurface = $prefixSurface;
+        if (
+            $prefixMatching
+            && (
+                $prefixSurface === null
+                || !WP_FTS_TermNamespace::term_key_fits($prefixSurface['term'], $prefixSurface['lang'])
+            )
+        ) {
+            // A filtered final token has no exact candidate, and the writer
+            // truncates long surfaces at the dictionary boundary. Falling back
+            // to an earlier word or a shorter stored key would admit false
+            // positives, so retain exact groups and disable only the prefix.
+            $storageOpts['prefix_matching'] = false;
+            $storagePrefixSurface = null;
+        }
+        $storageOptions = $this->set_oriented_storage_options(
+            $storageOpts,
+            $mode,
+            $pageSize,
+            $responseLang,
+            count($groups) - 1,
+            $storagePrefixSurface,
+            $searchReadyIncarnation,
+            $searchReadyProfileHash
+        );
+        $this->guard_request_budget();
+        $page = $this->storage->search_page($groups, $storageOptions);
+        $this->guard_request_budget();
+
+        $authoritativePrefixes = $storagePrefixSurface === null ? [] : [$storagePrefixSurface];
+
+        return $this->normalize_set_oriented_page(
+            $page,
+            $pageSize,
+            $responseLang,
+            $query,
+            $groups,
+            $opts,
+            $authoritativePrefixes
+        );
+    }
+
+    /** Reject every option that is not part of the fixed relational contract. */
+    private function assert_set_oriented_option_keys(array $opts): void
+    {
+        $allowed = array_fill_keys([
+            'mode',
+            'offset',
+            'limit',
+            'phrase',
+            'query_lang',
+            'lang',
+            'language',
+            'default_lang',
+            'locale',
+            'result_lang',
+            'document_lang',
+            'prefix_matching',
+            'prefix',
+            'prefix_min_length',
+            'include_metadata',
+            'include_snippets',
+            'snippets',
+            'highlight',
+            'snippet_length',
+            'explain',
+            'debug',
+            'cursor',
+            'after_cursor',
+            'before_cursor',
+            'direction',
+            'post_type',
+            'post_types',
+            'post_status',
+            'post_statuses',
+            'date_after',
+            'after',
+            'post_date_after',
+            'date_before',
+            'before',
+            'post_date_before',
+            'recency_boost',
+            'freshness_boost',
+            'recency_boost_strength',
+            'freshness_boost_strength',
+            'recency_boost_half_life_days',
+            'freshness_boost_half_life_days',
+            'recency_boost_window_days',
+            'now_gmt',
+            'recency_now',
+            'max_query_terms',
+            'request_budget_guard',
+            '_include_canonical_post_rows',
+            '_search_ready_incarnation',
+            '_search_ready_profile_hash',
+        ], true);
+
+        foreach ($opts as $key => $_value) {
+            if (!is_string($key)) {
+                throw new InvalidArgumentException('Set-oriented search option keys must be strings.');
+            }
+            if (!isset($allowed[$key])) {
+                throw new InvalidArgumentException("Set-oriented search does not support {$key}.");
+            }
+        }
+    }
+
+    /** Resolve a public mode without normalizing an arbitrarily large scalar. */
+    private function search_mode(array $opts): string
+    {
+        $rawMode = $opts['mode'] ?? 'OR';
+        if (!is_string($rawMode) || strlen($rawMode) > self::MAX_SET_ORIENTED_MODE_BYTES) {
+            throw new InvalidArgumentException('Search mode must be a string of at most 8 bytes.');
+        }
+
+        return strtoupper($rawMode);
+    }
+
+    /**
+     * Reject obviously over-wide input before invoking an analyzer or storage.
+     *
+     * The analyzer remains authoritative for punctuation and Unicode token
+     * boundaries. This cheap ASCII-whitespace scan catches ordinary oversized
+     * visitor queries after the thirteenth lexical unit instead of materializing
+     * the legacy 1,024-term plan first. Analyzer output is checked again below.
+     */
+    private function assert_set_oriented_query_input(string $query, array $opts): void
+    {
+        if (strlen($query) > self::MAX_SET_ORIENTED_QUERY_BYTES) {
+            throw new WP_FTS_Search_Budget_Exceeded('query bytes');
+        }
+
+        foreach (['langs', 'languages', 'fallback_lang', 'fallback_language', 'fallback_languages', 'language_fallback', 'fallback_to_default_lang'] as $key) {
+            if (!array_key_exists($key, $opts)) {
+                continue;
+            }
+            $value = $opts[$key];
+            if ($value !== null && $value !== '' && $value !== [] && $value !== false) {
+                throw new InvalidArgumentException(
+                    'Set-oriented search accepts one per-occurrence language plan and does not support language fanout options.'
+                );
+            }
+        }
+
+        foreach (['query_lang', 'lang', 'language', 'default_lang', 'locale', 'result_lang', 'document_lang'] as $key) {
+            if (!array_key_exists($key, $opts)) {
+                continue;
+            }
+            if (!is_string($opts[$key])) {
+                throw new InvalidArgumentException('Set-oriented language options must be strings.');
+            }
+            if (strlen($opts[$key]) > self::MAX_SET_ORIENTED_LANGUAGE_BYTES) {
+                throw new InvalidArgumentException('Set-oriented language options may contain at most 64 bytes.');
+            }
+        }
+        foreach ([
+            'query language' => ['query_lang', 'lang', 'language'],
+            'default language' => ['default_lang', 'locale'],
+            'result language' => ['result_lang', 'document_lang'],
+        ] as $label => $keys) {
+            $resolved = null;
+            foreach ($keys as $key) {
+                if (!array_key_exists($key, $opts)) {
+                    continue;
+                }
+                $value = trim($opts[$key]);
+                $value = $value === '' ? '' : WP_FTS_TermNamespace::canonicalize_lang($value);
+                if ($resolved !== null && $resolved !== $value) {
+                    throw new InvalidArgumentException("Set-oriented {$label} aliases must agree.");
+                }
+                $resolved = $value;
+            }
+        }
+
+        foreach (['phrase', 'prefix_matching', 'prefix', 'include_metadata', 'include_snippets', 'snippets', '_include_canonical_post_rows', 'highlight', 'explain', 'debug'] as $key) {
+            $this->assert_set_oriented_switch_option($opts, $key);
+        }
+        foreach ([
+            'prefix matching' => ['prefix_matching', 'prefix'],
+            'snippet inclusion' => ['include_snippets', 'snippets'],
+        ] as $label => [$primary, $alias]) {
+            if (
+                array_key_exists($primary, $opts)
+                && array_key_exists($alias, $opts)
+                && $this->truthy_option($opts[$primary]) !== $this->truthy_option($opts[$alias])
+            ) {
+                throw new InvalidArgumentException("Set-oriented {$label} aliases must agree.");
+            }
+        }
+
+        foreach ([
+            'offset' => [0, 0],
+            'limit' => [1, WP_FTS_Set_Oriented_Search_Storage::MAX_PAGE_SIZE],
+            'max_query_terms' => [1, WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_ALTERNATIVES],
+            'prefix_min_length' => [2, 255],
+            'snippet_length' => [1, self::MAX_SET_ORIENTED_SNIPPET_LENGTH],
+        ] as $key => [$minimum, $maximum]) {
+            $this->assert_set_oriented_integer_option($opts, $key, $minimum, $maximum);
+        }
+        foreach (['recency_boost', 'freshness_boost'] as $key) {
+            $this->assert_set_oriented_recency_toggle($opts, $key);
+        }
+        foreach ([
+            'recency_boost_strength' => [0.0, self::MAX_RECENCY_BOOST_STRENGTH],
+            'freshness_boost_strength' => [0.0, self::MAX_RECENCY_BOOST_STRENGTH],
+            'recency_boost_half_life_days' => [self::MIN_RECENCY_BOOST_HALF_LIFE_DAYS, self::MAX_RECENCY_BOOST_HALF_LIFE_DAYS],
+            'freshness_boost_half_life_days' => [self::MIN_RECENCY_BOOST_HALF_LIFE_DAYS, self::MAX_RECENCY_BOOST_HALF_LIFE_DAYS],
+            'recency_boost_window_days' => [self::MIN_RECENCY_BOOST_HALF_LIFE_DAYS, self::MAX_RECENCY_BOOST_HALF_LIFE_DAYS],
+        ] as $key => [$minimum, $maximum]) {
+            $this->assert_set_oriented_float_option($opts, $key, $minimum, $maximum);
+        }
+        foreach ([
+            'recency boost' => ['recency_boost', 'freshness_boost', true],
+            'recency boost strength' => ['recency_boost_strength', 'freshness_boost_strength', false],
+            'recency half life' => ['recency_boost_half_life_days', 'freshness_boost_half_life_days', false],
+        ] as $label => [$primary, $alias, $toggle]) {
+            if (!array_key_exists($primary, $opts) || !array_key_exists($alias, $opts)) {
+                continue;
+            }
+            $primaryValue = $toggle
+                ? $this->set_oriented_recency_toggle_value($opts[$primary])
+                : (float) $opts[$primary];
+            $aliasValue = $toggle
+                ? $this->set_oriented_recency_toggle_value($opts[$alias])
+                : (float) $opts[$alias];
+            if ($primaryValue !== $aliasValue) {
+                throw new InvalidArgumentException("Set-oriented {$label} aliases must agree.");
+            }
+        }
+        foreach (['date_after', 'after', 'post_date_after', 'date_before', 'before', 'post_date_before', 'now_gmt', 'recency_now'] as $key) {
+            if (!array_key_exists($key, $opts)) {
+                continue;
+            }
+            if (
+                !is_string($opts[$key])
+                || $opts[$key] === ''
+                || trim($opts[$key]) !== $opts[$key]
+                || strlen($opts[$key]) > self::MAX_SET_ORIENTED_FILTER_VALUE_BYTES
+                || $this->parse_gmt_timestamp($opts[$key]) === null
+            ) {
+                throw new InvalidArgumentException("Set-oriented {$key} must be a valid UTC date or datetime of at most 64 bytes.");
+            }
+        }
+        foreach ([
+            'lower date boundary' => [['date_after', 'after', 'post_date_after'], false],
+            'upper date boundary' => [['date_before', 'before', 'post_date_before'], true],
+        ] as $label => [$keys, $endOfDay]) {
+            $resolved = null;
+            $resolvedSet = false;
+            foreach ($keys as $key) {
+                if (!array_key_exists($key, $opts)) {
+                    continue;
+                }
+                $value = $this->bounded_set_oriented_date_filter($opts[$key], $endOfDay);
+                if ($resolvedSet && $resolved !== $value) {
+                    throw new InvalidArgumentException("Set-oriented {$label} aliases must agree.");
+                }
+                $resolved = $value;
+                $resolvedSet = true;
+            }
+        }
+        if (
+            array_key_exists('now_gmt', $opts)
+            && array_key_exists('recency_now', $opts)
+            && $this->parse_gmt_timestamp($opts['now_gmt']) !== $this->parse_gmt_timestamp($opts['recency_now'])
+        ) {
+            throw new InvalidArgumentException('Set-oriented recency clock aliases must agree.');
+        }
+        if (array_key_exists('request_budget_guard', $opts) && !is_callable($opts['request_budget_guard'])) {
+            throw new InvalidArgumentException('Set-oriented request_budget_guard must be callable.');
+        }
+        // Cursor and filter checks belong before analyzer work. Their helpers
+        // are repeated when the storage options are built, but only over the
+        // already-proven 2 KiB/32-value envelopes.
+        $this->set_oriented_cursor($opts);
+        $this->bounded_set_oriented_filter_values($this->set_oriented_filter_value($opts, 'post_type', 'post_types'));
+        $this->bounded_set_oriented_filter_values($this->set_oriented_filter_value($opts, 'post_status', 'post_statuses'));
+
+        $inUnit = false;
+        $units = 0;
+        $length = strlen($query);
+        for ($index = 0; $index < $length; $index++) {
+            $byte = ord($query[$index]);
+            $isAsciiWhitespace = $byte === 32 || ($byte >= 9 && $byte <= 13);
+            if ($isAsciiWhitespace) {
+                $inUnit = false;
+                continue;
+            }
+            if ($inUnit) {
+                continue;
+            }
+
+            $inUnit = true;
+            $units++;
+            if ($units > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_GROUPS) {
+                throw new WP_FTS_Search_Budget_Exceeded('logical query groups');
+            }
+        }
+    }
+
+    /** Accept only explicit boolean spellings; arbitrary strings are not switches. */
+    private function assert_set_oriented_switch_option(array $opts, string $key): void
+    {
+        if (!array_key_exists($key, $opts)) {
+            return;
+        }
+
+        $value = $opts[$key];
+        if (is_bool($value) || (is_int($value) && ($value === 0 || $value === 1))) {
+            return;
+        }
+        if (
+            is_string($value)
+            && strlen($value) <= self::MAX_SET_ORIENTED_SWITCH_BYTES
+            && in_array(strtolower($value), ['0', '1', 'true', 'false', 'yes', 'no', 'on', 'off'], true)
+        ) {
+            return;
+        }
+
+        throw new InvalidArgumentException("Set-oriented {$key} must be a boolean switch.");
+    }
+
+    /** Reject fractional, padded, non-finite, and implicitly cast integer inputs. */
+    private function assert_set_oriented_integer_option(
+        array $opts,
+        string $key,
+        int $minimum,
+        int $maximum
+    ): void {
+        if (!array_key_exists($key, $opts)) {
+            return;
+        }
+
+        $value = $opts[$key];
+        if (
+            (!is_int($value) && (!is_string($value) || preg_match('/^(0|[1-9][0-9]*)$/D', $value) !== 1))
+            || (is_string($value) && strlen($value) > self::MAX_SET_ORIENTED_NUMERIC_BYTES)
+            || (int) $value < $minimum
+            || (int) $value > $maximum
+        ) {
+            throw new InvalidArgumentException("Set-oriented {$key} must be an integer from {$minimum} through {$maximum}.");
+        }
+    }
+
+    /** Recency toggles may also carry a finite strength in the documented range. */
+    private function assert_set_oriented_recency_toggle(array $opts, string $key): void
+    {
+        if (!array_key_exists($key, $opts)) {
+            return;
+        }
+
+        $value = $opts[$key];
+        if (is_bool($value)) {
+            return;
+        }
+        if (is_string($value) && in_array(strtolower($value), ['true', 'false', 'yes', 'no', 'on', 'off'], true)) {
+            return;
+        }
+
+        $this->assert_set_oriented_float_option($opts, $key, 0.0, self::MAX_RECENCY_BOOST_STRENGTH);
+    }
+
+    /** Convert one already-validated recency toggle to its effective strength. */
+    private function set_oriented_recency_toggle_value(mixed $value): float
+    {
+        if (is_bool($value)) {
+            return $value ? self::DEFAULT_RECENCY_BOOST_STRENGTH : 0.0;
+        }
+        if (is_string($value) && !preg_match('/^(0|[1-9][0-9]*)(?:\.[0-9]+)?$/D', $value)) {
+            return $this->truthy_option($value) ? self::DEFAULT_RECENCY_BOOST_STRENGTH : 0.0;
+        }
+
+        return (float) $value;
+    }
+
+    /** Accept only a finite unsigned decimal inside the option's semantic range. */
+    private function assert_set_oriented_float_option(
+        array $opts,
+        string $key,
+        float $minimum,
+        float $maximum
+    ): void {
+        if (!array_key_exists($key, $opts)) {
+            return;
+        }
+
+        $value = $opts[$key];
+        $validType = is_int($value) || is_float($value);
+        if (is_string($value)) {
+            $validType = strlen($value) <= self::MAX_SET_ORIENTED_NUMERIC_BYTES
+                && preg_match('/^(0|[1-9][0-9]*)(?:\.[0-9]+)?$/D', $value) === 1;
+        }
+        $number = $validType ? (float) $value : NAN;
+        if (!$validType || !is_finite($number) || $number < $minimum || $number > $maximum) {
+            throw new InvalidArgumentException("Set-oriented {$key} must be a finite number from {$minimum} through {$maximum}.");
+        }
+    }
+
+    /** Bound arbitrary public option maps before retaining or copying them. */
+    private function assert_public_option_map_bounds(array $opts): void
+    {
+        if (count($opts) > self::MAX_PUBLIC_OPTION_KEYS) {
+            throw new InvalidArgumentException('FTS search options may contain at most 64 keys.');
+        }
+        $nodes = 0;
+        $bytes = 0;
+        $stack = [[$opts, 0]];
+        while ($stack !== []) {
+            [$map, $depth] = array_pop($stack);
+            if ($depth > 8 || count($map) > self::MAX_PUBLIC_OPTION_NODES) {
+                throw new InvalidArgumentException('FTS search options exceed the bounded graph shape.');
+            }
+            foreach ($map as $key => $value) {
+                if (++$nodes > self::MAX_PUBLIC_OPTION_NODES) {
+                    throw new InvalidArgumentException('FTS search options exceed the 512-node limit.');
+                }
+                if (is_string($key)) {
+                    if (strlen($key) > 191) {
+                        throw new InvalidArgumentException('FTS search option keys may contain at most 191 bytes.');
+                    }
+                    $bytes += strlen($key);
+                }
+                if (is_string($value)) {
+                    $bytes += strlen($value);
+                } elseif (is_array($value)) {
+                    $stack[] = [$value, $depth + 1];
+                }
+                if ($bytes > self::MAX_PUBLIC_OPTION_BYTES) {
+                    throw new InvalidArgumentException('FTS search options exceed the 64 KiB source limit.');
+                }
+            }
+        }
+    }
+
+    /**
+     * Enforce the fixed relational query shape independently of public budgets.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $groups
+     */
+    private function assert_set_oriented_query_groups(array $groups): void
+    {
+        if (count($groups) > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_GROUPS) {
+            throw new WP_FTS_Search_Budget_Exceeded('logical query groups');
+        }
+
+        $alternatives = 0;
+        foreach ($groups as $group) {
+            if (count($group) > WP_FTS_Set_Oriented_Search_Storage::MAX_ALTERNATIVES_PER_GROUP) {
+                throw new WP_FTS_Search_Budget_Exceeded('query alternatives per group');
+            }
+
+            $alternatives += count($group);
+            if ($alternatives > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_ALTERNATIVES) {
+                throw new WP_FTS_Search_Budget_Exceeded('query alternatives');
+            }
+        }
+    }
+
+    /**
+     * Analyze a set-oriented query with exactly one analyzer method call.
+     *
+     * Older analyzers receive both occurrence-format hints in the same call. The
+     * legacy retry sequence remains available only to legacy storage backends.
+     *
+     * @return array<int,array<string,mixed>|string>
+     */
+    private function analyze_query_once(string $query, array $opts): array
+    {
+        $analysisOpts = $this->query_analysis_options($opts);
+        unset(
+            $analysisOpts['langs'],
+            $analysisOpts['languages'],
+            $analysisOpts['fallback_lang'],
+            $analysisOpts['fallback_language'],
+            $analysisOpts['fallback_languages'],
+            $analysisOpts['language_fallback'],
+            $analysisOpts['fallback_to_default_lang']
+        );
+        $analysisOpts['return'] = 'occurrences';
+        $analysisOpts['format'] = 'occurrences';
+        // Stop the analyzer at the same hard plan bound instead of first
+        // materializing thousands of CJK n-grams or custom-tokenizer rows that
+        // the relational backend must reject immediately afterward.
+        $analysisOpts['_max_query_occurrences'] = WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_ALTERNATIVES;
+        // The final prefix descriptor must come from this same analyzer pass.
+        // `surface` remains presentation text; `normalized_surface` is the
+        // typed lexical key and must never be inferred from a lemma later.
+        $analysisOpts['_include_query_surface'] = true;
+
+        if (method_exists($this->analyzer, 'analyze_query_occurrences')) {
+            return $this->normalize_set_oriented_query_analysis(
+                $this->analyzer->analyze_query_occurrences($query, $analysisOpts)
+            );
+        }
+        if (!is_callable([$this->analyzer, 'analyze_query'])) {
+            throw new LogicException('Analyzer must provide analyze_query().');
+        }
+
+        return $this->normalize_set_oriented_query_analysis($this->analyzer->analyze_query($query, $analysisOpts));
+    }
+
+    /**
+     * Build the bounded backend-owned search contract.
+     *
+     * @param array<string,mixed> $opts
+     * @return array<string,mixed>
+     */
+    private function set_oriented_storage_options(
+        array $opts,
+        string $mode,
+        int $pageSize,
+        string $queryLang,
+        int $prefixGroupIndex,
+        ?array $prefixSurface,
+        ?string $searchReadyIncarnation,
+        ?string $searchReadyProfileHash
+    ): array {
+        [$cursor, $direction] = $this->set_oriented_cursor($opts);
+        $recencyBoost = $this->recency_boost_config($opts);
+        $postTypes = $this->bounded_set_oriented_filter_values($this->set_oriented_filter_value($opts, 'post_type', 'post_types'));
+        $postStatuses = $this->bounded_set_oriented_filter_values($this->set_oriented_filter_value($opts, 'post_status', 'post_statuses'));
+
+        $storageOptions = [
+            'mode' => $mode,
+            'page_size' => $pageSize,
+            'limit' => $pageSize + 1,
+            'cursor' => $cursor,
+            'direction' => $direction,
+            'query_lang' => WP_FTS_TermNamespace::canonicalize_lang($queryLang),
+            'prefix_matching' => $this->prefix_matching_enabled($opts),
+            'prefix_group_index' => $prefixGroupIndex,
+            'prefix_min_length' => $this->prefix_min_length($opts),
+            'post_types' => $postTypes,
+            'post_statuses' => $postStatuses,
+            'date_after' => $this->bounded_set_oriented_date_filter(
+                $opts['date_after'] ?? $opts['after'] ?? $opts['post_date_after'] ?? null,
+                false
+            ),
+            'date_before' => $this->bounded_set_oriented_date_filter(
+                $opts['date_before'] ?? $opts['before'] ?? $opts['post_date_before'] ?? null,
+                true
+            ),
+            'include_metadata' => $this->truthy_option($opts['include_metadata'] ?? false),
+            'include_snippets' => $this->truthy_option($opts['include_snippets'] ?? $opts['snippets'] ?? false),
+            // The WordPress integration consumes this private transport row so
+            // its bounded third statement is also the canonical WP_Post hydrate.
+            'include_canonical_post_row' => $this->truthy_option($opts['_include_canonical_post_rows'] ?? false),
+            'highlight' => $this->truthy_option($opts['highlight'] ?? false),
+            'snippet_length' => max(1, min(
+                self::MAX_SET_ORIENTED_SNIPPET_LENGTH,
+                (int) ($opts['snippet_length'] ?? 180)
+            )),
+            'explain' => $this->explain_requested($opts),
+            'recency_boost_strength' => $recencyBoost['enabled'] ? $recencyBoost['strength'] : 0.0,
+            'recency_boost_half_life_days' => $recencyBoost['half_life_days'],
+        ];
+        if ($prefixSurface !== null) {
+            $storageOptions['prefix_surface'] = $prefixSurface;
+        }
+        if ($recencyBoost['enabled']) {
+            $storageOptions['now_gmt'] = $recencyBoost['now_gmt'];
+        }
+        if ($searchReadyIncarnation !== null) {
+            $storageOptions['search_ready_incarnation'] = $searchReadyIncarnation;
+        }
+        if ($searchReadyProfileHash !== null) {
+            $storageOptions['search_ready_profile_hash'] = $searchReadyProfileHash;
+        }
+
+        return $storageOptions;
+    }
+
+    /**
+     * Validate the caller's private publication capability without changing it.
+     *
+     * The storage statement compares this exact value with the durable option;
+     * trimming or case-folding here could authorize a capability the Plugin did
+     * not publish. Component-only set-oriented backends may omit the value, but
+     * the production MySQL backend requires it.
+     */
+    private function set_oriented_search_ready_incarnation(array $opts): ?string
+    {
+        if (!array_key_exists('_search_ready_incarnation', $opts)) {
+            return null;
+        }
+
+        $incarnation = $opts['_search_ready_incarnation'];
+        if (!is_string($incarnation) || preg_match('/^[a-f0-9]{32}$/D', $incarnation) !== 1) {
+            throw new InvalidArgumentException('Search-ready incarnation must be exactly 32 lowercase hexadecimal bytes.');
+        }
+
+        return $incarnation;
+    }
+
+    /**
+     * Keep analyzer provenance independent from the publication incarnation.
+     * The backend compares these exact bytes with its durable ready profile;
+     * deriving one capability from the other would admit a mixed index after a
+     * profile-only rebuild.
+     */
+    private function set_oriented_search_ready_profile_hash(array $opts): ?string
+    {
+        if (!array_key_exists('_search_ready_profile_hash', $opts)) {
+            return null;
+        }
+
+        $profileHash = $opts['_search_ready_profile_hash'];
+        if (!is_string($profileHash) || preg_match('/^[a-f0-9]{40}$/D', $profileHash) !== 1) {
+            throw new InvalidArgumentException('Search-ready profile hash must be exactly 40 lowercase hexadecimal bytes.');
+        }
+
+        return $profileHash;
+    }
+
+    /**
+     * Resolve the final group's normalized typed surface from the one analysis.
+     *
+     * @param array<int,array<string,mixed>|string> $occurrences
+     * @param array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}> $finalGroup
+     * @return array{lang:string,term:string}|null
+     */
+    private function set_oriented_prefix_surface(
+        array $occurrences,
+        array $finalGroup,
+        string $defaultLang,
+        ?string $authoritativeLang
+    ): ?array {
+        $finalKeys = [];
+        foreach ($finalGroup as $candidate) {
+            $finalKeys[(string) $candidate['key']] = true;
+        }
+
+        for ($index = count($occurrences) - 1; $index >= 0; $index--) {
+            $occurrence = $occurrences[$index];
+            if (!is_array($occurrence)) {
+                continue;
+            }
+            $hasSurface = (
+                is_scalar($occurrence['normalized_surface'] ?? null)
+                && (string) $occurrence['normalized_surface'] !== ''
+            ) || (
+                is_scalar($occurrence['surface'] ?? null)
+                && (string) $occurrence['surface'] !== ''
+            );
+            if (!$hasSurface) {
+                continue;
+            }
+
+            $candidate = $this->candidate_from_occurrence(
+                $occurrence,
+                $defaultLang,
+                0,
+                $authoritativeLang
+            );
+            if ($candidate === null || !isset($finalKeys[$candidate['key']])) {
+                return null;
+            }
+
+            $surface = $this->normalized_occurrence_surface($occurrence, $candidate);
+            if ($surface === '') {
+                return null;
+            }
+
+            return ['lang' => $candidate['lang'], 'term' => $surface];
+        }
+
+        return null;
+    }
+
+    /**
+     * Read the normalized typed surface without mistaking a lemma for one.
+     *
+     * Structured third-party analyzers may expose only the older `surface`
+     * field. It is safe as a normalized identity only when it is literally the
+     * analyzed term; otherwise absence disables prefix behavior instead of
+     * ranging or highlighting on unnormalized presentation text.
+     *
+     * @param array<string,mixed> $occurrence
+     * @param array{term:string} $candidate
+     */
+    private function normalized_occurrence_surface(array $occurrence, array $candidate): string
+    {
+        $surface = isset($occurrence['normalized_surface']) && is_scalar($occurrence['normalized_surface'])
+            ? trim((string) $occurrence['normalized_surface'])
+            : '';
+        if (
+            $surface === ''
+            && isset($occurrence['surface'])
+            && is_scalar($occurrence['surface'])
+            && trim((string) $occurrence['surface']) === $candidate['term']
+        ) {
+            return $candidate['term'];
+        }
+
+        return $surface;
+    }
+
+    /**
+     * Normalize mutually exclusive public cursor aliases.
+     *
+     * @param array<string,mixed> $opts
+     * @return array{0:?string,1:string}
+     */
+    private function set_oriented_cursor(array $opts): array
+    {
+        $after = $this->set_oriented_cursor_value($opts['after_cursor'] ?? null);
+        $before = $this->set_oriented_cursor_value($opts['before_cursor'] ?? null);
+        $cursor = $this->set_oriented_cursor_value($opts['cursor'] ?? null);
+        $cursorCount = ($after !== null ? 1 : 0) + ($before !== null ? 1 : 0) + ($cursor !== null ? 1 : 0);
+        if ($cursorCount > 1) {
+            throw new InvalidArgumentException('Pass only one of cursor, after_cursor, or before_cursor.');
+        }
+
+        $direction = null;
+        if (array_key_exists('direction', $opts)) {
+            if (!is_string($opts['direction']) || !in_array($opts['direction'], ['after', 'before'], true)) {
+                throw new InvalidArgumentException('Cursor direction must be exactly after or before.');
+            }
+            $direction = $opts['direction'];
+            if ($cursorCount === 0) {
+                throw new InvalidArgumentException('Cursor direction requires a nonempty cursor.');
+            }
+        }
+
+        if ($after !== null) {
+            if ($direction !== null && $direction !== 'after') {
+                throw new InvalidArgumentException('after_cursor cannot be combined with before direction.');
+            }
+            return [$after, 'after'];
+        }
+        if ($before !== null) {
+            if ($direction !== null && $direction !== 'before') {
+                throw new InvalidArgumentException('before_cursor cannot be combined with after direction.');
+            }
+            return [$before, 'before'];
+        }
+        if ($cursor === null) {
+            return [null, 'after'];
+        }
+
+        return [$cursor, $direction ?? 'after'];
+    }
+
+    /** Validate one opaque search-after cursor before handing it to storage. */
+    private function set_oriented_cursor_value(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (!is_string($value)) {
+            throw new InvalidArgumentException('Search cursors must be strings.');
+        }
+
+        if (strlen($value) > self::MAX_SET_ORIENTED_CURSOR_BYTES) {
+            throw new InvalidArgumentException('Search cursor is too long.');
+        }
+
+        if (trim($value) === '') {
+            throw new InvalidArgumentException('Search cursors must be nonempty strings.');
+        }
+
+        return $value;
+    }
+
+    /** Preserve an explicitly malformed alias instead of falling through to no filter. */
+    private function set_oriented_filter_value(array $opts, string $singular, string $plural): mixed
+    {
+        if (array_key_exists($singular, $opts) && array_key_exists($plural, $opts)) {
+            throw new InvalidArgumentException("Pass only one of {$singular} or {$plural}.");
+        }
+        if (array_key_exists($singular, $opts)) {
+            return $opts[$singular];
+        }
+        if (array_key_exists($plural, $opts)) {
+            return $opts[$plural];
+        }
+
+        return [];
+    }
+
+    /**
+     * @return string[]
+     */
+    private function bounded_set_oriented_filter_values(mixed $value): array
+    {
+        $restrictionWasSupplied = !is_array($value) || $value !== [];
+        $values = is_array($value) ? $value : [$value];
+        if (count($values) > self::MAX_SET_ORIENTED_FILTER_VALUES) {
+            throw new InvalidArgumentException('Set-oriented search accepts at most 32 values per metadata filter.');
+        }
+
+        $inputBytes = 0;
+        foreach ($values as $filterValue) {
+            if (!is_scalar($filterValue)) {
+                throw new InvalidArgumentException('Set-oriented metadata filter values must be scalar.');
+            }
+
+            $inputBytes += strlen((string) $filterValue);
+            if ($inputBytes > self::MAX_SET_ORIENTED_FILTER_BYTES) {
+                throw new InvalidArgumentException('Set-oriented metadata filters may contain at most 4096 bytes.');
+            }
+        }
+
+        $bounded = [];
+        foreach ($values as $value) {
+            foreach (explode(',', (string) $value) as $part) {
+                $part = trim($part);
+                if ($part === '') {
+                    if ($restrictionWasSupplied) {
+                        throw new InvalidArgumentException('Set-oriented metadata filters must contain only nonempty values.');
+                    }
+                    continue;
+                }
+                if (strlen($part) > self::MAX_SET_ORIENTED_FILTER_VALUE_BYTES) {
+                    throw new InvalidArgumentException('Set-oriented metadata filter values may contain at most 64 bytes.');
+                }
+
+                $bounded[$part] = true;
+                if (count($bounded) > self::MAX_SET_ORIENTED_FILTER_VALUES) {
+                    throw new InvalidArgumentException('Set-oriented search accepts at most 32 values per metadata filter.');
+                }
+            }
+        }
+
+        $bounded = array_keys($bounded);
+        sort($bounded, SORT_STRING);
+        if ($restrictionWasSupplied && $bounded === []) {
+            throw new InvalidArgumentException('Set-oriented metadata filters must contain a nonempty scalar value.');
+        }
+
+        return $bounded;
+    }
+
+    /**
+     * Normalize a date filter without accepting an unbounded parser input.
+     */
+    private function bounded_set_oriented_date_filter(mixed $value, bool $endOfDay): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (
+            !is_string($value)
+            || $value === ''
+            || trim($value) !== $value
+            || strlen($value) > self::MAX_SET_ORIENTED_FILTER_VALUE_BYTES
+        ) {
+            throw new InvalidArgumentException('Set-oriented date filters must be nonempty strings of at most 64 bytes.');
+        }
+        $timestamp = $this->parse_gmt_timestamp($value);
+        if ($timestamp === null) {
+            throw new InvalidArgumentException('Set-oriented date filters must contain a valid UTC date or datetime.');
+        }
+        if (preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/D', $value) === 1) {
+            return $value . ($endOfDay ? ' 23:59:59' : ' 00:00:00');
+        }
+
+        return gmdate('Y-m-d H:i:s', $timestamp);
+    }
+
+    /**
+     * Keep backend output page-sized and expose an explicitly unknown total.
+     *
+     * @param array<string,mixed> $page
+     * @param array<string,mixed> $opts
+     * @return array<string,mixed>
+     */
+    private function normalize_set_oriented_page(
+        array $page,
+        int $pageSize,
+        string $queryLang,
+        string $query,
+        array $queryGroups,
+        array $opts,
+        ?array $authoritativePrefixes = null
+    ): array
+    {
+        $rawResults = isset($page['results']) && is_array($page['results'])
+            ? $page['results']
+            : [];
+        $results = [];
+        foreach (array_slice($rawResults, 0, $pageSize + 1) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $docId = $row['doc_id'] ?? ($row['post_id'] ?? null);
+            if (!is_numeric($docId) || (int) $docId < 0) {
+                continue;
+            }
+            $row['doc_id'] = (int) $docId;
+            if (isset($row['score']) && is_numeric($row['score'])) {
+                $row['score'] = (float) $row['score'];
+            }
+            unset($row['_rank']);
+            $results[] = $row;
+        }
+
+        $hasMore = $this->truthy_option($page['has_more'] ?? false) || count($results) > $pageSize;
+        $results = array_slice($results, 0, $pageSize);
+        $results = $this->enrich_set_oriented_results(
+            $results,
+            $query,
+            $opts,
+            $queryGroups,
+            $queryLang,
+            $authoritativePrefixes
+        );
+        $resolvedLang = is_scalar($page['query_lang'] ?? null) && trim((string) $page['query_lang']) !== ''
+            ? (string) $page['query_lang']
+            : $queryLang;
+        $payload = [
+            'total' => null,
+            'total_relation' => 'unknown',
+            'query_lang' => WP_FTS_TermNamespace::canonicalize_lang($resolvedLang),
+            'has_more' => $hasMore,
+            // Reverse pages can have no more rows in the reverse direction and
+            // still need a forward cursor back toward the originating page.
+            'next_cursor' => $this->set_oriented_cursor_value($page['next_cursor'] ?? null),
+            'previous_cursor' => $this->set_oriented_cursor_value($page['previous_cursor'] ?? null),
+            'results' => $results,
+        ];
+
+        if ($this->explain_requested($opts) && isset($page['explain']) && is_array($page['explain'])) {
+            $payload['explain'] = $page['explain'];
+            if (isset($payload['explain']['results']) && is_array($payload['explain']['results'])) {
+                $payload['explain']['results'] = array_slice($payload['explain']['results'], 0, $pageSize);
+            }
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Enrich only the returned page from sidecars already carried by its rows.
+     *
+     * Set-oriented storage attaches raw `snippet_text` and optional `metadata`
+     * to at most the first `page_size` rows. They are internal transport fields:
+     * the raw snippet source never reaches the public payload, and this method
+     * performs no storage reads or query-plan rebuilds.
+     *
+     * @param array<int,array<string,mixed>> $results
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $queryGroups
+     * @return array<int,array<string,mixed>>
+     */
+    private function enrich_set_oriented_results(
+        array $results,
+        string $query,
+        array $opts,
+        array $queryGroups,
+        string $queryLang,
+        ?array $authoritativePrefixes
+    ): array
+    {
+        $includeMetadata = $this->truthy_option($opts['include_metadata'] ?? false);
+        $includeSnippets = $this->truthy_option($opts['include_snippets'] ?? $opts['snippets'] ?? false);
+        foreach ($results as &$row) {
+            $meta = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
+            foreach (['post_id', 'post_type', 'post_status', 'post_date_gmt', 'title', 'excerpt', 'search_text', 'search_html', 'language', 'lang', 'primary_lang'] as $key) {
+                if (array_key_exists($key, $row) && is_scalar($row[$key])) {
+                    $meta[$key] = $row[$key];
+                }
+            }
+
+            if ($includeMetadata) {
+                foreach (['post_id', 'post_type', 'post_status', 'post_date_gmt', 'title', 'excerpt'] as $key) {
+                    $row[$key] = isset($meta[$key]) && is_scalar($meta[$key])
+                        ? (string) $meta[$key]
+                        : ($key === 'post_id' ? 0 : '');
+                }
+                $row['post_id'] = max(0, (int) $row['post_id']);
+                if (
+                    $this->truthy_option($opts['highlight'] ?? false)
+                    && is_scalar($row['title'] ?? null)
+                    && (string) $row['title'] !== ''
+                ) {
+                    $row['highlighted_title'] = $this->highlight_analyzed_text(
+                        (string) $row['title'],
+                        $query,
+                        $opts,
+                        $queryGroups,
+                        $queryLang,
+                        $this->snippet_result_language($row, $meta, null, $opts, $queryLang),
+                        $authoritativePrefixes
+                    );
+                }
+            }
+
+            if ($includeSnippets) {
+                $resultLang = $this->snippet_result_language($row, $meta, null, $opts, $queryLang);
+                $snippetLength = max(40, min(
+                    self::MAX_SET_ORIENTED_SNIPPET_LENGTH,
+                    (int) ($opts['snippet_length'] ?? 180)
+                ));
+                $snippetSource = is_scalar($row['snippet_text'] ?? null)
+                    ? $this->bounded_set_oriented_snippet_source((string) $row['snippet_text'])
+                    : '';
+                if (trim($snippetSource) === '') {
+                    foreach (['search_text', 'excerpt', 'title', 'search_html'] as $sourceKey) {
+                        if (!is_scalar($meta[$sourceKey] ?? null)) {
+                            continue;
+                        }
+                        $candidateSource = $this->bounded_set_oriented_snippet_source((string) $meta[$sourceKey]);
+                        if (trim($candidateSource) !== '') {
+                            $snippetSource = $candidateSource;
+                            break;
+                        }
+                    }
+                }
+                $row['snippet'] = $this->snippet(
+                    $snippetSource,
+                    $query,
+                    $snippetLength,
+                    $this->truthy_option($opts['highlight'] ?? false),
+                    $opts,
+                    // Query analysis is reused; only the bounded returned-page
+                    // text is analyzed for presentation, with no extra SQL.
+                    $queryGroups,
+                    $queryLang,
+                    $resultLang,
+                    $authoritativePrefixes
+                );
+            } else {
+                unset($row['snippet']);
+            }
+
+            unset($row['metadata'], $row['snippet_text'], $row['search_text'], $row['search_html']);
+        }
+        unset($row);
+
+        return $results;
+    }
+
+    /** Highlight a complete bounded field using the search's existing groups. */
+    private function highlight_analyzed_text(
+        string $text,
+        string $query,
+        array $opts,
+        array $queryGroups,
+        string $queryLang,
+        string $resultLang,
+        ?array $authoritativePrefixes = null
+    ): string {
+        $length = max(40, WP_FTS_Utf8::length(WP_FTS_Html_Text_Stream::visible_text($text)) + 1);
+
+        return $this->snippet(
+            $text,
+            $query,
+            $length,
+            true,
+            $opts,
+            $queryGroups,
+            $queryLang,
+            $resultLang,
+            $authoritativePrefixes
+        );
+    }
+
+    /**
+     * Bound a backend sidecar before running UTF-8 repair or HTML processing.
+     */
+    private function bounded_set_oriented_snippet_source(string $source): string
+    {
+        if (strlen($source) > self::MAX_SET_ORIENTED_SNIPPET_SOURCE_BYTES) {
+            $source = substr($source, 0, self::MAX_SET_ORIENTED_SNIPPET_SOURCE_BYTES);
+        }
+
+        return WP_FTS_Utf8::truncate_bytes($source, self::MAX_SET_ORIENTED_SNIPPET_SOURCE_BYTES);
     }
 
     /**
@@ -470,9 +1668,13 @@ final class WP_FTS_Searcher
         }
 
         if ($candidateFilter !== null) {
-            $filteredDocIds = $candidateFilter(array_keys($scoringDocIds));
+            $candidateDocIds = array_keys($scoringDocIds);
+            $filteredDocIds = $candidateFilter($candidateDocIds);
             if (!is_array($filteredDocIds)) {
                 throw new UnexpectedValueException('candidate_doc_ids_filter must return an array of document ids.');
+            }
+            if (count($filteredDocIds) > count($candidateDocIds)) {
+                throw new UnexpectedValueException('candidate_doc_ids_filter may not return more document ids than it received.');
             }
 
             $allowedDocIds = [];
@@ -1149,10 +2351,14 @@ final class WP_FTS_Searcher
         }
 
         $this->guard_request_budget();
-        $filteredDocIds = ($opts['explain_doc_ids_filter'])(array_map('intval', array_column($page, 'doc_id')));
+        $pageDocIds = array_map('intval', array_column($page, 'doc_id'));
+        $filteredDocIds = ($opts['explain_doc_ids_filter'])($pageDocIds);
         $this->guard_request_budget();
         if (!is_array($filteredDocIds)) {
             throw new UnexpectedValueException('explain_doc_ids_filter must return an array of document ids.');
+        }
+        if (count($filteredDocIds) > count($pageDocIds)) {
+            throw new UnexpectedValueException('explain_doc_ids_filter may not return more document ids than it received.');
         }
 
         $allowedDocIds = array_fill_keys(array_map('intval', $filteredDocIds), true);
@@ -1680,24 +2886,19 @@ final class WP_FTS_Searcher
     private function groups_from_occurrences(array $occurrences, string $defaultLang, int $rank, ?string $authoritativeLang = null): array
     {
         $groups = [];
-        $currentPosition = null;
-        $currentGroupIndex = null;
+        $groupByPosition = [];
         foreach ($occurrences as $occurrence) {
             $candidate = $this->candidate_from_occurrence($occurrence, $defaultLang, $rank, $authoritativeLang);
             if ($candidate !== null) {
                 $position = $this->occurrence_position($occurrence);
-                if ($position !== null && $currentGroupIndex !== null && $currentPosition === $position) {
-                    $groups[$currentGroupIndex][] = $candidate;
+                if ($position !== null && array_key_exists($position, $groupByPosition)) {
+                    $groups[$groupByPosition[$position]][] = $candidate;
                     continue;
                 }
 
                 $groups[] = [$candidate];
-                if ($position === null) {
-                    $currentPosition = null;
-                    $currentGroupIndex = null;
-                } else {
-                    $currentPosition = $position;
-                    $currentGroupIndex = count($groups) - 1;
+                if ($position !== null) {
+                    $groupByPosition[$position] = count($groups) - 1;
                 }
             }
         }
@@ -1727,14 +2928,26 @@ final class WP_FTS_Searcher
      */
     private function candidate_from_occurrence(array|string $occurrence, string $defaultLang, int $rank, ?string $authoritativeLang = null): ?array
     {
-        $term = is_array($occurrence)
-            ? trim((string) ($occurrence['term'] ?? ''))
-            : trim((string) $occurrence);
+        $rawTerm = is_array($occurrence) ? ($occurrence['term'] ?? '') : $occurrence;
+        if (!is_scalar($rawTerm)) {
+            return null;
+        }
+        $rawTerm = (string) $rawTerm;
+        if (strlen($rawTerm) > WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES) {
+            throw new WP_FTS_Search_Budget_Exceeded('analyzer occurrence bytes');
+        }
+        $term = trim($rawTerm);
         if ($term === '') {
             return null;
         }
 
+        if (strlen($defaultLang) > self::MAX_SET_ORIENTED_LANGUAGE_BYTES) {
+            throw new WP_FTS_Search_Budget_Exceeded('analyzer language bytes');
+        }
         $defaultLang = WP_FTS_TermNamespace::canonicalize_lang($defaultLang);
+        if ($authoritativeLang !== null && strlen($authoritativeLang) > self::MAX_SET_ORIENTED_LANGUAGE_BYTES) {
+            throw new WP_FTS_Search_Budget_Exceeded('analyzer language bytes');
+        }
         $authoritativeLang = $authoritativeLang === null
             ? null
             : WP_FTS_TermNamespace::canonicalize_lang($authoritativeLang, $defaultLang);
@@ -1743,8 +2956,14 @@ final class WP_FTS_Searcher
             $lang = $authoritativeLang ?? $split['lang'];
             $term = $split['term'];
         } else {
-            $lang = $authoritativeLang ?? (is_array($occurrence) && isset($occurrence['lang'])
-                ? WP_FTS_TermNamespace::canonicalize_lang((string) $occurrence['lang'], $defaultLang)
+            $occurrenceLang = is_array($occurrence) && isset($occurrence['lang'])
+                ? $occurrence['lang']
+                : null;
+            if ($occurrenceLang !== null && (!is_scalar($occurrenceLang) || strlen((string) $occurrenceLang) > self::MAX_SET_ORIENTED_LANGUAGE_BYTES)) {
+                throw new WP_FTS_Search_Budget_Exceeded('analyzer language bytes');
+            }
+            $lang = $authoritativeLang ?? ($occurrenceLang !== null
+                ? WP_FTS_TermNamespace::canonicalize_lang((string) $occurrenceLang, $defaultLang)
                 : $defaultLang);
         }
 
@@ -1772,7 +2991,11 @@ final class WP_FTS_Searcher
             'source' => $source,
         ];
         if (is_array($occurrence) && isset($occurrence['surface']) && is_scalar($occurrence['surface'])) {
-            $surface = trim((string) $occurrence['surface']);
+            $rawSurface = (string) $occurrence['surface'];
+            if (strlen($rawSurface) > self::MAX_SET_ORIENTED_OCCURRENCE_TEXT_BYTES) {
+                throw new WP_FTS_Search_Budget_Exceeded('analyzer occurrence bytes');
+            }
+            $surface = trim($rawSurface);
             if ($surface !== '') {
                 $candidate['surface'] = $surface;
             }
@@ -1893,7 +3116,6 @@ final class WP_FTS_Searcher
     private function dedupe_query_groups(array $groups): array
     {
         $deduped = [];
-        $seenGroups = [];
         foreach ($groups as $group) {
             $byKey = [];
             foreach ($group as $candidate) {
@@ -1908,12 +3130,9 @@ final class WP_FTS_Searcher
             }
 
             ksort($byKey, SORT_STRING);
-            $signature = implode("\0", array_keys($byKey));
-            if (isset($seenGroups[$signature])) {
-                continue;
-            }
-
-            $seenGroups[$signature] = true;
+            // Every source occurrence remains a logical group. Repeated words
+            // may share the same alternatives, but collapsing the groups would
+            // change AND semantics and remove one occurrence's score.
             $deduped[] = array_values($byKey);
         }
 
@@ -2032,6 +3251,13 @@ final class WP_FTS_Searcher
     {
         return $this->truthy_option($opts['explain'] ?? false)
             || $this->truthy_option($opts['debug'] ?? false);
+    }
+
+    /** Explain may decorate a legacy payload, but must not create that payload. */
+    private function legacy_explain_payload_requested(array $opts, ?int $candidateCap): bool
+    {
+        return $this->explain_requested($opts)
+            && (!empty($opts['include_total']) || $candidateCap !== null);
     }
 
     private function explain_result_matches_requested(array $opts): bool
@@ -2736,12 +3962,45 @@ final class WP_FTS_Searcher
      */
     public function snippet_for_text(string $text, string $query, array $opts = []): string
     {
+        $this->assert_public_option_map_bounds($opts);
+        $this->assert_set_oriented_query_input($query, $opts);
+        $text = $this->bounded_set_oriented_snippet_source($text);
         $query = trim($query);
         if ($query === '' || trim($text) === '') {
             return '';
         }
 
-        $groups = $this->build_query_groups($query, $opts);
+        $explicitQueryLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['query_lang', 'lang', 'language']);
+        try {
+            $queryOccurrences = $this->analyze_query_once($query, $opts);
+        } catch (WP_FTS_Analysis_Limit_Exceeded $error) {
+            throw new WP_FTS_Search_Budget_Exceeded(
+                $error->reason_code === 'occurrences' ? 'analyzer occurrences' : 'query bytes'
+            );
+        }
+        $queryLang = $explicitQueryLang ?? $this->resolve_query_language($opts, $queryOccurrences);
+        $groups = $this->dedupe_query_groups($this->groups_from_occurrences(
+            $queryOccurrences,
+            $queryLang,
+            0,
+            $explicitQueryLang
+        ));
+        $this->assert_set_oriented_query_groups($groups);
+        $authoritativePrefixes = [];
+        if ($groups !== []) {
+            $prefixSurface = $this->set_oriented_prefix_surface(
+                $queryOccurrences,
+                $groups[array_key_last($groups)],
+                $queryLang,
+                $explicitQueryLang
+            );
+            if (
+                $prefixSurface !== null
+                && WP_FTS_TermNamespace::term_key_fits($prefixSurface['term'], $prefixSurface['lang'])
+            ) {
+                $authoritativePrefixes[] = $prefixSurface;
+            }
+        }
         $queryLang = $this->response_query_language($opts, $groups);
         $resultLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['result_lang', 'document_lang', 'lang', 'language'])
             ?? $queryLang;
@@ -2749,19 +4008,30 @@ final class WP_FTS_Searcher
         return $this->snippet(
             $text,
             $query,
-            max(40, (int) ($opts['snippet_length'] ?? 180)),
+            max(40, min(self::MAX_SET_ORIENTED_SNIPPET_LENGTH, (int) ($opts['snippet_length'] ?? 180))),
             !empty($opts['highlight']),
             $opts,
             $groups,
             $queryLang,
-            $resultLang
+            $resultLang,
+            $authoritativePrefixes
         );
     }
 
     /**
      * Build a compact snippet from stored plain text.
      */
-    private function snippet(string $text, string $query, int $length, bool $highlight, array $opts = [], array $queryGroups = [], string $queryLang = '', string $resultLang = ''): string
+    private function snippet(
+        string $text,
+        string $query,
+        int $length,
+        bool $highlight,
+        array $opts = [],
+        array $queryGroups = [],
+        string $queryLang = '',
+        string $resultLang = '',
+        ?array $authoritativePrefixes = null
+    ): string
     {
         $text = WP_FTS_Html_Text_Stream::visible_text($text);
         if ($text === '') {
@@ -2770,7 +4040,7 @@ final class WP_FTS_Searcher
 
         $terms = $this->snippet_terms($query);
         $queryKeys = $highlight ? $this->snippet_query_keys($queryGroups) : [];
-        $analysisCache = [];
+        $analyzedSurfaces = [];
         $start = 0;
         $literalPositionFound = false;
         foreach ($terms as $term) {
@@ -2783,15 +4053,17 @@ final class WP_FTS_Searcher
             }
         }
         if (!$literalPositionFound && $highlight && $queryKeys !== []) {
-            $position = $this->first_analyzed_snippet_match_position(
-                $text,
+            $analyzedSource = WP_FTS_Utf8::truncate_bytes($text, self::MAX_SNIPPET_ANALYSIS_SOURCE_BYTES);
+            $analyzedSurfaces = $this->snippet_matching_surfaces(
+                $analyzedSource,
                 $queryKeys,
                 $opts,
                 $queryGroups,
                 $queryLang,
                 $resultLang,
-                $analysisCache
+                $authoritativePrefixes
             );
+            $position = $this->first_snippet_surface_position($analyzedSource, $analyzedSurfaces);
             if ($position !== null) {
                 $characterPosition = WP_FTS_Utf8::length(substr($text, 0, $position));
                 $start = max(0, $characterPosition - intdiv($length, 3));
@@ -2807,19 +4079,26 @@ final class WP_FTS_Searcher
             $snippet = rtrim($snippet) . '...';
         }
 
-        if (!$highlight || $terms === []) {
+        if (!$highlight) {
             return $this->escape_snippet_text($snippet);
+        }
+
+        if ($queryKeys !== [] && ($start > 0 || $analyzedSurfaces === [])) {
+            $analyzedSurfaces = $this->snippet_matching_surfaces(
+                $snippet,
+                $queryKeys,
+                $opts,
+                $queryGroups,
+                $queryLang,
+                $resultLang,
+                $authoritativePrefixes
+            );
         }
 
         return $this->highlight_snippet_terms(
             $snippet,
             array_fill_keys($terms, true),
-            $queryKeys,
-            $opts,
-            $queryGroups,
-            $queryLang,
-            $resultLang,
-            $analysisCache
+            $analyzedSurfaces
         );
     }
 
@@ -2921,38 +4200,12 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * Find the first snippet token whose analyzed key matches the query plan.
-     *
-     * @param array<string,bool> $queryKeys
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
-     * @param array<string,array<string,bool>> $analysisCache
-     */
-    private function first_analyzed_snippet_match_position(string $text, array $queryKeys, array $opts, array $queryGroups, string $queryLang, string $resultLang, array &$analysisCache): ?int
-    {
-        $matched = preg_match_all(self::SNIPPET_TOKEN_PATTERN, $text, $matches, PREG_OFFSET_CAPTURE);
-        if ($matched === false || $matched === 0) {
-            return null;
-        }
-
-        foreach ($matches[0] as $match) {
-            $token = (string) $match[0];
-            if ($this->snippet_token_matches_query($token, $queryKeys, $opts, $queryGroups, $queryLang, $resultLang, $analysisCache)) {
-                return (int) $match[1];
-            }
-        }
-
-        return null;
-    }
-
-    /**
      * Escape snippet text and wrap matching surface tokens with generated marks.
      *
      * @param array<string,bool> $literalTerms
-     * @param array<string,bool> $queryKeys
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
-     * @param array<string,array<string,bool>> $analysisCache
+     * @param array<string,bool> $analyzedSurfaces
      */
-    private function highlight_snippet_terms(string $snippet, array $literalTerms, array $queryKeys, array $opts, array $queryGroups, string $queryLang, string $resultLang, array &$analysisCache): string
+    private function highlight_snippet_terms(string $snippet, array $literalTerms, array $analyzedSurfaces): string
     {
         $matched = preg_match_all(self::SNIPPET_TOKEN_PATTERN, $snippet, $matches, PREG_OFFSET_CAPTURE);
         if ($matched === false || $matched === 0) {
@@ -2966,8 +4219,7 @@ final class WP_FTS_Searcher
             $offset = (int) $match[1];
             $length = strlen($token);
             $matchesLiteral = isset($literalTerms[strtolower($token)]);
-            $matchesAnalyzer = $queryKeys !== []
-                && $this->snippet_token_matches_query($token, $queryKeys, $opts, $queryGroups, $queryLang, $resultLang, $analysisCache);
+            $matchesAnalyzer = $this->snippet_token_has_analyzed_surface($token, $analyzedSurfaces);
 
             $highlighted .= $this->escape_snippet_text(substr($snippet, $cursor, $offset - $cursor));
             $escapedToken = $this->escape_snippet_text($token);
@@ -2979,23 +4231,60 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * Compare one original snippet token against analyzed query term keys.
+     * Return the prefix surfaces that may have contributed to membership.
      *
-     * @param array<string,bool> $queryKeys
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
-     * @param array<string,array<string,bool>> $analysisCache
+     * A non-null authoritative list comes from the set-oriented query plan and
+     * must not be widened with lemma/stem alternatives for presentation. Null
+     * retains the legacy fixture behavior, whose membership path still expands
+     * final-group candidates itself.
+     *
+     * @param array<int,array{lang:string,term:string}>|null $authoritativePrefixes
+     * @return array<int,array{lang:string,term:string}>
      */
-    private function snippet_token_matches_query(string $token, array $queryKeys, array $opts, array $queryGroups, string $queryLang, string $resultLang, array &$analysisCache): bool
+    private function snippet_query_prefixes(
+        array $queryGroups,
+        array $opts,
+        ?array $authoritativePrefixes = null
+    ): array
     {
-        foreach ($this->snippet_analysis_languages($opts, $queryGroups, $queryLang, $resultLang) as $lang) {
-            foreach ($this->snippet_token_keys($token, $lang, $opts, $analysisCache) as $key => $_) {
-                if (isset($queryKeys[$key])) {
-                    return true;
+        if (!$this->prefix_matching_enabled($opts)) {
+            return [];
+        }
+
+        $prefixes = [];
+        $minimum = $this->prefix_min_length($opts);
+        if ($authoritativePrefixes !== null) {
+            foreach ($authoritativePrefixes as $prefix) {
+                if (!is_array($prefix)) {
+                    continue;
                 }
+                $term = is_scalar($prefix['term'] ?? null) ? (string) $prefix['term'] : '';
+                $lang = is_scalar($prefix['lang'] ?? null) ? (string) $prefix['lang'] : '';
+                if ($term === '' || $lang === '' || WP_FTS_Utf8::length($term) < $minimum) {
+                    continue;
+                }
+                $lang = WP_FTS_TermNamespace::canonicalize_lang($lang);
+                $prefixes[$lang . "\0" . $term] = ['lang' => $lang, 'term' => $term];
+            }
+
+            return array_values($prefixes);
+        }
+
+        if ($queryGroups === []) {
+            return [];
+        }
+        foreach ($queryGroups[count($queryGroups) - 1] ?? [] as $candidate) {
+            $term = (string) ($candidate['term'] ?? '');
+            $lang = (string) ($candidate['lang'] ?? '');
+            if ($term !== '' && $lang !== '' && WP_FTS_Utf8::length($term) >= $minimum) {
+                $prefixes[$lang . "\0" . $term] = [
+                    'lang' => WP_FTS_TermNamespace::canonicalize_lang($lang),
+                    'term' => $term,
+                ];
             }
         }
 
-        return false;
+        return array_values($prefixes);
     }
 
     /**
@@ -3025,33 +4314,145 @@ final class WP_FTS_Searcher
             }
         }
 
-        return array_keys($languages);
+        return array_slice(array_keys($languages), 0, self::MAX_SNIPPET_ANALYSIS_LANGUAGES);
     }
 
     /**
-     * Analyze one plain snippet token under an explicit language and return term keys.
+     * Analyze one bounded presentation window per relevant language.
      *
-     * @param array<string,array<string,bool>> $analysisCache
-     * @return array<string,bool>
+     * The old implementation invoked the analyzer once for every distinct token.
+     * A 20-row page containing adversarial 20-KiB snippets could therefore make
+     * hundreds of thousands of analyzer calls. One bounded pass per language
+     * retains morphology-aware highlighting without token-count fanout.
+     *
+     * @param array<string,bool> $queryKeys
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
+     * @return array<string,bool> Canonical analyzer surfaces that matched the query.
      */
-    private function snippet_token_keys(string $token, string $lang, array $opts, array &$analysisCache): array
+    private function snippet_matching_surfaces(
+        string $text,
+        array $queryKeys,
+        array $opts,
+        array $queryGroups,
+        string $queryLang,
+        string $resultLang,
+        ?array $authoritativePrefixes = null
+    ): array
     {
-        $cacheKey = $lang . "\0" . strtolower($token);
-        if (isset($analysisCache[$cacheKey])) {
-            return $analysisCache[$cacheKey];
+        if ($text === '' || $queryKeys === []) {
+            return [];
         }
 
-        $keys = [];
-        $occurrences = $this->analyze_query($token, $this->with_query_language($opts, $lang));
-        foreach ($this->groups_from_occurrences($occurrences, $lang, 0, $lang) as $group) {
-            foreach ($group as $candidate) {
-                $keys[$candidate['key']] = true;
+        $prefixes = $this->snippet_query_prefixes($queryGroups, $opts, $authoritativePrefixes);
+        $surfaces = [];
+        foreach ($this->snippet_analysis_languages($opts, $queryGroups, $queryLang, $resultLang) as $lang) {
+            $analysisOpts = $this->with_query_language($opts, $lang);
+            $analysisOpts['_include_query_surface'] = true;
+            $analysisOpts['_max_query_occurrences'] = self::MAX_SNIPPET_ANALYSIS_OCCURRENCES;
+            try {
+                $occurrences = $this->analyze_query($text, $analysisOpts);
+                foreach ($occurrences as $occurrence) {
+                    if (!is_array($occurrence) || !is_scalar($occurrence['surface'] ?? null)) {
+                        continue;
+                    }
+                    $candidate = $this->candidate_from_occurrence($occurrence, $lang, 0, $lang);
+                    if ($candidate === null) {
+                        continue;
+                    }
+                    $matches = isset($queryKeys[$candidate['key']]);
+                    if (!$matches) {
+                        $prefixTerm = $authoritativePrefixes === null
+                            ? $candidate['term']
+                            : $this->normalized_occurrence_surface($occurrence, $candidate);
+                        foreach ($prefixes as $prefix) {
+                            if (
+                                $prefixTerm !== ''
+                                && $candidate['lang'] === $prefix['lang']
+                                && str_starts_with($prefixTerm, $prefix['term'])
+                            ) {
+                                $matches = true;
+                                break;
+                            }
+                        }
+                    }
+                    if ($matches) {
+                        $surface = trim((string) $occurrence['surface']);
+                        if ($surface !== '') {
+                            $surfaces[$this->normalize_snippet_surface($surface)] = true;
+                        }
+                    }
+                }
+            } catch (WP_FTS_Analysis_Limit_Exceeded|WP_FTS_Search_Budget_Exceeded) {
+                // Highlighting is presentation-only. A custom tokenizer that
+                // exceeds the fixed window budget must not fail the search.
+                continue;
             }
         }
 
-        $analysisCache[$cacheKey] = $keys;
+        return $surfaces;
+    }
 
-        return $keys;
+    /** @param array<string,bool> $surfaces */
+    private function first_snippet_surface_position(string $text, array $surfaces): ?int
+    {
+        // Analyzer surfaces have passed through whole-text NFKC, while the
+        // rendered snippet must retain the source spelling. Scan raw tokens so
+        // canonically equivalent forms such as decomposed cafe + combining
+        // acute can still supply a source byte offset without trying to map
+        // offsets back from a normalized copy of the whole document.
+        $matched = preg_match_all(self::SNIPPET_TOKEN_PATTERN, $text, $tokens, PREG_OFFSET_CAPTURE);
+        if ($matched === false || $matched === 0) {
+            return null;
+        }
+        foreach ($tokens[0] as $token) {
+            if ($this->snippet_token_has_analyzed_surface((string) $token[0], $surfaces)) {
+                return (int) $token[1];
+            }
+        }
+
+        return null;
+    }
+
+    /** @param array<string,bool> $surfaces */
+    private function snippet_token_has_analyzed_surface(string $token, array $surfaces): bool
+    {
+        $normalizedToken = $this->normalize_snippet_surface($token);
+        if (isset($surfaces[$normalizedToken])) {
+            return true;
+        }
+
+        // The built-in CJK tokenizer emits overlapping n-grams while the
+        // presentation tokenizer keeps one script run intact. Probe the same
+        // fixed four-code-point window against the canonical surface set; cost
+        // stays linear in the bounded snippet instead of multiplying every raw
+        // token by every analyzed surface.
+        if (preg_match('/[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]/u', $normalizedToken) === 1) {
+            $window = [];
+            $tokenLength = WP_FTS_Utf8::length($normalizedToken);
+            for ($index = 0; $index < $tokenLength; $index++) {
+                $window[] = WP_FTS_Utf8::slice($normalizedToken, $index, 1);
+                if (count($window) > 4) {
+                    array_shift($window);
+                }
+                $windowCount = count($window);
+                for ($length = 1; $length <= $windowCount; $length++) {
+                    if (isset($surfaces[implode('', array_slice($window, $windowCount - $length))])) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /** Normalize canonical Unicode equivalents without changing source output. */
+    private function normalize_snippet_surface(string $surface): string
+    {
+        static $normalizer = null;
+        $normalizer ??= new WP_FTS_Normalizer(['fold_diacritics' => false]);
+
+        return $normalizer->normalize_unicode($surface);
     }
 
     /**
@@ -3086,10 +4487,14 @@ final class WP_FTS_Searcher
     {
         $analysisOpts = $this->query_analysis_options($opts);
         $analysisOpts['return'] = 'occurrences';
+        $maxOccurrences = isset($analysisOpts['_max_query_occurrences']) && is_int($analysisOpts['_max_query_occurrences'])
+            ? max(1, $analysisOpts['_max_query_occurrences'])
+            : null;
 
         if (method_exists($this->analyzer, 'analyze_query_occurrences')) {
             return $this->normalize_query_analysis(
-                $this->analyzer->analyze_query_occurrences($query, $analysisOpts)
+                $this->analyzer->analyze_query_occurrences($query, $analysisOpts),
+                $maxOccurrences
             );
         }
 
@@ -3099,19 +4504,28 @@ final class WP_FTS_Searcher
 
         $returnOpts = $analysisOpts;
         $returnOpts['return'] = 'occurrences';
-        $occurrences = $this->normalize_query_analysis($this->analyzer->analyze_query($query, $returnOpts));
+        $occurrences = $this->normalize_query_analysis(
+            $this->analyzer->analyze_query($query, $returnOpts),
+            $maxOccurrences
+        );
         if ($this->has_occurrence_rows($occurrences)) {
             return $occurrences;
         }
 
         $formatOpts = $analysisOpts;
         $formatOpts['format'] = 'occurrences';
-        $occurrences = $this->normalize_query_analysis($this->analyzer->analyze_query($query, $formatOpts));
+        $occurrences = $this->normalize_query_analysis(
+            $this->analyzer->analyze_query($query, $formatOpts),
+            $maxOccurrences
+        );
         if ($this->has_occurrence_rows($occurrences)) {
             return $occurrences;
         }
 
-        return $this->normalize_query_analysis($this->analyzer->analyze_query($query, $analysisOpts));
+        return $this->normalize_query_analysis(
+            $this->analyzer->analyze_query($query, $analysisOpts),
+            $maxOccurrences
+        );
     }
 
     /**
@@ -3147,9 +4561,96 @@ final class WP_FTS_Searcher
      * @param mixed $analysis Raw analyzer result.
      * @return array<int,array<string,mixed>|string>
      */
-    private function normalize_query_analysis(mixed $analysis): array
+    private function normalize_query_analysis(mixed $analysis, ?int $maxOccurrences = null): array
     {
-        return is_array($analysis) ? array_values($analysis) : [];
+        if (!is_array($analysis)) {
+            return [];
+        }
+        $maxOccurrences ??= WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES;
+        if (count($analysis) > $maxOccurrences) {
+            throw new WP_FTS_Analysis_Limit_Exceeded(
+                'occurrences',
+                "FTS analyzer output exceeds the {$maxOccurrences}-occurrence limit."
+            );
+        }
+        foreach ($analysis as $occurrence) {
+            $this->assert_analyzer_occurrence_output($occurrence);
+        }
+
+        return array_values($analysis);
+    }
+
+    /**
+     * Bound third-party analyzer output before reindexing or normalizing it.
+     *
+     * The analyzer receives a 12-occurrence stop hint, but a custom analyzer
+     * may ignore it. Check the original array first so `array_values()` cannot
+     * duplicate an arbitrarily large result only to reject it afterward.
+     *
+     * @return array<int,array<string,mixed>|string>
+     */
+    private function normalize_set_oriented_query_analysis(mixed $analysis): array
+    {
+        if (!is_array($analysis)) {
+            return [];
+        }
+        if (count($analysis) > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_ALTERNATIVES) {
+            throw new WP_FTS_Search_Budget_Exceeded('analyzer occurrences');
+        }
+
+        foreach ($analysis as $occurrence) {
+            $this->assert_analyzer_occurrence_output($occurrence);
+        }
+
+        return array_values($analysis);
+    }
+
+    /** Reject extension analyzer scalars before trim, casts, or array reindexing. */
+    private function assert_analyzer_occurrence_output(mixed $occurrence): void
+    {
+        if (is_string($occurrence)) {
+            if (strlen($occurrence) > WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES) {
+                throw new WP_FTS_Search_Budget_Exceeded('analyzer occurrence bytes');
+            }
+            return;
+        }
+        if (!is_array($occurrence)) {
+            throw new InvalidArgumentException('Analyzer occurrences must be strings or arrays.');
+        }
+
+        if (
+            array_key_exists('term', $occurrence)
+            && (!is_scalar($occurrence['term']) || strlen((string) $occurrence['term']) > WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES)
+        ) {
+            throw new WP_FTS_Search_Budget_Exceeded('analyzer occurrence bytes');
+        }
+        foreach (['surface', 'normalized_surface'] as $key) {
+            if (!array_key_exists($key, $occurrence)) {
+                continue;
+            }
+            if (!is_scalar($occurrence[$key]) || strlen((string) $occurrence[$key]) > self::MAX_SET_ORIENTED_OCCURRENCE_TEXT_BYTES) {
+                throw new WP_FTS_Search_Budget_Exceeded('analyzer occurrence bytes');
+            }
+        }
+        if (
+            array_key_exists('lang', $occurrence)
+            && (!is_scalar($occurrence['lang']) || strlen((string) $occurrence['lang']) > self::MAX_SET_ORIENTED_LANGUAGE_BYTES)
+        ) {
+            throw new WP_FTS_Search_Budget_Exceeded('analyzer language bytes');
+        }
+        if (
+            array_key_exists('position', $occurrence)
+            && (!is_scalar($occurrence['position']) || strlen((string) $occurrence['position']) > self::MAX_SET_ORIENTED_OCCURRENCE_POSITION_BYTES)
+        ) {
+            throw new WP_FTS_Search_Budget_Exceeded('analyzer occurrence bytes');
+        }
+        if (
+            array_key_exists('rank', $occurrence)
+            && is_string($occurrence['rank'])
+            && strlen($occurrence['rank']) > self::MAX_SET_ORIENTED_OCCURRENCE_RANK_BYTES
+        ) {
+            throw new WP_FTS_Search_Budget_Exceeded('analyzer occurrence bytes');
+        }
     }
 
     /**

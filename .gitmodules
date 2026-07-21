@@ -1,8 +1,8 @@
 [submodule "markdown-editor/vendor/php-toolkit"]
 	path = markdown-editor/vendor/php-toolkit
 	url = https://github.com/WordPress/php-toolkit.git
-[submodule "indexer/resources/sources/jieba"]
-	path = indexer/resources/sources/jieba
+[submodule "components/full-text-search/resources/sources/jieba"]
+	path = components/full-text-search/resources/sources/jieba
 	url = https://github.com/fxsjy/jieba
 [submodule "indexer/resources/sources/unimorph/rus"]
 	path = indexer/resources/sources/unimorph/rus

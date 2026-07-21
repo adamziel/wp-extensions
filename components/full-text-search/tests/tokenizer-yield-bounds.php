@@ -1,0 +1,168 @@
+<?php
+declare(strict_types=1);
+
+require_once __DIR__ . '/../src/bootstrap.php';
+
+final class WP_FTS_Tokenizer_Yield_Bounds_Probe
+{
+    public int $yields = 0;
+    public int $receivedArguments = 0;
+
+    /** Configures the yielded value and optional finite yield ceiling. */
+    public function __construct(
+        private mixed $value,
+        private ?int $yieldLimit = null,
+    ) {
+    }
+
+    /** Yields fixture values until the consumer or configured ceiling stops it. */
+    public function __invoke(string $run, string $language): Generator
+    {
+        $this->receivedArguments = max($this->receivedArguments, func_num_args());
+        while ($this->yieldLimit === null || $this->yields < $this->yieldLimit) {
+            $this->yields++;
+            yield $this->value;
+        }
+    }
+}
+
+$wp_fts_tokenizer_yield_checks = 0;
+
+/** Records one assertion and throws when a tokenizer-yield invariant fails. */
+function wp_fts_tokenizer_yield_check(bool $condition, string $message): void
+{
+    global $wp_fts_tokenizer_yield_checks;
+    $wp_fts_tokenizer_yield_checks++;
+    if (!$condition) {
+        throw new RuntimeException($message);
+    }
+}
+
+/** @return array{terms:array<int,array<string,mixed>>,error:?Throwable} */
+function wp_fts_tokenizer_yield_analyze(WP_FTS_Tokenizer_Yield_Bounds_Probe $probe, int $limit): array
+{
+    $analyzer = new WP_FTS_Analyzer([
+        'auto_detect_language' => false,
+        'default_lang' => 'zh',
+        'query_lang' => 'zh',
+        'enable_stemming' => false,
+        'cjk_tokenizer' => $probe,
+    ]);
+
+    try {
+        return [
+            'terms' => $analyzer->analyze_query_occurrences('中文', [
+                'query_lang' => 'zh',
+                '_max_query_occurrences' => $limit,
+            ]),
+            'error' => null,
+        ];
+    } catch (Throwable $error) {
+        return ['terms' => [], 'error' => $error];
+    }
+}
+
+$limit = WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_ALTERNATIVES;
+$exactProbe = new WP_FTS_Tokenizer_Yield_Bounds_Probe(['ignored' => true], $limit);
+$exact = wp_fts_tokenizer_yield_analyze($exactProbe, $limit);
+wp_fts_tokenizer_yield_check(
+    $exact['error'] === null,
+    'an extension tokenizer may inspect exactly the analyzer occurrence allowance'
+);
+wp_fts_tokenizer_yield_check(
+    $exactProbe->yields === $limit,
+    'the exact-boundary tokenizer should be consumed completely'
+);
+wp_fts_tokenizer_yield_check(
+    count($exact['terms']) === 3,
+    'an exact-boundary invalid tokenizer result should retain bounded CJK fallback tokens'
+);
+wp_fts_tokenizer_yield_check(
+    $exactProbe->receivedArguments === 2,
+    'an existing two-argument custom tokenizer must keep its original invocation contract'
+);
+
+$overProbe = new WP_FTS_Tokenizer_Yield_Bounds_Probe(['ignored' => true], $limit + 1);
+$over = wp_fts_tokenizer_yield_analyze($overProbe, $limit);
+wp_fts_tokenizer_yield_check(
+    $over['error'] instanceof WP_FTS_Analysis_Limit_Exceeded
+        && $over['error']->reason_code === 'occurrences',
+    'the first raw yield above the analyzer allowance should raise the typed occurrence limit'
+);
+wp_fts_tokenizer_yield_check(
+    $overProbe->yields === $limit + 1,
+    'the over-boundary tokenizer should stop on its first excess raw yield'
+);
+
+$internalPipeline = new WP_FTS_LanguagePipeline([
+    'enable_stemming' => false,
+    'cjk_tokenizer' => 'str_contains',
+]);
+$internalLimitSupport = (new ReflectionProperty(
+    $internalPipeline,
+    'cjkTokenizerAcceptsProducerLimit'
+))->getValue($internalPipeline);
+wp_fts_tokenizer_yield_check(
+    $internalLimitSupport === false && count($internalPipeline->analyze_detailed('中文', 'zh')) === 3,
+    'a two-argument internal tokenizer must keep its old call and deterministic fallback behavior'
+);
+
+$legacyThirdValue = null;
+$legacyThreeArgumentPipeline = new WP_FTS_LanguagePipeline([
+    'enable_stemming' => false,
+    'cjk_tokenizer' => static function (
+        string $run,
+        string $language,
+        string $mode = 'legacy'
+    ) use (&$legacyThirdValue): array {
+        $legacyThirdValue = $mode;
+
+        return ['中文'];
+    },
+]);
+$legacyThreeArgumentTerms = $legacyThreeArgumentPipeline->analyze_detailed('中文', 'zh');
+wp_fts_tokenizer_yield_check(
+    $legacyThirdValue === 'legacy'
+        && array_column($legacyThreeArgumentTerms, 'term') === ['中文'],
+    'a legacy optional third tokenizer parameter must retain its default value and custom output'
+);
+
+$legacyVariadicArguments = null;
+$legacyVariadicPipeline = new WP_FTS_LanguagePipeline([
+    'enable_stemming' => false,
+    'cjk_tokenizer' => static function (
+        string $run,
+        string $language,
+        mixed ...$extra
+    ) use (&$legacyVariadicArguments): array {
+        $legacyVariadicArguments = $extra;
+
+        return ['中文'];
+    },
+]);
+$legacyVariadicTerms = $legacyVariadicPipeline->analyze_detailed('中文', 'zh');
+wp_fts_tokenizer_yield_check(
+    $legacyVariadicArguments === []
+        && array_column($legacyVariadicTerms, 'term') === ['中文'],
+    'a legacy variadic tokenizer must receive no new arguments and retain its custom output'
+);
+
+foreach ([
+    'null' => null,
+    'empty string' => '',
+    'invalid array' => ['ignored' => true],
+] as $label => $value) {
+    $probe = new WP_FTS_Tokenizer_Yield_Bounds_Probe($value);
+    $attempt = wp_fts_tokenizer_yield_analyze($probe, $limit);
+    wp_fts_tokenizer_yield_check(
+        $attempt['error'] instanceof WP_FTS_Analysis_Limit_Exceeded
+            && $attempt['error']->reason_code === 'occurrences',
+        "an infinite {$label} tokenizer should raise the typed occurrence limit"
+    );
+    wp_fts_tokenizer_yield_check(
+        $probe->yields === $limit + 1,
+        "an infinite {$label} tokenizer should stop after one raw yield above the allowance"
+    );
+}
+
+return $wp_fts_tokenizer_yield_checks;

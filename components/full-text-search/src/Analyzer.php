@@ -11,6 +11,13 @@ declare(strict_types=1);
  */
 final class WP_FTS_Analyzer
 {
+    // Fragment processors add implicit HTML and BODY roots, and non-element
+    // tokens add one current pseudo-node. The pushed state stack accounts for
+    // every source or virtual element below those two roots, so exactly three is
+    // the complete difference between its 256 rows and the reported depth.
+    private const HTML_PROCESSOR_DEPTH_OVERHEAD = 3;
+    private const HTML_PROCESSOR_TOKEN_TYPE_BYTES = 64;
+
     /** @var array<string,bool> */
     private array $skipAncestors;
 
@@ -110,6 +117,7 @@ final class WP_FTS_Analyzer
      */
     public function __construct(array $options = [])
     {
+        WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'Analyzer options');
         $skip = $options['skip_ancestors'] ?? [
             'SCRIPT',
             'STYLE',
@@ -176,13 +184,16 @@ final class WP_FTS_Analyzer
         $this->queryLanguage = $this->canonicalLanguage($options['query_lang'] ?? null);
 
         $this->stopwords = [];
-        foreach (($options['stopwords'] ?? []) as $word) {
-            foreach ($this->languagePipeline->analyze_detailed((string) $word, $this->defaultLanguage) as $term) {
-                $this->stopwords[$term['term']] = true;
-            }
-        }
-
         $this->stopwordsByLang = [];
+        $stopwordSegments = [];
+        $stopwordTargets = [];
+        foreach (($options['stopwords'] ?? []) as $word) {
+            $stopwordSegments[] = [
+                'text' => (string) $word,
+                'language' => $this->defaultLanguage,
+            ];
+            $stopwordTargets[] = null;
+        }
         foreach (($options['stopwords_by_lang'] ?? []) as $lang => $words) {
             $canonical = $this->canonicalLanguage((string) $lang);
             if ($canonical === null || !is_array($words)) {
@@ -190,8 +201,20 @@ final class WP_FTS_Analyzer
             }
 
             foreach ($words as $word) {
-                foreach ($this->languagePipeline->analyze_detailed((string) $word, $canonical) as $term) {
-                    $this->stopwordsByLang[$canonical][$term['term']] = true;
+                $stopwordSegments[] = [
+                    'text' => (string) $word,
+                    'language' => $canonical,
+                ];
+                $stopwordTargets[] = $canonical;
+            }
+        }
+        foreach ($this->languagePipeline->analyze_detailed_batch($stopwordSegments) as $index => $terms) {
+            $target = $stopwordTargets[$index] ?? null;
+            foreach ($terms as $term) {
+                if ($target === null) {
+                    $this->stopwords[$term['term']] = true;
+                } else {
+                    $this->stopwordsByLang[$target][$term['term']] = true;
                 }
             }
         }
@@ -217,12 +240,19 @@ final class WP_FTS_Analyzer
     public function analyze_content(string $html, array|string|null $options = []): array
     {
         $options = $this->normalizeLanguageOptions($options, 'document');
+        WP_FTS_Analysis_Limits::assert_source_bytes($html);
+        WP_FTS_Html_Text_Stream::assert_analysis_markup_limits($html);
+        $maxOccurrences = $this->documentOccurrenceLimit($options);
+        $includeSurface = $this->truthyOption($options['_include_document_surface'] ?? false);
+        $this->assertLexicalWordBudget($html, $maxOccurrences);
         $tokens = [];
         $nextPosition = 0;
 
-        foreach ($this->extractHtmlSegments($html, $options) as $segment) {
+        $segments = $this->extractHtmlSegments($html, $options);
+        $segmentWeights = array_column($segments, 'weight');
+        foreach ($this->analyzeTextBatchStream($segments, $includeSurface, $maxOccurrences) as $index => $terms) {
             $terms = $this->renumberAnalyzedPositions(
-                $this->analyzeText($segment['text'], $segment['lang']),
+                $terms,
                 $nextPosition
             );
             foreach ($terms as $term) {
@@ -232,10 +262,10 @@ final class WP_FTS_Analyzer
 
                 $row = [
                     'term' => $term['term'],
-                    'weight' => $segment['weight'],
+                    'weight' => $segmentWeights[$index],
                     'lang' => $term['lang'],
                 ];
-                foreach (['position', 'rank', 'source'] as $key) {
+                foreach (['position', 'rank', 'source', 'normalized_surface'] as $key) {
                     if (array_key_exists($key, $term)) {
                         $row[$key] = $term[$key];
                     }
@@ -276,6 +306,10 @@ final class WP_FTS_Analyzer
     public function analyze_plain_content(string $text, array|string|null $options = []): array
     {
         $options = $this->normalizeLanguageOptions($options, 'document');
+        WP_FTS_Analysis_Limits::assert_source_bytes($text);
+        $maxOccurrences = $this->documentOccurrenceLimit($options);
+        $includeSurface = $this->truthyOption($options['_include_document_surface'] ?? false);
+        $this->assertLexicalWordBudget($text, $maxOccurrences);
         $lang = $this->resolveDocumentLanguage($options);
         if ($this->shouldAutoDetectDocumentLanguage($options)) {
             $lang = $this->detectSegmentLanguage($text, $lang);
@@ -283,7 +317,10 @@ final class WP_FTS_Analyzer
         $nextPosition = 0;
         $tokens = [];
 
-        foreach ($this->renumberAnalyzedPositions($this->analyzeText($text, $lang), $nextPosition) as $term) {
+        foreach ($this->renumberAnalyzedPositions(
+            $this->analyzeText($text, $lang, $includeSurface, $maxOccurrences),
+            $nextPosition
+        ) as $term) {
             if ($this->isStopword($term['term'], $term['lang'])) {
                 continue;
             }
@@ -293,7 +330,7 @@ final class WP_FTS_Analyzer
                 'weight' => 1.0,
                 'lang' => $term['lang'],
             ];
-            foreach (['position', 'rank', 'source'] as $key) {
+            foreach (['position', 'rank', 'source', 'normalized_surface'] as $key) {
                 if (array_key_exists($key, $term)) {
                     $row[$key] = $term[$key];
                 }
@@ -302,6 +339,134 @@ final class WP_FTS_Analyzer
         }
 
         return $tokens;
+    }
+
+    /**
+     * Analyze all normalized index fields through one dictionary lookup batch.
+     *
+     * Indexer uses this production path to prevent field boundaries from
+     * multiplying sidecar reads. Each returned element contains the occurrence
+     * list for the field at the same input index; HTML boosts and language scopes
+     * remain local to their original field.
+     *
+     * @param array<int,array{name:string,text:string,html?:string,boost:float}> $fields
+     * @param array<string,mixed>|string|null $options
+     * @return array<int,array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>>
+     */
+    public function analyze_document_fields(array $fields, array|string|null $options = []): array
+    {
+        if (count($fields) > 32) {
+            throw new WP_FTS_Analysis_Limit_Exceeded(
+                'index_fields',
+                'FTS document analysis accepts at most 32 fields.'
+            );
+        }
+
+        $baseOptions = $this->normalizeLanguageOptions($options, 'document');
+        $maxOccurrences = $this->documentOccurrenceLimit($baseOptions);
+        $includeSurface = $this->truthyOption($baseOptions['_include_document_surface'] ?? false);
+        $segments = [];
+        $segmentFields = [];
+        $segmentWeights = [];
+        $sourceBytes = 0;
+        $lexicalWords = 0;
+        $fieldSources = [];
+        foreach ($fields as $fieldIndex => $field) {
+            if (!is_array($field) || count($field) > 4) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'index_field_shape',
+                    'FTS document fields must use the bounded normalized field shape.'
+                );
+            }
+            $source = isset($field['html'])
+                ? (string) $field['html']
+                : (string) ($field['text'] ?? '');
+            $fieldSources[$fieldIndex] = $source;
+            $sourceBytes += strlen($source);
+            WP_FTS_Analysis_Limits::assert_document_source_bytes($sourceBytes);
+            foreach (WP_FTS_Html_Text_Stream::visible_word_stream($source) as $word) {
+                WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen((string) ($word['text'] ?? '')));
+                if (++$lexicalWords > $maxOccurrences) {
+                    throw new WP_FTS_Analysis_Limit_Exceeded(
+                        'occurrences',
+                        'FTS document analysis exceeds the 20,000-occurrence limit.'
+                    );
+                }
+            }
+            if (isset($field['html'])) {
+                WP_FTS_Html_Text_Stream::assert_analysis_markup_limits($source);
+            }
+        }
+
+        // Only collect segment arrays after every aggregate source/word/markup
+        // preflight succeeds, so a late invalid field cannot leave an almost
+        // maximum document resident before rejection.
+        foreach ($fields as $fieldIndex => $field) {
+            $fieldOptions = $baseOptions;
+            $fieldOptions['field_name'] = (string) ($field['name'] ?? '');
+            $source = $fieldSources[$fieldIndex];
+            if (isset($field['html'])) {
+                foreach ($this->extractHtmlSegments($source, $fieldOptions) as $segment) {
+                    if (count($segments) >= WP_FTS_Analysis_Limits::MAX_HTML_MARKUP_TOKENS) {
+                        throw new WP_FTS_Analysis_Limit_Exceeded(
+                            'html_markup_tokens',
+                            'FTS document HTML exceeds the aggregate 20,000-segment limit.'
+                        );
+                    }
+                    $segments[] = $segment;
+                    $segmentFields[] = $fieldIndex;
+                    $segmentWeights[] = $segment['weight'];
+                }
+                continue;
+            }
+
+            $lang = $this->resolveDocumentLanguage($fieldOptions);
+            if ($this->shouldAutoDetectDocumentLanguage($fieldOptions)) {
+                $lang = $this->detectSegmentLanguage($source, $lang);
+            }
+            if (count($segments) >= WP_FTS_Analysis_Limits::MAX_HTML_MARKUP_TOKENS) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'html_markup_tokens',
+                    'FTS document fields exceed the aggregate 20,000-segment limit.'
+                );
+            }
+            $segments[] = ['text' => $source, 'lang' => $lang];
+            $segmentFields[] = $fieldIndex;
+            $segmentWeights[] = 1.0;
+        }
+
+        $tokensByField = array_fill(0, count($fields), []);
+        $nextPositions = array_fill(0, count($fields), 0);
+        $accepted = 0;
+        foreach ($this->analyzeTextBatchStream($segments, $includeSurface, $maxOccurrences) as $segmentIndex => $terms) {
+            $fieldIndex = $segmentFields[$segmentIndex];
+            $terms = $this->renumberAnalyzedPositions($terms, $nextPositions[$fieldIndex]);
+            foreach ($terms as $term) {
+                if ($this->isStopword($term['term'], $term['lang'])) {
+                    continue;
+                }
+                if (++$accepted > $maxOccurrences) {
+                    throw new WP_FTS_Analysis_Limit_Exceeded(
+                        'occurrences',
+                        'FTS document analysis exceeds the 20,000-occurrence limit.'
+                    );
+                }
+
+                $row = [
+                    'term' => $term['term'],
+                    'weight' => $segmentWeights[$segmentIndex],
+                    'lang' => $term['lang'],
+                ];
+                foreach (['position', 'rank', 'source', 'normalized_surface'] as $key) {
+                    if (array_key_exists($key, $term)) {
+                        $row[$key] = $term[$key];
+                    }
+                }
+                $tokensByField[$fieldIndex][] = $row;
+            }
+        }
+
+        return $tokensByField;
     }
 
     /**
@@ -338,7 +503,7 @@ final class WP_FTS_Analyzer
      * defaults to strings.
      *
      * @param array<string,mixed>|string|null $language
-     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string}>
+     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string,normalized_surface?:string}>
      */
     public function analyze_query_terms(string $query, array|string|null $language = null): array
     {
@@ -352,11 +517,14 @@ final class WP_FTS_Analyzer
      * query terms.
      *
      * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,_force_query_lang?:bool,_include_query_surface?:bool,include_query_surface?:bool,include_surface?:bool}|string|null $options
-     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string}>
+     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string,normalized_surface?:string}>
      */
     public function analyze_query_occurrences(string $query, array|string|null $options = []): array
     {
         $options = $this->normalizeLanguageOptions($options, 'query');
+        $maxOccurrences = isset($options['_max_query_occurrences']) && is_numeric($options['_max_query_occurrences'])
+            ? max(0, min(WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES, (int) $options['_max_query_occurrences']))
+            : null;
         $lang = $this->resolveQueryLanguage($options);
         $includeSurface = $this->truthyOption($options['_include_query_surface'] ?? false)
             || $this->truthyOption($options['include_query_surface'] ?? false)
@@ -364,21 +532,75 @@ final class WP_FTS_Analyzer
         $terms = [];
         $nextPosition = 0;
 
-        foreach ($this->queryTextSegments($query, $lang, $options) as $segment) {
+        $segments = $this->queryTextSegments($query, $lang, $options);
+        foreach ($this->analyzeTextBatchStream($segments, $includeSurface, $maxOccurrences) as $analyzedSegment) {
             $segmentTerms = $this->renumberAnalyzedPositions(
-                $this->analyzeText($segment['text'], $segment['lang'], $includeSurface),
+                $analyzedSegment,
                 $nextPosition
             );
-            foreach ($segmentTerms as $term) {
-                if ($this->isStopword($term['term'], $term['lang'])) {
-                    continue;
-                }
-
-                $terms[] = $term;
+            array_push($terms, ...$this->filterQueryStopwords($segmentTerms, $includeSurface));
+            if ($maxOccurrences !== null && count($terms) > $maxOccurrences) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'occurrences',
+                    "FTS analysis exceeds its {$maxOccurrences}-occurrence limit."
+                );
             }
         }
 
         return $terms;
+    }
+
+    /**
+     * Remove query stopwords without losing which raw token was typed last.
+     *
+     * Set-oriented prefix search must not fall back to an earlier word when the
+     * final word is a stopword. When every analysis for one source token is
+     * filtered, retain one surface-only row; it cannot become an exact query
+     * candidate, but it keeps the final typed surface authoritative. Analyzer
+     * alternatives share a position and are filtered as one source token.
+     *
+     * @param array<int,array<string,mixed>> $terms
+     * @return array<int,array<string,mixed>>
+     */
+    private function filterQueryStopwords(array $terms, bool $includeSurface): array
+    {
+        $sourceGroups = [];
+        foreach ($terms as $index => $term) {
+            $sourceKey = isset($term['position']) && is_scalar($term['position'])
+                ? 'position:' . (string) $term['position']
+                : 'row:' . (string) $index;
+            $sourceGroups[$sourceKey][] = $term;
+        }
+
+        $filtered = [];
+        foreach ($sourceGroups as $sourceTerms) {
+            $accepted = [];
+            foreach ($sourceTerms as $term) {
+                if (!$this->isStopword($term['term'], $term['lang'])) {
+                    $accepted[] = $term;
+                }
+            }
+            if ($accepted !== []) {
+                array_push($filtered, ...$accepted);
+                continue;
+            }
+
+            $surface = $sourceTerms[0] ?? null;
+            if (
+                !$includeSurface
+                || !is_array($surface)
+                || !is_scalar($surface['normalized_surface'] ?? null)
+                || (string) $surface['normalized_surface'] === ''
+            ) {
+                continue;
+            }
+
+            $surface['term'] = '';
+            unset($surface['position'], $surface['rank'], $surface['source']);
+            $filtered[] = $surface;
+        }
+
+        return $filtered;
     }
 
     /**
@@ -439,6 +661,12 @@ final class WP_FTS_Analyzer
         return $this->indexSignature;
     }
 
+    /** Expose configured lemma-pack I/O diagnostics for acceptance checks. */
+    public function lemma_pack_diagnostics(string $language): ?array
+    {
+        return $this->languagePipeline->lemma_pack_diagnostics($language);
+    }
+
     /**
      * Run the configured language pipeline for one resolved text segment.
      *
@@ -447,11 +675,70 @@ final class WP_FTS_Analyzer
      *        fallbacks.
      * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string}>
      */
-    private function analyzeText(string $text, string $lang, bool $includeSurface = false): array
+    private function analyzeText(
+        string $text,
+        string $lang,
+        bool $includeSurface = false,
+        ?int $maxTerms = null
+    ): array
     {
         $lang = $this->canonicalLanguage($lang) ?? $this->defaultLanguage;
 
-        return $this->languagePipeline->analyze_detailed($text, $lang, $includeSurface);
+        return $this->languagePipeline->analyze_detailed($text, $lang, $includeSurface, $maxTerms);
+    }
+
+    /**
+     * Transfer resolved segments into one streamed lemma lookup batch.
+     *
+     * The input is cleared before pipeline preparation so callers do not retain
+     * both analyzer and pipeline copies of every maximum-depth HTML segment.
+     *
+     * @param array<int,array{text:string,lang:string}> $segments
+     * @return iterable<int,array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string}>>
+     */
+    private function analyzeTextBatchStream(
+        array &$segments,
+        bool $includeSurface = false,
+        ?int $maxTerms = null
+    ): iterable {
+        $pipelineSegments = [];
+        foreach ($segments as $segment) {
+            $pipelineSegments[] = [
+                'text' => $segment['text'],
+                'language' => $this->canonicalLanguage($segment['lang']) ?? $this->defaultLanguage,
+                'include_surface' => $includeSurface,
+            ];
+        }
+        $segments = [];
+
+        return $this->languagePipeline->analyze_detailed_batch_stream($pipelineSegments, $maxTerms);
+    }
+
+    /** Resolve the remaining per-document occurrence allowance. */
+    private function documentOccurrenceLimit(array $options): int
+    {
+        $requested = isset($options['_max_document_occurrences']) && is_numeric($options['_max_document_occurrences'])
+            ? (int) $options['_max_document_occurrences']
+            : WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES;
+
+        return max(0, min(WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES, $requested));
+    }
+
+    /**
+     * Reject token-dense input before HTML segmentation builds occurrence maps.
+     */
+    private function assertLexicalWordBudget(string $source, int $limit): void
+    {
+        $count = 0;
+        foreach (WP_FTS_Html_Text_Stream::visible_word_stream($source) as $word) {
+            WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen((string) ($word['text'] ?? '')));
+            if (++$count > $limit) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'occurrences',
+                    'FTS document analysis exceeds the 20,000-occurrence limit.'
+                );
+            }
+        }
     }
 
     /**
@@ -666,6 +953,9 @@ final class WP_FTS_Analyzer
             return $defaultLang;
         }
 
+        // A detector miss stays on the one configured query partition. Probing
+        // every enabled lemma pack here would make analyzer cost grow with the
+        // number and size of installed dictionaries.
         return $this->languageDetector->detect_text($text) ?? $defaultLang;
     }
 
@@ -684,22 +974,47 @@ final class WP_FTS_Analyzer
     {
         $documentLang = $this->resolveDocumentLanguage($options);
         $autoDetect = $this->shouldAutoDetectDocumentLanguage($options);
+        // Inline ancestry is represented as a request-local persistent trie.
+        // Segments retain one integer node ID instead of copying the complete
+        // ancestor path into every text run. This keeps deeply nested markup
+        // linear in source tokens plus element depth rather than their product.
+        $inlinePathParents = [0 => 0];
+        $inlinePathDepths = [0 => 0];
+        $inlinePathChildren = [];
 
         if ($this->htmlProcessorFactory !== null) {
             $processor = $this->createProcessor($html);
             if ($processor === null) {
-                return $this->coalesceInlineLexicalSegments(
-                    $this->maybeDetectSegmentLanguages($this->extractWithFallbackParser($html, $documentLang), $documentLang, $autoDetect)
+                $segments = $this->extractWithFallbackParser(
+                    $html,
+                    $documentLang,
+                    $inlinePathParents,
+                    $inlinePathDepths,
+                    $inlinePathChildren
+                );
+            } else {
+                $segments = $this->extractWithProcessor(
+                    $processor,
+                    $documentLang,
+                    $inlinePathParents,
+                    $inlinePathDepths,
+                    $inlinePathChildren
                 );
             }
-
-            return $this->coalesceInlineLexicalSegments(
-                $this->maybeDetectSegmentLanguages($this->extractWithProcessor($processor, $documentLang), $documentLang, $autoDetect)
+        } else {
+            $segments = $this->extractWithFallbackParser(
+                $html,
+                $documentLang,
+                $inlinePathParents,
+                $inlinePathDepths,
+                $inlinePathChildren
             );
         }
 
         return $this->coalesceInlineLexicalSegments(
-            $this->maybeDetectSegmentLanguages($this->extractWithFallbackParser($html, $documentLang), $documentLang, $autoDetect)
+            $this->maybeDetectSegmentLanguages($segments, $documentLang, $autoDetect),
+            $inlinePathParents,
+            $inlinePathDepths
         );
     }
 
@@ -763,10 +1078,31 @@ final class WP_FTS_Analyzer
     private function createProcessor(string $html): mixed
     {
         try {
-            return ($this->htmlProcessorFactory)($html);
+            $processor = ($this->htmlProcessorFactory)($html);
         } catch (Throwable) {
             return null;
         }
+
+        // get_current_depth() was added to WP_HTML_Processor in WordPress 6.6.
+        // Earlier and partial processor implementations fall back to the local
+        // streaming parser rather than forcing a full breadcrumb snapshot on
+        // every token. The remaining methods form the event-stream contract
+        // used below; accepting less would reintroduce a second parser model.
+        foreach ([
+            'next_token',
+            'get_current_depth',
+            'get_token_type',
+            'get_tag',
+            'is_tag_closer',
+            'expects_closer',
+            'get_modifiable_text',
+        ] as $method) {
+            if (!is_object($processor) || !method_exists($processor, $method)) {
+                return null;
+            }
+        }
+
+        return $processor;
     }
 
     /**
@@ -783,87 +1119,253 @@ final class WP_FTS_Analyzer
     /**
      * Extract text with a processor-like object while tracking language scopes.
      *
-     * `langByDepth` stores only depths that introduced a language. As the
-     * processor moves through breadcrumbs, deeper scopes are pruned so optional
-     * end tags and implicit closes do not leak a language into following text.
+     * Each opener derives one scalar state row from its parent, and each closer
+     * pops that row. WP_HTML_Processor emits virtual close/open events for
+     * implicit HTML structure, so language, skip, boost, inline-path, and text-
+     * group state remain aligned without requesting or walking breadcrumbs.
+     * Every row is pushed and popped once, making extraction linear in provider
+     * tokens plus maximum element depth.
      *
      * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}>
      */
-    private function extractWithProcessor(mixed $processor, string $documentLang): array
+    private function extractWithProcessor(
+        mixed $processor,
+        string $documentLang,
+        array &$inlinePathParents,
+        array &$inlinePathDepths,
+        array &$inlinePathChildren
+    ): array
     {
         $segments = [];
-        $langByDepth = [0 => ['lang' => $documentLang, 'explicit' => false]];
-        $textGroupByDepth = [];
-        $textGroupBoundaryByDepth = [];
+        $states = [
+            0 => [
+                'lang' => $documentLang,
+                'explicit_lang' => false,
+                'skipped' => false,
+                'weight' => 1.0,
+                'inline_path_id' => 0,
+                'nearest_text_group_depth' => null,
+                'detect_group' => null,
+            ],
+        ];
+        $activeDepth = 0;
+        $providerBaseDepth = null;
         $textGroupCounter = 0;
         $rootTextGroup = null;
+        $processorTokens = 0;
+        $processorOutputBytes = 0;
+        $processorControlBytes = 0;
 
         while ($processor->next_token()) {
-            $breadcrumbs = method_exists($processor, 'get_breadcrumbs')
-                ? ($processor->get_breadcrumbs() ?? [])
-                : [];
-            $breadcrumbs = array_map(
-                static fn($tag): string => strtoupper((string) $tag),
-                $breadcrumbs
-            );
-            $this->pruneLanguageStack($langByDepth, count($breadcrumbs));
-            $this->pruneTextGroupStack($textGroupByDepth, $textGroupBoundaryByDepth, count($breadcrumbs));
+            // One text run may appear before, between, and after the bounded
+            // markup tokens. Count provider tokens independently: a custom
+            // processor can otherwise return empty/non-text tokens forever
+            // after the source-byte and source-markup checks have passed.
+            if (++$processorTokens > (WP_FTS_Analysis_Limits::MAX_HTML_MARKUP_TOKENS * 2) + 1) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'html_markup_tokens',
+                    'FTS document HTML processor exceeds its bounded token envelope.'
+                );
+            }
+            $tokenType = $processor->get_token_type();
+            $tokenType = is_scalar($tokenType) ? (string) $tokenType : '';
+            $tokenTypeBytes = strlen($tokenType);
+            if ($tokenTypeBytes > self::HTML_PROCESSOR_TOKEN_TYPE_BYTES) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'html_processor_token_type_bytes',
+                    'FTS document HTML processor returned an oversized token type.'
+                );
+            }
+            $this->chargeProcessorOutputBytes($processorControlBytes, $tokenTypeBytes);
+            $providerDepth = $processor->get_current_depth();
+            if (
+                !is_int($providerDepth)
+                || $providerDepth < 0
+                || $providerDepth > WP_FTS_Analysis_Limits::MAX_HTML_ELEMENT_DEPTH + self::HTML_PROCESSOR_DEPTH_OVERHEAD
+            ) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'html_element_depth',
+                    'FTS document HTML processor exceeds its bounded structural depth.'
+                );
+            }
 
-            if ($processor->get_token_type() === '#tag') {
-                $isCloser = method_exists($processor, 'is_tag_closer') && $processor->is_tag_closer();
-                $depth = count($breadcrumbs);
-                $tag = $this->processorCurrentTag($processor, $breadcrumbs);
+            $isCloser = $tokenType === '#tag' && $processor->is_tag_closer();
+            if ($providerBaseDepth === null) {
+                // Fragment parsers begin below implicit HTML/BODY roots, while
+                // full-document parsers begin at depth zero. The first event
+                // identifies that fixed filler prefix without enumerating it.
+                $providerBaseDepth = max(0, $providerDepth - ($isCloser ? 0 : 1));
+            }
+            $relativeDepth = $providerDepth - $providerBaseDepth;
+            if ($relativeDepth < 0) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'html_element_depth',
+                    'FTS document HTML processor produced an invalid depth transition.'
+                );
+            }
+
+            if ($tokenType === '#tag') {
+                $tag = $this->processorCurrentTag($processor, $processorOutputBytes);
                 if ($isCloser) {
-                    unset($langByDepth[$depth]);
-                    unset($textGroupByDepth[$depth], $textGroupBoundaryByDepth[$depth]);
+                    $this->popProcessorStates($states, $activeDepth, $relativeDepth);
                     continue;
                 }
 
-                unset($langByDepth[$depth]);
-                unset($textGroupByDepth[$depth], $textGroupBoundaryByDepth[$depth]);
-                $lang = $this->processorLangAttribute($processor);
-                if ($lang !== null) {
-                    $langByDepth[$depth] = ['lang' => $lang, 'explicit' => true];
+                if ($relativeDepth < 1 || $relativeDepth > WP_FTS_Analysis_Limits::MAX_HTML_ELEMENT_DEPTH) {
+                    throw new WP_FTS_Analysis_Limit_Exceeded(
+                        'html_element_depth',
+                        'FTS document HTML processor exceeds the 256-element state-stack limit.'
+                    );
                 }
-                if ($tag !== null && $this->isTextGroupBoundaryTag($tag)) {
-                    $this->retireCurrentTextGroup($textGroupByDepth, $textGroupBoundaryByDepth, $rootTextGroup);
+                $parentDepth = $relativeDepth - 1;
+                $this->popProcessorStates($states, $activeDepth, $parentDepth);
+                $parent = $states[$parentDepth] ?? $states[0];
+
+                $isBoundary = $tag !== null && $this->isTextGroupBoundaryTag($tag);
+                if ($isBoundary) {
+                    $this->retireProcessorTextGroup($states, $parentDepth, $rootTextGroup);
+                }
+                // Atomic tags include HTML void elements, SCRIPT/STYLE/TITLE,
+                // and self-closing foreign content. WP_HTML_Processor emits no
+                // later pop event for them, so retaining a row here would leak
+                // skip, boost, or language state into the following sibling.
+                if ($processor->expects_closer() !== true) {
+                    continue;
+                }
+
+                $declaredLang = $this->processorLangAttribute($processor, $processorOutputBytes);
+                $inlinePathId = $tag === null
+                    ? (int) $parent['inline_path_id']
+                    : $this->internInlinePath(
+                        (int) $parent['inline_path_id'],
+                        $tag,
+                        $inlinePathParents,
+                        $inlinePathDepths,
+                        $inlinePathChildren
+                    );
+                $detectGroup = null;
+                $nearestTextGroupDepth = $parent['nearest_text_group_depth'];
+                if ($isBoundary) {
                     $textGroupCounter++;
-                    $textGroupByDepth[$depth] = $textGroupCounter;
-                    $textGroupBoundaryByDepth[$depth] = true;
+                    $detectGroup = $textGroupCounter;
+                    $nearestTextGroupDepth = $relativeDepth;
                 }
+
+                $states[$relativeDepth] = [
+                    'lang' => $declaredLang ?? (string) $parent['lang'],
+                    'explicit_lang' => $declaredLang !== null
+                        ? true
+                        : (bool) $parent['explicit_lang'],
+                    'skipped' => (bool) $parent['skipped']
+                        || ($tag !== null && isset($this->skipAncestors[$tag])),
+                    'weight' => max(
+                        (float) $parent['weight'],
+                        (float) ($tag !== null ? ($this->boosts[$tag] ?? 1.0) : 1.0)
+                    ),
+                    'inline_path_id' => $inlinePathId,
+                    'nearest_text_group_depth' => $nearestTextGroupDepth,
+                    'detect_group' => $detectGroup,
+                ];
+                $activeDepth = $relativeDepth;
                 continue;
             }
 
-            if ($processor->get_token_type() !== '#text') {
+            if ($tokenType !== '#text') {
                 continue;
             }
 
-            if ($this->hasSkippedAncestor($breadcrumbs)) {
+            // WP_HTML_Processor includes the current #text pseudo-node in its
+            // reported depth; test/custom processors commonly report just the
+            // active element depth. Both are O(1) event-stream conventions.
+            if ($relativeDepth !== $activeDepth && $relativeDepth !== $activeDepth + 1) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'html_element_depth',
+                    'FTS document HTML processor produced an invalid text depth transition.'
+                );
+            }
+            $state = $states[$activeDepth] ?? $states[0];
+            if ($state['skipped']) {
                 continue;
             }
 
-            $text = (string) $processor->get_modifiable_text();
+            $text = $processor->get_modifiable_text();
+            if (!is_scalar($text)) {
+                continue;
+            }
+            $text = (string) $text;
+            $this->chargeProcessorOutputBytes($processorOutputBytes, strlen($text));
             if (trim($text) === '') {
                 continue;
             }
-            $scope = $this->currentLanguageScope($langByDepth);
 
             $segments[] = [
                 'text' => $text,
-                'weight' => $this->boostForAncestors($breadcrumbs),
-                'lang' => $scope['lang'],
-                'explicit_lang' => $scope['explicit'],
-                'detect_group' => $this->currentTextGroup(
-                    $textGroupByDepth,
-                    $textGroupBoundaryByDepth,
+                'weight' => (float) $state['weight'],
+                'lang' => (string) $state['lang'],
+                'explicit_lang' => (bool) $state['explicit_lang'],
+                'detect_group' => $this->currentProcessorTextGroup(
+                    $states,
+                    $activeDepth,
                     $rootTextGroup,
                     $textGroupCounter
                 ),
-                'inline_path' => $this->inlineAncestors($breadcrumbs),
+                'inline_path_id' => (int) $state['inline_path_id'],
             ];
         }
 
         return $segments;
+    }
+
+    /** Pop each retained element state once as the processor leaves its scope. */
+    private function popProcessorStates(array &$states, int &$activeDepth, int $targetDepth): void
+    {
+        if ($targetDepth < 0 || $targetDepth > $activeDepth) {
+            throw new WP_FTS_Analysis_Limit_Exceeded(
+                'html_element_depth',
+                'FTS document HTML processor produced an invalid stack transition.'
+            );
+        }
+        while ($activeDepth > $targetDepth) {
+            unset($states[$activeDepth]);
+            $activeDepth--;
+        }
+    }
+
+    /** Retire the parent run before a child block boundary begins. */
+    private function retireProcessorTextGroup(array &$states, int $depth, ?int &$rootTextGroup): void
+    {
+        $nearestDepth = $states[$depth]['nearest_text_group_depth'] ?? null;
+        if ($nearestDepth !== null && isset($states[$nearestDepth])) {
+            $states[$nearestDepth]['detect_group'] = null;
+            return;
+        }
+
+        $rootTextGroup = null;
+    }
+
+    /** Return or allocate the active block's language-detection group. */
+    private function currentProcessorTextGroup(
+        array &$states,
+        int $depth,
+        ?int &$rootTextGroup,
+        int &$textGroupCounter
+    ): int {
+        $nearestDepth = $states[$depth]['nearest_text_group_depth'] ?? null;
+        if ($nearestDepth !== null && isset($states[$nearestDepth])) {
+            if ($states[$nearestDepth]['detect_group'] === null) {
+                $textGroupCounter++;
+                $states[$nearestDepth]['detect_group'] = $textGroupCounter;
+            }
+
+            return (int) $states[$nearestDepth]['detect_group'];
+        }
+
+        if ($rootTextGroup === null) {
+            $textGroupCounter++;
+            $rootTextGroup = $textGroupCounter;
+        }
+
+        return $rootTextGroup;
     }
 
     /**
@@ -878,7 +1380,13 @@ final class WP_FTS_Analyzer
      * @param string $documentLang Fallback language for text outside scoped tags.
      * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}>
      */
-    private function extractWithFallbackParser(string $html, string $documentLang): array
+    private function extractWithFallbackParser(
+        string $html,
+        string $documentLang,
+        array &$inlinePathParents,
+        array &$inlinePathDepths,
+        array &$inlinePathChildren
+    ): array
     {
         $stack = [];
         $segments = [];
@@ -940,7 +1448,12 @@ final class WP_FTS_Analyzer
 
                 $opening = $tag['name'];
                 $this->closeFallbackOptionalEndTags($stack, $opening);
-                if (!isset($voidTags[$opening]) && !$this->fallbackTagIsSelfClosing($part)) {
+                $isAtomic = isset($voidTags[$opening]) || $this->fallbackTagIsSelfClosing($part);
+                if ($isAtomic && $this->isTextGroupBoundaryTag($opening)) {
+                    $this->retireFallbackCurrentTextGroup($stack, $rootTextGroup);
+                }
+                if (!$isAtomic) {
+                    $parent = $stack === [] ? null : $stack[count($stack) - 1];
                     $isTextGroupBoundary = $this->isTextGroupBoundaryTag($opening);
                     $detectGroup = null;
                     if ($isTextGroupBoundary) {
@@ -948,21 +1461,40 @@ final class WP_FTS_Analyzer
                         $textGroupCounter++;
                         $detectGroup = $textGroupCounter;
                     }
+                    $declaredLang = $this->tagLangAttribute($part);
+                    $inlinePathId = $this->internInlinePath(
+                        (int) ($parent['inline_path_id'] ?? 0),
+                        $opening,
+                        $inlinePathParents,
+                        $inlinePathDepths,
+                        $inlinePathChildren
+                    );
+                    $depth = count($stack);
                     $stack[] = [
                         'tag' => $opening,
-                        'lang' => $this->tagLangAttribute($part),
+                        'lang' => $declaredLang ?? ($parent['lang'] ?? $documentLang),
+                        'explicit_lang' => $declaredLang !== null
+                            ? true
+                            : (bool) ($parent['explicit_lang'] ?? false),
+                        'skipped' => (bool) ($parent['skipped'] ?? false)
+                            || isset($this->skipAncestors[$opening]),
+                        'weight' => max(
+                            (float) ($parent['weight'] ?? 1.0),
+                            (float) ($this->boosts[$opening] ?? 1.0)
+                        ),
+                        'inline_path_id' => $inlinePathId,
                         'detect_group' => $detectGroup,
                         'text_group_boundary' => $isTextGroupBoundary,
+                        'nearest_text_group_depth' => $isTextGroupBoundary
+                            ? $depth
+                            : ($parent['nearest_text_group_depth'] ?? null),
                     ];
                 }
                 continue;
             }
 
-            $ancestors = array_map(
-                static fn(array $entry): string => $entry['tag'],
-                $stack
-            );
-            if ($this->hasSkippedAncestor($ancestors)) {
+            $scope = $stack === [] ? null : $stack[count($stack) - 1];
+            if (!empty($scope['skipped'])) {
                 continue;
             }
 
@@ -970,15 +1502,13 @@ final class WP_FTS_Analyzer
             if (trim($text) === '') {
                 continue;
             }
-            $scope = $this->fallbackCurrentLanguageScope($stack, $documentLang);
-
             $segments[] = [
                 'text' => $text,
-                'weight' => $this->boostForAncestors($ancestors),
-                'lang' => $scope['lang'],
-                'explicit_lang' => $scope['explicit'],
+                'weight' => (float) ($scope['weight'] ?? 1.0),
+                'lang' => (string) ($scope['lang'] ?? $documentLang),
+                'explicit_lang' => (bool) ($scope['explicit_lang'] ?? false),
                 'detect_group' => $this->fallbackCurrentTextGroup($stack, $rootTextGroup, $textGroupCounter),
-                'inline_path' => $this->inlineAncestors($ancestors),
+                'inline_path_id' => (int) ($scope['inline_path_id'] ?? 0),
             ];
         }
 
@@ -990,6 +1520,8 @@ final class WP_FTS_Analyzer
      *
      * Tag boundaries are found one byte at a time so `>` inside a quoted
      * attribute cannot end a tag. Invalid `<` sequences stay visible text.
+     * SCRIPT data and STYLE raw text use the shared byte-stream boundary logic,
+     * preventing tag-looking code from changing this fallback event stream.
      *
      * @return iterable<int,array{type:'text'|'tag'|'declaration',raw:string}>
      */
@@ -1032,9 +1564,34 @@ final class WP_FTS_Analyzer
             }
 
             $raw = substr($html, $tagStart, $tagEnd - $tagStart + 1);
-            if ($this->fallbackTagDescriptor($raw) !== null) {
+            $tag = $this->fallbackTagDescriptor($raw);
+            if ($tag !== null) {
                 yield ['type' => 'tag', 'raw' => $raw];
                 $offset = $tagEnd + 1;
+                if (
+                    !$tag['closing']
+                    && ($tag['name'] === 'SCRIPT' || $tag['name'] === 'STYLE')
+                    && !$this->fallbackTagIsSelfClosing($raw)
+                ) {
+                    $closingTagStart = null;
+                    $elementEnd = WP_FTS_Html_Text_Stream::hidden_text_element_end_offset(
+                        $html,
+                        $offset,
+                        $tag['name'],
+                        $closingTagStart
+                    );
+                    $contentEnd = $closingTagStart ?? $elementEnd;
+                    if ($contentEnd > $offset) {
+                        yield ['type' => 'text', 'raw' => substr($html, $offset, $contentEnd - $offset)];
+                    }
+                    if ($closingTagStart !== null) {
+                        yield [
+                            'type' => 'tag',
+                            'raw' => substr($html, $closingTagStart, $elementEnd - $closingTagStart),
+                        ];
+                    }
+                    $offset = $elementEnd;
+                }
                 continue;
             }
 
@@ -1159,12 +1716,20 @@ final class WP_FTS_Analyzer
      * @param array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}> $segments
      * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}>
      */
-    private function coalesceInlineLexicalSegments(array $segments): array
+    private function coalesceInlineLexicalSegments(
+        array $segments,
+        array $inlinePathParents,
+        array $inlinePathDepths
+    ): array
     {
         $coalesced = [];
         $openIndex = null;
 
-        foreach ($segments as $segment) {
+        foreach ($segments as $index => $segment) {
+            // Release the retained text-node row as soon as its lexical chunks
+            // have local ownership. At the boundary this avoids holding two
+            // complete segment arrays while coalescing a maximum-size input.
+            unset($segments[$index]);
             foreach ($this->lexicalChunks((string) $segment['text']) as $chunk) {
                 if (!$chunk['word']) {
                     $openIndex = null;
@@ -1176,8 +1741,19 @@ final class WP_FTS_Analyzer
                 if (
                     $openIndex !== null
                     && isset($coalesced[$openIndex])
-                    && $this->canMergeLexicalSegments($coalesced[$openIndex], $candidate)
+                    && $this->canMergeLexicalSegments(
+                        $coalesced[$openIndex],
+                        $candidate,
+                        $inlinePathParents,
+                        $inlinePathDepths
+                    )
                 ) {
+                    $mergedBytes = strlen($coalesced[$openIndex]['text']) + strlen($chunk['text']);
+                    // Check the complete cross-element lexical run before .=
+                    // can repeatedly copy an ever-growing string. The same
+                    // 4-KiB invariant applies whether markup split the word or
+                    // it arrived in one text token.
+                    WP_FTS_Analysis_Limits::assert_lexical_run_bytes($mergedBytes);
                     $coalesced[$openIndex]['text'] .= $chunk['text'];
                     $coalesced[$openIndex]['weight'] = max(
                         (float) ($coalesced[$openIndex]['weight'] ?? 1.0),
@@ -1198,78 +1774,120 @@ final class WP_FTS_Analyzer
      * @param array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int} $left
      * @param array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int} $right
      */
-    private function canMergeLexicalSegments(array $left, array $right): bool
+    private function canMergeLexicalSegments(
+        array $left,
+        array $right,
+        array $inlinePathParents,
+        array $inlinePathDepths
+    ): bool
     {
         return ($left['lang'] ?? '') === ($right['lang'] ?? '')
             && (bool) ($left['explicit_lang'] ?? false) === (bool) ($right['explicit_lang'] ?? false)
             && ($left['detect_group'] ?? null) === ($right['detect_group'] ?? null)
-            && $this->inlinePathsCompatible($left['inline_path'] ?? [], $right['inline_path'] ?? []);
+            && $this->inlinePathsCompatible(
+                (int) ($left['inline_path_id'] ?? 0),
+                (int) ($right['inline_path_id'] ?? 0),
+                $inlinePathParents,
+                $inlinePathDepths
+            );
     }
 
     /**
-     * @param string[] $left
-     * @param string[] $right
+     * Paths are compatible when either tag-name sequence is a prefix of the
+     * other. Aligning persistent trie nodes by depth preserves the previous
+     * sequence semantics without materializing either ancestor array.
      */
-    private function inlinePathsCompatible(array $left, array $right): bool
-    {
-        return $this->isInlinePathPrefix($left, $right) || $this->isInlinePathPrefix($right, $left);
-    }
-
-    /**
-     * @param string[] $prefix
-     * @param string[] $path
-     */
-    private function isInlinePathPrefix(array $prefix, array $path): bool
-    {
-        if (count($prefix) > count($path)) {
-            return false;
+    private function inlinePathsCompatible(
+        int $left,
+        int $right,
+        array $inlinePathParents,
+        array $inlinePathDepths
+    ): bool {
+        if (!isset($inlinePathDepths[$left])) {
+            $left = 0;
+        }
+        if (!isset($inlinePathDepths[$right])) {
+            $right = 0;
         }
 
-        foreach ($prefix as $index => $tag) {
-            if (($path[$index] ?? null) !== $tag) {
-                return false;
-            }
+        $leftDepth = $inlinePathDepths[$left];
+        $rightDepth = $inlinePathDepths[$right];
+        while ($leftDepth > $rightDepth) {
+            $left = $inlinePathParents[$left];
+            $leftDepth--;
+        }
+        while ($rightDepth > $leftDepth) {
+            $right = $inlinePathParents[$right];
+            $rightDepth--;
         }
 
-        return true;
+        return $left === $right;
     }
 
     /**
-     * @return array<int,array{text:string,word:bool}>
+     * @return iterable<int,array{text:string,word:bool}>
      */
-    private function lexicalChunks(string $text): array
+    private function lexicalChunks(string $text): iterable
     {
         $text = $this->languagePipeline->normalize_unicode_text($text);
         if ($text === '') {
-            return [];
+            return;
         }
 
-        $chars = [];
-        if (preg_match_all('/./us', $text, $matches)) {
-            $chars = $matches[0];
-        } else {
-            $chars = str_split($text);
-        }
-
-        $chunks = [];
-        $current = '';
-        $currentIsWord = null;
-        foreach ($chars as $char) {
-            $isWord = $this->isLexicalWordCharacter($char);
-            if ($current !== '' && $currentIsWord !== $isWord) {
-                $chunks[] = ['text' => $current, 'word' => (bool) $currentIsWord];
-                $current = '';
+        $currentWord = '';
+        $currentWordBytes = 0;
+        $insideNonWord = false;
+        $length = strlen($text);
+        for ($offset = 0; $offset < $length;) {
+            $charLength = $this->utf8CharacterLength($text, $offset);
+            $char = substr($text, $offset, $charLength);
+            $offset += $charLength;
+            if (!$this->isLexicalWordCharacter($char)) {
+                if ($currentWord !== '') {
+                    yield ['text' => $currentWord, 'word' => true];
+                    $currentWord = '';
+                    $currentWordBytes = 0;
+                }
+                $insideNonWord = true;
+                continue;
             }
 
-            $current .= $char;
-            $currentIsWord = $isWord;
+            if ($insideNonWord) {
+                // Callers only need to know that a lexical boundary occurred;
+                // retaining a multi-megabyte punctuation run has no value.
+                yield ['text' => '', 'word' => false];
+                $insideNonWord = false;
+            }
+            $currentWordBytes += $charLength;
+            WP_FTS_Analysis_Limits::assert_lexical_run_bytes($currentWordBytes);
+            $currentWord .= $char;
         }
 
-        if ($current !== '') {
-            $chunks[] = ['text' => $current, 'word' => (bool) $currentIsWord];
+        if ($currentWord !== '') {
+            yield ['text' => $currentWord, 'word' => true];
+        } elseif ($insideNonWord) {
+            yield ['text' => '', 'word' => false];
+        }
+    }
+
+    /** Read one repaired UTF-8 codepoint without materializing a character array. */
+    private function utf8CharacterLength(string $text, int $offset): int
+    {
+        $byte = ord($text[$offset]);
+        if ($byte < 0x80) {
+            return 1;
+        }
+        if (($byte & 0xE0) === 0xC0) {
+            return 2;
+        }
+        if (($byte & 0xF0) === 0xE0) {
+            return 3;
+        }
+        if (($byte & 0xF8) === 0xF0) {
+            return 4;
         }
 
-        return $chunks;
+        return 1;
     }
 
     private function isLexicalWordCharacter(string $char): bool
@@ -1278,69 +1896,39 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Return non-boundary element ancestors that affect inline word continuity.
+     * Intern one non-boundary tag in the request-local inline-path trie.
      *
-     * WordPress processor breadcrumbs for text nodes may include pseudo entries
-     * such as `#text`. Those are not element boundaries; keeping them would make
-     * nested inline fragments look like unrelated sibling paths.
-     *
-     * @param string[] $ancestors
-     * @return string[]
+     * Defensive custom processor events may expose pseudo names such as
+     * `#text`; those are not element boundaries. Block tags likewise do not
+     * participate in inline word continuity. Interning tag-name sequences (not
+     * element identities) preserves compatibility across same-shaped sibling
+     * markup while every segment retains only one integer ID.
      */
-    private function inlineAncestors(array $ancestors): array
-    {
-        $inline = [];
-        foreach ($ancestors as $tag) {
-            $tag = strtoupper($tag);
-            if ($tag === '' || str_starts_with($tag, '#')) {
-                continue;
-            }
-            if (!$this->isTextGroupBoundaryTag($tag)) {
-                $inline[] = $tag;
-            }
+    private function internInlinePath(
+        int $parentId,
+        string $tag,
+        array &$inlinePathParents,
+        array &$inlinePathDepths,
+        array &$inlinePathChildren
+    ): int {
+        if ($tag === '' || str_starts_with($tag, '#') || $this->isTextGroupBoundaryTag($tag)) {
+            return $parentId;
         }
 
-        return $inline;
-    }
-
-    /**
-     * Decide whether text under any ancestor tag should be skipped.
-     *
-     * @param string[] $ancestors
-     * @return bool True for script/style/template/navigation and configured
-     *         skipped ancestors.
-     */
-    private function hasSkippedAncestor(array $ancestors): bool
-    {
-        foreach ($ancestors as $tag) {
-            if (isset($this->skipAncestors[strtoupper($tag)])) {
-                return true;
-            }
+        if (isset($inlinePathChildren[$parentId][$tag])) {
+            return $inlinePathChildren[$parentId][$tag];
         }
 
-        return false;
-    }
+        // A normal parser creates at most one node per opening markup token. A
+        // custom processor can synthesize unrelated tag-event paths, so enforce
+        // the same markup-token envelope before retaining a new node.
+        WP_FTS_Analysis_Limits::assert_html_markup_tokens(count($inlinePathParents));
+        $nodeId = count($inlinePathParents);
+        $inlinePathParents[$nodeId] = $parentId;
+        $inlinePathDepths[$nodeId] = $inlinePathDepths[$parentId] + 1;
+        $inlinePathChildren[$parentId][$tag] = $nodeId;
 
-    /**
-     * Return the strongest configured boost inherited from ancestor tags.
-     *
-     * The analyzer does not multiply boosts; the largest ancestor boost wins so
-     * nested headings/strong tags do not explode term frequency.
-     *
-     * @param string[] $ancestors
-     * @return float Weight to attach to the text segment.
-     */
-    private function boostForAncestors(array $ancestors): float
-    {
-        $weight = 1.0;
-        foreach ($ancestors as $tag) {
-            $tag = strtoupper($tag);
-            if (isset($this->boosts[$tag])) {
-                $weight = max($weight, $this->boosts[$tag]);
-            }
-        }
-
-        return $weight;
+        return $nodeId;
     }
 
     /**
@@ -1425,6 +2013,10 @@ final class WP_FTS_Analyzer
             return null;
         }
 
+        if (strlen((string) $language) > WP_FTS_Analysis_Limits::MAX_HTML_LANGUAGE_ATTRIBUTE_BYTES) {
+            return null;
+        }
+
         $language = trim((string) $language);
         if ($language === '') {
             return null;
@@ -1440,7 +2032,7 @@ final class WP_FTS_Analyzer
         }
 
         $parts = array_values(array_filter(explode('-', $language), static fn(string $part): bool => $part !== ''));
-        if ($parts === []) {
+        if ($parts === [] || count($parts) > WP_FTS_Analysis_Limits::MAX_LANGUAGE_SUBTAGS) {
             return null;
         }
 
@@ -1606,131 +2198,21 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Remove language scopes deeper than the processor's current depth.
-     *
-     * The processor may have already resolved optional/implicit end tags in its
-     * breadcrumb stack. Pruning by depth keeps `langByDepth` aligned with that
-     * canonical tree.
-     *
-     * @param array<int,array{lang:string,explicit:bool}> $langByDepth
-     */
-    private function pruneLanguageStack(array &$langByDepth, int $depth): void
-    {
-        foreach (array_keys($langByDepth) as $scopeDepth) {
-            if ($scopeDepth > $depth) {
-                unset($langByDepth[$scopeDepth]);
-            }
-        }
-    }
-
-    /**
-     * Remove text-detection groups deeper than the processor's current depth.
-     *
-     * @param array<int,int|null> $textGroupByDepth
-     * @param array<int,bool> $textGroupBoundaryByDepth
-     */
-    private function pruneTextGroupStack(array &$textGroupByDepth, array &$textGroupBoundaryByDepth, int $depth): void
-    {
-        foreach (array_keys($textGroupByDepth) as $scopeDepth) {
-            if ($scopeDepth > $depth) {
-                unset($textGroupByDepth[$scopeDepth]);
-            }
-        }
-
-        foreach (array_keys($textGroupBoundaryByDepth) as $scopeDepth) {
-            if ($scopeDepth > $depth) {
-                unset($textGroupBoundaryByDepth[$scopeDepth]);
-            }
-        }
-    }
-
-    /**
-     * Close the current inline text run before a child boundary starts.
-     *
-     * A boundary element such as `p` gets its own detection group. Retiring the
-     * parent run here prevents direct sibling text after that boundary from
-     * being concatenated with direct text that came before it.
-     *
-     * @param array<int,int|null> $textGroupByDepth
-     * @param array<int,bool> $textGroupBoundaryByDepth
-     */
-    private function retireCurrentTextGroup(
-        array &$textGroupByDepth,
-        array $textGroupBoundaryByDepth,
-        ?int &$rootTextGroup
-    ): void {
-        krsort($textGroupBoundaryByDepth, SORT_NUMERIC);
-
-        foreach ($textGroupBoundaryByDepth as $depth => $_active) {
-            $textGroupByDepth[(int) $depth] = null;
-            return;
-        }
-
-        $rootTextGroup = null;
-    }
-
-    /**
-     * Return the nearest active visible-text detection group.
-     *
-     * Inline markup inherits the surrounding block group's language context, so
-     * weak connector words split into their own text node can still be detected
-     * with the phrase around them.
-     *
-     * @param array<int,int|null> $textGroupByDepth
-     * @param array<int,bool> $textGroupBoundaryByDepth
-     */
-    private function currentTextGroup(
-        array &$textGroupByDepth,
-        array $textGroupBoundaryByDepth,
-        ?int &$rootTextGroup,
-        int &$textGroupCounter
-    ): int
-    {
-        krsort($textGroupBoundaryByDepth, SORT_NUMERIC);
-
-        foreach ($textGroupBoundaryByDepth as $depth => $_active) {
-            $depth = (int) $depth;
-            if (isset($textGroupByDepth[$depth]) && $textGroupByDepth[$depth] !== null) {
-                return (int) $textGroupByDepth[$depth];
-            }
-
-            $textGroupCounter++;
-            $textGroupByDepth[$depth] = $textGroupCounter;
-            return $textGroupCounter;
-        }
-
-        if ($rootTextGroup === null) {
-            $textGroupCounter++;
-            $rootTextGroup = $textGroupCounter;
-        }
-
-        return $rootTextGroup;
-    }
-
-    /**
      * Return the current processor tag name when available.
-     *
-     * @param string[] $breadcrumbs
      */
-    private function processorCurrentTag(mixed $processor, array $breadcrumbs): ?string
+    private function processorCurrentTag(mixed $processor, int &$processorOutputBytes): ?string
     {
-        if (method_exists($processor, 'get_tag')) {
-            try {
-                $tag = $processor->get_tag();
-                if (is_scalar($tag) && trim((string) $tag) !== '') {
-                    return strtoupper((string) $tag);
-                }
-            } catch (Throwable) {
-                // Fall back to breadcrumbs below.
-            }
-        }
-
-        if ($breadcrumbs === []) {
+        $tag = $processor->get_tag();
+        if (!is_scalar($tag)) {
             return null;
         }
 
-        $tag = end($breadcrumbs);
-        return is_string($tag) && $tag !== '' ? strtoupper($tag) : null;
+        $tag = (string) $tag;
+        $tagBytes = strlen($tag);
+        WP_FTS_Analysis_Limits::assert_html_tag_bytes($tagBytes);
+        $this->chargeProcessorOutputBytes($processorOutputBytes, $tagBytes);
+
+        return trim($tag) === '' ? null : strtoupper($tag);
     }
 
     /**
@@ -1744,6 +2226,7 @@ final class WP_FTS_Analyzer
             'ASIDE' => true,
             'BLOCKQUOTE' => true,
             'BODY' => true,
+            'BR' => true,
             'DD' => true,
             'DETAILS' => true,
             'DIALOG' => true,
@@ -1763,6 +2246,7 @@ final class WP_FTS_Analyzer
             'H6' => true,
             'HEADER' => true,
             'HGROUP' => true,
+            'HR' => true,
             'LI' => true,
             'MAIN' => true,
             'MENU' => true,
@@ -1787,36 +2271,12 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Return the nearest active language scope.
-     *
-     * @param array<int,array{lang:string,explicit:bool}> $langByDepth Map of
-     *        processor depth to language. Depth 0 always carries the fallback
-     *        document language.
-     * @return array{lang:string,explicit:bool} Language from the deepest active
-     *         scope and whether it came from an HTML attribute.
-     */
-    private function currentLanguageScope(array $langByDepth): array
-    {
-        krsort($langByDepth, SORT_NUMERIC);
-
-        $scope = reset($langByDepth);
-        if (is_array($scope) && isset($scope['lang'])) {
-            return [
-                'lang' => (string) $scope['lang'],
-                'explicit' => (bool) ($scope['explicit'] ?? false),
-            ];
-        }
-
-        return ['lang' => 'en', 'explicit' => false];
-    }
-
-    /**
      * Read and canonicalize `lang` or `xml:lang` from the current processor tag.
      *
      * @param mixed $processor WordPress HTML processor or compatible test double.
      * @return string|null Canonical language when the current tag declares one.
      */
-    private function processorLangAttribute(mixed $processor): ?string
+    private function processorLangAttribute(mixed $processor, int &$processorOutputBytes): ?string
     {
         if (!method_exists($processor, 'get_attribute')) {
             return null;
@@ -1829,6 +2289,12 @@ final class WP_FTS_Analyzer
                 continue;
             }
 
+            if (is_scalar($value)) {
+                $valueBytes = strlen((string) $value);
+                WP_FTS_Analysis_Limits::assert_html_language_attribute_bytes($valueBytes);
+                $this->chargeProcessorOutputBytes($processorOutputBytes, $valueBytes);
+            }
+
             $lang = $this->canonicalLanguage($value);
             if ($lang !== null) {
                 return $lang;
@@ -1836,6 +2302,13 @@ final class WP_FTS_Analyzer
         }
 
         return null;
+    }
+
+    /** Charge provider strings before trim(), case folding, or retained copies. */
+    private function chargeProcessorOutputBytes(int &$total, int $bytes): void
+    {
+        $total += $bytes;
+        WP_FTS_Analysis_Limits::assert_document_source_bytes($total);
     }
 
     /**
@@ -1964,7 +2437,7 @@ final class WP_FTS_Analyzer
      * explicit end tag. The fallback parser models the common cases so language
      * and boost scopes do not leak across sibling elements.
      *
-     * @param array<int,array{tag:string,lang:?string,detect_group:?int,text_group_boundary?:bool}> $stack
+     * @param array<int,array{tag:string,nearest_text_group_depth:?int}> $stack
      */
     private function closeFallbackOptionalEndTags(array &$stack, string $opening): void
     {
@@ -2032,36 +2505,21 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Return the nearest language scope in the fallback parser stack.
-     *
-     * @param array<int,array{tag:string,lang:?string,detect_group:?int,text_group_boundary?:bool}> $stack
-     * @param string $documentLang Fallback language outside any scoped tag.
-     * @return array{lang:string,explicit:bool} Effective language for the
-     *         current text node and whether it came from an HTML attribute.
-     */
-    private function fallbackCurrentLanguageScope(array $stack, string $documentLang): array
-    {
-        for ($i = count($stack) - 1; $i >= 0; $i--) {
-            if ($stack[$i]['lang'] !== null) {
-                return ['lang' => $stack[$i]['lang'], 'explicit' => true];
-            }
-        }
-
-        return ['lang' => $documentLang, 'explicit' => false];
-    }
-
-    /**
      * Close the current fallback inline text run before a child boundary starts.
      *
-     * @param array<int,array{tag:string,lang:?string,detect_group:?int,text_group_boundary?:bool}> $stack
+     * The nearest boundary depth is inherited when an element is pushed, so
+     * retirement is constant-time rather than a reverse ancestor scan.
+     *
+     * @param array<int,array{detect_group:?int,nearest_text_group_depth:?int}> $stack
      */
     private function retireFallbackCurrentTextGroup(array &$stack, ?int &$rootTextGroup): void
     {
-        for ($i = count($stack) - 1; $i >= 0; $i--) {
-            if (!empty($stack[$i]['text_group_boundary'])) {
-                $stack[$i]['detect_group'] = null;
-                return;
-            }
+        $nearestDepth = $stack === []
+            ? null
+            : ($stack[count($stack) - 1]['nearest_text_group_depth'] ?? null);
+        if ($nearestDepth !== null && isset($stack[$nearestDepth])) {
+            $stack[$nearestDepth]['detect_group'] = null;
+            return;
         }
 
         $rootTextGroup = null;
@@ -2070,22 +2528,20 @@ final class WP_FTS_Analyzer
     /**
      * Return or allocate the nearest visible-text detection group in the fallback parser.
      *
-     * @param array<int,array{tag:string,lang:?string,detect_group:?int,text_group_boundary?:bool}> $stack
+     * @param array<int,array{detect_group:?int,nearest_text_group_depth:?int}> $stack
      */
     private function fallbackCurrentTextGroup(array &$stack, ?int &$rootTextGroup, int &$textGroupCounter): int
     {
-        for ($i = count($stack) - 1; $i >= 0; $i--) {
-            if (empty($stack[$i]['text_group_boundary'])) {
-                continue;
+        $nearestDepth = $stack === []
+            ? null
+            : ($stack[count($stack) - 1]['nearest_text_group_depth'] ?? null);
+        if ($nearestDepth !== null && isset($stack[$nearestDepth])) {
+            if ($stack[$nearestDepth]['detect_group'] === null) {
+                $textGroupCounter++;
+                $stack[$nearestDepth]['detect_group'] = $textGroupCounter;
             }
 
-            if (isset($stack[$i]['detect_group']) && $stack[$i]['detect_group'] !== null) {
-                return (int) $stack[$i]['detect_group'];
-            }
-
-            $textGroupCounter++;
-            $stack[$i]['detect_group'] = $textGroupCounter;
-            return $textGroupCounter;
+            return (int) $stack[$nearestDepth]['detect_group'];
         }
 
         if ($rootTextGroup === null) {
@@ -2186,9 +2642,12 @@ final class WP_FTS_Analyzer
 
             if ($callback instanceof Closure) {
                 $reflection = new ReflectionFunction($callback);
-                $capturedState = $includeCapturedState
-                    ? ':' . sha1($this->stableJson($this->signatureValue($reflection->getStaticVariables())))
-                    : '';
+                $capturedState = '';
+                if ($includeCapturedState) {
+                    $variables = $reflection->getStaticVariables();
+                    WP_FTS_Analyzer_Config_Limits::assert_option_graph($variables, 'Analyzer callback captured state');
+                    $capturedState = ':' . sha1($this->stableJson($this->signatureValue($variables)));
+                }
                 return sprintf(
                     'closure:%s:%d-%d%s',
                     $reflection->getFileName() ?: 'internal',
@@ -2201,6 +2660,8 @@ final class WP_FTS_Analyzer
             if (is_object($callback)) {
                 return 'invokable:' . $this->objectSignature($callback);
             }
+        } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
+            throw $error;
         } catch (Throwable) {
             return 'callable:' . get_debug_type($callback);
         }

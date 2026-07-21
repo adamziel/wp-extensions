@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * Storage contract shared by in-memory, file, and MySQL index backends.
+ * Legacy blob-storage contract used by the in-memory and file backends.
  *
  * Implementations store postings by namespaced term key, document metadata with
  * per-language lengths, and collection metadata used by BM25. The interface also
@@ -145,14 +145,59 @@ interface WP_FTS_Storage
 }
 
 /**
- * Optional storage extension for backends that store postings as individual rows.
+ * Storage contract for set-oriented search and pagination.
  *
- * The base storage interface keeps the blob-shaped `get_terms()`/`put_term()`
- * contract for file and in-memory compatibility. MySQL implements this
- * extension so indexing can replace one document's postings with row deletes
- * and upserts instead of read-decode-write cycles over whole term blobs.
+ * Backends implementing this contract own dictionary resolution, candidate
+ * discovery, visibility filtering, ranking, and pagination in the database.
+ * The searcher supplies one analyzed logical-group plan and never expands
+ * prefixes or reads postings through the legacy storage primitives first.
  */
-interface WP_FTS_Row_Postings_Storage extends WP_FTS_Storage
+interface WP_FTS_Set_Oriented_Search_Storage
+{
+    public const MAX_QUERY_GROUPS = 12;
+    public const MAX_ALTERNATIVES_PER_GROUP = 12;
+    public const MAX_QUERY_ALTERNATIVES = 12;
+    public const MAX_PAGE_SIZE = 50;
+
+    /**
+     * Return one bounded ranked page for pre-prefix logical query groups.
+     *
+     * `$options['limit']` includes the caller's one-row lookahead. Backends may
+     * return that many result rows or return at most `page_size` rows together
+     * with an explicit `has_more` value and opaque cursors. Interactive totals
+     * are intentionally unknown; implementations must not perform an exhaustive
+     * count merely to populate the response. The input is hard-bounded to 12
+     * logical groups and 12 alternatives total. The aggregate cap preserves a
+     * twelve-way morphology group or twelve ordinary words without permitting
+     * a 48-posting-range OR plan.
+     * A backend should emit only term ids/group ids/ranks into its SQL constant
+     * relation; `source` and `surface` are presentation-side analyzer context.
+     *
+     * When `include_metadata` is true, each of the first `page_size` rows may
+     * carry a `metadata` array or the canonical WordPress metadata columns.
+     * When `include_snippets` is true, those rows carry bounded raw
+     * `snippet_text`, not escaped or highlighted HTML. The searcher consumes the
+     * sidecars after slicing off the lookahead row, generates the final safe
+     * snippet, and removes `metadata`/`snippet_text` from the public result. This
+     * contract keeps all hydration page-sized and forbids follow-up document or
+     * metadata reads in the searcher.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $groups
+     * @param array<string,mixed> $options Normalized, bounded search options.
+     * @return array<string,mixed> Page payload containing at most `limit`
+     *         `results` plus optional `has_more`, `next_cursor`,
+     *         `previous_cursor`, `query_lang`, and bounded `explain` values.
+     */
+    public function search_page(array $groups, array $options): array;
+}
+
+/**
+ * Optional writer extension for backends that replace one document's posting rows.
+ *
+ * The narrow contract lets a set-oriented production backend publish postings
+ * without claiming that it can materialize posting lists for legacy readers.
+ */
+interface WP_FTS_Row_Postings_Writer_Storage extends WP_FTS_Storage
 {
     /**
      * Replace all postings for one document id.
@@ -164,6 +209,18 @@ interface WP_FTS_Row_Postings_Storage extends WP_FTS_Storage
      * @param array<string,int> $term_frequencies Stored term key => weighted tf.
      */
     public function replace_doc_postings(int $doc_id, array $term_frequencies): void;
+}
+
+/**
+ * Optional read/write extension for backends that expose individual posting rows.
+ *
+ * The base storage interface keeps the blob-shaped `get_terms()`/`put_term()`
+ * contract for file and in-memory compatibility. Implementations of this wider
+ * contract support both native per-document replacement and bounded callers
+ * that explicitly request decoded posting maps.
+ */
+interface WP_FTS_Row_Postings_Storage extends WP_FTS_Row_Postings_Writer_Storage
+{
 
     /**
      * Fetch postings for requested stored term keys only.
@@ -249,17 +306,20 @@ interface WP_FTS_Prefix_Term_Storage extends WP_FTS_Storage
 }
 
 /**
- * Optional storage extension for table-preserving whole-index resets.
+ * Storage capability for table-preserving whole-index resets.
  *
  * Implementations must remove only derived FTS rows and leave schema/table
  * contracts intact so a later reindex can repopulate the same backend.
  */
-interface WP_FTS_Resettable_Storage extends WP_FTS_Storage
+interface WP_FTS_Resettable_Storage
 {
     /**
      * Clear all indexed document, posting, term, and collection metadata rows.
      *
-     * @return array<string,int> Bounded row counts keyed by deleted data kind.
+     * Production DDL resets may report null row counts rather than scan the
+     * corpus solely to make destructive-operation counters exact.
+     *
+     * @return array<string,mixed> Reset strategy, count precision, and optional row counts.
      */
     public function reset_index(): array;
 }

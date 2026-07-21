@@ -22,11 +22,22 @@ final class WP_FTS_DisposableReleaseSmokeRunner
     private const INDEX_TIME_BUDGET = '5';
     private const REPORT_SCHEMA = 'wp-fts-disposable-release-smoke-v1';
     private const OUTPUT_EXCERPT_BYTES = 900;
+    private const REQUIRED_FTS_SUBCOMMANDS = [
+        'clear-failed-item',
+        'failed-items',
+        'import-conllu-lemma-pack',
+        'import-lemma-pack',
+        'import-unimorph-lemma-pack',
+        'process-batch',
+        'reset-index',
+        'retry-failed-item',
+        'schedule-queue',
+    ];
 
     /** @var callable(array<int,string>, array<string,string>): array{exit:int,stdout:string,stderr:string} */
     private $processRunner;
 
-    /** @var callable(array<string,mixed>): array{build_dir:string,zip_path:string,sha256:string,removed_paths:string[],prohibited_paths:string[]} */
+    /** @var callable(array<string,mixed>): array{build_dir:string,zip_path:string,sha256:string,removed_paths:string[],prohibited_paths:string[],composer_home:string,composer_cache_dir:string,composer_plugins:bool,composer_scripts:bool} */
     private $releaseBuilder;
 
     /** @var callable(string): void */
@@ -44,7 +55,7 @@ final class WP_FTS_DisposableReleaseSmokeRunner
 
     /**
      * @param callable(array<int,string>, array<string,string>): array{exit:int,stdout:string,stderr:string}|null $processRunner
-     * @param callable(array<string,mixed>): array{build_dir:string,zip_path:string,sha256:string,removed_paths:string[],prohibited_paths:string[]}|null $releaseBuilder
+     * @param callable(array<string,mixed>): array{build_dir:string,zip_path:string,sha256:string,removed_paths:string[],prohibited_paths:string[],composer_home:string,composer_cache_dir:string,composer_plugins:bool,composer_scripts:bool}|null $releaseBuilder
      * @param callable(string): void|null $removePath
      * @param array<string,string>|null $env
      */
@@ -187,6 +198,16 @@ final class WP_FTS_DisposableReleaseSmokeRunner
                 $report
             );
 
+            $ftsHelp = $this->require_success(
+                'inspect packaged FTS command surface',
+                array_merge($baseCommand, ['help', 'fts']),
+                $report
+            );
+            $this->assert_required_fts_subcommands($ftsHelp['stdout']);
+            $report['cli_surface_evidence'] = [
+                'canonical_subcommands' => self::REQUIRED_FTS_SUBCOMMANDS,
+            ];
+
             $statusBefore = $this->require_json_success(
                 'status before repair',
                 array_merge($baseCommand, ['fts', 'status', '--format=json']),
@@ -228,7 +249,7 @@ final class WP_FTS_DisposableReleaseSmokeRunner
                 'process bounded index batch',
                 array_merge($baseCommand, [
                     'fts',
-                    'process_batch',
+                    'process-batch',
                     '--batch_size=' . self::INDEX_BATCH_SIZE,
                     '--time_budget=' . self::INDEX_TIME_BUDGET,
                     '--format=json',
@@ -546,6 +567,33 @@ final class WP_FTS_DisposableReleaseSmokeRunner
             . ($detail !== '' ? ' Detail: ' . self::sanitize_output($detail) : '');
     }
 
+    /** Fail when packaged WP-CLI help omits any canonical operator command. */
+    private function assert_required_fts_subcommands(string $help): void
+    {
+        $published = [];
+        foreach (explode("\n", str_replace("\r\n", "\n", $help)) as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+
+            $tokenLength = strcspn($line, " \t");
+            $published[substr($line, 0, $tokenLength)] = true;
+        }
+
+        $missing = [];
+        foreach (self::REQUIRED_FTS_SUBCOMMANDS as $subcommand) {
+            if (!isset($published[$subcommand])) {
+                $missing[] = $subcommand;
+            }
+        }
+        if ($missing !== []) {
+            throw new RuntimeException(
+                'Packaged `wp help fts` omitted canonical subcommands: ' . implode(', ', $missing) . '.'
+            );
+        }
+    }
+
     /**
      * @param array<string,mixed> $payload
      */
@@ -724,7 +772,7 @@ final class WP_FTS_DisposableReleaseSmokeRunner
 
     /**
      * @param array<string,mixed> $options
-     * @return array{build_dir:string,zip_path:string,sha256:string,removed_paths:string[],prohibited_paths:string[]}
+     * @return array{build_dir:string,zip_path:string,sha256:string,removed_paths:string[],prohibited_paths:string[],composer_home:string,composer_cache_dir:string,composer_plugins:bool,composer_scripts:bool}
      */
     private function default_release_builder(array $options): array
     {

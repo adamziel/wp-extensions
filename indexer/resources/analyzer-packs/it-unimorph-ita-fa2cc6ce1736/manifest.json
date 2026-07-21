@@ -12,8 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import",
-        "indexed-runtime-lookups"
+        "indexed-runtime-lookups",
+        "unimorph-source-import"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -24,58 +24,58 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "90c6f9d32920f6dbb2db3975092bb2fc8b0fb8ba062d59ad49433e9fc9e97bb1",
+                "sha256": "49e7c12b5749972485bf7fe39f22c1703aedcd55de12510a75f59d65a201abdc",
                 "rows": 100000,
                 "first_surface": "abaliena",
                 "last_surface": "divenissi",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0001.tsv.gz.lookup",
-                    "sha256": "9ee507b9c20ea0a73590e8f1d1f46f2f2ae4caee05a50cc1ba6a264ac72b9b24",
-                    "blocks": 49
+                    "sha256": "5b533a82f543dd9afd883c3b42fecb201c8e93a33fa77def7c7f367e4596ba24",
+                    "blocks": 142
                 }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "bc459e21a2c4019763a41daf9766237571d4b82d1bd9c23c80dc9f63c59b2fa2",
+                "sha256": "99ef657f64f3d34b9014a649a70967c1172c4534066be2a5eac299c9d33680be",
                 "rows": 100000,
                 "first_surface": "divenissimo",
                 "last_surface": "radiotelegrafante",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0002.tsv.gz.lookup",
-                    "sha256": "785a2cd67a71b79fe2f8c335cb8276cc27c75e7f9afa63c204b7c23473b39ba9",
-                    "blocks": 49
+                    "sha256": "6382613c3b7f542910d918d98f118c066ee0ff6c23cca5ca17ab6b6696902d93",
+                    "blocks": 139
                 }
             },
             {
                 "path": "runtime/0003.tsv.gz",
-                "sha256": "3618c1d114dfa208ae90c78df714a897e2fcda0c93d0d00616cf615c64866241",
+                "sha256": "f7627883d8b728f6c76e51a06f89bcc6624a7333974d5dff88a17b5d00179607",
                 "rows": 100000,
                 "first_surface": "radiotelegrafare",
                 "last_surface": "tallonano",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0003.tsv.gz.lookup",
-                    "sha256": "a0e665c922d1b7a90019ff66dd9fd34af95da36f1e5721a0fb13dee2e8265366",
-                    "blocks": 49
+                    "sha256": "758991d079eb15dae85d63fecdbef8cc2878a78ad2538a22ad89bf8d8235c302",
+                    "blocks": 142
                 }
             },
             {
                 "path": "runtime/0004.tsv.gz",
-                "sha256": "d20a1b09d4b937e507a5a2d5ba2ec99f1890f153bcf0e8a5065473aa90e554e9",
+                "sha256": "b65c68106aeb4f178b05783029d2ae2189ffc711b4bd3a2c26cf826cb535f584",
                 "rows": 21279,
                 "first_surface": "tallonante",
                 "last_surface": "zuppo",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0004.tsv.gz.lookup",
-                    "sha256": "592ddd3793449c71ff36a081e93df4c906ae048c8e0ce8cb5fb8f390b3607852",
-                    "blocks": 11
+                    "sha256": "b0376fb1841488e20ae7e22063c297466b9f698eef9d30b72af5a122fe365bf5",
+                    "blocks": 29
                 }
             }
         ]
@@ -105,16 +105,48 @@
         "parse_stats": {
             "source_path": "ita",
             "source_files": 1,
-            "files": [
-                "ita"
-            ],
+            "source_path_bytes": 3,
+            "source_entries": 1,
+            "source_max_depth": 0,
+            "source_physical_bytes": 19801423,
+            "source_physical_byte_limit": 67108864,
             "source_lines": 509575,
+            "source_line_limit": 8000000,
+            "source_decoded_bytes": 19801423,
+            "source_decoded_byte_limit": 536870912,
             "blank_lines": 1,
             "comment_lines": 0,
             "placeholder_rows": 0,
             "invalid_runtime_token_rows": 97250,
             "rows_with_features": 412324,
-            "accepted_rows": 412324
+            "accepted_rows": 412324,
+            "staged_tsv_bytes": 20118850,
+            "staged_row_limit": 1250000,
+            "staged_tsv_byte_limit": 67108864,
+            "accepted_source_rows": 412324,
+            "rows_with_tags": 412324,
+            "rows_with_source_notes": 412324,
+            "runtime_rows": 321279,
+            "unique_source_rows": 321279,
+            "deduplicated_rows": 91045,
+            "ambiguous_surfaces": 3178,
+            "unambiguous_surfaces": 314803,
+            "ambiguity_noop_surfaces": 0,
+            "ambiguity_noop_source_pairs": 0,
+            "chunk_files": 2,
+            "chunk_merge_outputs": 0,
+            "chunk_merge_passes": 0,
+            "max_live_chunk_files": 2,
+            "max_chunk_merge_inputs": 2,
+            "chunk_merge_fan_in_limit": 64,
+            "max_chunk_lexical_bytes": 4591189,
+            "chunk_lexical_byte_limit": 8388608,
+            "runtime_decoded_bytes": 7377060,
+            "runtime_encoded_bytes": 885431,
+            "lookup_index_bytes": 57424,
+            "lookup_blocks": 452,
+            "runtime_lookup_bytes": 942855,
+            "runtime_lookup_byte_limit": 16777216
         }
     },
     "license": {

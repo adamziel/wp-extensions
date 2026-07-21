@@ -4,9 +4,10 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/bootstrap.php';
 
 /**
- * Parser, importer, and local BM25 quality gate for operator-provided Cranfield
- * corpora. The full Cranfield data is intentionally not bundled here; callers
- * point this gate at local files they are licensed to use.
+ * Parser, importer, and legacy component BM25 fixture for operator-provided
+ * Cranfield corpora. It does not exercise the production relational ranker.
+ * The full data is intentionally not bundled; callers point this fixture at
+ * local files they are licensed to use.
  */
 final class WP_FTS_Cranfield_Relevance_Gate
 {

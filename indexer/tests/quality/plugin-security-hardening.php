@@ -68,7 +68,7 @@ test_case('quality plugin settings sanitization clamps generated operator input'
         $settings = WP_FTS_Plugin::sanitize_settings($raw);
         assert_true($settings['index_post_types'] !== [], "plugin settings case {$i} should keep a non-empty post type allowlist");
         foreach ($settings['index_post_types'] as $postType) {
-            assert_true(in_array($postType, ['page', 'post'], true), "plugin settings case {$i} should reject non-public post type {$postType}");
+            assert_true(in_array($postType, ['attachment', 'page', 'post'], true), "plugin settings case {$i} should reject non-public post type {$postType}");
         }
         assert_true($settings['snippet_length'] >= 40 && $settings['snippet_length'] <= 500, "plugin settings case {$i} should clamp snippet length");
         assert_true($settings['result_limit'] >= 1 && $settings['result_limit'] <= WP_FTS_Plugin::MAX_SEARCH_LIMIT, "plugin settings case {$i} should clamp result limit");
@@ -77,7 +77,7 @@ test_case('quality plugin settings sanitization clamps generated operator input'
         assert_true(is_bool($settings['replace_frontend_search']), "plugin settings case {$i} should sanitize frontend replacement as bool");
         assert_true(is_bool($settings['replace_admin_post_search']), "plugin settings case {$i} should sanitize admin replacement as bool");
         assert_true(is_bool($settings['highlight']), "plugin settings case {$i} should sanitize highlight as bool");
-        assert_true(is_bool($settings['language_fallback']), "plugin settings case {$i} should sanitize language fallback as bool");
+        assert_true(!array_key_exists('language_fallback', $settings), "plugin settings case {$i} should discard removed language fanout state");
     }
 });
 
@@ -124,6 +124,9 @@ test_case('quality plugin frontend and admin query gates reject unsupported gene
 
     $GLOBALS['wp_fts_test_is_admin'] = true;
     $GLOBALS['pagenow'] = 'edit.php';
+    $GLOBALS['wp_fts_test_caps']['edit_others_posts'][0] = true;
+    $GLOBALS['wp_fts_test_caps']['edit_published_posts'][0] = true;
+    $GLOBALS['wp_fts_test_caps']['read_private_posts'][0] = true;
     for ($i = 0; $i < 180; $i++) {
         $vars = ['s' => 'needle', 'posts_per_page' => 10, 'post_type' => 'post'];
         $expected = true;
@@ -154,40 +157,135 @@ test_case('quality plugin frontend and admin query gates reject unsupported gene
     }
 });
 
-test_case('quality plugin visibility gates protect generated private draft and password states', function (): void {
+test_case('quality plugin visibility scope authorizes type-wide statuses before SQL LIMIT', function (): void {
     wp_fts_test_reset_wordpress_fakes();
-    $statuses = ['publish', 'draft', 'pending', 'future', 'private', 'trash'];
 
-    for ($postId = 1; $postId <= 220; $postId++) {
-        $status = $statuses[$postId % count($statuses)];
-        $type = $postId % 13 === 0 ? 'secret' : ($postId % 5 === 0 ? 'page' : 'post');
-        $password = $postId % 17 === 0 ? 'pw' : '';
-        $GLOBALS['wp_fts_test_posts'][$postId] = (object) [
-            'ID' => $postId,
-            'post_title' => "Visibility {$postId}",
-            'post_content' => 'needle visible',
-            'post_excerpt' => '',
-            'post_status' => $status,
-            'post_type' => $type,
-            'post_password' => $password,
-            'post_date_gmt' => '2026-03-01 00:00:00',
-        ];
-        if ($postId % 4 === 0) {
-            $GLOBALS['wp_fts_test_caps']['read_post'][$postId] = true;
+    $defaultSettings = WP_FTS_Plugin::default_settings();
+    $typeCases = [
+        ['label' => 'configured default', 'opts' => [], 'types' => ['attachment', 'page', 'post'], 'valid' => true],
+        ['label' => 'singular post', 'opts' => ['post_type' => 'post'], 'types' => ['post'], 'valid' => true],
+        ['label' => 'plural page', 'opts' => ['post_types' => ['page']], 'types' => ['page'], 'valid' => true],
+        ['label' => 'normalized configured pair', 'opts' => ['post_types' => ['post,page', 'post']], 'types' => ['page', 'post'], 'valid' => true],
+        ['label' => 'excluded non-public type', 'opts' => ['post_type' => 'secret'], 'types' => ['secret'], 'valid' => false],
+        ['label' => 'unknown type', 'opts' => ['post_type' => 'unknown'], 'types' => ['unknown'], 'valid' => false],
+        ['label' => 'mixed enabled and excluded types', 'opts' => ['post_types' => ['post', 'secret']], 'types' => ['post', 'secret'], 'valid' => false],
+        [
+            'label' => 'type disabled in settings',
+            'opts' => ['post_type' => 'page'],
+            'types' => ['page'],
+            'valid' => false,
+            'settings' => array_replace($defaultSettings, ['index_post_types' => ['post']]),
+        ],
+        [
+            'label' => 'restricted configured default',
+            'opts' => [],
+            'types' => ['post'],
+            'valid' => true,
+            'settings' => array_replace($defaultSettings, ['index_post_types' => ['post']]),
+        ],
+    ];
+    $statusCases = [
+        ['label' => 'published default', 'opts' => [], 'statuses' => ['publish'], 'valid' => true],
+        ['label' => 'published', 'opts' => ['post_status' => 'publish'], 'statuses' => ['publish'], 'valid' => true],
+        ['label' => 'draft', 'opts' => ['post_status' => 'draft'], 'statuses' => ['draft'], 'valid' => true],
+        ['label' => 'pending', 'opts' => ['post_status' => 'pending'], 'statuses' => ['pending'], 'valid' => true],
+        ['label' => 'future', 'opts' => ['post_status' => 'future'], 'statuses' => ['future'], 'valid' => true],
+        ['label' => 'private', 'opts' => ['post_status' => 'private'], 'statuses' => ['private'], 'valid' => true],
+        ['label' => 'published and draft', 'opts' => ['post_statuses' => ['publish,draft']], 'statuses' => ['draft', 'publish'], 'valid' => true],
+        ['label' => 'all editable', 'opts' => ['post_statuses' => ['future', 'pending', 'draft']], 'statuses' => ['draft', 'future', 'pending'], 'valid' => true],
+        ['label' => 'published and private', 'opts' => ['post_statuses' => ['private', 'publish']], 'statuses' => ['private', 'publish'], 'valid' => true],
+        ['label' => 'editable and private', 'opts' => ['post_statuses' => ['private', 'draft']], 'statuses' => ['draft', 'private'], 'valid' => true],
+        ['label' => 'all supported', 'opts' => ['post_statuses' => ['private', 'publish', 'future', 'pending', 'draft']], 'statuses' => ['draft', 'future', 'pending', 'private', 'publish'], 'valid' => true],
+        ['label' => 'unsupported trash', 'opts' => ['post_status' => 'trash'], 'statuses' => ['trash'], 'valid' => false],
+        ['label' => 'mixed supported and unsupported', 'opts' => ['post_statuses' => ['publish', 'inherit']], 'statuses' => ['inherit', 'publish'], 'valid' => false],
+    ];
+    $typeCapabilities = [
+        'attachment' => ['edit' => 'edit_others_posts', 'published' => 'edit_published_posts', 'private' => 'read_private_posts'],
+        'post' => ['edit' => 'edit_others_posts', 'published' => 'edit_published_posts', 'private' => 'read_private_posts'],
+        'page' => ['edit' => 'edit_others_pages', 'published' => 'edit_published_pages', 'private' => 'read_private_pages'],
+    ];
+    $capabilityBits = [
+        'edit_others_posts',
+        'edit_published_posts',
+        'read_private_posts',
+        'edit_others_pages',
+        'edit_published_pages',
+        'read_private_pages',
+    ];
+
+    $caseNumber = 0;
+    foreach ($typeCases as $typeCase) {
+        foreach ($statusCases as $statusCase) {
+            foreach (range(0, 63) as $capabilityMask) {
+                $caseNumber++;
+                $GLOBALS['wp_fts_test_caps'] = [
+                    // Per-object grants cannot make a pre-LIMIT SQL scope safe.
+                    'read_post' => [991 => true],
+                    'edit_post' => [991 => true],
+                ];
+                foreach ($capabilityBits as $bit => $capability) {
+                    if (($capabilityMask & (1 << $bit)) !== 0) {
+                        $GLOBALS['wp_fts_test_caps'][$capability][0] = true;
+                    }
+                }
+
+                $needsEditOthers = array_intersect($statusCase['statuses'], ['draft', 'pending', 'future']) !== [];
+                $needsEditPublished = in_array('future', $statusCase['statuses'], true);
+                $needsReadPrivate = in_array('private', $statusCase['statuses'], true);
+                $hasRequiredCapabilities = true;
+                foreach ($typeCase['types'] as $postType) {
+                    if (!isset($typeCapabilities[$postType])) {
+                        continue;
+                    }
+                    if (
+                        $needsEditOthers
+                        && empty($GLOBALS['wp_fts_test_caps'][$typeCapabilities[$postType]['edit']][0])
+                    ) {
+                        $hasRequiredCapabilities = false;
+                    }
+                    if (
+                        $needsEditPublished
+                        && empty($GLOBALS['wp_fts_test_caps'][$typeCapabilities[$postType]['published']][0])
+                    ) {
+                        $hasRequiredCapabilities = false;
+                    }
+                    if (
+                        $needsReadPrivate
+                        && empty($GLOBALS['wp_fts_test_caps'][$typeCapabilities[$postType]['private']][0])
+                    ) {
+                        $hasRequiredCapabilities = false;
+                    }
+                }
+                $expectedAllowed = $typeCase['valid'] && $statusCase['valid'] && $hasRequiredCapabilities;
+                $label = "plugin SQL visibility case {$caseNumber} ({$typeCase['label']}; {$statusCase['label']}; capability mask {$capabilityMask})";
+
+                $threw = false;
+                try {
+                    $scope = qpsh_private(
+                        'authorized_search_scope',
+                        array_replace($typeCase['opts'], $statusCase['opts']),
+                        $typeCase['settings'] ?? $defaultSettings
+                    );
+                } catch (InvalidArgumentException) {
+                    $threw = true;
+                    $scope = [];
+                }
+
+                assert_same($expectedAllowed, !$threw, $label);
+                if (!$expectedAllowed) {
+                    continue;
+                }
+                assert_same($typeCase['types'], $scope['post_types'] ?? null, $label . ' should compile sorted post types');
+                assert_same($statusCase['statuses'], $scope['post_statuses'] ?? null, $label . ' should compile sorted statuses');
+                assert_true(!array_key_exists('post_type', $scope), $label . ' should remove the singular post type input');
+                assert_true(!array_key_exists('post_status', $scope), $label . ' should remove the singular post status input');
+            }
         }
-        if ($postId % 9 === 0) {
-            $GLOBALS['wp_fts_test_caps']['edit_post'][$postId] = true;
-        }
-
-        $frontendExpected = $status === 'publish' && $password === '' && in_array($type, ['post', 'page'], true);
-        $readableNonPublic = in_array($status, ['draft', 'pending', 'future', 'private'], true)
-            && $password === ''
-            && in_array($type, ['post', 'page'], true)
-            && (!empty($GLOBALS['wp_fts_test_caps']['read_post'][$postId]) || !empty($GLOBALS['wp_fts_test_caps']['edit_post'][$postId]));
-        $adminExpected = $frontendExpected || $readableNonPublic;
-
-        assert_same($frontendExpected, qpsh_private('frontend_post_result_visible', $postId, ['post', 'page']), "plugin frontend visibility case {$postId}");
-        assert_same($adminExpected, qpsh_private('admin_post_result_visible', $postId, ['post', 'page']), "plugin admin visibility case {$postId}");
-        assert_same($frontendExpected || $readableNonPublic, qpsh_private('can_read_post_result', $postId), "plugin REST/public visibility case {$postId}");
     }
+
+    $acceptance = (string) file_get_contents(dirname(__DIR__, 2) . '/docs/relational-search-acceptance.md');
+    $readme = (string) file_get_contents(dirname(__DIR__, 2) . '/README.md');
+    assert_contains('7,488 capability combinations', $acceptance, 'acceptance should retain the exhaustive mapped-capability matrix');
+    assert_contains('future rows require both mapped', $acceptance, 'acceptance should retain WordPress future-post meta-cap parity');
+    assert_contains('future rows also require `edit_published_posts`', $readme, 'operator documentation should state the scheduled-post capability boundary');
 });

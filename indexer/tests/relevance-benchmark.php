@@ -6,9 +6,9 @@ require_once __DIR__ . '/../src/bootstrap.php';
 /**
  * Native relevance evaluator for committed multilingual gold fixtures.
  *
- * The evaluator intentionally uses the production analyzer, indexer, storage,
- * and searcher classes. It does not depend on WordPress Playground or external
- * packages, so the same suite can run under normal PHP and `php -n`.
+ * The evaluator intentionally uses the component analyzer/indexer and legacy
+ * in-memory searcher. It does not exercise the production relational ranker,
+ * WordPress visibility, or MySQL query plans; those have separate gates.
  */
 final class WP_FTS_Relevance_Benchmark
 {
@@ -509,21 +509,21 @@ final class WP_FTS_Relevance_Benchmark
 
         $surface = (string) ($query['surface'] ?? 'searcher');
         if ($surface === 'plugin_rest' || $surface === 'native_visibility') {
-            return self::visibility_refill_search($searcher, $docMap, (string) ($query['query'] ?? ''), $searchOptions, $query, $limit);
+            return self::legacy_visibility_page_search($searcher, $docMap, (string) ($query['query'] ?? ''), $searchOptions, $query, $limit);
         }
 
         return $searcher->search((string) ($query['query'] ?? ''), $searchOptions);
     }
 
     /**
-     * Mirror the plugin's public-result refill semantics without requiring WP.
+     * Preserve the retired component fixture's post-filtered page semantics.
      *
      * @param array<int,array<string,mixed>> $docMap
      * @param array<string,mixed> $searchOptions
      * @param array<string,mixed> $query
      * @return array<int,array<string,mixed>>
      */
-    private static function visibility_refill_search(WP_FTS_Searcher $searcher, array $docMap, string $queryText, array $searchOptions, array $query, int $limit): array
+    private static function legacy_visibility_page_search(WP_FTS_Searcher $searcher, array $docMap, string $queryText, array $searchOptions, array $query, int $limit): array
     {
         $visible = [];
         $offset = 0;

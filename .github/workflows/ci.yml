@@ -10,7 +10,7 @@ jobs:
   language-fts:
     name: Language FTS / PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
@@ -24,6 +24,27 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+
+      - name: Initialize the pinned Jieba dictionary
+        run: |
+          set -euo pipefail
+          path=components/full-text-search/resources/sources/jieba
+          gitlink=67fa2e36e72f69d9134b8a1037b83fbb070b9775
+          read -r mode indexed_gitlink stage indexed_path <<< "$(git ls-files --stage -- "${path}")"
+          test "${mode}" = 160000
+          test "${indexed_gitlink}" = "${gitlink}"
+          test "${stage}" = 0
+          test "${indexed_path}" = "${path}"
+          test "$(git config -f .gitmodules --get "submodule.${path}.path")" = "${path}"
+          test "$(git config -f .gitmodules --get "submodule.${path}.url")" = https://github.com/fxsjy/jieba
+          git submodule sync -- "${path}"
+          git -c protocol.version=2 submodule update --init --depth 1 -- "${path}"
+          test "$(git -C "${path}" rev-parse HEAD)" = "${gitlink}"
+          test -z "$(git -C "${path}" status --porcelain --untracked-files=all)"
+          test "$(sha256sum "${path}/jieba/dict.txt" | cut -d ' ' -f 1)" = 7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8
+          test "$(stat -c %s "${path}/jieba/dict.txt")" = 5071852
+          test "$(sha256sum "${path}/LICENSE" | cut -d ' ' -f 1)" = 18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37
+          test "$(stat -c %s "${path}/LICENSE")" = 1075
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -40,7 +61,9 @@ jobs:
 
       - name: Test reusable full-text search component
         working-directory: components/full-text-search
-        run: composer test
+        run: |
+          timeout --signal=TERM --kill-after=10s 60s php -d memory_limit=128M tools/build-jieba-lookup-index.php --check
+          composer test
 
       - name: Install Language FTS dependencies
         working-directory: indexer
@@ -57,7 +80,7 @@ jobs:
   language-fts-no-extensions:
     name: Language FTS / PHP ${{ matrix.php }} / no shared extensions
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
@@ -72,6 +95,27 @@ jobs:
         with:
           submodules: false
 
+      - name: Initialize the pinned Jieba dictionary
+        run: |
+          set -euo pipefail
+          path=components/full-text-search/resources/sources/jieba
+          gitlink=67fa2e36e72f69d9134b8a1037b83fbb070b9775
+          read -r mode indexed_gitlink stage indexed_path <<< "$(git ls-files --stage -- "${path}")"
+          test "${mode}" = 160000
+          test "${indexed_gitlink}" = "${gitlink}"
+          test "${stage}" = 0
+          test "${indexed_path}" = "${path}"
+          test "$(git config -f .gitmodules --get "submodule.${path}.path")" = "${path}"
+          test "$(git config -f .gitmodules --get "submodule.${path}.url")" = https://github.com/fxsjy/jieba
+          git submodule sync -- "${path}"
+          git -c protocol.version=2 submodule update --init --depth 1 -- "${path}"
+          test "$(git -C "${path}" rev-parse HEAD)" = "${gitlink}"
+          test -z "$(git -C "${path}" status --porcelain --untracked-files=all)"
+          test "$(sha256sum "${path}/jieba/dict.txt" | cut -d ' ' -f 1)" = 7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8
+          test "$(stat -c %s "${path}/jieba/dict.txt")" = 5071852
+          test "$(sha256sum "${path}/LICENSE" | cut -d ' ' -f 1)" = 18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37
+          test "$(stat -c %s "${path}/LICENSE")" = 1075
+
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
@@ -82,6 +126,7 @@ jobs:
         env:
           WP_FTS_FAIL_ON_PENDING: '1'
         run: |
+          timeout --signal=TERM --kill-after=10s 60s php -n -d memory_limit=128M components/full-text-search/tools/build-jieba-lookup-index.php --check
           php -n components/full-text-search/tests/smoke.php
           php -n indexer/tests/run.php
 
@@ -95,6 +140,27 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+
+      - name: Initialize the pinned Jieba dictionary
+        run: |
+          set -euo pipefail
+          path=components/full-text-search/resources/sources/jieba
+          gitlink=67fa2e36e72f69d9134b8a1037b83fbb070b9775
+          read -r mode indexed_gitlink stage indexed_path <<< "$(git ls-files --stage -- "${path}")"
+          test "${mode}" = 160000
+          test "${indexed_gitlink}" = "${gitlink}"
+          test "${stage}" = 0
+          test "${indexed_path}" = "${path}"
+          test "$(git config -f .gitmodules --get "submodule.${path}.path")" = "${path}"
+          test "$(git config -f .gitmodules --get "submodule.${path}.url")" = https://github.com/fxsjy/jieba
+          git submodule sync -- "${path}"
+          git -c protocol.version=2 submodule update --init --depth 1 -- "${path}"
+          test "$(git -C "${path}" rev-parse HEAD)" = "${gitlink}"
+          test -z "$(git -C "${path}" status --porcelain --untracked-files=all)"
+          test "$(sha256sum "${path}/jieba/dict.txt" | cut -d ' ' -f 1)" = 7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8
+          test "$(stat -c %s "${path}/jieba/dict.txt")" = 5071852
+          test "$(sha256sum "${path}/LICENSE" | cut -d ' ' -f 1)" = 18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37
+          test "$(stat -c %s "${path}/LICENSE")" = 1075
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2

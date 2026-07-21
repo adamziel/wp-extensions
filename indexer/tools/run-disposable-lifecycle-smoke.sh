@@ -10,6 +10,7 @@ COMPOSE_FILE=""
 LIFECYCLE_REPORT_FILE=""
 LIFECYCLE_REPORT_CONTAINER_FILE="/smoke-reports/lifecycle-report.json"
 LIFECYCLE_OUTPUT_FILE=""
+REINSTALL_ZIP_FILE=""
 SOURCE_COPY_TAR_EXCLUDES=(
     --exclude='./vendor'
     --exclude='./node_modules'
@@ -86,6 +87,24 @@ run_source_copy_composer_install() {
     env "${composer_env[@]}" composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader
 }
 
+build_lifecycle_reinstall_zip() {
+    local staging="${PROOF_ROOT}/reinstall/indexer"
+    mkdir -p "${staging}"
+    (
+        cd "${PROOF_ROOT}/plugin"
+        tar -cf - .
+    ) | (
+        cd "${staging}"
+        tar -xf -
+    )
+    (
+        cd "${PROOF_ROOT}/reinstall"
+        zip -q -r "$(basename "${REINSTALL_ZIP_FILE}")" indexer
+    )
+    rm -rf "${staging}"
+    test -s "${REINSTALL_ZIP_FILE}"
+}
+
 run_lifecycle_step() {
     local label="$1"
     shift
@@ -112,18 +131,60 @@ $status = $report["status"] ?? "";
 if (!is_string($status) || $status === "") {
     exit(3);
 }
-echo $status;
+$multisite = $report["multisite_evidence"]["status"] ?? "";
+$cleanup = $report["covered_behaviors"]["uninstall_removes_current_and_legacy_fts_tables"] ?? false;
+$fence = $report["covered_behaviors"]["uninstall_retains_exact_bounded_lifecycle_fence"] ?? false;
+$reactivation = $report["covered_behaviors"]["multisite_reactivation_clears_all_site_fences_and_reprovisions"] ?? false;
+echo json_encode([
+    "status" => $status,
+    "multisite_status" => is_string($multisite) ? $multisite : "",
+    "uninstall_cleanup" => $cleanup === true,
+    "uninstall_fence" => $fence === true,
+    "network_reactivation" => $reactivation === true,
+], JSON_UNESCAPED_SLASHES);
 ' "${LIFECYCLE_REPORT_FILE}")"; then
         cat "${LIFECYCLE_OUTPUT_FILE}" >&2
         printf 'FAIL: Inner lifecycle smoke did not write a parseable lifecycle report.\n' >&2
         return 1
     fi
 
-    printf '{"schema":"wp-fts-disposable-lifecycle-wrapper-proof-v1","inner_report_schema":"wp-fts-disposable-lifecycle-smoke-v1","inner_report_status":"%s"}\n' "${report_status}"
+    local inner_status
+    local multisite_status
+    local uninstall_cleanup
+    local uninstall_fence
+    local network_reactivation
+    inner_status="$(php -r '$v=json_decode($argv[1],true); echo is_array($v)?($v["status"]??""):"";' "${report_status}")"
+    multisite_status="$(php -r '$v=json_decode($argv[1],true); echo is_array($v)?($v["multisite_status"]??""):"";' "${report_status}")"
+    uninstall_cleanup="$(php -r '$v=json_decode($argv[1],true); echo is_array($v)&&($v["uninstall_cleanup"]??false)===true?"true":"false";' "${report_status}")"
+    uninstall_fence="$(php -r '$v=json_decode($argv[1],true); echo is_array($v)&&($v["uninstall_fence"]??false)===true?"true":"false";' "${report_status}")"
+    network_reactivation="$(php -r '$v=json_decode($argv[1],true); echo is_array($v)&&($v["network_reactivation"]??false)===true?"true":"false";' "${report_status}")"
 
-    if [[ "${report_status}" != "passed" ]]; then
+    printf '{"schema":"wp-fts-disposable-lifecycle-wrapper-proof-v1","inner_report_schema":"wp-fts-disposable-lifecycle-smoke-v1","inner_report_status":"%s","multisite_evidence_status":"%s","uninstall_table_cleanup":%s,"uninstall_fence":%s,"network_reactivation":%s}\n' \
+        "${inner_status}" "${multisite_status}" "${uninstall_cleanup}" "${uninstall_fence}" "${network_reactivation}"
+
+    if [[ "${inner_status}" != "passed" ]]; then
         cat "${LIFECYCLE_OUTPUT_FILE}" >&2
-        printf 'FAIL: Inner lifecycle smoke reported status "%s"; expected "passed".\n' "${report_status}" >&2
+        printf 'FAIL: Inner lifecycle smoke reported status "%s"; expected "passed".\n' "${inner_status}" >&2
+        return 1
+    fi
+    if [[ "${multisite_status}" != "passed" ]]; then
+        cat "${LIFECYCLE_OUTPUT_FILE}" >&2
+        printf 'FAIL: Inner lifecycle smoke reported multisite_evidence.status "%s"; expected "passed".\n' "${multisite_status}" >&2
+        return 1
+    fi
+    if [[ "${uninstall_cleanup}" != "true" ]]; then
+        cat "${LIFECYCLE_OUTPUT_FILE}" >&2
+        printf 'FAIL: Inner lifecycle smoke did not prove current/legacy FTS table removal.\n' >&2
+        return 1
+    fi
+    if [[ "${uninstall_fence}" != "true" ]]; then
+        cat "${LIFECYCLE_OUTPUT_FILE}" >&2
+        printf 'FAIL: Inner lifecycle smoke did not prove the exact bounded uninstall fence.\n' >&2
+        return 1
+    fi
+    if [[ "${network_reactivation}" != "true" ]]; then
+        cat "${LIFECYCLE_OUTPUT_FILE}" >&2
+        printf 'FAIL: Inner lifecycle smoke did not prove network reactivation fence clearance and reprovisioning.\n' >&2
         return 1
     fi
 
@@ -133,6 +194,7 @@ echo $status;
 
 require_command php
 require_command tar
+require_command zip
 require_command composer
 require_command docker
 
@@ -148,6 +210,7 @@ PROOF_ROOT="$(mktemp -d /tmp/wp-fts-lifecycle-smoke.XXXXXX)"
 COMPOSE_FILE="${PROOF_ROOT}/compose.yaml"
 LIFECYCLE_REPORT_FILE="${PROOF_ROOT}/reports/lifecycle-report.json"
 LIFECYCLE_OUTPUT_FILE="${PROOF_ROOT}/lifecycle-output.txt"
+REINSTALL_ZIP_FILE="${PROOF_ROOT}/reinstall/indexer-lifecycle-reinstall.zip"
 trap cleanup EXIT INT TERM
 
 mkdir -p "${PROOF_ROOT}/plugin" "${PROOF_ROOT}/components/full-text-search" "${PROOF_ROOT}/reports"
@@ -171,6 +234,9 @@ chmod 0777 "${PROOF_ROOT}/reports"
 
 run_step "Installing source-copy Composer production dependencies" \
     run_source_copy_composer_install
+
+run_step "Building source-bound lifecycle reinstallation ZIP" \
+    build_lifecycle_reinstall_zip
 
 cat > "${COMPOSE_FILE}" <<YAML
 services:
@@ -217,6 +283,7 @@ services:
     volumes:
       - wp_data:/var/www/html
       - ${PROOF_ROOT}/plugin:/smoke-src:ro
+      - ${PROOF_ROOT}/reinstall:/smoke-reinstall:ro
       - ${PROOF_ROOT}/reports:/smoke-reports
     entrypoint: ["wp"]
 volumes:
@@ -239,10 +306,10 @@ if [[ "${wp_config_ready}" != "1" ]]; then
     exit 1
 fi
 
-run_step "Installing disposable WordPress site" \
-    docker compose -f "${COMPOSE_FILE}" run --rm wpcli core install \
+run_step "Installing disposable WordPress multisite network" \
+    docker compose -f "${COMPOSE_FILE}" run --rm wpcli core multisite-install \
         --path=/var/www/html \
-        --url="http://wordpress:80" \
+        --url="http://wordpress" \
         --title="WP FTS Lifecycle Smoke" \
         --admin_user=admin \
         --admin_password="wpfts_lifecycle_smoke_admin_only" \
@@ -257,14 +324,14 @@ run_step "Marking disposable WordPress root for guarded lifecycle smoke" \
     docker compose -f "${COMPOSE_FILE}" run --rm --entrypoint sh wpcli -lc \
         'touch /var/www/html/.wp-fts-lifecycle-smoke'
 
-printf 'INFO: Multisite lifecycle sub-scenario not run; this Docker wrapper records a single-site disposable lifecycle boundary.\n'
-
 run_lifecycle_step "Running disposable lifecycle smoke against source-copy plugin" \
     docker compose -f "${COMPOSE_FILE}" run --rm --entrypoint php \
         -e WP_FTS_WP_PATH=/var/www/html \
         -e WP_FTS_WP_CLI=wp \
-        -e WP_FTS_WP_URL=http://wordpress:80 \
+        -e WP_FTS_WP_URL=http://wordpress \
         -e WP_FTS_LIFECYCLE_SMOKE_ALLOW=1 \
+        -e WP_FTS_LIFECYCLE_SMOKE_NETWORK_ACTIVATE=1 \
+        -e WP_FTS_LIFECYCLE_SMOKE_REINSTALL_ZIP=/smoke-reinstall/indexer-lifecycle-reinstall.zip \
         -e "WP_FTS_SOURCE_SHA=${SOURCE_SHA}" \
         wpcli /smoke-src/tools/smoke-disposable-wordpress-lifecycle.php \
         --report-file="${LIFECYCLE_REPORT_CONTAINER_FILE}"

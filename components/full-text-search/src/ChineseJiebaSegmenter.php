@@ -2,12 +2,14 @@
 declare(strict_types=1);
 
 /**
- * Optional Chinese segmenter backed directly by the pinned Jieba submodule.
+ * Optional Chinese segmenter backed by the pinned Jieba dictionary.
  *
- * Runtime construction validates the exact upstream dictionary hash before the
- * segmenter can be used. Lookups stream the dictionary lazily for only the
- * first characters observed in a CJK run and keep a bounded LRU cache, so the
- * full dictionary is never materialized during ordinary indexing or search.
+ * Runtime construction validates custom source hashes eagerly. The pinned
+ * dictionary instead requires an attested, compact first-codepoint range index
+ * and verifies each source range when it is read. Ordinary lookups therefore
+ * avoid rescanning the 5 MiB dictionary. Source-only custom dictionaries are
+ * limited to fixtures: they build the same range shape in one bounded source
+ * pass and must pass complete-cache admission before any result is returned.
  */
 final class WP_FTS_ChineseJiebaSegmenter
 {
@@ -16,27 +18,79 @@ final class WP_FTS_ChineseJiebaSegmenter
     public const SOURCE_FILE = 'jieba/dict.txt';
     public const SOURCE_SHA256 = '7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8';
     public const SOURCE_BYTE_SIZE = 5071852;
+    public const LOOKUP_SHA256 = '4c979fd244e59b8343c2e584dbd5ba062deb1f836b8ae9ca2b56b54f130b9046';
+    public const LOOKUP_BYTE_SIZE = 329972;
+    public const LOOKUP_RANGE_COUNT = 11783;
+
+    // A dictionary word may use the complete 4-KiB lexical-run allowance;
+    // another 4 KiB leaves room for its frequency and tag without permitting
+    // one valid custom dictionary row to allocate the complete 16-MiB source.
+    public const MAX_DICTIONARY_LINE_BYTES = 8192;
+
+    // The public segmenter definition admits 337,461 pinned rows and 3,013,799
+    // bytes of candidate words; LanguagePipeline can reach the 337,399 rows and
+    // 3,013,489 bytes whose first codepoint is Han. Compact word-membership and
+    // length maps therefore keep every populated pinned prefix resident after
+    // its first indexed read. Fixture dictionaries must fit the same complete
+    // cache at admission; there is no eviction/re-read path.
+    public const MAX_RETAINED_DICTIONARY_CANDIDATES = 350000;
+    public const MAX_RETAINED_DICTIONARY_CANDIDATE_BYTES = 8388608;
 
     private const FALLBACK_MAX_NGRAM_LENGTH = 4;
-    private const DEFAULT_MAX_CACHED_PREFIXES = 16;
     private const DEFAULT_MAX_CANDIDATES_PER_PREFIX = 5000;
+    private const MAX_CANDIDATES_PER_PREFIX = 5000;
+    private const MAX_SOURCE_FILE_BYTES = 16777216;
+    private const LOOKUP_MAGIC = "WPFTSJ2\0";
+    private const LOOKUP_HEADER_BYTES = 48;
+    private const LOOKUP_RECORD_BYTES = 28;
+    private const DYNAMIC_LOOKUP_RECORD_BYTES = 12;
+    private const UNICODE_CODEPOINT_COUNT = 1114112;
+    private const NO_DYNAMIC_RANGE = 0xFFFFFFFF;
+    private const LOADED_PREFIX_BYTES = 139264;
+    private const MAX_RETAINED_RUNS = 256;
+    private const MAX_RETAINED_RUN_TOKENS = 4096;
+    private const MAX_RETAINED_RUN_BYTES = 262144;
 
-    /** @var array<string,array{entries:array<int,array{word:string,frequency:int,length:int}>,words:array<string,bool>}> */
+    /** @var array<string,array{words:array<string,bool>,lengths:array<int,bool>,candidate_count:int,candidate_bytes:int}> */
     private array $prefixCache = [];
+    private ?string $loadedPrefixBits = null;
 
+    /** Number of complete dictionary scans, retained for bounded-work tests. */
+    private int $dictionaryScanCount = 0;
+    /** Number of complete source hashes performed by this instance. */
+    private int $sourceHashScanCount = 0;
+
+    /** Aggregate retained entries and logical word bytes across complete prefixes. */
+    private int $cachedCandidateCount = 0;
+    private int $cachedCandidateBytes = 0;
+
+    /** @var array<string,string[]> */
+    private array $runCache = [];
     /** @var string[] */
-    private array $prefixCacheOrder = [];
+    private array $runCacheOrder = [];
+    private int $cachedRunTokenCount = 0;
+    private int $cachedRunBytes = 0;
+    /** Number of source ranges read, retained for bounded-work tests. */
+    private int $indexedRangeReadCount = 0;
 
     private string $sourceFile;
+    private ?string $attestedSourceSnapshot = null;
     private string $language;
     private string $packId;
     private string $packVersion;
     private string $sourceSha256;
     private int $sourceByteSize;
     private bool $fixtureOnly;
-    private int $maxCachedPrefixes;
     private int $maxCandidatesPerPrefix;
     private string $indexSignature;
+    private ?string $lookupFile = null;
+    /** @var resource|null */
+    private $lookupHandle = null;
+    /** @var resource|null */
+    private $dynamicLookupHandle = null;
+    private ?string $dynamicLookupHeads = null;
+    private int $dynamicLookupRangeCount = 0;
+    private ?Throwable $dynamicLookupFailure = null;
 
     /**
      * @param array{
@@ -53,12 +107,13 @@ final class WP_FTS_ChineseJiebaSegmenter
      *   expected_bytes?:int,
      *   byte_size?:int,
      *   fixture_only?:bool,
-     *   max_cached_prefixes?:int,
      *   max_candidates_per_prefix?:int
      * } $config
      */
     private function __construct(array $config)
     {
+        WP_FTS_Analyzer_Config_Limits::assert_option_graph($config, 'Jieba segmenter configuration');
+        WP_FTS_Analyzer_Config_Limits::assert_path((string) ($config['source_file'] ?? ''), 'Jieba dictionary path');
         $this->sourceFile = (string) $config['source_file'];
         $this->language = self::base_language((string) ($config['language'] ?? 'zh'));
         $this->packId = trim((string) ($config['pack_id'] ?? 'zh-jieba-dict-67fa2e36e72f'));
@@ -66,8 +121,11 @@ final class WP_FTS_ChineseJiebaSegmenter
         $this->sourceSha256 = strtolower(trim((string) ($config['expected_sha256'] ?? $config['sha256'] ?? self::SOURCE_SHA256)));
         $this->sourceByteSize = (int) ($config['expected_byte_size'] ?? $config['expected_bytes'] ?? $config['byte_size'] ?? self::SOURCE_BYTE_SIZE);
         $this->fixtureOnly = (bool) ($config['fixture_only'] ?? false);
-        $this->maxCachedPrefixes = max(1, (int) ($config['max_cached_prefixes'] ?? self::DEFAULT_MAX_CACHED_PREFIXES));
-        $this->maxCandidatesPerPrefix = max(1, (int) ($config['max_candidates_per_prefix'] ?? self::DEFAULT_MAX_CANDIDATES_PER_PREFIX));
+        $this->maxCandidatesPerPrefix = self::bounded_positive_int(
+            $config['max_candidates_per_prefix'] ?? self::DEFAULT_MAX_CANDIDATES_PER_PREFIX,
+            self::MAX_CANDIDATES_PER_PREFIX,
+            'Jieba prefix-candidate limit'
+        );
 
         if ($this->language !== 'zh') {
             throw new RuntimeException('Jieba segmenter can only be used for the zh language partition.');
@@ -78,16 +136,47 @@ final class WP_FTS_ChineseJiebaSegmenter
         if ($this->packVersion === '') {
             throw new RuntimeException('Jieba segmenter version cannot be empty.');
         }
+        if (strlen($this->packId) > WP_FTS_Analyzer_Config_Limits::MAX_OPTION_KEY_BYTES
+            || strlen($this->packVersion) > WP_FTS_Analyzer_Config_Limits::MAX_OPTION_KEY_BYTES
+        ) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'pack_identity_bytes',
+                'Jieba pack identity exceeds the 128-byte limit.'
+            );
+        }
+        if (preg_match('/^[a-f0-9]{64}$/', $this->sourceSha256) !== 1) {
+            throw new RuntimeException('Jieba dictionary SHA-256 must be a 64-character hex digest.');
+        }
+        if ($this->sourceByteSize < 1 || $this->sourceByteSize > self::MAX_SOURCE_FILE_BYTES) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'source_file_bytes',
+                'Jieba dictionary exceeds the 16 MiB source-file limit.'
+            );
+        }
+        $this->lookupFile = $this->resolve_lookup_file();
+        if ($this->lookupFile === null && !$this->fixtureOnly) {
+            throw new RuntimeException(
+                'Source-only custom Jieba dictionaries are fixture-only and production custom dictionaries are not supported.'
+            );
+        }
         $this->verify_source_file();
         $this->indexSignature = $this->build_index_signature($config);
     }
 
-    /**
-     * Return the default submodule dictionary path.
-     */
+    /** Return the curated runtime dictionary, or its source checkout in development. */
     public static function default_source_file(): string
     {
-        return dirname(__DIR__) . '/resources/sources/jieba/' . self::SOURCE_FILE;
+        $runtime = dirname(__DIR__) . '/resources/runtime/jieba/dict.txt';
+
+        return is_file($runtime)
+            ? $runtime
+            : dirname(__DIR__) . '/resources/sources/jieba/' . self::SOURCE_FILE;
+    }
+
+    /** Return the compact lookup shipped next to the curated runtime source. */
+    public static function default_lookup_file(): string
+    {
+        return dirname(__DIR__) . '/resources/runtime/jieba/dict.idx';
     }
 
     /**
@@ -106,9 +195,30 @@ final class WP_FTS_ChineseJiebaSegmenter
             'sha256' => self::SOURCE_SHA256,
             'byte_size' => self::SOURCE_BYTE_SIZE,
             'path' => $path,
-            'available' => is_file($path)
-                && filesize($path) === self::SOURCE_BYTE_SIZE
-                && hash_file('sha256', $path) === self::SOURCE_SHA256,
+            'available' => self::file_matches_digest(
+                $path,
+                self::SOURCE_BYTE_SIZE,
+                self::SOURCE_SHA256,
+                self::MAX_SOURCE_FILE_BYTES
+            ),
+        ];
+    }
+
+    /**
+     * Return attestation evidence for the pinned dictionary range index.
+     *
+     * @return array{path:string,sha256:string,byte_size:int,range_count:int,available:bool}
+     */
+    public static function default_lookup_evidence(): array
+    {
+        $path = self::default_lookup_file();
+
+        return [
+            'path' => $path,
+            'sha256' => self::LOOKUP_SHA256,
+            'byte_size' => self::LOOKUP_BYTE_SIZE,
+            'range_count' => self::LOOKUP_RANGE_COUNT,
+            'available' => self::lookup_file_is_attested_static($path),
         ];
     }
 
@@ -117,6 +227,13 @@ final class WP_FTS_ChineseJiebaSegmenter
      */
     public static function from_pack_option(mixed $option, ?string $expectedLanguage = null): ?self
     {
+        WP_FTS_Analyzer_Config_Limits::assert_pack_option($option, 'Jieba segmenter pack option');
+        if ($expectedLanguage !== null && strlen($expectedLanguage) > WP_FTS_Analyzer_Config_Limits::MAX_LANGUAGE_BYTES) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'language_bytes',
+                'Expected Jieba language exceeds the 64-byte limit.'
+            );
+        }
         $config = self::source_config_from_option($option);
         if ($config === null) {
             return null;
@@ -128,6 +245,8 @@ final class WP_FTS_ChineseJiebaSegmenter
 
         try {
             return new self($config);
+        } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
+            throw $error;
         } catch (Throwable) {
             return null;
         }
@@ -136,31 +255,83 @@ final class WP_FTS_ChineseJiebaSegmenter
     /**
      * Segment one Chinese CJK run and retain fallback n-grams for recall.
      *
+     * `$maxTokens` is a producer ceiling used by bounded query analysis. The
+     * caller passes its occurrence allowance plus one so it can observe and
+     * reject the first excess item. When fallback n-grams alone reach that
+     * ceiling, they prove the query cannot be accepted and return before any
+     * dictionary prefix is read. Calls without a ceiling retain complete direct
+     * segmentation; the analyzer's ceiling is one item above its accepted
+     * indexing output, so accepted documents retain the same complete order.
+     *
      * @return string[]
      */
-    public function __invoke(string $run, string $language): array
+    public function __invoke(string $run, string $language, ?int $maxTokens = null): array
     {
         if (self::base_language($language) !== $this->language) {
             return [];
         }
 
+        // LanguagePipeline enforces this before invoking any extension. Keep
+        // the public segmenter safe when it is called directly as well: both
+        // UTF-8 character materialization and candidate-by-offset matching are
+        // otherwise proportional to an unchecked complete run.
+        WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($run));
+        if ($maxTokens !== null && $maxTokens <= 0) {
+            return [];
+        }
+        if (array_key_exists($run, $this->runCache)) {
+            $this->touch_run($run);
+            return $maxTokens === null
+                ? $this->runCache[$run]
+                : array_slice($this->runCache[$run], 0, $maxTokens);
+        }
         $chars = $this->utf8_chars($run);
         if ($chars === []) {
             return [];
         }
-        $this->preload_prefixes($chars);
+        if (count($chars) === 1) {
+            $this->store_run_tokens($run, $chars);
+            return $chars;
+        }
+
+        if ($maxTokens !== null) {
+            $boundedFallbackTokens = [];
+            $fallbackSeen = [];
+            foreach ($this->fallback_cjk_tokens($chars) as $token) {
+                $this->append_unique($boundedFallbackTokens, $fallbackSeen, $token);
+                if (count($boundedFallbackTokens) >= $maxTokens) {
+                    return $boundedFallbackTokens;
+                }
+            }
+            unset($boundedFallbackTokens, $fallbackSeen);
+        }
+
+        $preloaded = $this->preload_prefixes($chars);
+        $activePrefixes = $preloaded['active'];
+        $runLookup = $preloaded['lookup'];
 
         $tokens = [];
         $seen = [];
-        foreach ($this->dictionary_segments($chars) as $segment) {
-            foreach ($this->search_subsegments($segment) as $subsegment) {
+        foreach ($this->dictionary_segments($chars, $activePrefixes, $runLookup['matches'] ?? null) as $segment) {
+            foreach ($this->search_subsegments($segment, $activePrefixes, $runLookup['words'] ?? null) as $subsegment) {
                 $this->append_unique($tokens, $seen, $subsegment);
+                if ($maxTokens !== null && count($tokens) >= $maxTokens) {
+                    return $tokens;
+                }
             }
             $this->append_unique($tokens, $seen, $segment);
+            if ($maxTokens !== null && count($tokens) >= $maxTokens) {
+                return $tokens;
+            }
         }
         foreach ($this->fallback_cjk_tokens($chars) as $token) {
             $this->append_unique($tokens, $seen, $token);
+            if ($maxTokens !== null && count($tokens) >= $maxTokens) {
+                return $tokens;
+            }
         }
+
+        $this->store_run_tokens($run, $tokens);
 
         return $tokens;
     }
@@ -188,33 +359,205 @@ final class WP_FTS_ChineseJiebaSegmenter
         return $this->sourceFile;
     }
 
+    /** Bind custom dictionaries to a bounded immutable snapshot before use. */
     private function verify_source_file(): void
     {
         if (!is_file($this->sourceFile)) {
             throw new RuntimeException('Jieba dictionary source file is missing.');
         }
 
-        $size = filesize($this->sourceFile);
-        if ($size !== $this->sourceByteSize) {
-            throw new RuntimeException('Jieba dictionary byte size mismatch.');
+        // Every indexed range carries a digest anchored by the attested lookup
+        // file, so the immutable bundled source is verified lazily as ranges
+        // are read. Custom paths keep the eager complete hash contract.
+        if ($this->lookupFile !== null) {
+            if (filesize($this->sourceFile) !== $this->sourceByteSize) {
+                throw new RuntimeException('Jieba dictionary byte size mismatch.');
+            }
+            return;
         }
 
-        $hash = hash_file('sha256', $this->sourceFile);
-        if (!is_string($hash) || strtolower($hash) !== $this->sourceSha256) {
+        $this->sourceHashScanCount++;
+        $this->attestedSourceSnapshot = $this->snapshot_custom_source_file();
+    }
+
+    /**
+     * Use the committed range index only for the exact pinned source bytes.
+     *
+     * The index is deliberately not trusted from path or filename. Its own
+     * digest and header bind every byte range to the declared source digest and
+     * size. Per-range digests verify bytes lazily when they are read. A custom
+     * path therefore keeps eager source hashing and generated indexed lookup.
+     */
+    private function resolve_lookup_file(): ?string
+    {
+        if ($this->sourceSha256 !== self::SOURCE_SHA256
+            || $this->sourceByteSize !== self::SOURCE_BYTE_SIZE
+            || !$this->is_curated_source_path()
+        ) {
+            return null;
+        }
+
+        $path = self::default_lookup_file();
+        if (!$this->lookup_file_is_attested($path)) {
+            throw new RuntimeException('The curated Jieba dictionary requires its attested range index.');
+        }
+
+        return $path;
+    }
+
+    /** Validate the curated lookup header from its exact bounded byte string. */
+    private function lookup_file_is_attested(string $path): bool
+    {
+        $contents = self::attested_lookup_contents($path);
+        if ($contents === null) {
+            return false;
+        }
+        $header = substr($contents, 0, self::LOOKUP_HEADER_BYTES);
+        $counts = unpack('Nsource_size/Nrange_count', substr($header, 40, 8));
+        if (substr($header, 0, 8) !== self::LOOKUP_MAGIC
+            || !hash_equals(hex2bin(self::SOURCE_SHA256), substr($header, 8, 32))
+            || (int) ($counts['source_size'] ?? 0) !== self::SOURCE_BYTE_SIZE
+            || (int) ($counts['range_count'] ?? 0) !== self::LOOKUP_RANGE_COUNT
+        ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /** Verify the curated lookup from one bounded in-memory generation. */
+    private static function lookup_file_is_attested_static(string $path): bool
+    {
+        return self::attested_lookup_contents($path) !== null;
+    }
+
+    /** Return exact curated lookup bytes only when size and digest both match. */
+    private static function attested_lookup_contents(string $path): ?string
+    {
+        if (!is_file($path)) {
+            return null;
+        }
+        $contents = file_get_contents($path, false, null, 0, self::LOOKUP_BYTE_SIZE + 1);
+        if (!is_string($contents)
+            || strlen($contents) !== self::LOOKUP_BYTE_SIZE
+            || hash('sha256', $contents) !== self::LOOKUP_SHA256
+        ) {
+            return null;
+        }
+
+        return $contents;
+    }
+
+    /** Check diagnostics evidence without hashing bytes past its declared cap. */
+    private static function file_matches_digest(string $path, int $bytes, string $sha256, int $maxBytes): bool
+    {
+        if (!is_file($path)) {
+            return false;
+        }
+        try {
+            $result = WP_FTS_LemmaPackLimits::hash_file_bounded(
+                $path,
+                $maxBytes,
+                'source_file_bytes',
+                'Jieba dictionary exceeds the 16 MiB source-file limit.'
+            );
+        } catch (Throwable) {
+            return false;
+        }
+
+        return $result['bytes'] === $bytes && hash_equals(strtolower($sha256), strtolower($result['sha256']));
+    }
+
+    /** Copy and attest a custom source once so later scans cannot race its path. */
+    private function snapshot_custom_source_file(): string
+    {
+        $snapshotPath = tempnam(sys_get_temp_dir(), 'wp-fts-jieba-source-');
+        $source = @fopen($this->sourceFile, 'rb');
+        $snapshot = is_string($snapshotPath) ? @fopen($snapshotPath, 'w+b') : false;
+        if (!is_string($snapshotPath) || !is_resource($source) || !is_resource($snapshot)) {
+            if (is_resource($source)) {
+                fclose($source);
+            }
+            if (is_resource($snapshot)) {
+                fclose($snapshot);
+            }
+            if (is_string($snapshotPath)) {
+                @unlink($snapshotPath);
+            }
+            throw new RuntimeException('Could not create an attested Jieba source snapshot.');
+        }
+
+        try {
+            $result = WP_FTS_LemmaPackLimits::hash_open_file_bounded(
+                $source,
+                self::MAX_SOURCE_FILE_BYTES,
+                'source_file_bytes',
+                'Jieba dictionary exceeds the 16 MiB source-file limit.',
+                $snapshot
+            );
+            if (!fflush($snapshot)) {
+                throw new RuntimeException('Could not flush the attested Jieba source snapshot.');
+            }
+        } catch (Throwable $error) {
+            fclose($source);
+            fclose($snapshot);
+            @unlink($snapshotPath);
+            throw $error;
+        }
+        fclose($source);
+        fclose($snapshot);
+        if ($result['bytes'] !== $this->sourceByteSize) {
+            @unlink($snapshotPath);
+            throw new RuntimeException('Jieba dictionary byte size mismatch.');
+        }
+        if (!hash_equals($this->sourceSha256, strtolower($result['sha256']))) {
+            @unlink($snapshotPath);
             throw new RuntimeException('Jieba dictionary SHA-256 mismatch.');
+        }
+
+        return $snapshotPath;
+    }
+
+    /** Limit the committed range index to the two repository-owned source paths. */
+    private function is_curated_source_path(): bool
+    {
+        $source = realpath($this->sourceFile);
+        if (!is_string($source)) {
+            return false;
+        }
+        $runtime = realpath(dirname(__DIR__) . '/resources/runtime/jieba/dict.txt');
+        $checkout = realpath(dirname(__DIR__) . '/resources/sources/jieba/' . self::SOURCE_FILE);
+
+        return (is_string($runtime) && $source === $runtime)
+            || (is_string($checkout) && $source === $checkout);
+    }
+
+    /** Close retained indexes and remove the private custom-source snapshot. */
+    public function __destruct()
+    {
+        if (is_resource($this->lookupHandle)) {
+            fclose($this->lookupHandle);
+        }
+        if (is_resource($this->dynamicLookupHandle)) {
+            fclose($this->dynamicLookupHandle);
+        }
+        if ($this->attestedSourceSnapshot !== null) {
+            @unlink($this->attestedSourceSnapshot);
         }
     }
 
     /**
      * @param string[] $chars
+     * @param array<string,bool> $activePrefixes
+     * @param array<int,array{word:string,length:int}>|null $runMatches
      * @return string[]
      */
-    private function dictionary_segments(array $chars): array
+    private function dictionary_segments(array $chars, array $activePrefixes, ?array $runMatches = null): array
     {
         $segments = [];
         $count = count($chars);
         for ($offset = 0; $offset < $count;) {
-            $match = $this->longest_dictionary_match($chars, $offset);
+            $match = $runMatches[$offset] ?? $this->longest_dictionary_match($chars, $offset, $activePrefixes);
             if ($match === null) {
                 $offset++;
                 continue;
@@ -229,9 +572,10 @@ final class WP_FTS_ChineseJiebaSegmenter
 
     /**
      * @param string[] $chars
+     * @param array<string,bool> $activePrefixes
      * @return array{word:string,length:int}|null
      */
-    private function longest_dictionary_match(array $chars, int $offset): ?array
+    private function longest_dictionary_match(array $chars, int $offset, array $activePrefixes): ?array
     {
         $first = $chars[$offset] ?? '';
         if ($first === '') {
@@ -242,16 +586,19 @@ final class WP_FTS_ChineseJiebaSegmenter
         if ($remainingLength < 2) {
             return null;
         }
-        $remaining = implode('', array_slice($chars, $offset));
-
-        foreach ($this->load_prefix($first)['entries'] as $entry) {
-            if ($entry['length'] > $remainingLength) {
+        $prefix = $this->cached_prefix($first, $activePrefixes);
+        if ($prefix['lengths'] === []) {
+            return null;
+        }
+        foreach ($prefix['lengths'] as $length => $_available) {
+            if ($length > $remainingLength) {
                 continue;
             }
-            if (str_starts_with($remaining, $entry['word'])) {
+            $word = implode('', array_slice($chars, $offset, $length));
+            if (isset($prefix['words'][$word])) {
                 return [
-                    'word' => $entry['word'],
-                    'length' => $entry['length'],
+                    'word' => $word,
+                    'length' => $length,
                 ];
             }
         }
@@ -262,9 +609,11 @@ final class WP_FTS_ChineseJiebaSegmenter
     /**
      * Return short dictionary-backed subsegments similar to Jieba search mode.
      *
+     * @param array<string,bool> $activePrefixes
+     * @param array<string,bool>|null $runWords
      * @return string[]
      */
-    private function search_subsegments(string $segment): array
+    private function search_subsegments(string $segment, array $activePrefixes, ?array $runWords = null): array
     {
         $chars = $this->utf8_chars($segment);
         $count = count($chars);
@@ -278,7 +627,9 @@ final class WP_FTS_ChineseJiebaSegmenter
         for ($length = 2; $length <= $maxLength; $length++) {
             for ($offset = 0; $offset <= $count - $length; $offset++) {
                 $candidate = implode('', array_slice($chars, $offset, $length));
-                if (isset($seen[$candidate]) || !$this->dictionary_contains($candidate)) {
+                $contained = isset($runWords[$candidate])
+                    || $this->dictionary_contains($candidate, $activePrefixes);
+                if (isset($seen[$candidate]) || !$contained) {
                     continue;
                 }
 
@@ -290,7 +641,8 @@ final class WP_FTS_ChineseJiebaSegmenter
         return $subsegments;
     }
 
-    private function dictionary_contains(string $word): bool
+    /** @param array<string,bool> $activePrefixes */
+    private function dictionary_contains(string $word, array $activePrefixes): bool
     {
         $chars = $this->utf8_chars($word);
         $first = $chars[0] ?? '';
@@ -298,178 +650,739 @@ final class WP_FTS_ChineseJiebaSegmenter
             return false;
         }
 
-        return isset($this->load_prefix($first)['words'][$word]);
+        return isset($this->cached_prefix($first, $activePrefixes)['words'][$word]);
     }
 
     /**
-     * @return array{entries:array<int,array{word:string,frequency:int,length:int}>,words:array<string,bool>}
-     */
-    private function load_prefix(string $first): array
-    {
-        if (isset($this->prefixCache[$first])) {
-            $this->touch_prefix($first);
-            return $this->prefixCache[$first];
-        }
-
-        $data = [
-            'entries' => [],
-            'words' => [],
-        ];
-
-        $handle = fopen($this->sourceFile, 'rb');
-        if (!is_resource($handle)) {
-            return $data;
-        }
-
-        try {
-            while (($line = fgets($handle)) !== false) {
-                $row = $this->parse_dict_line((string) $line);
-                if ($row === null) {
-                    continue;
-                }
-
-                $word = $row['word'];
-                if (!str_starts_with($word, $first)) {
-                    continue;
-                }
-                $chars = $this->utf8_chars($word);
-                if (($chars[0] ?? '') !== $first || count($chars) < 2 || !$this->contains_han($word)) {
-                    continue;
-                }
-
-                if (count($data['entries']) >= $this->maxCandidatesPerPrefix) {
-                    throw new RuntimeException('Jieba prefix candidate cache cap exceeded.');
-                }
-
-                $data['words'][$word] = true;
-                $data['entries'][] = [
-                    'word' => $word,
-                    'frequency' => $row['frequency'],
-                    'length' => count($chars),
-                ];
-            }
-        } finally {
-            fclose($handle);
-        }
-
-        usort(
-            $data['entries'],
-            static function (array $a, array $b): int {
-                $length = $b['length'] <=> $a['length'];
-                if ($length !== 0) {
-                    return $length;
-                }
-                $frequency = $b['frequency'] <=> $a['frequency'];
-                if ($frequency !== 0) {
-                    return $frequency;
-                }
-
-                return strcmp($a['word'], $b['word']);
-            }
-        );
-
-        $this->prefixCache[$first] = $data;
-        $this->touch_prefix($first);
-        $this->evict_old_prefixes();
-
-        return $data;
-    }
-
-    /**
-     * Scan the source once for the uncached first characters needed by a run.
+     * Read only complete prefixes selected for this run.
      *
-     * @param string[] $chars
+     * A run may contain every distinct Han codepoint that fits in the 4-KiB
+     * lexical envelope. Indexed ranges avoid a complete dictionary pass, while
+     * the compact cache makes each populated pinned prefix a once-per-instance
+     * read rather than an LRU entry that an adversarial rotation can evict.
+     *
+     * @param array<string,bool> $activePrefixes
+     * @return array{words:array<string,bool>,lengths:array<int,bool>,candidate_count:int,candidate_bytes:int}
      */
-    private function preload_prefixes(array $chars): void
+    private function cached_prefix(string $first, array $activePrefixes): array
     {
-        $needed = [];
-        foreach ($chars as $char) {
-            if ($char === '' || isset($this->prefixCache[$char]) || isset($needed[$char])) {
-                continue;
-            }
-            if (count($needed) >= $this->maxCachedPrefixes) {
-                break;
-            }
-            $needed[$char] = [
-                'entries' => [],
+        if (!isset($activePrefixes[$first], $this->prefixCache[$first])) {
+            return [
                 'words' => [],
+                'lengths' => [],
+                'candidate_count' => 0,
+                'candidate_bytes' => 0,
             ];
         }
-        if ($needed === []) {
-            return;
+
+        return $this->prefixCache[$first];
+    }
+
+    /**
+     * Match one run without retaining uncontrolled dictionary fanout.
+     *
+     * Indexed ranges record only the longest match at each source offset plus
+     * the two- and three-character words needed for search-mode output. The
+     * pinned source identity or fixture admission guarantees that the complete
+     * compact prefix maps fit the retained-cache bounds. Every requested map is
+     * installed completely; there is no partial-cache or eviction branch.
+     *
+     * @param string[] $chars
+     * @param array<string,bool> $cachePrefixes Missing prefixes to retain.
+     * @return array{matches:array<int,array{word:string,length:int}>,words:array<string,bool>}
+     */
+    private function scan_run(array $chars, array $cachePrefixes): array
+    {
+        $prefixOffsets = [];
+        $byteOffsets = [];
+        $run = '';
+        foreach ($chars as $offset => $char) {
+            $byteOffsets[$offset] = strlen($run);
+            $run .= $char;
+            if (isset($cachePrefixes[$char])) {
+                $prefixOffsets[$char][] = $offset;
+            }
         }
 
-        $handle = fopen($this->sourceFile, 'rb');
-        if (!is_resource($handle)) {
-            return;
+        $matches = [];
+        $words = [];
+        $prefixCandidateCounts = [];
+        $retainedCandidates = [];
+        foreach ($cachePrefixes as $prefix => $_enabled) {
+            $retainedCandidates[(string) $prefix] = [
+                'words' => [],
+                'lengths' => [],
+                'candidate_count' => 0,
+                'candidate_bytes' => 0,
+            ];
         }
+        $retainedCandidateCount = 0;
+        $retainedCandidateBytes = 0;
+        foreach ($this->dictionary_lines_for_prefixes(array_keys($prefixOffsets)) as $line) {
+            $row = $this->parse_dict_line((string) $line);
+            if ($row === null) {
+                continue;
+            }
 
-        try {
-            while (($line = fgets($handle)) !== false) {
-                $row = $this->parse_dict_line((string) $line);
-                if ($row === null) {
+            $word = $row['word'];
+            $first = $this->first_utf8_character($word);
+            if ($first === '' || !isset($prefixOffsets[$first])) {
+                continue;
+            }
+            $wordChars = $this->utf8_chars($word);
+            $wordLength = count($wordChars);
+            if ($wordLength < 2 || !$this->contains_han($word)) {
+                continue;
+            }
+
+            $prefixCandidateCounts[$first] = ($prefixCandidateCounts[$first] ?? 0) + 1;
+            if ($prefixCandidateCounts[$first] > $this->maxCandidatesPerPrefix) {
+                throw new WP_FTS_Analysis_Limit_Exceeded(
+                    'jieba_dictionary_candidates',
+                    'A Jieba dictionary prefix exceeds the 5,000-candidate allowance.'
+                );
+            }
+
+            if (isset($retainedCandidates[$first])) {
+                $wordBytes = strlen($word);
+                $retainedCandidates[$first]['words'][$word] = true;
+                $retainedCandidates[$first]['lengths'][$wordLength] = true;
+                $retainedCandidates[$first]['candidate_count']++;
+                $retainedCandidates[$first]['candidate_bytes'] += $wordBytes;
+                $retainedCandidateCount++;
+                $retainedCandidateBytes += $wordBytes;
+            }
+
+            foreach ($prefixOffsets[$first] as $offset) {
+                if ($wordLength > count($chars) - $offset) {
+                    continue;
+                }
+                $byteOffset = $byteOffsets[$offset];
+                if (substr_compare($run, $word, $byteOffset, strlen($word)) !== 0) {
                     continue;
                 }
 
-                $word = $row['word'];
-                $first = null;
-                foreach ($needed as $prefix => $_data) {
-                    if (str_starts_with($word, (string) $prefix)) {
-                        $first = (string) $prefix;
-                        break;
-                    }
+                if ($wordLength <= 3) {
+                    $words[$word] = true;
                 }
-                if ($first === null) {
-                    continue;
-                }
-
-                $chars = $this->utf8_chars($word);
-                if (($chars[0] ?? '') !== $first || count($chars) < 2 || !$this->contains_han($word)) {
-                    continue;
-                }
-
-                if (count($needed[$first]['entries']) >= $this->maxCandidatesPerPrefix) {
-                    throw new RuntimeException('Jieba prefix candidate cache cap exceeded.');
-                }
-
-                $needed[$first]['words'][$word] = true;
-                $needed[$first]['entries'][] = [
+                $current = $matches[$offset] ?? null;
+                if ($current === null || $this->dictionary_entry_precedes([
                     'word' => $word,
                     'frequency' => $row['frequency'],
-                    'length' => count($chars),
-                ];
+                    'length' => $wordLength,
+                ], $current)) {
+                    $matches[$offset] = [
+                        'word' => $word,
+                        'frequency' => $row['frequency'],
+                        'length' => $wordLength,
+                    ];
+                }
+            }
+        }
+
+        $this->store_prefix_candidates(
+            $retainedCandidates,
+            $retainedCandidateCount,
+            $retainedCandidateBytes
+        );
+
+        foreach ($matches as $offset => $match) {
+            $matches[$offset] = [
+                'word' => $match['word'],
+                'length' => $match['length'],
+            ];
+        }
+
+        return ['matches' => $matches, 'words' => $words];
+    }
+
+    /**
+     * Stream dictionary rows for the requested first characters.
+     *
+     * The attested index turns a pinned-source lookup into a handful of byte
+     * ranges. Fixture dictionaries have no trusted offsets and build their
+     * source-local index in one complete scan. `dictionaryScanCount`
+     * intentionally counts only those complete scans, which makes the
+     * non-rescan invariant observable.
+     *
+     * @param string[] $prefixes
+     * @return iterable<int,string>
+     */
+    private function dictionary_lines_for_prefixes(array $prefixes): iterable
+    {
+        $ranges = $this->indexed_ranges_for_prefixes($prefixes);
+        if ($ranges === []) {
+            return;
+        }
+
+        $handle = fopen($this->attestedSourceSnapshot ?? $this->sourceFile, 'rb');
+        if (!is_resource($handle)) {
+            throw new RuntimeException('Could not open the Jieba dictionary for indexed lookup.');
+        }
+        try {
+            foreach ($ranges as $range) {
+                $this->indexedRangeReadCount++;
+                if (fseek($handle, $range['offset']) !== 0) {
+                    throw new RuntimeException('Could not seek an indexed Jieba dictionary range.');
+                }
+                if (isset($range['digest'])) {
+                    $bytes = '';
+                    while (strlen($bytes) < $range['length']) {
+                        $chunk = fread($handle, $range['length'] - strlen($bytes));
+                        if (!is_string($chunk) || $chunk === '') {
+                            throw new RuntimeException('Could not read an attested Jieba dictionary range.');
+                        }
+                        $bytes .= $chunk;
+                    }
+                    $digest = substr(hash('sha256', $bytes, true), 0, 16);
+                    if (!hash_equals($range['digest'], $digest)) {
+                        throw new RuntimeException('Jieba dictionary range digest mismatch.');
+                    }
+                    yield from $this->dictionary_lines_from_buffer($bytes);
+                    continue;
+                }
+
+                $end = $range['offset'] + $range['length'];
+                while (ftell($handle) < $end) {
+                    $line = $this->read_dictionary_line($handle);
+                    if ($line === false) {
+                        throw new RuntimeException('Could not read an indexed Jieba dictionary range.');
+                    }
+                    yield $line;
+                }
             }
         } finally {
             fclose($handle);
         }
+    }
 
-        foreach ($needed as $prefix => $data) {
-            $this->sort_prefix_entries($data['entries']);
-            $this->prefixCache[(string) $prefix] = $data;
-            $this->touch_prefix((string) $prefix);
+    /** @return iterable<int,string> */
+    private function dictionary_lines_from_buffer(string $buffer): iterable
+    {
+        $offset = 0;
+        $length = strlen($buffer);
+        while ($offset < $length) {
+            $newline = strpos($buffer, "\n", $offset);
+            $end = $newline === false ? $length : $newline + 1;
+            $line = substr($buffer, $offset, $end - $offset);
+            $offset = $end;
+
+            $payloadBytes = strlen($line);
+            if ($payloadBytes > 0 && $line[$payloadBytes - 1] === "\n") {
+                $payloadBytes--;
+                if ($payloadBytes > 0 && $line[$payloadBytes - 1] === "\r") {
+                    $payloadBytes--;
+                }
+            }
+            if ($payloadBytes > self::MAX_DICTIONARY_LINE_BYTES) {
+                $this->throw_dictionary_line_limit();
+            }
+            yield $line;
         }
-        $this->evict_old_prefixes();
     }
 
     /**
-     * @param array<int,array{word:string,frequency:int,length:int}> $entries
+     * @param string[] $prefixes
+     * @return array<int,array{offset:int,length:int,digest?:string}>
      */
-    private function sort_prefix_entries(array &$entries): void
+    private function indexed_ranges_for_prefixes(array $prefixes): array
     {
-        usort(
-            $entries,
-            static function (array $a, array $b): int {
-                $length = $b['length'] <=> $a['length'];
-                if ($length !== 0) {
-                    return $length;
+        if ($this->lookupFile === null) {
+            $this->ensure_dynamic_lookup();
+
+            $ranges = [];
+            $seen = [];
+            foreach ($prefixes as $prefix) {
+                $codepoint = $this->utf8_codepoint((string) $prefix);
+                if ($codepoint === null || isset($seen[$codepoint])) {
+                    continue;
                 }
-                $frequency = $b['frequency'] <=> $a['frequency'];
-                if ($frequency !== 0) {
-                    return $frequency;
+                $seen[$codepoint] = true;
+                foreach ($this->dynamic_ranges_for_codepoint($codepoint) as $range) {
+                    $ranges[] = $range;
+                }
+            }
+            usort(
+                $ranges,
+                static fn(array $a, array $b): int => $a['offset'] <=> $b['offset']
+            );
+
+            return $ranges;
+        }
+        if (!is_resource($this->lookupHandle)) {
+            $this->lookupHandle = fopen($this->lookupFile, 'rb');
+            if (!is_resource($this->lookupHandle)) {
+                throw new RuntimeException('Could not open the attested Jieba range index.');
+            }
+        }
+
+        $ranges = [];
+        $seen = [];
+        foreach ($prefixes as $prefix) {
+            $codepoint = $this->utf8_codepoint((string) $prefix);
+            if ($codepoint === null || isset($seen[$codepoint])) {
+                continue;
+            }
+            $seen[$codepoint] = true;
+            $prefixRanges = $this->lookup_ranges_for_codepoint($codepoint);
+            if ($prefixRanges === null) {
+                throw new RuntimeException('Could not read the attested Jieba range index.');
+            }
+            foreach ($prefixRanges as $range) {
+                $ranges[] = $range;
+            }
+        }
+        usort(
+            $ranges,
+            static fn(array $a, array $b): int => $a['offset'] <=> $b['offset']
+        );
+
+        return $ranges;
+    }
+
+    /**
+     * Build a compact source-local range index once for a fixture dictionary.
+     *
+     * A 4.25 MiB packed head table and transient 2.13 MiB prefix-count table
+     * cover the complete Unicode range without PHP arrays per codepoint.
+     * Twelve-byte range records spill to the system temporary stream above
+     * 1 MiB. During the same scan, complete-cache admission rejects a source
+     * above 350,000 eligible rows, 8 MiB of word bytes, or the configured
+     * per-prefix bound. Failure is permanent for the instance, so neither
+     * accepted nor rejected fixtures can trigger repeated complete scans or
+     * alternating-prefix cache thrash.
+     */
+    private function ensure_dynamic_lookup(): void
+    {
+        if ($this->dynamicLookupHeads !== null && is_resource($this->dynamicLookupHandle)) {
+            return;
+        }
+        if ($this->dynamicLookupFailure !== null) {
+            throw $this->dynamicLookupFailure;
+        }
+
+        $source = fopen($this->attestedSourceSnapshot ?? $this->sourceFile, 'rb');
+        $index = fopen('php://temp/maxmemory:1048576', 'w+b');
+        if (!is_resource($source) || !is_resource($index)) {
+            if (is_resource($source)) {
+                fclose($source);
+            }
+            if (is_resource($index)) {
+                fclose($index);
+            }
+            throw new RuntimeException('Could not create the Jieba custom-dictionary range index.');
+        }
+
+        $heads = str_repeat("\xFF", self::UNICODE_CODEPOINT_COUNT * 4);
+        $prefixCandidateCounts = str_repeat("\0", self::UNICODE_CODEPOINT_COUNT * 2);
+        $rangeCount = 0;
+        $rangeCodepoint = null;
+        $rangeOffset = 0;
+        $rangeEnd = 0;
+        $candidateCount = 0;
+        $candidateBytes = 0;
+        $this->dictionaryScanCount++;
+        try {
+            while (true) {
+                $lineOffset = ftell($source);
+                $line = $this->read_dictionary_line($source);
+                if ($line === false) {
+                    break;
+                }
+                $lineEnd = ftell($source);
+                $row = $this->parse_dict_line($line);
+                $first = $row === null ? '' : $this->first_utf8_character($row['word']);
+                $codepoint = $this->utf8_codepoint($first);
+                if ($row === null || $codepoint === null || $codepoint >= self::UNICODE_CODEPOINT_COUNT) {
+                    if ($rangeCodepoint !== null) {
+                        $this->append_dynamic_range(
+                            $index,
+                            $heads,
+                            $rangeCount,
+                            $rangeCodepoint,
+                            $rangeOffset,
+                            $rangeEnd - $rangeOffset
+                        );
+                        $rangeCodepoint = null;
+                    }
+                    continue;
                 }
 
-                return strcmp($a['word'], $b['word']);
+                $word = $row['word'];
+                if (strlen($word) > strlen($first) && $this->contains_han($word)) {
+                    $candidateCount++;
+                    $candidateBytes += strlen($word);
+                    $countOffset = $codepoint * 2;
+                    $packedCount = unpack('nvalue', substr($prefixCandidateCounts, $countOffset, 2));
+                    $prefixCandidateCount = (int) ($packedCount['value'] ?? 0) + 1;
+                    $encodedCount = pack('n', $prefixCandidateCount);
+                    $prefixCandidateCounts[$countOffset] = $encodedCount[0];
+                    $prefixCandidateCounts[$countOffset + 1] = $encodedCount[1];
+                    if ($candidateCount > self::MAX_RETAINED_DICTIONARY_CANDIDATES
+                        || $candidateBytes > self::MAX_RETAINED_DICTIONARY_CANDIDATE_BYTES
+                        || $prefixCandidateCount > $this->maxCandidatesPerPrefix
+                    ) {
+                        throw new WP_FTS_Analysis_Limit_Exceeded(
+                            'jieba_dictionary_candidates',
+                            'Custom Jieba dictionaries must fit the complete 350,000-row, 8-MiB, and configured per-prefix cache admission.'
+                        );
+                    }
+                }
+
+                if ($rangeCodepoint !== $codepoint) {
+                    if ($rangeCodepoint !== null) {
+                        $this->append_dynamic_range(
+                            $index,
+                            $heads,
+                            $rangeCount,
+                            $rangeCodepoint,
+                            $rangeOffset,
+                            $rangeEnd - $rangeOffset
+                        );
+                    }
+                    $rangeCodepoint = $codepoint;
+                    $rangeOffset = (int) $lineOffset;
+                }
+                $rangeEnd = (int) $lineEnd;
             }
+            if ($rangeCodepoint !== null) {
+                $this->append_dynamic_range(
+                    $index,
+                    $heads,
+                    $rangeCount,
+                    $rangeCodepoint,
+                    $rangeOffset,
+                    $rangeEnd - $rangeOffset
+                );
+            }
+        } catch (Throwable $error) {
+            $this->dynamicLookupFailure = $error;
+            fclose($index);
+            throw $error;
+        } finally {
+            fclose($source);
+        }
+
+        $this->dynamicLookupHandle = $index;
+        $this->dynamicLookupHeads = $heads;
+        $this->dynamicLookupRangeCount = $rangeCount;
+    }
+
+    /**
+     * @param resource $index
+     */
+    private function append_dynamic_range(
+        $index,
+        string &$heads,
+        int &$rangeCount,
+        int $codepoint,
+        int $offset,
+        int $length
+    ): void {
+        $headOffset = $codepoint * 4;
+        $previous = unpack('Nvalue', substr($heads, $headOffset, 4));
+        $previousRange = (int) ($previous['value'] ?? self::NO_DYNAMIC_RANGE);
+        $record = pack('NNN', $offset, $length, $previousRange);
+        if (fwrite($index, $record) !== self::DYNAMIC_LOOKUP_RECORD_BYTES) {
+            throw new RuntimeException('Could not build the Jieba custom-dictionary range index.');
+        }
+        $head = pack('N', $rangeCount);
+        for ($byte = 0; $byte < 4; $byte++) {
+            $heads[$headOffset + $byte] = $head[$byte];
+        }
+        $rangeCount++;
+    }
+
+    /** @return array<int,array{offset:int,length:int}> */
+    private function dynamic_ranges_for_codepoint(int $codepoint): array
+    {
+        if ($this->dynamicLookupHeads === null || !is_resource($this->dynamicLookupHandle)) {
+            return [];
+        }
+        $headOffset = $codepoint * 4;
+        $head = unpack('Nvalue', substr($this->dynamicLookupHeads, $headOffset, 4));
+        $recordNumber = (int) ($head['value'] ?? self::NO_DYNAMIC_RANGE);
+        $ranges = [];
+        while ($recordNumber !== self::NO_DYNAMIC_RANGE) {
+            if ($recordNumber < 0 || $recordNumber >= $this->dynamicLookupRangeCount) {
+                throw new RuntimeException('Jieba custom-dictionary range index is corrupt.');
+            }
+            if (fseek($this->dynamicLookupHandle, $recordNumber * self::DYNAMIC_LOOKUP_RECORD_BYTES) !== 0) {
+                throw new RuntimeException('Could not seek the Jieba custom-dictionary range index.');
+            }
+            $bytes = fread($this->dynamicLookupHandle, self::DYNAMIC_LOOKUP_RECORD_BYTES);
+            $record = is_string($bytes) && strlen($bytes) === self::DYNAMIC_LOOKUP_RECORD_BYTES
+                ? unpack('Noffset/Nlength/Nnext', $bytes)
+                : false;
+            if (!is_array($record)) {
+                throw new RuntimeException('Could not read the Jieba custom-dictionary range index.');
+            }
+            $ranges[] = [
+                'offset' => (int) $record['offset'],
+                'length' => (int) $record['length'],
+            ];
+            $recordNumber = (int) $record['next'];
+        }
+
+        return $ranges;
+    }
+
+    /**
+     * @return array<int,array{offset:int,length:int,digest:string}>|null
+     */
+    private function lookup_ranges_for_codepoint(int $codepoint): ?array
+    {
+        $low = 0;
+        $high = self::LOOKUP_RANGE_COUNT;
+        while ($low < $high) {
+            $middle = intdiv($low + $high, 2);
+            $record = $this->read_lookup_record($middle);
+            if ($record === null) {
+                return null;
+            }
+            if ($record['codepoint'] < $codepoint) {
+                $low = $middle + 1;
+            } else {
+                $high = $middle;
+            }
+        }
+
+        $ranges = [];
+        for ($recordNumber = $low; $recordNumber < self::LOOKUP_RANGE_COUNT; $recordNumber++) {
+            $record = $this->read_lookup_record($recordNumber);
+            if ($record === null) {
+                return null;
+            }
+            if ($record['codepoint'] !== $codepoint) {
+                break;
+            }
+            $ranges[] = [
+                'offset' => $record['offset'],
+                'length' => $record['length'],
+                'digest' => $record['digest'],
+            ];
+        }
+
+        return $ranges;
+    }
+
+    /** @return array{codepoint:int,offset:int,length:int,digest:string}|null */
+    private function read_lookup_record(int $recordNumber): ?array
+    {
+        if (!is_resource($this->lookupHandle)) {
+            return null;
+        }
+        $offset = self::LOOKUP_HEADER_BYTES + ($recordNumber * self::LOOKUP_RECORD_BYTES);
+        if (fseek($this->lookupHandle, $offset) !== 0) {
+            return null;
+        }
+        $bytes = fread($this->lookupHandle, self::LOOKUP_RECORD_BYTES);
+        if (!is_string($bytes) || strlen($bytes) !== self::LOOKUP_RECORD_BYTES) {
+            return null;
+        }
+        $record = unpack('Ncodepoint/Noffset/Nlength', substr($bytes, 0, 12));
+        if (!is_array($record)) {
+            return null;
+        }
+
+        return [
+            'codepoint' => (int) $record['codepoint'],
+            'offset' => (int) $record['offset'],
+            'length' => (int) $record['length'],
+            'digest' => substr($bytes, 12, 16),
+        ];
+    }
+
+    /** Decode one already-split UTF-8 character for packed lookup addressing. */
+    private function utf8_codepoint(string $character): ?int
+    {
+        if ($character === '') {
+            return null;
+        }
+        $first = ord($character[0]);
+        if ($first <= 0x7F) {
+            return $first;
+        }
+        if (($first & 0xE0) === 0xC0 && strlen($character) >= 2) {
+            return (($first & 0x1F) << 6) | (ord($character[1]) & 0x3F);
+        }
+        if (($first & 0xF0) === 0xE0 && strlen($character) >= 3) {
+            return (($first & 0x0F) << 12)
+                | ((ord($character[1]) & 0x3F) << 6)
+                | (ord($character[2]) & 0x3F);
+        }
+        if (($first & 0xF8) === 0xF0 && strlen($character) >= 4) {
+            return (($first & 0x07) << 18)
+                | ((ord($character[1]) & 0x3F) << 12)
+                | ((ord($character[2]) & 0x3F) << 6)
+                | (ord($character[3]) & 0x3F);
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array{word:string,frequency:int,length:int} $candidate
+     * @param array{word:string,frequency:int,length:int} $current
+     */
+    private function dictionary_entry_precedes(array $candidate, array $current): bool
+    {
+        return $candidate['length'] > $current['length']
+            || (
+                $candidate['length'] === $current['length']
+                && (
+                    $candidate['frequency'] > $current['frequency']
+                    || (
+                        $candidate['frequency'] === $current['frequency']
+                        && strcmp($candidate['word'], $current['word']) < 0
+                    )
+                )
+            );
+    }
+
+    /**
+     * Fetch every first-character range needed by one bounded lexical run.
+     *
+     * @param string[] $chars
+     * @return array{
+     *   active:array<string,bool>,
+     *   lookup:?array{matches:array<int,array{word:string,length:int}>,words:array<string,bool>}
+     * }
+     */
+    private function preload_prefixes(array $chars): array
+    {
+        $active = [];
+        $needed = [];
+        foreach ($chars as $char) {
+            if ($char === '' || isset($active[$char])) {
+                continue;
+            }
+            $active[$char] = true;
+            if ($this->prefix_is_loaded($char)) {
+                continue;
+            }
+            $needed[$char] = true;
+        }
+        if ($needed === []) {
+            return ['active' => $active, 'lookup' => null];
+        }
+
+        return [
+            'active' => $active,
+            'lookup' => $this->scan_run($chars, $needed),
+        ];
+    }
+
+    /**
+     * @param array<string,array{words:array<string,bool>,lengths:array<int,bool>,candidate_count:int,candidate_bytes:int}> $candidates
+     */
+    private function store_prefix_candidates(array $candidates, int $candidateCount, int $candidateBytes): void
+    {
+        if ($this->cachedCandidateCount + $candidateCount > self::MAX_RETAINED_DICTIONARY_CANDIDATES
+            || $this->cachedCandidateBytes + $candidateBytes > self::MAX_RETAINED_DICTIONARY_CANDIDATE_BYTES
+        ) {
+            throw new RuntimeException('The admitted Jieba dictionary exceeds its complete-cache invariant.');
+        }
+
+        foreach ($candidates as $prefix => $data) {
+            if ($data['candidate_count'] !== 0) {
+                krsort($data['lengths'], SORT_NUMERIC);
+                $this->prefixCache[$prefix] = $data;
+            }
+            $this->mark_prefix_loaded((string) $prefix);
+        }
+        $this->cachedCandidateCount += $candidateCount;
+        $this->cachedCandidateBytes += $candidateBytes;
+    }
+
+    /** Test one prefix bit in the fixed-size loaded-prefix bitmap. */
+    private function prefix_is_loaded(string $prefix): bool
+    {
+        if ($this->loadedPrefixBits === null) {
+            return false;
+        }
+        $codepoint = $this->utf8_codepoint($prefix);
+        if ($codepoint === null) {
+            return false;
+        }
+        $byte = intdiv($codepoint, 8);
+        $bit = 1 << ($codepoint % 8);
+
+        return (ord($this->loadedPrefixBits[$byte]) & $bit) !== 0;
+    }
+
+    /** Mark one prefix in the fixed-size loaded-prefix bitmap. */
+    private function mark_prefix_loaded(string $prefix): void
+    {
+        $codepoint = $this->utf8_codepoint($prefix);
+        if ($codepoint === null) {
+            return;
+        }
+        if ($this->loadedPrefixBits === null) {
+            $this->loadedPrefixBits = str_repeat("\0", self::LOADED_PREFIX_BYTES);
+        }
+        $byte = intdiv($codepoint, 8);
+        $bit = 1 << ($codepoint % 8);
+        $this->loadedPrefixBits[$byte] = chr(ord($this->loadedPrefixBits[$byte]) | $bit);
+    }
+
+    /** Return one complete leading UTF-8 character without optional extensions. */
+    private function first_utf8_character(string $text): string
+    {
+        if ($text === '') {
+            return '';
+        }
+
+        $byte = ord($text[0]);
+        $length = 1;
+        if (($byte & 0xE0) === 0xC0) {
+            $length = 2;
+        } elseif (($byte & 0xF0) === 0xE0) {
+            $length = 3;
+        } elseif (($byte & 0xF8) === 0xF0) {
+            $length = 4;
+        }
+
+        return substr($text, 0, $length);
+    }
+
+    /**
+     * Read one bounded dictionary row without materializing an oversized line.
+     *
+     * @param resource $handle
+     */
+    private function read_dictionary_line($handle): string|false
+    {
+        // fgets() reads at most length - 1 bytes. Two extra bytes admit both
+        // LF and CRLF after an exact-boundary payload while exposing byte 8,193.
+        $line = fgets($handle, self::MAX_DICTIONARY_LINE_BYTES + 3);
+        if ($line === false) {
+            return false;
+        }
+
+        $payloadBytes = strlen($line);
+        if ($payloadBytes > 0 && $line[$payloadBytes - 1] === "\n") {
+            $payloadBytes--;
+            if ($payloadBytes > 0 && $line[$payloadBytes - 1] === "\r") {
+                $payloadBytes--;
+            }
+        } elseif (!feof($handle)) {
+            $this->throw_dictionary_line_limit();
+        }
+
+        if ($payloadBytes > self::MAX_DICTIONARY_LINE_BYTES) {
+            $this->throw_dictionary_line_limit();
+        }
+
+        return $line;
+    }
+
+    /** Raise the stable typed failure shared by every dictionary read path. */
+    private function throw_dictionary_line_limit(): never
+    {
+        throw new WP_FTS_Analysis_Limit_Exceeded(
+            'jieba_dictionary_line_bytes',
+            'Jieba dictionary rows may contain at most 8 KiB.'
         );
     }
 
@@ -553,24 +1466,22 @@ final class WP_FTS_ChineseJiebaSegmenter
 
     /**
      * @param string[] $chars
-     * @return string[]
+     * @return iterable<int,string>
      */
-    private function fallback_cjk_tokens(array $chars): array
+    private function fallback_cjk_tokens(array $chars): iterable
     {
         $count = count($chars);
         if ($count <= 1) {
-            return $chars;
+            yield from $chars;
+            return;
         }
 
-        $tokens = [];
         $maxLength = min(self::FALLBACK_MAX_NGRAM_LENGTH, $count);
         for ($length = 1; $length <= $maxLength; $length++) {
             for ($offset = 0; $offset <= $count - $length; $offset++) {
-                $tokens[] = implode('', array_slice($chars, $offset, $length));
+                yield implode('', array_slice($chars, $offset, $length));
             }
         }
-
-        return $tokens;
     }
 
     /**
@@ -599,23 +1510,55 @@ final class WP_FTS_ChineseJiebaSegmenter
         $tokens[] = $token;
     }
 
-    private function touch_prefix(string $prefix): void
+    /** @param string[] $tokens */
+    private function store_run_tokens(string $run, array $tokens): void
     {
-        $this->prefixCacheOrder = array_values(array_filter(
-            $this->prefixCacheOrder,
-            static fn(string $cached): bool => $cached !== $prefix
-        ));
-        $this->prefixCacheOrder[] = $prefix;
+        $tokenBytes = strlen($run);
+        foreach ($tokens as $token) {
+            $tokenBytes += strlen($token);
+        }
+        $tokenCount = count($tokens);
+        if ($tokenCount > self::MAX_RETAINED_RUN_TOKENS || $tokenBytes > self::MAX_RETAINED_RUN_BYTES) {
+            return;
+        }
+
+        while ($this->runCacheOrder !== [] && (
+            count($this->runCacheOrder) >= self::MAX_RETAINED_RUNS
+            || $this->cachedRunTokenCount + $tokenCount > self::MAX_RETAINED_RUN_TOKENS
+            || $this->cachedRunBytes + $tokenBytes > self::MAX_RETAINED_RUN_BYTES
+        )) {
+            $this->evict_oldest_run();
+        }
+        $this->runCache[$run] = $tokens;
+        $this->runCacheOrder[] = $run;
+        $this->cachedRunTokenCount += $tokenCount;
+        $this->cachedRunBytes += $tokenBytes;
     }
 
-    private function evict_old_prefixes(): void
+    /** Move one bounded run-cache entry to the most-recent position. */
+    private function touch_run(string $run): void
     {
-        while (count($this->prefixCacheOrder) > $this->maxCachedPrefixes) {
-            $oldest = array_shift($this->prefixCacheOrder);
-            if (is_string($oldest)) {
-                unset($this->prefixCache[$oldest]);
-            }
+        $this->runCacheOrder = array_values(array_filter(
+            $this->runCacheOrder,
+            static fn(string $cached): bool => $cached !== $run
+        ));
+        $this->runCacheOrder[] = $run;
+    }
+
+    /** Evict the least-recent run and subtract its retained byte accounting. */
+    private function evict_oldest_run(): void
+    {
+        $oldest = array_shift($this->runCacheOrder);
+        if (!is_string($oldest) || !isset($this->runCache[$oldest])) {
+            return;
         }
+        $tokens = $this->runCache[$oldest];
+        $this->cachedRunTokenCount -= count($tokens);
+        $this->cachedRunBytes -= strlen($oldest);
+        foreach ($tokens as $token) {
+            $this->cachedRunBytes -= strlen($token);
+        }
+        unset($this->runCache[$oldest]);
     }
 
     /**
@@ -636,7 +1579,6 @@ final class WP_FTS_ChineseJiebaSegmenter
             'source_sha256' => $this->sourceSha256,
             'source_byte_size' => $this->sourceByteSize,
             'fallback_max_ngram_length' => self::FALLBACK_MAX_NGRAM_LENGTH,
-            'max_cached_prefixes' => $this->maxCachedPrefixes,
             'max_candidates_per_prefix' => $this->maxCandidatesPerPrefix,
         ];
 
@@ -733,7 +1675,6 @@ final class WP_FTS_ChineseJiebaSegmenter
             'expected_bytes',
             'byte_size',
             'fixture_only',
-            'max_cached_prefixes',
             'max_candidates_per_prefix',
         ] as $key) {
             if (array_key_exists($key, $option)) {
@@ -763,8 +1704,10 @@ final class WP_FTS_ChineseJiebaSegmenter
         ];
     }
 
+    /** Resolve either a direct dictionary path or its repository root form. */
     private static function source_file_from_path(string $path): ?string
     {
+        WP_FTS_Analyzer_Config_Limits::assert_path($path, 'Jieba dictionary path');
         if ($path === '') {
             return null;
         }
@@ -773,6 +1716,23 @@ final class WP_FTS_ChineseJiebaSegmenter
         }
 
         return $path;
+    }
+
+    /** Parse one public numeric option while enforcing its independent hard max. */
+    private static function bounded_positive_int(mixed $value, int $maximum, string $label): int
+    {
+        if (!is_int($value) && (!is_string($value) || preg_match('/^[1-9][0-9]*$/', $value) !== 1)) {
+            throw new InvalidArgumentException("{$label} must be a positive integer.");
+        }
+        $value = (int) $value;
+        if ($value < 1 || $value > $maximum) {
+            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                'segmenter_numeric_limit',
+                "{$label} exceeds its hard maximum of {$maximum}."
+            );
+        }
+
+        return $value;
     }
 
     private static function base_language(string $language): string

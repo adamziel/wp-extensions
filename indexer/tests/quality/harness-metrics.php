@@ -178,6 +178,20 @@ if (getenv('WP_FTS_HARNESS_GATE_CHILD') !== '1') {
         assert_contains('[FAIL] pending tests', $output, 'strict pending gate should report a gate failure');
         assert_contains('pending=1', $output, 'strict pending gate summary should retain the pending count');
     });
+
+    test_case('quality harness releases completed cyclic fixtures', function (): void {
+        $result = test_run_harness_with_environment([
+            'WP_FTS_HARNESS_GATE_CHILD' => '1',
+            'WP_FTS_HARNESS_GATE_CHILD_RELEASE' => '1',
+            'WP_FTS_MIN_CHECKS' => '2',
+            'WP_FTS_TEST_FILTER' => '',
+        ]);
+
+        $output = $result['stdout'] . $result['stderr'];
+        assert_same(0, $result['exit'], "completed cyclic-fixture release child should pass\n{$output}");
+        assert_contains('[PASS] quality harness completed callable release sentinel', $output, 'the next test should observe its predecessor cyclic fixture as released');
+        assert_contains('2/2 named tests passed', $output, 'the release child should execute both ordered tests');
+    });
 }
 
 if ($wp_fts_harness_metrics_direct) {

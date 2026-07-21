@@ -17,11 +17,16 @@ final class WP_FTS_UnimorphLemmaPackImporter
     public function import(array $options): array
     {
         $sourcePath = $this->required_source_path($options, 'source');
+        $outputPath = $this->required_output_path($options);
+        WP_FTS_LemmaSourceImportLimits::assert_source_output_separate($sourcePath, $outputPath, 'UniMorph');
         $language = $this->required_language($options, 'language');
         $tmpDir = $this->prepare_temp_directory($options['tmp_dir'] ?? null);
+        $packDir = null;
+        $importComplete = false;
         try {
             $normalizedTsv = $tmpDir . DIRECTORY_SEPARATOR . 'normalized-lemma.tsv';
-            $stats = $this->write_normalized_tsv($sourcePath, $normalizedTsv, $language);
+            $staging = $this->write_normalized_tsv($sourcePath, $normalizedTsv, $language);
+            $stats = $staging['stats'];
             if ((int) $stats['accepted_rows'] < 1) {
                 throw new RuntimeException('UniMorph source did not yield any normalized runtime rows.');
             }
@@ -30,18 +35,27 @@ final class WP_FTS_UnimorphLemmaPackImporter
             $tsvOptions['source'] = $normalizedTsv;
             $tsvOptions['language'] = $language;
             $summary = (new WP_FTS_LemmaTsvPackImporter())->import($tsvOptions);
+            $manifestPath = is_string($summary['manifest'] ?? null) ? $summary['manifest'] : '';
+            if ($manifestPath !== '') {
+                $packDir = dirname($manifestPath);
+            }
             $summary = $this->rewrite_pack_metadata_for_unimorph_source(
                 $summary,
                 $options,
                 $sourcePath,
                 $language,
-                $stats
+                $stats,
+                $staging['source_evidence']
             );
             $summary['unimorph'] = $stats;
+            $importComplete = true;
 
             return $summary;
         } finally {
             $this->remove_tree($tmpDir);
+            if (!$importComplete && is_string($packDir)) {
+                $this->remove_tree($packDir);
+            }
         }
     }
 
@@ -65,6 +79,14 @@ final class WP_FTS_UnimorphLemmaPackImporter
         }
 
         return $path;
+    }
+
+    /** @param array<string,mixed> $options */
+    private function required_output_path(array $options): string
+    {
+        return isset($options['out'])
+            ? $this->required_string($options, 'out')
+            : $this->required_string($options, 'output_dir');
     }
 
     /**
@@ -93,11 +115,13 @@ final class WP_FTS_UnimorphLemmaPackImporter
     }
 
     /**
-     * @return array<string,mixed>
+     * @return array{stats:array<string,mixed>,source_evidence:array{sha256:string,bytes:int,files:array<int,array{path:string,sha256:string,byte_count:int}>}}
      */
     private function write_normalized_tsv(string $sourcePath, string $tsvPath, string $language): array
     {
-        $sources = $this->discover_source_files($sourcePath);
+        $discovery = $this->discover_source_files($sourcePath);
+        $sources = $discovery['files'];
+        $physicalEvidence = WP_FTS_LemmaSourceImportLimits::source_physical_evidence($sources, 'UniMorph');
         $handle = fopen($tsvPath, 'wb');
         if (!is_resource($handle)) {
             throw new RuntimeException("Could not write normalized TSV: {$tsvPath}");
@@ -108,56 +132,65 @@ final class WP_FTS_UnimorphLemmaPackImporter
             'source_path' => $sourcePath,
             'source_files' => count($sources),
             'files' => array_map(fn(string $path): string => $this->source_label($path, $sourcePath), $sources),
+            'source_path_bytes' => $discovery['path_bytes'],
+            'source_entries' => $discovery['entries'],
+            'source_max_depth' => $discovery['max_depth'],
+            'source_physical_bytes' => $physicalEvidence['bytes'],
+            'source_physical_byte_limit' => WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PHYSICAL_BYTES,
             'source_lines' => 0,
+            'source_line_limit' => WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_LINES,
+            'source_decoded_bytes' => 0,
+            'source_decoded_byte_limit' => WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_DECODED_BYTES,
             'blank_lines' => 0,
             'comment_lines' => 0,
             'placeholder_rows' => 0,
             'invalid_runtime_token_rows' => 0,
             'rows_with_features' => 0,
             'accepted_rows' => 0,
+            'staged_tsv_bytes' => 0,
+            'staged_row_limit' => WP_FTS_LemmaSourceImportLimits::MAX_STAGED_ROWS,
+            'staged_tsv_byte_limit' => WP_FTS_LemmaSourceImportLimits::MAX_STAGED_TSV_BYTES,
         ];
+        $sourceFiles = [];
 
         try {
-            foreach ($sources as $file) {
-                $this->append_source_file($file, $sourcePath, $language, $normalizer, $handle, $stats);
+            foreach ($sources as $sourceIndex => $file) {
+                $sourceSnapshot = dirname($tsvPath) . DIRECTORY_SEPARATOR
+                    . sprintf('upstream-%04d.snapshot', $sourceIndex + 1)
+                    . (str_ends_with(strtolower($file), '.gz') ? '.gz' : '');
+                $sourceFiles[] = $this->append_source_file(
+                    $file,
+                    $sourceSnapshot,
+                    $sourcePath,
+                    $language,
+                    $normalizer,
+                    $handle,
+                    $stats,
+                    $physicalEvidence['file_evidence'][$file]
+                );
             }
         } finally {
             fclose($handle);
         }
 
-        return $stats;
+        return ['stats' => $stats, 'source_evidence' => $this->source_evidence_from_files($sourceFiles)];
     }
 
     /**
-     * @return string[]
+     * @return array{files:string[],path_bytes:int,entries:int,max_depth:int}
      */
     private function discover_source_files(string $sourcePath): array
     {
-        if (is_file($sourcePath)) {
-            return [$sourcePath];
-        }
-
-        $files = [];
-        try {
-            $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($sourcePath, FilesystemIterator::SKIP_DOTS));
-            foreach ($iterator as $file) {
-                if (!$file->isFile()) {
-                    continue;
-                }
-                $path = $file->getPathname();
-                if ($this->has_supported_source_extension($path)) {
-                    $files[] = $path;
-                }
-            }
-        } catch (UnexpectedValueException $e) {
-            throw new RuntimeException("Could not read UniMorph source directory: {$sourcePath}", 0, $e);
-        }
-        sort($files, SORT_STRING);
-        if ($files === []) {
+        $discovery = WP_FTS_LemmaSourceImportLimits::discover_source_files(
+            $sourcePath,
+            fn(string $path): bool => $this->has_supported_source_extension($path),
+            'UniMorph'
+        );
+        if ($discovery['files'] === []) {
             throw new RuntimeException("Source directory did not contain any .txt, .tsv, or .unimorph files: {$sourcePath}");
         }
 
-        return $files;
+        return $discovery;
     }
 
     private function has_supported_source_extension(string $path): bool
@@ -175,22 +208,37 @@ final class WP_FTS_UnimorphLemmaPackImporter
     /**
      * @param resource $tsvHandle
      * @param array<string,mixed> $stats
+     * @param array{bytes:int,device:int,inode:int,mtime:int,ctime:int} $physicalEvidence
+     * @return array{path:string,sha256:string,byte_count:int}
      */
     private function append_source_file(
         string $file,
+        string $sourceSnapshot,
         string $sourceRoot,
         string $language,
         WP_FTS_Normalizer $normalizer,
         $tsvHandle,
-        array &$stats
-    ): void {
+        array &$stats,
+        array $physicalEvidence
+    ): array {
         $label = $this->source_label($file, $sourceRoot);
-        $reader = $this->open_source($file);
+        $hashedSource = WP_FTS_LemmaSourceImportLimits::snapshot_source_artifact(
+            $file,
+            $sourceSnapshot,
+            $physicalEvidence,
+            'UniMorph'
+        );
+        $reader = $this->open_source($sourceSnapshot);
         $lineNumber = 0;
         try {
             while (($line = $this->read_source_line($reader)) !== false) {
                 $lineNumber++;
-                $stats['source_lines']++;
+                WP_FTS_LemmaSourceImportLimits::account_decoded_line(
+                    $line,
+                    $stats['source_lines'],
+                    $stats['source_decoded_bytes'],
+                    'UniMorph'
+                );
                 $line = rtrim((string) $line, "\n");
                 $line = rtrim($line, "\r");
                 if ($lineNumber === 1) {
@@ -224,7 +272,7 @@ final class WP_FTS_UnimorphLemmaPackImporter
 
                 $surface = $normalizer->normalize_token($form, $language);
                 $normalizedLemma = $normalizer->normalize_token($lemma, $language);
-                if (!$this->is_single_runtime_token($surface) || !$this->is_single_runtime_token($normalizedLemma)) {
+                if (!$this->is_single_runtime_token($surface, $language) || !$this->is_single_runtime_token($normalizedLemma, $language)) {
                     $stats['invalid_runtime_token_rows']++;
                     continue;
                 }
@@ -236,17 +284,34 @@ final class WP_FTS_UnimorphLemmaPackImporter
                 }
                 $sourceNote = $this->clean_tsv_note($label . ':' . $lineNumber);
                 $row = $surface . "\t" . $normalizedLemma . "\t" . $tag . "\t" . $sourceNote . "\n";
-                if (fwrite($tsvHandle, $row) === false) {
+                if ($stats['accepted_rows'] >= WP_FTS_LemmaSourceImportLimits::MAX_STAGED_ROWS) {
+                    throw new RuntimeException(
+                        'UniMorph staging exceeds the '
+                        . number_format(WP_FTS_LemmaSourceImportLimits::MAX_STAGED_ROWS)
+                        . '-row limit.'
+                    );
+                }
+                if ($stats['staged_tsv_bytes'] + strlen($row) > WP_FTS_LemmaSourceImportLimits::MAX_STAGED_TSV_BYTES) {
+                    throw new RuntimeException('UniMorph staging exceeds the 64 MiB decoded TSV limit.');
+                }
+                if (fwrite($tsvHandle, $row) !== strlen($row)) {
                     throw new RuntimeException("Could not append normalized UniMorph row for {$label}:{$lineNumber}.");
                 }
                 $stats['accepted_rows']++;
+                $stats['staged_tsv_bytes'] += strlen($row);
             }
         } finally {
             $this->close_source($reader);
         }
+        return [
+            'path' => $label,
+            'sha256' => $hashedSource['sha256'],
+            'byte_count' => $physicalEvidence['bytes'],
+        ];
     }
 
-    private function is_single_runtime_token(string $token): bool
+    /** Accept one lexical token only when its namespaced key fits storage. */
+    private function is_single_runtime_token(string $token, string $language): bool
     {
         if ($token === '' || strpbrk($token, " \t\r\n") !== false || str_contains($token, WP_FTS_TermNamespace::SEPARATOR)) {
             return false;
@@ -254,19 +319,22 @@ final class WP_FTS_UnimorphLemmaPackImporter
 
         $unicodeMatch = @preg_match('/^[\p{L}\p{M}\p{N}_]+$/u', $token);
         if ($unicodeMatch === 1) {
-            return true;
+            return WP_FTS_TermNamespace::term_key_fits($token, $language);
         }
         if ($unicodeMatch === 0) {
             return false;
         }
 
-        return preg_match('/^[A-Za-z0-9_]+$/', $token) === 1;
+        return preg_match('/^[A-Za-z0-9_]+$/', $token) === 1
+            && WP_FTS_TermNamespace::term_key_fits($token, $language);
     }
 
+    /** Publish a bounded in-root relative path instead of a host path. */
     private function source_label(string $file, string $sourceRoot): string
     {
         if (is_dir($sourceRoot)) {
-            $root = rtrim($sourceRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+            $canonicalRoot = realpath($sourceRoot);
+            $root = rtrim(is_string($canonicalRoot) ? $canonicalRoot : $sourceRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
             if (str_starts_with($file, $root)) {
                 return str_replace(DIRECTORY_SEPARATOR, '/', substr($file, strlen($root)));
             }
@@ -287,6 +355,7 @@ final class WP_FTS_UnimorphLemmaPackImporter
      * @param array<string,mixed> $summary
      * @param array<string,mixed> $options
      * @param array<string,mixed> $stats
+     * @param array{sha256:string,bytes:int,files:array<int,array{path:string,sha256:string,byte_count:int}>} $sourceEvidence
      * @return array<string,mixed>
      */
     private function rewrite_pack_metadata_for_unimorph_source(
@@ -294,7 +363,8 @@ final class WP_FTS_UnimorphLemmaPackImporter
         array $options,
         string $sourcePath,
         string $language,
-        array $stats
+        array $stats,
+        array $sourceEvidence
     ): array {
         $manifestPath = (string) ($summary['manifest'] ?? '');
         if ($manifestPath === '' || !is_file($manifestPath)) {
@@ -302,7 +372,6 @@ final class WP_FTS_UnimorphLemmaPackImporter
         }
 
         $manifest = $this->read_json_file($manifestPath);
-        $sourceEvidence = $this->source_evidence($sourcePath);
         $sourceUrl = $this->required_string($options, 'source_url');
         $sourceName = $this->required_string($options, 'source_name');
         $sourceVersion = (string) ($options['source_version'] ?? $manifest['version'] ?? 'unknown');
@@ -315,7 +384,25 @@ final class WP_FTS_UnimorphLemmaPackImporter
         $licenseEvidencePath = is_scalar($options['license_evidence_path'] ?? null) ? trim((string) $options['license_evidence_path']) : '';
         $licenseEvidenceSha = is_scalar($options['license_evidence_sha256'] ?? null) ? trim((string) $options['license_evidence_sha256']) : '';
         $publishedStats = $stats;
-        $publishedStats['source_path'] = $declaredSourceFile !== '' ? $declaredSourceFile : implode(',', array_column($sourceEvidence['files'], 'path'));
+        $delegatedStats = $manifest['source']['parse_stats'] ?? [];
+        if (is_array($delegatedStats)) {
+            // UniMorph owns upstream parsing counts while the delegated TSV
+            // compiler owns deduplication and bounded-ambiguity counts. Keep
+            // both so a shipped manifest explains every source-to-runtime row
+            // difference instead of publishing only the first phase.
+            $publishedStats += $delegatedStats;
+        }
+        // source.files is the sole per-file path/digest list. Keeping a second
+        // joined copy in parse_stats would violate the bounded manifest at the
+        // exact accepted discovery envelope.
+        unset($publishedStats['files']);
+        if ($declaredSourceFile !== '') {
+            $publishedStats['source_path'] = $declaredSourceFile;
+        } elseif (count($sourceEvidence['files']) === 1) {
+            $publishedStats['source_path'] = $sourceEvidence['files'][0]['path'];
+        } else {
+            unset($publishedStats['source_path']);
+        }
 
         $capabilities = $manifest['capabilities'] ?? [];
         if (is_array($capabilities)) {
@@ -362,10 +449,12 @@ final class WP_FTS_UnimorphLemmaPackImporter
         $manifest['provenance']['delegated_runtime_importer'] = 'indexer/tools/import-lemma-tsv-pack.php';
 
         $this->write_json_file($manifestPath, $manifest);
-        $manifestSha = hash_file('sha256', $manifestPath);
-        if (!is_string($manifestSha)) {
-            throw new RuntimeException('Could not hash rewritten UniMorph manifest.');
-        }
+        $manifestSha = WP_FTS_LemmaPackLimits::hash_file_bounded(
+            $manifestPath,
+            WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES,
+            'manifest_bytes',
+            'Generated UniMorph analyzer-pack manifest exceeds 64 KiB.'
+        )['sha256'];
 
         $packDir = dirname($manifestPath);
         $noticePath = $packDir . DIRECTORY_SEPARATOR . 'NOTICE.txt';
@@ -427,9 +516,15 @@ final class WP_FTS_UnimorphLemmaPackImporter
      */
     private function read_json_file(string $path): array
     {
-        $json = file_get_contents($path);
-        if (!is_string($json)) {
-            throw new RuntimeException("Could not read JSON file: {$path}");
+        $json = file_get_contents(
+            $path,
+            false,
+            null,
+            0,
+            WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES + 1
+        );
+        if (!is_string($json) || strlen($json) > WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES) {
+            throw new RuntimeException("Could not read a bounded analyzer-pack manifest: {$path}");
         }
         $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
         if (!is_array($decoded)) {
@@ -458,41 +553,33 @@ final class WP_FTS_UnimorphLemmaPackImporter
     }
 
     /**
+     * @param array<int,array{path:string,sha256:string,byte_count:int}> $sourceFiles
      * @return array{sha256:string,bytes:int,files:array<int,array{path:string,sha256:string,byte_count:int}>}
      */
-    private function source_evidence(string $sourcePath): array
+    private function source_evidence_from_files(array $sourceFiles): array
     {
-        $files = [];
         $totalBytes = 0;
         $digest = hash_init('sha256');
-        foreach ($this->discover_source_files($sourcePath) as $file) {
-            $sha = hash_file('sha256', $file);
-            $bytes = filesize($file);
-            if (!is_string($sha) || !is_int($bytes)) {
-                throw new RuntimeException("Could not collect source evidence for {$file}.");
-            }
-            $label = $this->source_label($file, $sourcePath);
-            $files[] = [
-                'path' => $label,
-                'sha256' => $sha,
-                'byte_count' => $bytes,
-            ];
-            $totalBytes += $bytes;
-            hash_update($digest, $label . "\0" . $sha . "\0" . (string) $bytes . "\n");
+        foreach ($sourceFiles as $file) {
+            $totalBytes += $file['byte_count'];
+            hash_update(
+                $digest,
+                $file['path'] . "\0" . $file['sha256'] . "\0" . (string) $file['byte_count'] . "\n"
+            );
         }
 
-        if (count($files) === 1) {
+        if (count($sourceFiles) === 1) {
             return [
-                'sha256' => $files[0]['sha256'],
-                'bytes' => $files[0]['byte_count'],
-                'files' => $files,
+                'sha256' => $sourceFiles[0]['sha256'],
+                'bytes' => $sourceFiles[0]['byte_count'],
+                'files' => $sourceFiles,
             ];
         }
 
         return [
             'sha256' => hash_final($digest),
             'bytes' => $totalBytes,
-            'files' => $files,
+            'files' => $sourceFiles,
         ];
     }
 
@@ -743,6 +830,10 @@ final class WP_FTS_UnimorphLemmaPackImporter
     {
         $runtime = $sourceLock['runtime'];
         $source = $sourceLock['source'];
+        $license = '- License: `' . $source['license']['spdx_id'] . '`';
+        if ($source['license']['license_url'] !== '') {
+            $license .= ' ' . $source['license']['license_url'];
+        }
         $lines = [
             '# UniMorph Analyzer Pack Provenance',
             '',
@@ -754,7 +845,7 @@ final class WP_FTS_UnimorphLemmaPackImporter
             '- Source commit: `' . $source['commit'] . '`',
             '- Source file: `' . $source['file'] . '`',
             '- Source SHA-256: `' . $source['artifact_sha256'] . '`',
-            '- License: `' . $source['license']['spdx_id'] . '` ' . $source['license']['license_url'],
+            $license,
             '- Importer command: `' . $sourceLock['importer']['command'] . '`',
             '- Runtime rows: `' . $runtime['row_count'] . '`',
             '- Runtime files: `' . $runtime['file_count'] . '`',
@@ -797,11 +888,7 @@ final class WP_FTS_UnimorphLemmaPackImporter
      */
     private function read_source_line(array $reader): string|false
     {
-        if ($reader['type'] === 'gzip') {
-            return gzgets($reader['handle']);
-        }
-
-        return fgets($reader['handle']);
+        return WP_FTS_LemmaSourceImportLimits::read_line($reader, 'UniMorph source');
     }
 
     /**
@@ -844,8 +931,13 @@ final class WP_FTS_UnimorphLemmaPackImporter
         throw new RuntimeException("Could not create a unique importer temporary directory under: {$parent}");
     }
 
+    /** Remove one owned tree while unlinking, never following, symlinks. */
     private function remove_tree(string $directory): void
     {
+        if (is_link($directory)) {
+            unlink($directory);
+            return;
+        }
         if (!is_dir($directory)) {
             return;
         }
@@ -854,10 +946,10 @@ final class WP_FTS_UnimorphLemmaPackImporter
             RecursiveIteratorIterator::CHILD_FIRST
         );
         foreach ($iterator as $path) {
-            if ($path->isDir()) {
-                rmdir($path->getPathname());
-            } else {
+            if ($path->isLink() || !$path->isDir()) {
                 unlink($path->getPathname());
+            } else {
+                rmdir($path->getPathname());
             }
         }
         rmdir($directory);

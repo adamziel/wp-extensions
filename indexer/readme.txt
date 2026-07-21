@@ -29,9 +29,11 @@ Support and feedback are best effort. Safety issues, install or activation failu
 1. Install the published self-contained Language FTS core ZIP through the WordPress admin plugin screen. A copied source `indexer` directory is incomplete without its adjacent monorepo component.
 2. Activate **Language FTS** from the Plugins screen.
 3. Open **Settings > Full-Text Search** and review Health, Settings, Sandbox, Indexed content, and Analyzer packs.
-4. Run an initial reindex from WP-CLI, for example: `wp fts reindex --post_type=post --batch_size=200`.
+4. Queue an initial reindex from WP-CLI, for example: `wp fts reindex --post_type=post --format=json`. The command returns after storing one durable scope; WP-Cron processes it in bounded batches.
 5. Test search results with your own content before enabling search replacement for visitors.
 6. Keep backups and a rollback plan, and monitor indexing, queues, cron, database load, and search quality.
+
+If WP-Cron is unavailable, run one bounded manual pass with `wp fts process-batch --batch_size=100 --time_budget=20 --format=json` and repeat only as needed.
 
 == Frequently Asked Questions ==
 

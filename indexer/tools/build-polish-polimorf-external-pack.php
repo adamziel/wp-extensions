@@ -26,14 +26,18 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
         $download = $this->bool_option($options['download'] ?? false);
         $source = $this->resolve_source($options, $download);
         $outDir = $this->required_string($options, 'out');
+        WP_FTS_LemmaSourceImportLimits::assert_source_output_separate(
+            $source,
+            $outDir,
+            'PoliMorf external pack builder'
+        );
 
         $this->reject_secret_path($outDir, 'output directory');
         $this->assert_external_directory($outDir, 'output directory', $this->bool_option($options['allow_repo_output'] ?? false));
-        $this->prepare_output_directory($outDir, $this->bool_option($options['replace_output'] ?? false));
-
         $expectedSha = $this->expected_sha256($options);
         $expectedBytes = $this->expected_bytes($options);
         $sourceVerification = $this->verify_source($source, $expectedSha, $expectedBytes);
+        $this->prepare_output_directory($outDir, $this->bool_option($options['replace_output'] ?? false));
 
         $importOptions = [
             'source' => $source,
@@ -57,7 +61,28 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
         }
 
         $importSummary = (new WP_FTS_PolishPolimorfImporter())->import($importOptions);
-        $validation = (new WP_FTS_AnalyzerPackValidator())->validate((string) $importSummary['manifest'], false);
+        $importedSource = is_array($importSummary['source'] ?? null) ? $importSummary['source'] : [];
+        if (
+            !is_string($importedSource['sha256'] ?? null)
+            || !hash_equals($sourceVerification['sha256'], $importedSource['sha256'])
+            || ($importedSource['bytes'] ?? null) !== $sourceVerification['bytes']
+        ) {
+            $this->remove_tree($outDir);
+            throw new RuntimeException('PoliMorf source changed between external verification and the importer snapshot.');
+        }
+        $validator = new WP_FTS_AnalyzerPackValidator();
+        $validation = $validator->validate((string) $importSummary['manifest'], false);
+        $pack = WP_FTS_LanguageLemmaPack::from_manifest_file(
+            (string) $importSummary['manifest'],
+            $validator,
+            'pl'
+        );
+        if ($pack->runtime_file_count() !== (int) $importSummary['runtime']['files']) {
+            throw new RuntimeException('Generated PoliMorf pack activation retained an unexpected runtime shard count.');
+        }
+        if ($pack->lookup_block_count() !== (int) $importSummary['lookup']['blocks']) {
+            throw new RuntimeException('Generated PoliMorf pack activation retained an unexpected lookup block count.');
+        }
 
         return $this->build_summary($download ? 'download' : 'local', $sourceVerification, $importSummary, $validation);
     }
@@ -122,6 +147,7 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
         return $source;
     }
 
+    /** Stream the approved download into a bounded, cleanup-safe partial file. */
     private function download_approved_source(string $target): void
     {
         if (!filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)) {
@@ -148,19 +174,31 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
             throw new RuntimeException("Could not write partial download: {$partial}");
         }
 
+        $downloadComplete = false;
+        $downloadedBytes = 0;
         try {
             while (!feof($input)) {
                 $chunk = fread($input, 1048576);
                 if ($chunk === false) {
                     throw new RuntimeException('Could not read source download stream.');
                 }
-                if ($chunk !== '' && fwrite($output, $chunk) === false) {
-                    throw new RuntimeException('Could not write source download stream.');
+                if ($chunk !== '') {
+                    $downloadedBytes += strlen($chunk);
+                    if ($downloadedBytes > WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PHYSICAL_BYTES) {
+                        throw new RuntimeException('Downloaded PoliMorf source exceeds the 64 MiB physical source limit.');
+                    }
+                    if (fwrite($output, $chunk) !== strlen($chunk)) {
+                        throw new RuntimeException('Could not write source download stream.');
+                    }
                 }
             }
+            $downloadComplete = true;
         } finally {
             fclose($input);
             fclose($output);
+            if (!$downloadComplete) {
+                @unlink($partial);
+            }
         }
 
         if (!rename($partial, $target)) {
@@ -174,21 +212,32 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
      */
     private function verify_source(string $source, string $expectedSha, int $expectedBytes): array
     {
-        $bytes = filesize($source);
-        if (!is_int($bytes)) {
-            throw new RuntimeException("Could not measure source artifact size: {$source}");
-        }
+        $physical = WP_FTS_LemmaSourceImportLimits::source_physical_evidence(
+            [$source],
+            'PoliMorf external builder'
+        );
+        $bytes = $physical['bytes'];
         if ($bytes !== $expectedBytes) {
             throw new RuntimeException("Source byte count mismatch for {$source}: expected {$expectedBytes}, got {$bytes}.");
         }
 
-        $sha = hash_file('sha256', $source);
-        if (!is_string($sha)) {
-            throw new RuntimeException("Could not hash source artifact: {$source}");
-        }
+        $hashed = WP_FTS_LemmaSourceImportLimits::hash_source_artifact(
+            $source,
+            $physical['file_evidence'][$source],
+            'PoliMorf external builder'
+        );
+        $sha = $hashed['sha256'];
         if (!hash_equals($expectedSha, $sha)) {
             throw new RuntimeException("Source SHA-256 mismatch for {$source}: expected {$expectedSha}, got {$sha}.");
         }
+
+        $gzipIntegrity = $this->verify_gzip_integrity($source);
+        WP_FTS_LemmaSourceImportLimits::assert_source_artifact_unchanged(
+            $source,
+            $hashed,
+            $physical['file_evidence'][$source],
+            'PoliMorf external builder'
+        );
 
         return [
             'path' => $source,
@@ -196,7 +245,7 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
             'bytes' => $bytes,
             'expected_sha256' => $expectedSha,
             'expected_bytes' => $expectedBytes,
-            'gzip_integrity' => $this->verify_gzip_integrity($source),
+            'gzip_integrity' => $gzipIntegrity,
         ];
     }
 
@@ -214,11 +263,17 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
             if (!is_resource($handle)) {
                 throw new RuntimeException("Could not open gzip source for integrity check: {$source}");
             }
+            $decodedBytes = 0;
             while (!gzeof($handle)) {
                 $chunk = gzread($handle, 1048576);
                 if ($chunk === false) {
                     gzclose($handle);
                     throw new RuntimeException("Gzip integrity check failed for {$source}.");
+                }
+                $decodedBytes += strlen($chunk);
+                if ($decodedBytes > WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_DECODED_BYTES) {
+                    gzclose($handle);
+                    throw new RuntimeException('PoliMorf gzip source exceeds the 512 MiB decoded source limit.');
                 }
             }
             gzclose($handle);
@@ -226,44 +281,15 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
             return ['status' => 'passed', 'method' => 'php-zlib'];
         }
 
-        foreach (['/usr/bin/gzip', '/bin/gzip'] as $gzip) {
-            if (!is_file($gzip) || !is_executable($gzip)) {
-                continue;
-            }
-            $exit = $this->run_gzip_test($gzip, $source);
-            if ($exit !== 0) {
-                throw new RuntimeException("Gzip integrity check failed for {$source}.");
-            }
-
-            return ['status' => 'passed', 'method' => $gzip];
-        }
-
-        return ['status' => 'skipped_no_available_tooling', 'method' => null];
+        throw new RuntimeException('Bounded PoliMorf gzip integrity verification requires PHP zlib support.');
     }
 
-    private function run_gzip_test(string $gzip, string $source): int
-    {
-        $process = proc_open(
-            [$gzip, '-t', $source],
-            [
-                0 => ['pipe', 'r'],
-                1 => ['pipe', 'w'],
-                2 => ['pipe', 'w'],
-            ],
-            $pipes
-        );
-        if (!is_resource($process)) {
-            throw new RuntimeException('Could not start gzip integrity check.');
-        }
-        foreach ($pipes as $pipe) {
-            fclose($pipe);
-        }
-
-        return proc_close($process);
-    }
-
+    /** Refuse symlink roots and replace only a recognizable generated pack. */
     private function prepare_output_directory(string $outDir, bool $replaceOutput): void
     {
+        if (is_link($outDir)) {
+            throw new RuntimeException("Output path must not be a symbolic link: {$outDir}");
+        }
         if (is_file($outDir)) {
             throw new RuntimeException("Output path is a file: {$outDir}");
         }
@@ -476,12 +502,23 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
                 'rows' => $importSummary['runtime']['rows'],
                 'files' => $importSummary['runtime']['files'],
                 'bytes' => $importSummary['runtime']['bytes'],
+                'decoded_bytes' => $importSummary['runtime']['decoded_bytes'],
+                'encoded_bytes' => $importSummary['runtime']['encoded_bytes'],
                 'sha256' => $importSummary['runtime']['sha256'],
             ],
+            'lookup' => [
+                'format' => $importSummary['lookup']['format'],
+                'files' => $importSummary['lookup']['files'],
+                'blocks' => $importSummary['lookup']['blocks'],
+                'bytes' => $importSummary['lookup']['bytes'],
+            ],
+            'runtime_lookup_bytes' => $importSummary['runtime_lookup_bytes'],
             'validation' => [
                 'status' => 'ok',
                 'manifest_sha256' => $validation['manifest_sha256'],
                 'runtime_files' => count($validation['runtime_files']),
+                'activatable' => true,
+                'lookup_blocks' => $importSummary['lookup']['blocks'],
             ],
             'configuration_example' => [
                 'polish_lemma_pack' => $manifestPath,
@@ -492,8 +529,13 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
         ];
     }
 
+    /** Remove a generated pack without following a nested or root symlink. */
     private function remove_tree(string $directory): void
     {
+        if (is_link($directory)) {
+            unlink($directory);
+            return;
+        }
         if (!is_dir($directory)) {
             return;
         }
@@ -502,10 +544,10 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
             RecursiveIteratorIterator::CHILD_FIRST
         );
         foreach ($iterator as $path) {
-            if ($path->isDir()) {
-                rmdir($path->getPathname());
-            } else {
+            if ($path->isLink() || !$path->isDir()) {
                 unlink($path->getPathname());
+            } else {
+                rmdir($path->getPathname());
             }
         }
         rmdir($directory);

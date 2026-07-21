@@ -12,8 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import",
-        "indexed-runtime-lookups"
+        "indexed-runtime-lookups",
+        "unimorph-source-import"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -24,30 +24,30 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "a9935623718a5e078320e556194757e01e9d8762296ed90bbf89c52b5ed2eacc",
+                "sha256": "32130840cc56ce5d7510b2b98f14ad2eecf96893a836cbcc8f63408711915d02",
                 "rows": 100000,
                 "first_surface": "abacharela",
                 "last_surface": "estourariamos",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0001.tsv.gz.lookup",
-                    "sha256": "0392ed62e1ce4e471ecf34a6775804c4522d064fbacbcc989ec9c0b0d650ff21",
-                    "blocks": 49
+                    "sha256": "6a940165957af09591d396182518b676ec97a67d204c9410ef862e153726a208",
+                    "blocks": 126
                 }
             },
             {
                 "path": "runtime/0002.tsv.gz",
-                "sha256": "a1c5a5f7c1d088d806e0de577df320f518d5758487959df3474437c06c02a606",
+                "sha256": "1c6b6b3eae3019604c02ba7213b685f28ac44a29b5417c2213b3f71315b67701",
                 "rows": 95342,
                 "first_surface": "estourarias",
                 "last_surface": "zurrou",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0002.tsv.gz.lookup",
-                    "sha256": "c139412f3c67388f3536166347e24d247a43ec51e567d41396b7c1805b39332f",
-                    "blocks": 47
+                    "sha256": "506964a01c4bb4f59c1c2db534a449909ff36826f11a32d3c91666cb7d22ef19",
+                    "blocks": 114
                 }
             }
         ]
@@ -77,16 +77,48 @@
         "parse_stats": {
             "source_path": "por",
             "source_files": 1,
-            "files": [
-                "por"
-            ],
+            "source_path_bytes": 3,
+            "source_entries": 1,
+            "source_max_depth": 0,
+            "source_physical_bytes": 10982524,
+            "source_physical_byte_limit": 67108864,
             "source_lines": 303997,
+            "source_line_limit": 8000000,
+            "source_decoded_bytes": 10982524,
+            "source_decoded_byte_limit": 536870912,
             "blank_lines": 1,
             "comment_lines": 0,
             "placeholder_rows": 0,
             "invalid_runtime_token_rows": 608,
             "rows_with_features": 303388,
-            "accepted_rows": 303388
+            "accepted_rows": 303388,
+            "staged_tsv_bytes": 14118091,
+            "staged_row_limit": 1250000,
+            "staged_tsv_byte_limit": 67108864,
+            "accepted_source_rows": 303388,
+            "rows_with_tags": 303388,
+            "rows_with_source_notes": 303388,
+            "runtime_rows": 195342,
+            "unique_source_rows": 195342,
+            "deduplicated_rows": 108046,
+            "ambiguous_surfaces": 374,
+            "unambiguous_surfaces": 194583,
+            "ambiguity_noop_surfaces": 0,
+            "ambiguity_noop_source_pairs": 0,
+            "chunk_files": 1,
+            "chunk_merge_outputs": 0,
+            "chunk_merge_passes": 0,
+            "max_live_chunk_files": 1,
+            "max_chunk_merge_inputs": 1,
+            "chunk_merge_fan_in_limit": 64,
+            "max_chunk_lexical_bytes": 3903470,
+            "chunk_lexical_byte_limit": 8388608,
+            "runtime_decoded_bytes": 3903470,
+            "runtime_encoded_bytes": 434842,
+            "lookup_index_bytes": 29848,
+            "lookup_blocks": 240,
+            "runtime_lookup_bytes": 464690,
+            "runtime_lookup_byte_limit": 16777216
         }
     },
     "license": {

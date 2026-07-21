@@ -12,8 +12,8 @@
         "sharded-runtime-files",
         "source-backed-lemma-tsv-import",
         "compressed-runtime-files",
-        "unimorph-source-import",
-        "indexed-runtime-lookups"
+        "indexed-runtime-lookups",
+        "unimorph-source-import"
     ],
     "runtime": {
         "format": "wp-fts-lemma-tsv-v1",
@@ -24,16 +24,16 @@
         "files": [
             {
                 "path": "runtime/0001.tsv.gz",
-                "sha256": "6429341d7f9c5f45ebda7678f2f451b2dd4cd8d900874cc77069cc6d0fc326b3",
+                "sha256": "325d1d088347279d90b21c346895486f138893426c9e100b4b503d69c64670f2",
                 "rows": 2855,
                 "first_surface": "অঙ্গ",
                 "last_surface": "হেগেছো",
                 "compression": "gzip",
                 "lookup": {
-                    "format": "wp-fts-lemma-block-index-v1",
+                    "format": "wp-fts-lemma-block-index-v2",
                     "path": "runtime/0001.tsv.gz.lookup",
-                    "sha256": "2ac6fa28ee6d364569ede01ef2b2704b184251e9b686bb9fed45ecbe4238dedf",
-                    "blocks": 2
+                    "sha256": "3822f6d0f167576a4b71f52be4135c396524e63185c52bd9b0b6c826f57399fb",
+                    "blocks": 7
                 }
             }
         ]
@@ -63,16 +63,48 @@
         "parse_stats": {
             "source_path": "ben",
             "source_files": 1,
-            "files": [
-                "ben"
-            ],
+            "source_path_bytes": 3,
+            "source_entries": 1,
+            "source_max_depth": 0,
+            "source_physical_bytes": 251991,
+            "source_physical_byte_limit": 67108864,
             "source_lines": 4581,
+            "source_line_limit": 8000000,
+            "source_decoded_bytes": 251991,
+            "source_decoded_byte_limit": 536870912,
             "blank_lines": 138,
             "comment_lines": 0,
             "placeholder_rows": 0,
             "invalid_runtime_token_rows": 1150,
             "rows_with_features": 3293,
-            "accepted_rows": 3293
+            "accepted_rows": 3293,
+            "staged_tsv_bytes": 191327,
+            "staged_row_limit": 1250000,
+            "staged_tsv_byte_limit": 67108864,
+            "accepted_source_rows": 3293,
+            "rows_with_tags": 3293,
+            "rows_with_source_notes": 3293,
+            "runtime_rows": 2855,
+            "unique_source_rows": 2855,
+            "deduplicated_rows": 438,
+            "ambiguous_surfaces": 5,
+            "unambiguous_surfaces": 2842,
+            "ambiguity_noop_surfaces": 0,
+            "ambiguity_noop_source_pairs": 0,
+            "chunk_files": 1,
+            "chunk_merge_outputs": 0,
+            "chunk_merge_passes": 0,
+            "max_live_chunk_files": 1,
+            "max_chunk_merge_inputs": 1,
+            "chunk_merge_fan_in_limit": 64,
+            "max_chunk_lexical_bytes": 101749,
+            "chunk_lexical_byte_limit": 8388608,
+            "runtime_decoded_bytes": 101749,
+            "runtime_encoded_bytes": 9098,
+            "lookup_index_bytes": 1184,
+            "lookup_blocks": 7,
+            "runtime_lookup_bytes": 10282,
+            "runtime_lookup_byte_limit": 16777216
         }
     },
     "license": {

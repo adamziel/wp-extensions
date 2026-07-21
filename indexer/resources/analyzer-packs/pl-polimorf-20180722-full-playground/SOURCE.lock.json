@@ -33,7 +33,7 @@
         "command": "php indexer/tools/import-polish-polimorf-lemmatizer.php --source=<artifact> --out=<pack-dir> --pack-id=pl-polimorf-20180722-full --version=2018.07.22-external-pack-v1 --source-url=https://clarin-pl.eu/dspace/bitstream/handle/11321/577/polimorf-20180722.tab.gz?isAllowed=y&sequence=1"
     },
     "runtime": {
-        "manifest_sha256": "46e5cae19a9cbe96a4443df093d53687b54b77fd6f4e02f141ff19b4955d9f51",
+        "manifest_sha256": "8c22d1301b34a622f822489995492239cc560d75f755228db8bc7b986327a82a",
         "row_count": 4748648,
         "file_count": 48,
         "byte_count": 117149568,
@@ -42,11 +42,11 @@
         "committed": true,
         "compression": "gzip",
         "compressed_file_count": 48,
-        "compressed_byte_count": 13532782,
-        "largest_compressed_shard_byte_count": 324468,
-        "lookup_index_format": "wp-fts-lemma-block-index-v1",
+        "compressed_byte_count": 13716988,
+        "largest_compressed_shard_byte_count": 331336,
+        "lookup_index_format": "wp-fts-lemma-block-index-v2",
         "lookup_index_file_count": 48,
-        "lookup_index_byte_count": 258072
+        "lookup_index_byte_count": 933775
     },
     "behavior": {
         "oov_policy": "return_original_normalized_term",

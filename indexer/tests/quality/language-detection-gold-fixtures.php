@@ -95,8 +95,21 @@ if ($wp_fts_ldgf_direct) {
 }
 
 if (!function_exists('pll_get_post_language')) {
+    /** Model Polylang language reads and optionally expose per-post SQL fanout. */
     function pll_get_post_language(int $post_id, string $field = 'locale'): string|false
     {
+        $GLOBALS['wp_fts_ldgf_polylang_post_language_calls'] = max(
+            0,
+            (int) ($GLOBALS['wp_fts_ldgf_polylang_post_language_calls'] ?? 0)
+        ) + 1;
+        if (
+            !empty($GLOBALS['wp_fts_ldgf_polylang_query_per_call'])
+            && isset($GLOBALS['wpdb'])
+            && is_object($GLOBALS['wpdb'])
+            && is_callable([$GLOBALS['wpdb'], 'get_var'])
+        ) {
+            $GLOBALS['wpdb']->get_var('SELECT language FROM wp_polylang_per_post_stub');
+        }
         $language = $GLOBALS['wp_fts_ldgf_polylang_post_languages'][$post_id] ?? null;
 
         return is_string($language) && $language !== '' ? $language : false;
@@ -112,10 +125,15 @@ if (!function_exists('pll_current_language')) {
     }
 }
 
+/** Restore every multilingual-provider fake between independent gold cases. */
 function wp_fts_ldgf_reset_multilingual_globals(): void
 {
     $GLOBALS['wp_fts_ldgf_polylang_post_languages'] = [];
     $GLOBALS['wp_fts_ldgf_polylang_current_language'] = null;
+    $GLOBALS['wp_fts_ldgf_polylang_post_language_calls'] = 0;
+    $GLOBALS['wp_fts_ldgf_polylang_query_per_call'] = false;
+    $GLOBALS['wp_fts_ldgf_wpml_post_languages'] = [];
+    unset($GLOBALS['polylang'], $GLOBALS['sitepress']);
     $GLOBALS['wp_fts_test_filters']['wpml_post_language_details'] = null;
     $GLOBALS['wp_fts_test_filters']['wpml_current_language'] = null;
 }
@@ -456,7 +474,7 @@ test_case('quality language detection gold fixtures isolate top-level text acros
     );
 });
 
-test_case('quality language detection gold fixtures honor explicit and multilingual-plugin metadata', function (): void {
+test_case('quality language detection gold fixtures honor explicit and preloaded multilingual metadata', function (): void {
     wp_fts_ldgf_reset_multilingual_globals();
     $GLOBALS['wp_fts_ldgf_polylang_post_languages'][10] = 'pl_PL';
     $GLOBALS['wp_fts_test_filters']['wpml_post_language_details'] = static function (mixed $value, int $postId): mixed {
@@ -470,10 +488,18 @@ test_case('quality language detection gold fixtures honor explicit and multiling
         $analyzer_options['polish_lemma_pack'] = false;
         $analyzer_options['polish_lemmatizer_pack'] = false;
         $analyzer = new WP_FTS_Analyzer($analyzer_options);
+        assert_true(!isset($analyzer_options['document_language_resolver']), 'runtime analyzer options must not install a provider-backed document resolver');
+        assert_true(!isset($analyzer_options['query_language_resolver']), 'runtime analyzer options must not install a provider-backed query resolver');
 
-        $polylang = test_lang_by_term($analyzer->analyze_content('<p>oraz jest</p>', ['post_id' => 10]));
-        assert_same('pl-PL', $polylang['oraz'] ?? null, 'Polylang post locale should resolve untagged document language');
-        assert_same('pl-PL', $polylang['jest'] ?? null, 'Polylang post locale should apply to the whole untagged span');
+        $polylangPost = (object) [
+            'ID' => 10,
+            'fts_language_override' => '',
+            'fts_integration_language' => 'pl_PL',
+        ];
+        $polylangOptions = WP_FTS_Plugin::prepare_post_index_options($polylangPost);
+        $polylang = test_lang_by_term($analyzer->analyze_content('<p>oraz jest</p>', $polylangOptions));
+        assert_same('pl-PL', $polylang['oraz'] ?? null, 'the preloaded Polylang locale should resolve untagged document language');
+        assert_same('pl-PL', $polylang['jest'] ?? null, 'the preloaded Polylang locale should apply to the whole untagged span');
 
         $explicitOption = test_lang_by_term($analyzer->analyze_content('<p>oraz jest</p>', [
             'post_id' => 10,
@@ -506,14 +532,20 @@ test_case('quality language detection gold fixtures honor explicit and multiling
         assert_same('pl-PL', $strongEvidenceExplicitContent['und'] ?? null, 'explicit HTML lang should keep connector in override partition');
         assert_same('pl-PL', $strongEvidenceExplicitContent['strasse'] ?? null, 'explicit HTML lang should apply to the full strong-evidence document span');
 
-        $wpml = test_lang_by_term($analyzer->analyze_content('<p>Führung und Straße</p>', ['post_id' => 20]));
-        assert_same('fr-FR', $wpml['fuhrung'] ?? null, 'WPML post locale should resolve untagged document language');
-        assert_same('fr-FR', $wpml['strass'] ?? null, 'WPML post locale should beat detector evidence from the text');
-        assert_same(null, $wpml['fuehrung'] ?? null, 'WPML metadata should prevent German-specific normalization for this fixture');
+        $wpmlPost = (object) [
+            'ID' => 20,
+            'fts_language_override' => '',
+            'fts_integration_language' => 'fr_FR',
+        ];
+        $wpmlOptions = WP_FTS_Plugin::prepare_post_index_options($wpmlPost);
+        $wpml = test_lang_by_term($analyzer->analyze_content('<p>Führung und Straße</p>', $wpmlOptions));
+        assert_same('fr-FR', $wpml['fuhrung'] ?? null, 'the preloaded WPML locale should resolve untagged document language');
+        assert_same('fr-FR', $wpml['strass'] ?? null, 'the preloaded WPML locale should beat detector evidence from the text');
+        assert_same(null, $wpml['fuehrung'] ?? null, 'preloaded WPML metadata should prevent German-specific normalization for this fixture');
 
         $GLOBALS['wp_fts_ldgf_polylang_current_language'] = 'pl_PL';
-        $currentQuery = test_lang_by_term($analyzer->analyze_query_occurrences('oraz jest'));
-        assert_same('pl-PL', $currentQuery['oraz'] ?? null, 'Polylang current language should resolve untagged query language');
+        $currentQuery = test_lang_by_term($analyzer->analyze_query_occurrences('alpha beta'));
+        assert_same('en', $currentQuery['alpha'] ?? null, 'the runtime query analyzer should use detection/site default instead of Polylang request state');
 
         $queryOverride = test_lang_by_term($analyzer->analyze_query_occurrences('oraz jest', ['query_lang' => 'en']));
         assert_same('en', $queryOverride['oraz'] ?? null, 'explicit query_lang should override Polylang current language');
@@ -528,10 +560,15 @@ test_case('quality language detection gold fixtures honor explicit and multiling
         assert_same('pl-PL', $strongEvidenceQueryOverride['strasse'] ?? null, 'explicit query_lang should apply to the full strong-evidence query span');
 
         $GLOBALS['wp_fts_ldgf_polylang_current_language'] = null;
-        $GLOBALS['wp_fts_test_filters']['wpml_current_language'] = static fn(mixed $value): string => 'tr_TR';
-        $wpmlQuery = test_lang_by_term($analyzer->analyze_query_occurrences('İstanbul Isparta'));
-        assert_same('tr-TR', $wpmlQuery['istanbul'] ?? null, 'WPML current language should resolve query language when Polylang is absent');
-        assert_same('tr-TR', $wpmlQuery['ısparta'] ?? null, 'WPML current language should preserve Turkish normalization');
+        $wpmlCurrentCalls = 0;
+        $GLOBALS['wp_fts_test_filters']['wpml_current_language'] = static function (mixed $value) use (&$wpmlCurrentCalls): string {
+            $wpmlCurrentCalls++;
+            return 'tr_TR';
+        };
+        $wpmlQuery = test_lang_by_term($analyzer->analyze_query_occurrences('alpha beta'));
+        assert_same('en', $wpmlQuery['alpha'] ?? null, 'the runtime query analyzer should use detection/site default instead of WPML request state');
+        assert_same(0, $wpmlCurrentCalls, 'runtime query analysis must not invoke the WPML current-language filter');
+        assert_same(0, $GLOBALS['wp_fts_ldgf_polylang_post_language_calls'] ?? null, 'runtime document analysis must not invoke the Polylang per-post API');
     } finally {
         wp_fts_ldgf_reset_multilingual_globals();
     }

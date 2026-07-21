@@ -45,17 +45,17 @@
         "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=es --pack-id=es-unimorph-spa-b9655efb0e5c --version=b9655efb0e5c-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/spa/blob/b9655efb0e5ce0f99809badaa7f4e93017ab8430/spa --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
     },
     "runtime": {
-        "manifest_sha256": "85d12249bbc80575fe8ae8e650807cf66cd2c2ff8169c1e4ad941624d6b991f0",
-        "row_count": 794521,
+        "manifest_sha256": "255679c31465d1749a384561656be2db6a8ac8ea5df5d7130030c4c376f1cc92",
+        "row_count": 794487,
         "file_count": 8,
-        "byte_count": 2053457,
-        "digest_sha256": "c68efa7dfa78f0b1442473c2770ee486965b0a308a63446d653f7929f2dcd54f",
+        "byte_count": 2068414,
+        "digest_sha256": "334e9f8bac85298967cf7e410f4f81413569f349f3cb77f2ef9745cf93579603",
         "contains_third_party_data": true,
         "committed": true,
         "compression": "gzip",
-        "lookup_index_format": "wp-fts-lemma-block-index-v1",
+        "lookup_index_format": "wp-fts-lemma-block-index-v2",
         "lookup_index_file_count": 8,
-        "lookup_index_byte_count": 41853
+        "lookup_index_byte_count": 130734
     },
     "behavior": {
         "oov_policy": "return_original_normalized_term",

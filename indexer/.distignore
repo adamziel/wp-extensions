@@ -12,6 +12,18 @@ auth.json
 .composer
 .composer/**
 tests
++ /tools/
++ /tools/import-lemma-tsv-pack.php
++ /tools/import-conllu-lemma-pack.php
++ /tools/import-unimorph-lemma-pack.php
++ /tools/import-polish-polimorf-lemmatizer.php
++ /tools/validate-analyzer-pack.php
++ /tools/audit-top-language-lemma-packs.php
++ /tools/build-lemma-pack-lookup-index.php
++ /tools/build-polish-polimorf-external-pack.php
++ /tools/lemma-source-import-limits.php
++ /tools/lemma-chunk-merge.php
+- /tools/**
 goal.md
 resources/sources
 playground/indexer-preview.zip
