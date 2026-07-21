@@ -1,6 +1,5 @@
 {
   "metadata_kind": "tokenizer_source_lock_test_fixture",
-  "fixture_only": true,
   "test_fixture_note": "Synthetic verifier fixture only. This is not an approved Thai tokenizer source lock and must not be used to import data.",
   "status": "test_fixture_complete",
   "source_lock_version": 1,

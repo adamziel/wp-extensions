@@ -16,7 +16,7 @@ test_case('CJK lexical run containment rejects the accepted-source adversary bef
         assert_same(4096, $payload['lexical_run_limit_bytes'] ?? null, "{$label} fixture should bind itself to the shared lexical-run envelope");
         assert_same('WP_FTS_Analysis_Limit_Exceeded', $payload['error']['class'] ?? null, "{$label} adversary should raise the typed analysis limit");
         assert_same('lexical_run_bytes', $payload['error']['reason_code'] ?? null, "{$label} adversary should identify the lexical-run boundary");
-        assert_same(0, $payload['dictionary_scan_count'] ?? null, "{$label} adversary must fail before one Jieba dictionary scan");
+        assert_same(0, $payload['indexed_range_read_count'] ?? null, "{$label} adversary must fail before one Jieba dictionary range read");
         assert_true((float) ($payload['elapsed_seconds'] ?? INF) <= 1.0, "{$label} adversary should reject within one second");
         assert_true((int) ($payload['php_peak_delta_bytes'] ?? PHP_INT_MAX) <= 16 * 1024 * 1024, "{$label} adversary should add at most 16 MiB PHP allocation");
         assert_true((int) ($payload['php_peak_bytes'] ?? PHP_INT_MAX) <= 128 * 1024 * 1024, "{$label} adversary should stay below the 128-MiB PHP ceiling");

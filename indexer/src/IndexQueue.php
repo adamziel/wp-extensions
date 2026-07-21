@@ -73,6 +73,26 @@ final class WP_FTS_Index_Queue
     private const MAX_PAYLOAD_NODES = 256;
     private const MAX_PAYLOAD_DEPTH = 8;
     private const MAX_PAYLOAD_BYTES = 8192;
+    private const CLAIM_KEYS = [
+        'job_key',
+        'kind',
+        'post_id',
+        'generation',
+        'attempts',
+        'last_error_code',
+        'token',
+        'claim_expires_at',
+        'cursor_post_id',
+        'scope_coverage',
+        'scope_subject_type',
+        'scope_subject_id',
+        'scope_incarnation',
+        'payload',
+        'source_exists',
+        'source_bytes',
+        'canonical_bytes',
+        'source_snapshot',
+    ];
 
     private object $wpdb;
     private string $table;
@@ -87,16 +107,33 @@ final class WP_FTS_Index_Queue
     /** @var array<string,int> Exclusive lifecycle guards held by this PHP process. */
     private static array $foregroundOwnerExclusiveGuardPaths = [];
 
+    /** @var array<int,string> Shared guard resource IDs owned by this process. */
+    private static array $foregroundOwnerGuardHandles = [];
+
+    /** @var array<int,string> Exclusive guard resource IDs owned by this process. */
+    private static array $foregroundOwnerExclusiveGuardHandles = [];
+
     /** Bind queue, posts, and document tables to one WordPress site prefix. */
     public function __construct(object $wpdb, ?string $prefix = null)
     {
         $this->wpdb = $wpdb;
+        $adapterFields = get_object_vars($wpdb);
         $prefixWasExplicit = $prefix !== null;
-        $prefix = $prefix ?? (string) ($wpdb->prefix ?? '');
+        if ($prefix === null) {
+            if (!array_key_exists('prefix', $adapterFields) || !is_string($adapterFields['prefix'])) {
+                throw new UnexpectedValueException('The FTS database adapter must expose a native table prefix.');
+            }
+            $prefix = $adapterFields['prefix'];
+        }
         $this->table = $prefix . 'fts_work';
-        $this->postsTable = !$prefixWasExplicit && isset($wpdb->posts) && is_scalar($wpdb->posts)
-            ? (string) $wpdb->posts
-            : $prefix . 'posts';
+        if (!$prefixWasExplicit && array_key_exists('posts', $adapterFields)) {
+            if (!is_string($adapterFields['posts'])) {
+                throw new UnexpectedValueException('The FTS database adapter must expose a native posts table name.');
+            }
+            $this->postsTable = $adapterFields['posts'];
+        } else {
+            $this->postsTable = $prefix . 'posts';
+        }
         $this->documentsTable = $prefix . 'fts_documents';
     }
 
@@ -148,6 +185,7 @@ final class WP_FTS_Index_Queue
             throw new RuntimeException('Failed to acquire the FTS foreground owner guard.');
         }
         self::$foregroundOwnerGuardPaths[$path] = (self::$foregroundOwnerGuardPaths[$path] ?? 0) + 1;
+        self::$foregroundOwnerGuardHandles[get_resource_id($handle)] = $path;
 
         return ['kind' => 'flock', 'path' => $path, 'handle' => $handle];
     }
@@ -199,6 +237,7 @@ final class WP_FTS_Index_Queue
         }
         self::$foregroundOwnerExclusiveGuardPaths[$path] =
             (self::$foregroundOwnerExclusiveGuardPaths[$path] ?? 0) + 1;
+        self::$foregroundOwnerExclusiveGuardHandles[get_resource_id($handle)] = $path;
 
         return ['kind' => 'flock-exclusive', 'path' => $path, 'handle' => $handle];
     }
@@ -210,40 +249,72 @@ final class WP_FTS_Index_Queue
      */
     public function release_foreground_owner_guard(array $guard): void
     {
-        $path = $guard['path'] ?? null;
-        $handle = $guard['handle'] ?? null;
-        if (($guard['kind'] ?? '') !== 'flock' || !is_string($path)) {
+        if (array_keys($guard) !== ['kind', 'path', 'handle']) {
             throw new InvalidArgumentException('Invalid FTS foreground owner guard.');
         }
-        if (is_resource($handle)) {
-            @flock($handle, LOCK_UN);
-            @fclose($handle);
+        $path = $guard['path'];
+        $handle = $guard['handle'];
+        if (
+            $guard['kind'] !== 'flock'
+            || !is_string($path)
+            || !is_resource($handle)
+            || (self::$foregroundOwnerGuardPaths[$path] ?? 0) <= 0
+            || (self::$foregroundOwnerGuardHandles[get_resource_id($handle)] ?? null) !== $path
+        ) {
+            throw new InvalidArgumentException('Invalid FTS foreground owner guard.');
         }
-        $remaining = max(0, (self::$foregroundOwnerGuardPaths[$path] ?? 0) - 1);
+        $handle_id = get_resource_id($handle);
+        $matches_path = $this->foreground_owner_guard_handle_matches_path($handle, $path);
+        $unlocked = @flock($handle, LOCK_UN);
+        $closed = @fclose($handle);
+        unset(self::$foregroundOwnerGuardHandles[$handle_id]);
+        $remaining = self::$foregroundOwnerGuardPaths[$path] - 1;
         if ($remaining === 0) {
             unset(self::$foregroundOwnerGuardPaths[$path]);
         } else {
             self::$foregroundOwnerGuardPaths[$path] = $remaining;
+        }
+        if (!$matches_path) {
+            throw new InvalidArgumentException('Invalid FTS foreground owner guard.');
+        }
+        if (!$unlocked || !$closed) {
+            throw new RuntimeException('Failed to release the FTS foreground owner guard.');
         }
     }
 
     /** @param array<string,mixed> $guard */
     public function release_exclusive_foreground_owner_guard(array $guard): void
     {
-        $path = $guard['path'] ?? null;
-        $handle = $guard['handle'] ?? null;
-        if (($guard['kind'] ?? '') !== 'flock-exclusive' || !is_string($path)) {
+        if (array_keys($guard) !== ['kind', 'path', 'handle']) {
             throw new InvalidArgumentException('Invalid exclusive FTS foreground owner guard.');
         }
-        if (is_resource($handle)) {
-            @flock($handle, LOCK_UN);
-            @fclose($handle);
+        $path = $guard['path'];
+        $handle = $guard['handle'];
+        if (
+            $guard['kind'] !== 'flock-exclusive'
+            || !is_string($path)
+            || !is_resource($handle)
+            || (self::$foregroundOwnerExclusiveGuardPaths[$path] ?? 0) <= 0
+            || (self::$foregroundOwnerExclusiveGuardHandles[get_resource_id($handle)] ?? null) !== $path
+        ) {
+            throw new InvalidArgumentException('Invalid exclusive FTS foreground owner guard.');
         }
-        $remaining = max(0, (self::$foregroundOwnerExclusiveGuardPaths[$path] ?? 0) - 1);
+        $handle_id = get_resource_id($handle);
+        $matches_path = $this->foreground_owner_guard_handle_matches_path($handle, $path);
+        $unlocked = @flock($handle, LOCK_UN);
+        $closed = @fclose($handle);
+        unset(self::$foregroundOwnerExclusiveGuardHandles[$handle_id]);
+        $remaining = self::$foregroundOwnerExclusiveGuardPaths[$path] - 1;
         if ($remaining === 0) {
             unset(self::$foregroundOwnerExclusiveGuardPaths[$path]);
         } else {
             self::$foregroundOwnerExclusiveGuardPaths[$path] = $remaining;
+        }
+        if (!$matches_path) {
+            throw new InvalidArgumentException('Invalid exclusive FTS foreground owner guard.');
+        }
+        if (!$unlocked || !$closed) {
+            throw new RuntimeException('Failed to release the exclusive FTS foreground owner guard.');
         }
     }
 
@@ -257,6 +328,7 @@ final class WP_FTS_Index_Queue
             && is_string($path)
             && is_resource($handle)
             && (self::$foregroundOwnerGuardPaths[$path] ?? 0) > 0
+            && (self::$foregroundOwnerGuardHandles[get_resource_id($handle)] ?? null) === $path
             && $this->foreground_owner_guard_handle_matches_path($handle, $path);
     }
 
@@ -264,14 +336,6 @@ final class WP_FTS_Index_Queue
     public function foreground_owner_guard_probe_state(): string
     {
         return $this->foregroundOwnerGuardProbeState;
-    }
-
-    /**
-     * Atomically coalesce a post save into the latest queued generation.
-     */
-    public function enqueue(int $post_id, ?int $now = null): void
-    {
-        $this->enqueue_many([$post_id], $now);
     }
 
     /**
@@ -288,35 +352,15 @@ final class WP_FTS_Index_Queue
      */
     public function enqueue_many(array $post_ids, ?int $now = null, array $payload = []): int
     {
-        if (count($post_ids) > self::MAX_ENQUEUE_POSTS) {
-            throw new InvalidArgumentException(
-                'FTS queue batch exceeds the ' . self::MAX_ENQUEUE_POSTS . '-post enqueue contract.'
-            );
-        }
-        $ids = [];
-        foreach ($post_ids as $post_id) {
-            if (!is_scalar($post_id) || (is_string($post_id) && strlen($post_id) > 64)) {
-                throw new InvalidArgumentException('FTS queue post ids must be bounded scalar values.');
-            }
-            $post_id = (int) $post_id;
-            if ($post_id > 0) {
-                $ids[$post_id] = true;
-            }
-        }
-        if ($ids === []) {
-            return 0;
-        }
-        if (count($ids) > self::MAX_ENQUEUE_POSTS) {
-            throw new InvalidArgumentException(
-                'FTS queue batch exceeds the ' . self::MAX_ENQUEUE_POSTS . '-post enqueue contract.'
-            );
-        }
-
+        $ids = $this->unique_positive_post_ids($post_ids, 'FTS queue');
         $now = $this->timestamp($now);
         $this->assert_bounded_payload($payload);
         $encodedPayload = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
         if (strlen($encodedPayload) > self::MAX_PAYLOAD_BYTES) {
             throw new InvalidArgumentException('FTS post work payload exceeds 8192 bytes.');
+        }
+        if ($ids === []) {
+            return 0;
         }
         $values = [];
         $args = [];
@@ -343,7 +387,7 @@ final class WP_FTS_Index_Queue
             throw new InvalidArgumentException('FTS queue batch exceeds the one-megabyte enqueue statement contract.');
         }
 
-        $this->query($this->wpdb->prepare(
+        $affected = $this->query($this->wpdb->prepare(
             "INSERT INTO {$this->table}
     (job_key, kind, post_id, generation, state, available_at, attempts, claim_token, claimed_generation, claim_expires_at, cursor_post_id, payload, last_error_code, last_error_at)
 VALUES " . implode(",\n", $values) . "
@@ -358,6 +402,7 @@ ON DUPLICATE KEY UPDATE
     state = IF(kind = 'meta', 'meta', IF(state IN ('fenced','guarded'), state, 'ready'))",
             ...$args
         ), 'enqueue FTS indexing work');
+        $this->bounded_affected_rows($affected, 2 * (count($ids) + 1), 'FTS indexing enqueue');
 
         return count($ids);
     }
@@ -374,9 +419,10 @@ ON DUPLICATE KEY UPDATE
      */
     public function fence_post(int $post_id, string $mutation_token, int $available_at, array $payload = []): void
     {
-        if ($post_id <= 0 || $mutation_token === '' || strlen($mutation_token) > 64) {
+        if ($post_id <= 0) {
             throw new InvalidArgumentException('FTS post mutation fences require a positive post id and bounded token.');
         }
+        $mutation_token = $this->validated_mutation_token($mutation_token);
         $this->assert_bounded_payload($payload);
         $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
         if (strlen($encoded) > self::MAX_PAYLOAD_BYTES) {
@@ -387,7 +433,7 @@ ON DUPLICATE KEY UPDATE
         $epoch_incarnation = $this->new_search_epoch_incarnation();
         $fence_state = $this->mutation_fence_state($mutation_token);
         // Leave an unclaimable row until the matching post hook promotes it.
-        $this->query($this->wpdb->prepare(
+        $affected = $this->query($this->wpdb->prepare(
             "INSERT INTO {$this->table}
 (job_key, kind, post_id, generation, state, available_at, attempts, claim_token, claimed_generation, claim_expires_at, cursor_post_id, payload, last_error_code, last_error_at)
 VALUES (%s, 'post', %d, 1, %s, %d, 0, %s, 1, 0, 0, %s, '', 0)
@@ -412,6 +458,7 @@ last_error_code = '', last_error_at = 0",
             self::SEARCH_EPOCH_JOB_KEY,
             $epoch_incarnation
         ), 'fence FTS post mutation');
+        $this->bounded_affected_rows($affected, 4, 'FTS post mutation fence');
     }
 
     /**
@@ -426,9 +473,10 @@ last_error_code = '', last_error_at = 0",
      */
     public function promote_post(int $post_id, string $mutation_token, ?int $now = null, ?array $payload = null): void
     {
-        if ($post_id <= 0 || $mutation_token === '' || strlen($mutation_token) > 64) {
+        if ($post_id <= 0) {
             throw new InvalidArgumentException('FTS post mutation promotion requires a positive post id and bounded token.');
         }
+        $mutation_token = $this->validated_mutation_token($mutation_token);
         $this->assert_bounded_payload($payload ?? []);
         $encoded = json_encode($payload ?? [], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
         if (strlen($encoded) > self::MAX_PAYLOAD_BYTES) {
@@ -451,7 +499,7 @@ last_error_code = '', last_error_at = 0",
     ELSE payload
 END";
         $payload_marker = $payload === null ? "\n/* wp_fts:preserve-existing-payload */" : '';
-        $this->query($this->wpdb->prepare(
+        $affected = $this->query($this->wpdb->prepare(
             "INSERT INTO {$this->table}
 (job_key, kind, post_id, generation, state, available_at, attempts, claim_token, claimed_generation, claim_expires_at, cursor_post_id, payload, last_error_code, last_error_at)
 VALUES (%s, 'post', %d, 1, 'ready', %d, 0, %s, 0, 0, 0, %s, '', 0)
@@ -481,6 +529,7 @@ claim_token = CASE WHEN {$owned} THEN '' ELSE claim_token END",
             self::SEARCH_EPOCH_JOB_KEY,
             $epoch_incarnation
         ), 'promote FTS post mutation');
+        $this->bounded_affected_rows($affected, 4, 'FTS post mutation promotion');
     }
 
     /**
@@ -566,7 +615,7 @@ claim_token = CASE WHEN {$owned} THEN '' ELSE claim_token END",
             ? "(state IN ('fenced','guarded') AND scope_incarnation = VALUES(scope_incarnation))"
             : '0 = 1';
 
-        $this->query($this->wpdb->prepare(
+        $affected = $this->query($this->wpdb->prepare(
             "INSERT INTO {$this->table}
     (job_key, kind, post_id, generation, state, available_at, attempts, claim_token, claimed_generation, claim_expires_at, cursor_post_id, scope_coverage, scope_incarnation, scope_subject_type, scope_subject_id, payload, last_error_code, last_error_at)
 VALUES (%s, 'scope', 0, 1, %s, %d, 0, '', 0, 0, 0, %s, %s, %s, %d, %s, '', 0)
@@ -598,6 +647,7 @@ ON DUPLICATE KEY UPDATE
             self::SEARCH_EPOCH_JOB_KEY,
             $epoch_incarnation
         ), 'enqueue FTS scope work');
+        $this->bounded_affected_rows($affected, 4, 'FTS scope enqueue');
     }
 
     /**
@@ -611,13 +661,8 @@ ON DUPLICATE KEY UPDATE
         string $scope_incarnation,
         string $profile_hash
     ): bool {
-        $scope_incarnation = strtolower(trim($scope_incarnation));
-        $profile_hash = strtolower(trim($profile_hash));
-        if (
-            preg_match('/^[a-f0-9]{32}$/D', $scope_incarnation) !== 1
-            || preg_match('/^[a-f0-9]{40}$/D', $profile_hash) !== 1
-        ) {
-            return false;
+        if (!$this->is_lower_hex($scope_incarnation, 32) || !$this->is_lower_hex($profile_hash, 40)) {
+            throw new InvalidArgumentException('FTS corpus scope matching requires exact lowercase capability hashes.');
         }
         $job_key = $this->scope_job_key($this->validated_scope_key($scope_key));
         $rows = $this->get_results($this->wpdb->prepare(
@@ -627,21 +672,43 @@ WHERE job_key = %s AND kind = 'scope' AND scope_coverage = 'corpus'
 LIMIT 1",
             $job_key
         ), 'confirm exact FTS profile scope');
-        $row = $rows[0] ?? null;
-        if (!is_object($row) || !hash_equals($scope_incarnation, (string) ($row->scope_incarnation ?? ''))) {
+        if ($rows === []) {
             return false;
+        }
+        if (count($rows) !== 1) {
+            throw new UnexpectedValueException('The FTS corpus scope query returned invalid cardinality.');
+        }
+        $row = $rows[0];
+        if (array_keys(get_object_vars($row)) !== ['scope_incarnation', 'payload']) {
+            throw new UnexpectedValueException('The FTS corpus scope row has invalid aliases.');
+        }
+        if (!is_string($row->scope_incarnation) || !is_string($row->payload)) {
+            throw new UnexpectedValueException('The FTS corpus scope row has invalid native types.');
+        }
+        if (!$this->is_lower_hex($row->scope_incarnation, 32)) {
+            throw new UnexpectedValueException('The FTS corpus scope row has an invalid incarnation.');
+        }
+        if (!hash_equals($scope_incarnation, $row->scope_incarnation)) {
+            return false;
+        }
+        if (strlen($row->payload) > self::MAX_PAYLOAD_BYTES) {
+            throw new UnexpectedValueException('The FTS corpus scope payload exceeds its database contract.');
         }
         try {
-            $payload = json_decode((string) ($row->payload ?? ''), true, flags: JSON_THROW_ON_ERROR);
-        } catch (JsonException) {
-            return false;
+            $payload = json_decode($row->payload, true, flags: JSON_THROW_ON_ERROR);
+            if (!is_array($payload)) {
+                throw new UnexpectedValueException('The FTS corpus scope payload is not an array.');
+            }
+            $this->assert_bounded_payload($payload);
+        } catch (JsonException|InvalidArgumentException $error) {
+            throw new UnexpectedValueException('The FTS corpus scope payload is malformed.', 0, $error);
         }
-        $stored_profile = is_array($payload) && is_scalar($payload['profile_hash'] ?? null)
-            ? strtolower(trim((string) $payload['profile_hash']))
-            : '';
+        $stored_profile = $payload['profile_hash'] ?? null;
+        if (!is_string($stored_profile) || !$this->is_lower_hex($stored_profile, 40)) {
+            throw new UnexpectedValueException('The FTS corpus scope payload has an invalid profile hash.');
+        }
 
-        return preg_match('/^[a-f0-9]{40}$/D', $stored_profile) === 1
-            && hash_equals($profile_hash, $stored_profile);
+        return hash_equals($profile_hash, $stored_profile);
     }
 
     /** Install one unclaimable scope boundary before canonical mutation. */
@@ -655,9 +722,7 @@ LIMIT 1",
         int $scope_subject_id = 0,
         string $scope_incarnation = ''
     ): void {
-        if ($mutation_token === '' || strlen($mutation_token) > 64) {
-            throw new InvalidArgumentException('FTS scope mutation fences require a bounded token.');
-        }
+        $mutation_token = $this->validated_mutation_token($mutation_token);
         $job_key = $this->scope_job_key($this->validated_scope_key($scope_key));
         $encoded = $this->encoded_scope_payload($payload);
         [$scope_coverage, $scope_subject_type, $scope_subject_id, $scope_incarnation]
@@ -669,7 +734,7 @@ LIMIT 1",
             );
         $epoch_incarnation = $this->new_search_epoch_incarnation();
         $fence_state = $this->mutation_fence_state($mutation_token);
-        $this->query($this->wpdb->prepare(
+        $affected = $this->query($this->wpdb->prepare(
             "INSERT INTO {$this->table}
 (job_key, kind, post_id, generation, state, available_at, attempts, claim_token, claimed_generation, claim_expires_at, cursor_post_id, scope_coverage, scope_incarnation, scope_subject_type, scope_subject_id, payload, last_error_code, last_error_at)
 VALUES (%s, 'scope', 0, 1, %s, %d, 0, %s, 1, 0, 0, %s, %s, %s, %d, %s, '', 0)
@@ -701,6 +766,7 @@ last_error_code = '', last_error_at = 0",
             self::SEARCH_EPOCH_JOB_KEY,
             $epoch_incarnation
         ), 'fence FTS scope mutation');
+        $this->bounded_affected_rows($affected, 4, 'FTS scope mutation fence');
     }
 
     /** Promote only the scope mutation generation owned by this request. */
@@ -714,9 +780,7 @@ last_error_code = '', last_error_at = 0",
         int $scope_subject_id = 0,
         string $scope_incarnation = ''
     ): void {
-        if ($mutation_token === '' || strlen($mutation_token) > 64) {
-            throw new InvalidArgumentException('FTS scope mutation promotion requires a bounded token.');
-        }
+        $mutation_token = $this->validated_mutation_token($mutation_token);
         $job_key = $this->scope_job_key($this->validated_scope_key($scope_key));
         $encoded = $this->encoded_scope_payload($payload);
         [$scope_coverage, $scope_subject_type, $scope_subject_id, $scope_incarnation]
@@ -733,7 +797,7 @@ last_error_code = '', last_error_at = 0",
         // MySQL evaluates UPSERT assignments left-to-right. Keep the ownership
         // columns unchanged until every authority and payload expression has
         // compared the original row, then clear the matching request token.
-        $this->query($this->wpdb->prepare(
+        $affected = $this->query($this->wpdb->prepare(
             "INSERT INTO {$this->table}
 (job_key, kind, post_id, generation, state, available_at, attempts, claim_token, claimed_generation, claim_expires_at, cursor_post_id, scope_coverage, scope_incarnation, scope_subject_type, scope_subject_id, payload, last_error_code, last_error_at)
 VALUES (%s, 'scope', 0, 1, 'ready', %d, 0, %s, 0, 0, 0, %s, %s, %s, %d, %s, '', 0)
@@ -775,6 +839,7 @@ claim_token = CASE WHEN {$owned} THEN '' ELSE claim_token END",
             self::SEARCH_EPOCH_JOB_KEY,
             $epoch_incarnation
         ), 'promote FTS scope mutation');
+        $this->bounded_affected_rows($affected, 4, 'FTS scope mutation promotion');
     }
 
     /**
@@ -809,44 +874,26 @@ claim_token = CASE WHEN {$owned} THEN '' ELSE claim_token END",
         ?int $now = null,
         string $scope_incarnation = ''
     ): array {
-        if ($mutation_token === '' || strlen($mutation_token) > 64) {
-            throw new InvalidArgumentException('FTS foreground mutation handoff requires a bounded scope token.');
-        }
-        if (count($post_ids) > self::MAX_ENQUEUE_POSTS || count($owned_post_tokens) > self::MAX_ENQUEUE_POSTS) {
+        $mutation_token = $this->validated_mutation_token($mutation_token);
+        if (count($owned_post_tokens) > self::MAX_ENQUEUE_POSTS) {
             throw new InvalidArgumentException(
                 'FTS foreground mutation handoff exceeds the ' . self::MAX_ENQUEUE_POSTS . '-post contract.'
             );
         }
 
-        $ids = [];
-        foreach ($post_ids as $post_id) {
-            if (!is_scalar($post_id) || (is_string($post_id) && strlen($post_id) > 64)) {
-                throw new InvalidArgumentException('FTS foreground mutation post ids must be bounded scalar values.');
-            }
-            $post_id = (int) $post_id;
-            if ($post_id > 0) {
-                $ids[$post_id] = true;
-            }
-        }
-        if (count($ids) > self::MAX_ENQUEUE_POSTS) {
-            throw new InvalidArgumentException(
-                'FTS foreground mutation handoff exceeds the ' . self::MAX_ENQUEUE_POSTS . '-post contract.'
-            );
-        }
+        $ids = $this->unique_positive_post_ids($post_ids, 'FTS foreground mutation handoff');
 
         $tokens = [];
         foreach ($owned_post_tokens as $post_id => $token) {
-            $post_id = (int) $post_id;
             if (
-                $post_id <= 0
+                !is_int($post_id)
+                || $post_id <= 0
                 || !isset($ids[$post_id])
                 || !is_string($token)
-                || $token === ''
-                || strlen($token) > 64
             ) {
                 throw new InvalidArgumentException('FTS foreground mutation post tokens must identify retained posts.');
             }
-            $tokens[$post_id] = $token;
+            $tokens[$post_id] = $this->validated_mutation_token($token);
         }
 
         if (count($owned_scope_tokens) > self::MAX_FOREGROUND_DIRECT_SCOPES) {
@@ -857,28 +904,25 @@ claim_token = CASE WHEN {$owned} THEN '' ELSE claim_token END",
             if (
                 !is_string($owned_scope_key)
                 || !is_string($token)
-                || strlen($token) > 64
             ) {
                 throw new InvalidArgumentException('FTS foreground mutation scope tokens must be bounded strings.');
             }
             $owned_scope_key = $this->validated_scope_key($owned_scope_key);
-            if ($token !== '') {
-                $scopeTokens[$owned_scope_key] = $token;
-            }
+            $scopeTokens[$owned_scope_key] = $this->validated_mutation_token($token);
         }
 
         $scope_key = $this->validated_scope_key($scope_key);
-        $this->encoded_scope_payload($scope_payload);
         $globalScopeReleased = false;
         if ($overflow) {
+            $this->encoded_scope_payload($scope_payload);
             $this->validated_scope_authority(
                 self::SCOPE_COVERAGE_CORPUS,
                 '',
                 0,
                 $scope_incarnation
             );
-        } elseif ($scope_incarnation !== '') {
-            throw new InvalidArgumentException('Exact foreground handoff cannot carry a corpus incarnation.');
+        } elseif ($scope_payload !== [] || $scope_incarnation !== '') {
+            throw new InvalidArgumentException('Exact foreground handoff cannot carry scope payload or corpus authority.');
         }
 
         $now = $this->timestamp($now);
@@ -955,7 +999,7 @@ claim_token = CASE WHEN {$owned} THEN '' ELSE claim_token END",
         $postWritable = "kind = 'post' AND (state NOT IN ('fenced','guarded') OR ({$postOwned}))";
         $latestPayload = "state NOT IN ('fenced','guarded') OR (({$postOwned}) AND generation = claimed_generation)";
 
-        $this->query($this->wpdb->prepare(
+        $affected = $this->query($this->wpdb->prepare(
             "INSERT INTO {$this->table}
     (job_key, kind, post_id, generation, state, available_at, attempts, claim_token, claimed_generation, claim_expires_at, cursor_post_id, scope_subject_type, scope_subject_id, payload, last_error_code, last_error_at)
 VALUES " . implode(",\n", $values) . "
@@ -985,6 +1029,11 @@ ON DUPLICATE KEY UPDATE
     kind = CASE WHEN {$incomingEpoch} THEN 'meta' WHEN {$incomingPost} AND ({$postWritable}) THEN 'post' ELSE kind END",
                 ...$args
             ), 'handoff exact FTS foreground posts');
+        $this->bounded_affected_rows(
+            $affected,
+            2 * (count($ids) + 1),
+            'exact FTS foreground post handoff'
+        );
     }
 
     /** Delete the exact request sentinel after all replacement post rows exist. */
@@ -992,23 +1041,22 @@ ON DUPLICATE KEY UPDATE
     {
         $jobKey = $this->scope_job_key($scope_key);
         $args = [$jobKey, $mutation_token];
-        return $this->query($this->wpdb->prepare(
+        $deleted = $this->query($this->wpdb->prepare(
             "DELETE FROM {$this->table}
 WHERE job_key = %s AND kind = 'scope' AND state IN ('fenced','guarded') AND claim_token = %s
 /* wp_fts:foreground-global-delete */",
                 ...$args
-            ), 'delete FTS foreground global scope') === 1;
+            ), 'delete FTS foreground global scope');
+
+        return $this->bounded_affected_rows($deleted, 1, 'foreground global scope delete') === 1;
     }
 
     /** Delete one claimed visibility sentinel after canonical replacement exists. */
     public function discard_replaced_scope(array $claim): bool
     {
         $claim = $this->normalize_scope_claim($claim);
-        if ($claim === null) {
-            return false;
-        }
 
-        return $this->query($this->wpdb->prepare(
+        $deleted = $this->query($this->wpdb->prepare(
             "DELETE FROM {$this->table}
 WHERE job_key = %s AND claim_token = %s
   AND claimed_generation = %d AND generation = %d
@@ -1017,7 +1065,9 @@ WHERE job_key = %s AND claim_token = %s
             $claim['token'],
             $claim['generation'],
             $claim['generation']
-        ), 'discard replaced FTS scope') === 1;
+        ), 'discard replaced FTS scope');
+
+        return $this->bounded_affected_rows($deleted, 1, 'replaced FTS scope delete') === 1;
     }
 
     /** Whether a durable scope currently suppresses the whole corpus. */
@@ -1030,7 +1080,7 @@ LIMIT 1",
             'check global FTS visibility scope'
         );
 
-        return is_numeric($value) && (int) $value === 1;
+        return $this->database_presence_value($value, 'global FTS visibility scope');
     }
 
     /**
@@ -1049,7 +1099,7 @@ LIMIT 1",
         }
         $scopeKey = (string) array_key_first($scopeTokens);
         $token = (string) $scopeTokens[$scopeKey];
-        $this->query($this->wpdb->prepare(
+        $deleted = $this->query($this->wpdb->prepare(
             "DELETE FROM {$this->table}
 WHERE job_key = %s AND claim_token = %s
   AND kind = 'scope' AND state IN ('fenced','guarded')
@@ -1057,48 +1107,27 @@ WHERE job_key = %s AND claim_token = %s
             $this->scope_job_key($scopeKey),
             $token
         ), 'discard covered FTS foreground scope generation');
-    }
-
-    /**
-     * Make an existing failed generation available as new desired work.
-     *
-     * Explicit recovery advances the fencing generation and clears any old
-     * lease. Otherwise a worker holding the pre-retry generation could still
-     * acknowledge and delete the operator's retry.
-     */
-    public function retry(int $post_id, ?int $now = null): void
-    {
-        $this->retry_many([$post_id], $now);
+        $this->bounded_affected_rows($deleted, 1, 'covered FTS foreground scope discard');
     }
 
     /**
      * Make a bounded set of failed generations available in one statement.
+     *
+     * Explicit recovery advances each fencing generation and clears any old
+     * lease. A worker holding the pre-retry generation therefore cannot
+     * acknowledge and delete the operator's retry.
      *
      * @param int[] $post_ids
      * @return int Number of unique positive post ids accepted.
      */
     public function retry_many(array $post_ids, ?int $now = null): int
     {
-        if (count($post_ids) > self::MAX_ENQUEUE_POSTS) {
-            throw new InvalidArgumentException(
-                'FTS retry batch exceeds the ' . self::MAX_ENQUEUE_POSTS . '-post enqueue contract.'
-            );
-        }
-        $ids = [];
-        foreach ($post_ids as $post_id) {
-            if (!is_scalar($post_id) || (is_string($post_id) && strlen($post_id) > 64)) {
-                throw new InvalidArgumentException('FTS retry post ids must be bounded scalar values.');
-            }
-            $post_id = (int) $post_id;
-            if ($post_id > 0) {
-                $ids[$post_id] = true;
-            }
-        }
+        $ids = $this->unique_positive_post_ids($post_ids, 'FTS retry');
+        $available_at = $this->timestamp($now);
         if ($ids === []) {
             return 0;
         }
 
-        $available_at = $this->timestamp($now);
         $values = [];
         $args = [];
         foreach (array_keys($ids) as $post_id) {
@@ -1110,7 +1139,7 @@ WHERE job_key = %s AND claim_token = %s
         $values[] = "(%s, 'meta', 0, 1, 'meta', 0, 0, '', 0, 0, 0, %s, '', 0)";
         $args[] = self::SEARCH_EPOCH_JOB_KEY;
         $args[] = $this->new_search_epoch_incarnation();
-        $this->query($this->wpdb->prepare(
+        $affected = $this->query($this->wpdb->prepare(
             "INSERT INTO {$this->table}
     (job_key, kind, post_id, generation, state, available_at, attempts, claim_token, claimed_generation, claim_expires_at, cursor_post_id, payload, last_error_code, last_error_at)
 VALUES " . implode(",\n", $values) . "
@@ -1126,6 +1155,7 @@ ON DUPLICATE KEY UPDATE
     state = IF(kind = 'meta', 'meta', IF(state IN ('fenced','guarded'), state, 'ready'))",
             ...$args
         ), 'retry FTS indexing work');
+        $this->bounded_affected_rows($affected, 2 * (count($ids) + 1), 'FTS indexing retry');
 
         return count($ids);
     }
@@ -1150,15 +1180,14 @@ ON DUPLICATE KEY UPDATE
         int $lease_seconds = self::DEFAULT_LEASE_SECONDS,
         int $source_snapshot_limit = 0
     ): array {
-        if ($post_limit > self::MAX_CLAIM_POSTS) {
-            throw new InvalidArgumentException('FTS work claims may contain at most 100 posts.');
+        if ($post_limit < 0 || $post_limit > self::MAX_CLAIM_POSTS) {
+            throw new InvalidArgumentException('FTS work claim size must be between zero and 100 posts.');
         }
         if ($source_snapshot_limit < 0 || $source_snapshot_limit > self::MAX_SOURCE_SNAPSHOT_BYTES) {
             throw new InvalidArgumentException(
                 'FTS source snapshots must be between zero and ' . self::MAX_SOURCE_SNAPSHOT_BYTES . ' bytes.'
             );
         }
-        $post_limit = max(0, $post_limit);
         [$now, $lease_expires_at] = $this->lease_window($now, $lease_seconds);
         $claimGuard = $this->begin_foreground_fence_claim();
         $recoverGuardedFences = $claimGuard['state'] === 'free';
@@ -1232,9 +1261,14 @@ WHERE (
             }
             $claimArgs[] = $now;
         }
-        $this->query(
+        $claimed_count = $this->query(
             $this->wpdb->prepare($claimSql, ...$claimArgs),
             'claim FTS work batch'
+        );
+        $claimed_count = $this->bounded_affected_rows(
+            $claimed_count,
+            $post_limit + 1,
+            'FTS work batch claim'
         );
         if (!$this->foreground_fence_claim_remains_free($recoverGuardedFences)) {
             // A foreground owner started after the first probe. Do not expose
@@ -1288,72 +1322,31 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
             $token,
             $token
         ), 'confirm claimed FTS work batch');
+        if ($claimed_count > self::MAX_CLAIM_POSTS + 1 || count($rows) > $claimed_count) {
+            throw $this->malformed_claim_row('the confirmation row count exceeds the claim write');
+        }
+
         $claims = [];
+        $claimed_job_keys = [];
+        $batch_snapshot_complete = null;
         foreach ($rows as $row) {
-            $job_key = isset($row->job_key) && is_scalar($row->job_key) ? (string) $row->job_key : '';
-            $kind = (string) ($row->kind ?? '');
-            $generation = max(0, (int) ($row->generation ?? 0));
-            if ($job_key === '' || $generation <= 0 || !in_array($kind, ['post', 'scope'], true)) {
-                continue;
+            if (!is_object($row)) {
+                throw $this->malformed_claim_row('the database returned a non-object row');
             }
-            $scopeAuthority = ['', '', 0, ''];
-            if ($kind === 'scope') {
-                $scopeAuthority = $this->validated_scope_authority(
-                    (string) ($row->scope_coverage ?? ''),
-                    (string) ($row->scope_subject_type ?? ''),
-                    max(0, (int) ($row->scope_subject_id ?? 0)),
-                    (string) ($row->scope_incarnation ?? '')
-                );
+            [$claim, $source_snapshot_complete] = $this->decode_claim_row(
+                $row,
+                $token,
+                $lease_expires_at
+            );
+            if (isset($claimed_job_keys[$claim['job_key']])) {
+                throw $this->malformed_claim_row('the confirmation query returned a duplicate job key');
             }
-            $payload = [];
-            if (isset($row->payload) && is_string($row->payload) && $row->payload !== '') {
-                try {
-                    $decoded = json_decode($row->payload, true, flags: JSON_THROW_ON_ERROR);
-                    $payload = is_array($decoded) ? $decoded : [];
-                } catch (JsonException) {
-                    $payload = [];
-                }
+            $claimed_job_keys[$claim['job_key']] = true;
+            if ($batch_snapshot_complete !== null && $batch_snapshot_complete !== $source_snapshot_complete) {
+                throw $this->malformed_claim_row('the confirmation query returned inconsistent snapshot state');
             }
-            $source_snapshot = null;
-            if ($kind === 'post' && !empty($row->source_exists) && !empty($row->source_snapshot_complete)) {
-                $source_snapshot = (object) [
-                    'ID' => max(0, (int) ($row->source_id ?? 0)),
-                    'post_title' => (string) ($row->source_post_title ?? ''),
-                    'post_content' => (string) ($row->source_post_content ?? ''),
-                    'post_excerpt' => (string) ($row->source_post_excerpt ?? ''),
-                    'post_type' => (string) ($row->source_post_type ?? ''),
-                    'post_status' => (string) ($row->source_post_status ?? ''),
-                    'post_date_gmt' => (string) ($row->source_post_date_gmt ?? ''),
-                    'post_password' => (string) ($row->source_post_password ?? ''),
-                    'fts_post_source_bytes' => max(0, (int) ($row->source_bytes ?? 0)),
-                    'fts_canonical_post_bytes' => max(0, (int) ($row->canonical_bytes ?? 0)),
-                    'fts_existing_hash' => isset($row->source_existing_hash) && is_scalar($row->source_existing_hash)
-                        ? (string) $row->source_existing_hash
-                        : null,
-                ];
-            }
-            $claims[] = [
-                'job_key' => $job_key,
-                'kind' => $kind,
-                'post_id' => max(0, (int) ($row->post_id ?? 0)),
-                'generation' => $generation,
-                'attempts' => max(0, (int) ($row->attempts ?? 0)),
-                'last_error_code' => isset($row->last_error_code) && is_scalar($row->last_error_code)
-                    ? substr((string) $row->last_error_code, 0, 40)
-                    : '',
-                'token' => $token,
-                'claim_expires_at' => $lease_expires_at,
-                'cursor_post_id' => max(0, (int) ($row->cursor_post_id ?? 0)),
-                'scope_coverage' => $scopeAuthority[0],
-                'scope_subject_type' => $scopeAuthority[1],
-                'scope_subject_id' => $scopeAuthority[2],
-                'scope_incarnation' => $scopeAuthority[3],
-                'payload' => $payload,
-                'source_exists' => !empty($row->source_exists),
-                'source_bytes' => max(0, (int) ($row->source_bytes ?? 0)),
-                'canonical_bytes' => max(0, (int) ($row->canonical_bytes ?? 0)),
-                'source_snapshot' => $source_snapshot,
-            ];
+            $batch_snapshot_complete = $source_snapshot_complete;
+            $claims[] = $claim;
         }
 
         return $claims;
@@ -1366,6 +1359,327 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
             static fn(string $column): string => "OCTET_LENGTH(COALESCE({$alias}.{$column}, ''))",
             self::CANONICAL_POST_COLUMNS
         ));
+    }
+
+    /**
+     * Decode one claim confirmation row without repairing database state in PHP.
+     *
+     * @return array{0:array<string,mixed>,1:bool}
+     */
+    private function decode_claim_row(object $row, string $token, int $lease_expires_at): array
+    {
+        $expected_aliases = [
+            'job_key',
+            'kind',
+            'post_id',
+            'generation',
+            'attempts',
+            'last_error_code',
+            'claim_expires_at',
+            'cursor_post_id',
+            'scope_coverage',
+            'scope_incarnation',
+            'scope_subject_type',
+            'scope_subject_id',
+            'payload',
+            'source_exists',
+            'source_bytes',
+            'canonical_bytes',
+            'source_snapshot_complete',
+            'source_id',
+            'source_post_title',
+            'source_post_content',
+            'source_post_excerpt',
+            'source_post_type',
+            'source_post_status',
+            'source_post_date_gmt',
+            'source_post_password',
+            'source_existing_hash',
+        ];
+        $actual_aliases = array_keys(get_object_vars($row));
+        if ($actual_aliases !== $expected_aliases) {
+            throw $this->malformed_claim_row('the selected aliases do not match the claim contract');
+        }
+
+        $job_key = $this->claim_row_text($row, 'job_key');
+        $kind = $this->claim_row_text($row, 'kind');
+        $post_id = $this->claim_row_integer($row, 'post_id');
+        $generation = $this->claim_row_integer($row, 'generation');
+        $attempts = $this->claim_row_integer($row, 'attempts');
+        $last_error_code = $this->claim_row_text($row, 'last_error_code');
+        $claim_expires_at = $this->claim_row_integer($row, 'claim_expires_at');
+        $cursor_post_id = $this->claim_row_integer($row, 'cursor_post_id');
+        $scope_coverage = $this->claim_row_text($row, 'scope_coverage');
+        $scope_incarnation = $this->claim_row_text($row, 'scope_incarnation');
+        $scope_subject_type = $this->claim_row_text($row, 'scope_subject_type');
+        $scope_subject_id = $this->claim_row_integer($row, 'scope_subject_id');
+        if ($generation === 0 || $claim_expires_at !== $lease_expires_at) {
+            throw $this->malformed_claim_row('the generation or lease boundary is invalid');
+        }
+        if (strlen($last_error_code) > 64) {
+            throw $this->malformed_claim_row('the last error code exceeds its database column');
+        }
+
+        if ($kind === 'post') {
+            if (
+                $post_id === 0
+                || !self::is_post_job_key($job_key, $post_id)
+                || $cursor_post_id !== 0
+                || $scope_coverage !== ''
+                || $scope_incarnation !== ''
+                || $scope_subject_type !== ''
+                || $scope_subject_id !== 0
+            ) {
+                throw $this->malformed_claim_row('a post claim has an invalid durable identity');
+            }
+            $scope_authority = ['', '', 0, ''];
+        } elseif ($kind === 'scope') {
+            if (
+                $post_id !== 0
+                || strlen($job_key) !== 70
+                || !str_starts_with($job_key, 'scope:')
+                || strspn(substr($job_key, 6), '0123456789abcdef') !== 64
+            ) {
+                throw $this->malformed_claim_row('a scope claim has an invalid durable identity');
+            }
+            try {
+                $scope_authority = $this->validated_scope_authority(
+                    $scope_coverage,
+                    $scope_subject_type,
+                    $scope_subject_id,
+                    $scope_incarnation
+                );
+            } catch (InvalidArgumentException $error) {
+                throw $this->malformed_claim_row('a scope claim has invalid durable authority', $error);
+            }
+        } else {
+            throw $this->malformed_claim_row('the kind alias is not post or scope');
+        }
+
+        $encoded_payload = $this->claim_row_text($row, 'payload');
+        if (strlen($encoded_payload) > self::MAX_PAYLOAD_BYTES) {
+            throw $this->malformed_claim_row('the payload exceeds its transport bound');
+        }
+        try {
+            $payload = json_decode($encoded_payload, true, flags: JSON_THROW_ON_ERROR);
+            if (!is_array($payload)) {
+                throw $this->malformed_claim_row('the payload is not an array');
+            }
+            $this->assert_bounded_payload($payload);
+        } catch (JsonException|InvalidArgumentException $error) {
+            throw $this->malformed_claim_row('the payload is not valid bounded JSON', $error);
+        }
+        if ($kind === 'scope') {
+            foreach (['scope_coverage', 'scope_incarnation', 'scope_subject_type', 'scope_subject_id'] as $reserved) {
+                if (array_key_exists($reserved, $payload)) {
+                    throw $this->malformed_claim_row('scope authority appears in the payload');
+                }
+            }
+        }
+
+        $source_exists = $this->claim_row_boolean($row, 'source_exists');
+        $source_bytes = $this->claim_row_integer($row, 'source_bytes');
+        $canonical_bytes = $this->claim_row_integer($row, 'canonical_bytes');
+        $source_snapshot_complete = $this->claim_row_boolean($row, 'source_snapshot_complete');
+        $source_id = $this->claim_row_nullable_integer($row, 'source_id');
+        $source_post_title = $this->claim_row_nullable_text($row, 'source_post_title');
+        $source_post_content = $this->claim_row_nullable_text($row, 'source_post_content');
+        $source_post_excerpt = $this->claim_row_nullable_text($row, 'source_post_excerpt');
+        $source_post_type = $this->claim_row_nullable_text($row, 'source_post_type');
+        $source_post_status = $this->claim_row_nullable_text($row, 'source_post_status');
+        $source_post_date_gmt = $this->claim_row_nullable_text($row, 'source_post_date_gmt');
+        $source_post_password = $this->claim_row_nullable_text($row, 'source_post_password');
+        $source_existing_hash = $this->claim_row_nullable_text($row, 'source_existing_hash');
+        if ($source_existing_hash !== null && strlen($source_existing_hash) > 40) {
+            throw $this->malformed_claim_row('the existing content hash exceeds its database column');
+        }
+
+        if ($source_exists) {
+            if (
+                $kind !== 'post'
+                || $source_id !== $post_id
+                || $source_post_type === null
+                || $source_post_status === null
+                || $source_post_date_gmt === null
+                || $source_post_password === null
+                || $canonical_bytes < $source_bytes
+            ) {
+                throw $this->malformed_claim_row('the canonical source identity or metadata is invalid');
+            }
+            if ($source_snapshot_complete) {
+                if (
+                    $source_post_title === null
+                    || $source_post_content === null
+                    || $source_post_excerpt === null
+                    || strlen($source_post_title) + strlen($source_post_content) + strlen($source_post_excerpt)
+                        !== $source_bytes
+                ) {
+                    throw $this->malformed_claim_row('the source snapshot does not match its byte measurement');
+                }
+            } elseif ($source_post_title !== '' || $source_post_content !== '' || $source_post_excerpt !== '') {
+                throw $this->malformed_claim_row('an over-budget source claim exposed large-object fields');
+            }
+        } elseif (
+            $source_id !== null
+            || $source_bytes !== 0
+            || $canonical_bytes !== 0
+            || $source_post_type !== null
+            || $source_post_status !== null
+            || $source_post_date_gmt !== null
+            || $source_post_password !== null
+            || $source_existing_hash !== null
+            || !in_array($source_post_title, [null, ''], true)
+            || !in_array($source_post_content, [null, ''], true)
+            || !in_array($source_post_excerpt, [null, ''], true)
+        ) {
+            throw $this->malformed_claim_row('an absent canonical source carried source data');
+        }
+
+        $source_snapshot = null;
+        if ($kind === 'post' && $source_exists && $source_snapshot_complete) {
+            $source_snapshot = (object) [
+                'ID' => $source_id,
+                'post_title' => $source_post_title,
+                'post_content' => $source_post_content,
+                'post_excerpt' => $source_post_excerpt,
+                'post_type' => $source_post_type,
+                'post_status' => $source_post_status,
+                'post_date_gmt' => $source_post_date_gmt,
+                'post_password' => $source_post_password,
+                'fts_post_source_bytes' => $source_bytes,
+                'fts_canonical_post_bytes' => $canonical_bytes,
+                'fts_existing_hash' => $source_existing_hash,
+            ];
+        }
+
+        return [[
+            'job_key' => $job_key,
+            'kind' => $kind,
+            'post_id' => $post_id,
+            'generation' => $generation,
+            'attempts' => $attempts,
+            'last_error_code' => $last_error_code,
+            'token' => $token,
+            'claim_expires_at' => $claim_expires_at,
+            'cursor_post_id' => $cursor_post_id,
+            'scope_coverage' => $scope_authority[0],
+            'scope_subject_type' => $scope_authority[1],
+            'scope_subject_id' => $scope_authority[2],
+            'scope_incarnation' => $scope_authority[3],
+            'payload' => $payload,
+            'source_exists' => $source_exists,
+            'source_bytes' => $source_bytes,
+            'canonical_bytes' => $canonical_bytes,
+            'source_snapshot' => $source_snapshot,
+        ], $source_snapshot_complete];
+    }
+
+    /** Return one required database text value without scalar coercion. */
+    private function claim_row_text(object $row, string $alias): string
+    {
+        $value = $row->{$alias};
+        if (!is_string($value)) {
+            throw $this->malformed_claim_row("the {$alias} alias is not native text");
+        }
+
+        return $value;
+    }
+
+    /** Return one nullable database text value without scalar coercion. */
+    private function claim_row_nullable_text(object $row, string $alias): ?string
+    {
+        $value = $row->{$alias};
+        if ($value !== null && !is_string($value)) {
+            throw $this->malformed_claim_row("the {$alias} alias is not nullable native text");
+        }
+
+        return $value;
+    }
+
+    /** Return one nonnegative native integer or canonical decimal DB string. */
+    private function claim_row_integer(object $row, string $alias): int
+    {
+        $value = $row->{$alias};
+        if (is_int($value)) {
+            if ($value >= 0) {
+                return $value;
+            }
+            throw $this->malformed_claim_row("the {$alias} alias is negative");
+        }
+        if (
+            !is_string($value)
+            || $value === ''
+            || strspn($value, '0123456789') !== strlen($value)
+            || ($value !== '0' && $value[0] === '0')
+            || strlen($value) > strlen((string) PHP_INT_MAX)
+            || (strlen($value) === strlen((string) PHP_INT_MAX) && strcmp($value, (string) PHP_INT_MAX) > 0)
+        ) {
+            throw $this->malformed_claim_row("the {$alias} alias is not a canonical nonnegative integer");
+        }
+
+        return (int) $value;
+    }
+
+    /** Return one nullable nonnegative native or canonical database integer. */
+    private function claim_row_nullable_integer(object $row, string $alias): ?int
+    {
+        if ($row->{$alias} === null) {
+            return null;
+        }
+
+        return $this->claim_row_integer($row, $alias);
+    }
+
+    /** Decode only the exact zero and one values emitted by SQL predicates. */
+    private function claim_row_boolean(object $row, string $alias): bool
+    {
+        $value = $this->claim_row_integer($row, $alias);
+        if ($value > 1) {
+            throw $this->malformed_claim_row("the {$alias} alias is not zero or one");
+        }
+
+        return $value === 1;
+    }
+
+    /** Decode one nonnegative native integer or canonical decimal DB string. */
+    private function database_nonnegative_integer(mixed $value, string $context): int
+    {
+        if (is_int($value)) {
+            if ($value >= 0) {
+                return $value;
+            }
+            throw new UnexpectedValueException("The {$context} database value is negative.");
+        }
+        if (
+            !is_string($value)
+            || $value === ''
+            || strspn($value, '0123456789') !== strlen($value)
+            || ($value !== '0' && $value[0] === '0')
+            || strlen($value) > strlen((string) PHP_INT_MAX)
+            || (strlen($value) === strlen((string) PHP_INT_MAX) && strcmp($value, (string) PHP_INT_MAX) > 0)
+        ) {
+            throw new UnexpectedValueException("The {$context} database value is not a canonical nonnegative integer.");
+        }
+
+        return (int) $value;
+    }
+
+    /** Decode SELECT 1 or a genuine no-row null without truthiness. */
+    private function database_presence_value(mixed $value, string $context): bool
+    {
+        if ($value === null) {
+            return false;
+        }
+        if ($value === 1 || $value === '1') {
+            return true;
+        }
+
+        throw new UnexpectedValueException("The {$context} presence query returned an invalid value.");
+    }
+
+    private function malformed_claim_row(string $detail, ?Throwable $previous = null): UnexpectedValueException
+    {
+        return new UnexpectedValueException("Malformed FTS claim confirmation row: {$detail}.", 0, $previous);
     }
 
     /**
@@ -1391,6 +1705,10 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
         $states = $recover_guarded_fences
             ? ['guarded', 'ready', 'retry', 'leased']
             : ['ready', 'retry', 'leased'];
+        // Foreground enqueue inserts PRIMARY and secondary-index records in
+        // that order. Skip its uncommitted rows instead of holding a candidate
+        // range while waiting back on PRIMARY, which would invert that order.
+        $candidate_lock = $this->is_sqlite_runtime() ? '' : ' FOR UPDATE SKIP LOCKED';
         $arms = [];
         $args = [];
         foreach ($states as $state) {
@@ -1411,7 +1729,7 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
         WHERE kind = '{$kind}' AND state = '{$state}'
           AND {$duePredicate}
         ORDER BY {$innerOrder}
-        LIMIT {$limit}
+        LIMIT {$limit}{$candidate_lock}
     ) {$alias}";
             $args[] = $now;
             if ($state === 'leased') {
@@ -1451,34 +1769,10 @@ LIMIT {$limit}",
         ?array $next_scope_payload = null
     ): bool {
         $claim = $this->normalize_scope_claim($claim);
-        if ($claim === null) {
-            return false;
-        }
-        if (count($post_ids) > self::MAX_ENQUEUE_POSTS) {
-            throw new InvalidArgumentException(
-                'FTS scope page exceeds the ' . self::MAX_ENQUEUE_POSTS . '-post enqueue contract.'
-            );
-        }
-
-        $ids = [];
-        foreach ($post_ids as $post_id) {
-            if (!is_scalar($post_id) || (is_string($post_id) && strlen($post_id) > 64)) {
-                throw new InvalidArgumentException('FTS scope page post ids must be bounded scalar values.');
-            }
-            $post_id = (int) $post_id;
-            if ($post_id <= 0) {
-                throw new InvalidArgumentException('FTS scope pages require positive post ids.');
-            }
-            $ids[$post_id] = true;
-        }
-        if (count($ids) > self::MAX_ENQUEUE_POSTS) {
-            throw new InvalidArgumentException(
-                'FTS scope page exceeds the ' . self::MAX_ENQUEUE_POSTS . '-post enqueue contract.'
-            );
-        }
-        $ids = array_map('intval', array_keys($ids));
+        $ids = $this->unique_positive_post_ids($post_ids, 'FTS scope page');
+        $ids = array_keys($ids);
         sort($ids, SORT_NUMERIC);
-        $previous_cursor = max(0, (int) ($claim['cursor_post_id'] ?? 0));
+        $previous_cursor = $claim['cursor_post_id'];
         if (
             $cursor_post_id <= $previous_cursor
             || ($ids !== [] && max($ids) > $cursor_post_id)
@@ -1491,16 +1785,13 @@ LIMIT {$limit}",
         $scope_payload_assignment = '';
         $scope_payload_args = [];
         if ($next_scope_payload !== null) {
-            $this->assert_bounded_payload($next_scope_payload);
-            $encoded_scope_payload = json_encode($next_scope_payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-            if (strlen($encoded_scope_payload) > self::MAX_PAYLOAD_BYTES) {
-                throw new InvalidArgumentException('FTS scope work payload exceeds 8192 bytes.');
-            }
+            $encoded_scope_payload = $this->encoded_scope_payload($next_scope_payload);
             $scope_payload_assignment = ",\n    payload = %s";
             $scope_payload_args[] = $encoded_scope_payload;
         }
+        $now = $this->timestamp($now);
 
-        $this->query('START TRANSACTION', 'start FTS scope page transaction');
+        $this->control_query('START TRANSACTION', 'start FTS scope page transaction');
         try {
             $advance_args = [
                 $cursor_post_id,
@@ -1523,24 +1814,48 @@ WHERE job_key = %s AND claim_token = %s
   AND claimed_generation = %d AND generation = %d",
                 ...$advance_args
             ), 'fence and advance FTS scope page');
+            $advanced = $this->bounded_affected_rows($advanced, 1, 'FTS scope page advance');
             if ($advanced !== 1) {
-                $this->query('ROLLBACK', 'roll back superseded FTS scope page');
+                $this->control_query('ROLLBACK', 'roll back superseded FTS scope page');
                 return false;
             }
 
             if ($ids !== [] && $this->enqueue_many($ids, $now, $post_payload) !== count($ids)) {
                 throw new RuntimeException('FTS scope page enqueue did not accept every post id.');
             }
-            $this->query('COMMIT', 'commit FTS scope page transaction');
+            $this->control_query('COMMIT', 'commit FTS scope page transaction');
             return true;
         } catch (Throwable $error) {
             try {
-                $this->query('ROLLBACK', 'roll back failed FTS scope page transaction');
+                $this->control_query('ROLLBACK', 'roll back failed FTS scope page transaction');
             } catch (Throwable) {
                 // Preserve the statement failure that made the transaction unsafe.
             }
             throw $error;
         }
+    }
+
+    /** Return a deduplicated map for one exact list of positive post IDs. */
+    private function unique_positive_post_ids(array $post_ids, string $surface): array
+    {
+        if (count($post_ids) > self::MAX_ENQUEUE_POSTS) {
+            throw new InvalidArgumentException(
+                "{$surface} batch exceeds the " . self::MAX_ENQUEUE_POSTS . '-post enqueue contract.'
+            );
+        }
+        if (!array_is_list($post_ids)) {
+            throw new InvalidArgumentException("{$surface} post ids must be a list.");
+        }
+
+        $ids = [];
+        foreach ($post_ids as $post_id) {
+            if (!is_int($post_id) || $post_id <= 0) {
+                throw new InvalidArgumentException("{$surface} post ids must be positive integers.");
+            }
+            $ids[$post_id] = true;
+        }
+
+        return $ids;
     }
 
     /**
@@ -1551,12 +1866,9 @@ WHERE job_key = %s AND claim_token = %s
     public function acknowledge_scope(array $claim, ?int $now = null): bool
     {
         $claim = $this->normalize_scope_claim($claim);
-        if ($claim === null) {
-            return false;
-        }
-        $this->query('START TRANSACTION', 'start FTS scope acknowledgement transaction');
+        $now = $this->timestamp($now);
+        $this->control_query('START TRANSACTION', 'start FTS scope acknowledgement transaction');
         try {
-            $this->advance_search_epoch();
             $deleted = $this->query($this->wpdb->prepare(
                 "DELETE FROM {$this->table}
 WHERE job_key = %s AND claim_token = %s
@@ -1566,44 +1878,45 @@ WHERE job_key = %s AND claim_token = %s
                 $claim['generation'],
                 $claim['generation']
             ), 'acknowledge FTS scope work');
+            $deleted = $this->bounded_affected_rows($deleted, 1, 'FTS scope acknowledgement');
             if ($deleted === 1) {
-                $this->query('COMMIT', 'commit FTS scope acknowledgement transaction');
+                $this->advance_search_epoch();
+                $this->control_query('COMMIT', 'commit FTS scope acknowledgement transaction');
                 return true;
             }
-            $this->query('ROLLBACK', 'roll back superseded FTS scope acknowledgement');
+            $this->control_query('ROLLBACK', 'roll back superseded FTS scope acknowledgement');
         } catch (Throwable $error) {
             try {
-                $this->query('ROLLBACK', 'roll back failed FTS scope acknowledgement');
+                $this->control_query('ROLLBACK', 'roll back failed FTS scope acknowledgement');
             } catch (Throwable) {
                 // Preserve the acknowledgement failure.
             }
             throw $error;
         }
 
-        return $this->query($this->wpdb->prepare(
+        $released = $this->query($this->wpdb->prepare(
             "UPDATE {$this->table}
 SET state = 'ready', attempts = 0, available_at = %d,
     claim_token = '', claimed_generation = 0, claim_expires_at = 0,
     cursor_post_id = 0
 WHERE job_key = %s AND claim_token = %s
   AND claimed_generation = %d AND generation > %d",
-            $this->timestamp($now),
+            $now,
             $claim['job_key'],
             $claim['token'],
             $claim['generation'],
             $claim['generation']
-        ), 'release superseded FTS scope work') === 1;
+        ), 'release superseded FTS scope work');
+
+        return $this->bounded_affected_rows($released, 1, 'superseded FTS scope release') === 1;
     }
 
     /** Release an unprocessed scope generation after a transient batch error. */
     public function release_scope(array $claim, ?int $now = null): bool
     {
         $claim = $this->normalize_scope_claim($claim);
-        if ($claim === null) {
-            return false;
-        }
 
-        return $this->query($this->wpdb->prepare(
+        $released = $this->query($this->wpdb->prepare(
             "UPDATE {$this->table}
 SET state = 'ready', available_at = %d,
     claim_token = '', claimed_generation = 0, claim_expires_at = 0
@@ -1612,7 +1925,9 @@ WHERE job_key = %s AND claim_token = %s AND claimed_generation = %d",
             $claim['job_key'],
             $claim['token'],
             $claim['generation']
-        ), 'release FTS scope work') === 1;
+        ), 'release FTS scope work');
+
+        return $this->bounded_affected_rows($released, 1, 'FTS scope release') === 1;
     }
 
     /**
@@ -1626,11 +1941,8 @@ WHERE job_key = %s AND claim_token = %s AND claimed_generation = %d",
     public function yield_scope_to_posts(array $claim, ?int $now = null): bool
     {
         $claim = $this->normalize_scope_claim($claim);
-        if ($claim === null) {
-            return false;
-        }
 
-        return $this->query($this->wpdb->prepare(
+        $yielded = $this->query($this->wpdb->prepare(
             "UPDATE {$this->table}
 SET state = 'ready', available_at = %d,
     claim_token = '', claimed_generation = 0, claim_expires_at = 0,
@@ -1644,7 +1956,9 @@ WHERE job_key = %s AND claim_token = %s
             $claim['token'],
             $claim['generation'],
             $claim['generation']
-        ), 'yield mixed FTS scope to direct posts') === 1;
+        ), 'yield mixed FTS scope to direct posts');
+
+        return $this->bounded_affected_rows($yielded, 1, 'mixed FTS scope yield') === 1;
     }
 
     /**
@@ -1660,9 +1974,6 @@ WHERE job_key = %s AND claim_token = %s
     ): int {
         $scope = $this->normalize_scope_claim($scope_claim);
         $posts = $this->normalize_claims($post_claims);
-        if ($scope === null) {
-            return $this->release_many($post_claims, $now);
-        }
         if ($posts === []) {
             return $this->yield_scope_to_posts($scope_claim, $now) ? 1 : 0;
         }
@@ -1730,26 +2041,27 @@ SET work_target.state = 'ready', work_target.available_at = claim_driver.release
     END";
         }
 
-        return $this->query(
+        $released = $this->query(
             $this->wpdb->prepare($sql, ...$args),
             'yield mixed FTS scope and release deferred posts'
         );
+
+        return $this->bounded_affected_rows($released, count($posts) + 1, 'mixed FTS claim release');
     }
 
     /** Return one failed scope generation with the same capped retry policy. */
     public function fail_scope(array $claim, ?int $now = null): array
     {
-        $rawAttempts = $claim['attempts'] ?? 0;
-        if (!is_scalar($rawAttempts) || (is_string($rawAttempts) && strlen($rawAttempts) > 64)) {
-            return ['status' => 'lost', 'attempts' => 0, 'available_at' => 0];
-        }
-        $attempts = max(0, (int) $rawAttempts) + 1;
         $claim = $this->normalize_scope_claim($claim);
-        if ($claim === null) {
-            return ['status' => 'lost', 'attempts' => 0, 'available_at' => 0];
+        if ($claim['attempts'] === PHP_INT_MAX) {
+            throw new InvalidArgumentException('FTS scope claim attempts exceed the platform integer range.');
         }
+        $attempts = $claim['attempts'] + 1;
 
         $now = $this->timestamp($now);
+        if ($now > PHP_INT_MAX - self::MAX_BACKOFF_SECONDS) {
+            throw new InvalidArgumentException('FTS scope retry time exceeds the platform integer range.');
+        }
         $availableAt = $now + $this->backoff_seconds($attempts);
         $failed = $this->query($this->wpdb->prepare(
             "UPDATE {$this->table}
@@ -1766,25 +2078,11 @@ WHERE job_key = %s AND claim_token = %s
             $claim['generation'],
             $claim['generation']
         ), 'defer failed FTS scope work');
+        $failed = $this->bounded_affected_rows($failed, 1, 'failed FTS scope deferral');
 
         return $failed === 1
             ? ['status' => 'backoff', 'attempts' => $attempts, 'available_at' => $availableAt]
             : ['status' => 'superseded', 'attempts' => 0, 'available_at' => $now];
-    }
-
-    /**
-     * Acknowledge only the generation owned by this claim.
-     *
-     * Enqueue already makes a superseding generation ready, so an exact delete
-     * miss reports false without issuing a follow-up release statement.
-     *
-     * @param array{post_id:int,generation:int,token:string} $claim
-     */
-    public function acknowledge(array $claim, ?int $now = null): bool
-    {
-        $result = $this->acknowledge_many([$claim], $now);
-
-        return $result['acknowledged'] === 1;
     }
 
     /**
@@ -1797,18 +2095,9 @@ WHERE job_key = %s AND claim_token = %s
      * @param array<int,array<string,mixed>> $claims
      * @return array{acknowledged:int,superseded:int}
      */
-    public function acknowledge_many(array $claims, ?int $now = null): array
+    public function acknowledge_many(array $claims): array
     {
-        $this->assert_bounded_claim_count($claims);
-        $normalized = [];
-        foreach ($claims as $claim) {
-            if (is_array($claim)) {
-                $claim = $this->normalize_claim($claim);
-                if ($claim !== null) {
-                    $normalized[$claim['job_key']] = $claim;
-                }
-            }
-        }
+        $normalized = $this->normalize_claims($claims);
         if ($normalized === []) {
             return ['acknowledged' => 0, 'superseded' => 0];
         }
@@ -1834,90 +2123,37 @@ STRAIGHT_JOIN {$this->table} work_target
             $deleteArgs = $driver['args'];
         }
 
-        $this->query('START TRANSACTION', 'start FTS acknowledgement transaction');
+        $this->control_query('START TRANSACTION', 'start FTS acknowledgement transaction');
         try {
-            $this->advance_search_epoch();
             $deleted = $this->query($this->wpdb->prepare(
                 $deleteSql,
                 ...$deleteArgs
             ), 'acknowledge FTS indexing batch');
+            $deleted = $this->bounded_affected_rows(
+                $deleted,
+                count($normalized),
+                'FTS indexing batch acknowledgement'
+            );
             if ($deleted > 0) {
-                $this->query('COMMIT', 'commit FTS acknowledgement transaction');
+                $this->advance_search_epoch();
+                $this->control_query('COMMIT', 'commit FTS acknowledgement transaction');
             } else {
                 // A superseding generation remains dirty. Do not invalidate
                 // cursors for a transition that did not become visible.
-                $this->query('ROLLBACK', 'roll back superseded FTS acknowledgement');
+                $this->control_query('ROLLBACK', 'roll back superseded FTS acknowledgement');
             }
         } catch (Throwable $error) {
             try {
-                $this->query('ROLLBACK', 'roll back failed FTS acknowledgement');
+                $this->control_query('ROLLBACK', 'roll back failed FTS acknowledgement');
             } catch (Throwable) {
                 // Preserve the statement failure that made the transition unsafe.
             }
             throw $error;
         }
-        $acknowledged = min(count($normalized), max(0, $deleted));
-
         return [
-            'acknowledged' => $acknowledged,
-            'superseded' => count($normalized) - $acknowledged,
+            'acknowledged' => $deleted,
+            'superseded' => count($normalized) - $deleted,
         ];
-    }
-
-    /**
-     * Return a failed generation with bounded exponential backoff.
-     *
-     * A newer generation is released immediately and does not inherit the old
-     * generation's failure count.
-     *
-     * @param array{post_id:int,generation:int,attempts?:int,token:string} $claim
-     * @return array{status:string,attempts:int,available_at:int}
-     */
-    public function fail(array $claim, ?int $now = null): array
-    {
-        $claim = $this->normalize_claim($claim);
-        if ($claim === null) {
-            return ['status' => 'lost', 'attempts' => 0, 'available_at' => 0];
-        }
-
-        $now = $this->timestamp($now);
-        $attempts = max(0, (int) ($claim['attempts'] ?? 0)) + 1;
-        $available_at = $now + $this->backoff_seconds($attempts);
-        $failed = $this->query($this->wpdb->prepare(
-            "UPDATE {$this->table}
-SET state = 'retry',
-    attempts = %d,
-    available_at = %d,
-    claim_token = '',
-    claimed_generation = 0,
-    claim_expires_at = 0,
-    last_error_code = 'content_failure',
-    last_error_at = %d
-WHERE job_key = %s
-  AND claim_token = %s
-  AND claimed_generation = %d
-  AND generation = %d",
-            $attempts,
-            $available_at,
-            $now,
-            $claim['job_key'],
-            $claim['token'],
-            $claim['generation'],
-            $claim['generation']
-        ), 'defer failed FTS indexing work');
-        if ($failed === 1) {
-            return [
-                'status' => 'backoff',
-                'attempts' => $attempts,
-                'available_at' => $available_at,
-            ];
-        }
-
-        if ($this->release_superseded_claim($claim, $now) === 1) {
-            return ['status' => 'superseded', 'attempts' => 0, 'available_at' => $now];
-        }
-
-        return ['status' => 'lost', 'attempts' => 0, 'available_at' => 0];
     }
 
     /**
@@ -1929,10 +2165,18 @@ WHERE job_key = %s
     public function fail_many(array $claims, ?int $now = null): int
     {
         $normalized = $this->normalize_claims($claims);
+        $now = $this->timestamp($now);
         if ($normalized === []) {
             return 0;
         }
-        $now = $this->timestamp($now);
+        if ($now > PHP_INT_MAX - self::MAX_BACKOFF_SECONDS) {
+            throw new InvalidArgumentException('FTS batch retry time exceeds the platform integer range.');
+        }
+        foreach ($normalized as $claim) {
+            if ($claim['attempts'] === PHP_INT_MAX) {
+                throw new InvalidArgumentException('FTS claim attempts exceed the platform integer range.');
+            }
+        }
         if ($this->is_sqlite_runtime()) {
             $predicates = [];
             $args = [];
@@ -1976,41 +2220,12 @@ SET work_target.available_at = claim_driver.failure_at + CASE
             $preparedArgs = $driver['args'];
         }
 
-        return $this->query(
+        $failed = $this->query(
             $this->wpdb->prepare($sql, ...$preparedArgs),
             'defer failed FTS indexing batch'
         );
-    }
 
-    /**
-     * Release an unprocessed claim without acknowledging its generation.
-     *
-     * @param array{post_id:int,generation:int,token:string} $claim
-     */
-    public function release(array $claim, ?int $now = null): bool
-    {
-        $claim = $this->normalize_claim($claim);
-        if ($claim === null) {
-            return false;
-        }
-
-        $affected = $this->query($this->wpdb->prepare(
-            "UPDATE {$this->table}
-SET state = 'ready',
-    available_at = %d,
-    claim_token = '',
-    claimed_generation = 0,
-    claim_expires_at = 0
-WHERE job_key = %s
-  AND claim_token = %s
-  AND claimed_generation = %d",
-            $this->timestamp($now),
-            $claim['job_key'],
-            $claim['token'],
-            $claim['generation']
-        ), 'release FTS indexing work');
-
-        return $affected === 1;
+        return $this->bounded_affected_rows($failed, count($normalized), 'failed FTS indexing batch deferral');
     }
 
     /**
@@ -2021,10 +2236,10 @@ WHERE job_key = %s
     public function release_many(array $claims, ?int $now = null): int
     {
         $normalized = $this->normalize_claims($claims);
+        $releasedAt = $this->timestamp($now);
         if ($normalized === []) {
             return 0;
         }
-        $releasedAt = $this->timestamp($now);
         if ($this->is_sqlite_runtime()) {
             $predicates = [];
             $args = [];
@@ -2050,10 +2265,12 @@ SET work_target.state = 'ready', work_target.available_at = claim_driver.release
             $preparedArgs = $driver['args'];
         }
 
-        return $this->query(
+        $released = $this->query(
             $this->wpdb->prepare($sql, ...$preparedArgs),
             'release FTS indexing batch'
         );
+
+        return $this->bounded_affected_rows($released, count($normalized), 'FTS indexing batch release');
     }
 
     /** Return a bounded pending count; the limit value means "at least". */
@@ -2090,7 +2307,7 @@ LIMIT 1",
             'check for pending FTS indexing work'
         );
 
-        return is_numeric($value) && (int) $value === 1;
+        return $this->database_presence_value($value, 'pending FTS indexing work');
     }
 
     /**
@@ -2120,23 +2337,47 @@ FROM (
 ) bounded_scope_work",
             'read bounded FTS work status'
         );
+        if (count($rows) !== 2) {
+            throw new UnexpectedValueException('The FTS work status query must return exactly two rows.');
+        }
+        $counts = [];
+        $cursors = [];
+        foreach ($rows as $row) {
+            if (array_keys(get_object_vars($row)) !== ['kind', 'work_count', 'max_cursor_post_id']) {
+                throw new UnexpectedValueException('An FTS work status row has invalid aliases.');
+            }
+            if (!is_string($row->kind) || !in_array($row->kind, ['post', 'scope'], true)) {
+                throw new UnexpectedValueException('An FTS work status row has an invalid kind.');
+            }
+            if (isset($counts[$row->kind])) {
+                throw new UnexpectedValueException('The FTS work status query returned a duplicate kind.');
+            }
+            $counts[$row->kind] = $this->database_nonnegative_integer(
+                $row->work_count,
+                "FTS {$row->kind} work count"
+            );
+            $cursors[$row->kind] = $this->database_nonnegative_integer(
+                $row->max_cursor_post_id,
+                "FTS {$row->kind} cursor"
+            );
+            if ($counts[$row->kind] > $limit) {
+                throw new UnexpectedValueException('An FTS work status count exceeds its bounded query.');
+            }
+        }
+        if (!isset($counts['post'], $counts['scope']) || $cursors['post'] !== 0) {
+            throw new UnexpectedValueException('The FTS work status rows violate their kind contracts.');
+        }
+        if ($counts['scope'] === 0 && $cursors['scope'] !== 0) {
+            throw new UnexpectedValueException('An empty FTS scope status cannot carry cursor progress.');
+        }
         $status = [
-            'post_count' => 0,
-            'scope_count' => 0,
-            'scope_cursor_post_id' => 0,
+            'post_count' => $counts['post'],
+            'scope_count' => $counts['scope'],
+            'scope_cursor_post_id' => $cursors['scope'],
             'post_count_relation' => 'exact',
             'scope_count_relation' => 'exact',
             'counts_capped' => false,
         ];
-        foreach ($rows as $row) {
-            $kind = isset($row->kind) && is_scalar($row->kind) ? (string) $row->kind : '';
-            if ($kind === 'post') {
-                $status['post_count'] = max(0, (int) ($row->work_count ?? 0));
-            } elseif ($kind === 'scope') {
-                $status['scope_count'] = max(0, (int) ($row->work_count ?? 0));
-                $status['scope_cursor_post_id'] = max(0, (int) ($row->max_cursor_post_id ?? 0));
-            }
-        }
         $status['post_count_relation'] = $status['post_count'] >= $limit ? 'at_least' : 'exact';
         $status['scope_count_relation'] = $status['scope_count'] >= $limit ? 'at_least' : 'exact';
         $status['counts_capped'] = $status['post_count_relation'] !== 'exact'
@@ -2200,52 +2441,15 @@ FROM (
             'read next available FTS work time'
         );
 
-        return is_numeric($value) ? max(1, (int) $value) : null;
-    }
-
-    /**
-     * Clear queued work unless an interrupted installation never created it.
-     *
-     * The table probe, rather than a database error message, distinguishes the
-     * compatible missing-table state. Probe and DELETE failures remain visible.
-     */
-    public function clear_if_table_exists(): void
-    {
-        $table = $this->get_var($this->wpdb->prepare(
-            'SHOW TABLES LIKE %s',
-            $this->wpdb->esc_like($this->table)
-        ), 'inspect the FTS indexing queue table');
-        if (!is_scalar($table) || (string) $table !== $this->table) {
-            return;
+        if ($value === null) {
+            return null;
+        }
+        $next_available_at = $this->database_nonnegative_integer($value, 'next available FTS work time');
+        if ($next_available_at === 0) {
+            throw new UnexpectedValueException('The next available FTS work time must be positive.');
         }
 
-        $this->clear();
-    }
-
-    /**
-     * Clear all pending work while retaining the queue schema.
-     */
-    public function clear(): int
-    {
-        $this->query('START TRANSACTION', 'start FTS work reset transaction');
-        try {
-            $this->advance_search_epoch();
-            $deleted = $this->query(
-                "DELETE FROM {$this->table}
-WHERE kind IN ('post','scope')
-   OR (kind = 'meta' AND job_key <> '" . self::SEARCH_EPOCH_JOB_KEY . "')",
-                'clear FTS indexing work'
-            );
-            $this->query('COMMIT', 'commit FTS work reset transaction');
-            return $deleted;
-        } catch (Throwable $error) {
-            try {
-                $this->query('ROLLBACK', 'roll back failed FTS work reset');
-            } catch (Throwable) {
-                // Preserve the reset failure.
-            }
-            throw $error;
-        }
+        return $next_available_at;
     }
 
     /**
@@ -2257,7 +2461,7 @@ WHERE kind IN ('post','scope')
      */
     public function advance_search_epoch(): int
     {
-        return $this->query($this->wpdb->prepare(
+        $affected = $this->query($this->wpdb->prepare(
             "INSERT INTO {$this->table}
     (job_key, kind, post_id, generation, state, available_at, attempts, claim_token, claimed_generation, claim_expires_at, cursor_post_id, scope_subject_type, scope_subject_id, payload, last_error_code, last_error_at)
 VALUES (%s, 'meta', 0, 1, 'meta', 0, 0, '', 0, 0, 0, '', 0, %s, '', 0)
@@ -2271,49 +2475,36 @@ ON DUPLICATE KEY UPDATE
             self::SEARCH_EPOCH_JOB_KEY,
             $this->new_search_epoch_incarnation()
         ), 'advance FTS search epoch');
+
+        return $this->bounded_affected_rows($affected, 2, 'FTS search epoch advance');
     }
 
     /**
      * @param array<string,mixed> $claim
-     * @return array{job_key:string,post_id:int,generation:int,attempts:int,token:string}|null
+     * @return array{job_key:string,post_id:int,generation:int,attempts:int,token:string}
      */
-    private function normalize_claim(array $claim): ?array
+    private function normalize_claim(array $claim): array
     {
-        if (count($claim) > 24) {
-            return null;
-        }
-        foreach (['post_id', 'generation', 'attempts'] as $key) {
-            if (
-                array_key_exists($key, $claim)
-                && (!is_scalar($claim[$key]) || (is_string($claim[$key]) && strlen($claim[$key]) > 64))
-            ) {
-                return null;
-            }
-        }
-        foreach (['job_key' => 191, 'token' => 64] as $key => $maxBytes) {
-            if (
-                array_key_exists($key, $claim)
-                && (!is_scalar($claim[$key]) || strlen((string) $claim[$key]) > $maxBytes)
-            ) {
-                return null;
-            }
-        }
-        $post_id = max(0, (int) ($claim['post_id'] ?? 0));
-        $job_key = isset($claim['job_key']) && is_scalar($claim['job_key'])
-            ? (string) $claim['job_key']
-            : $this->post_job_key($post_id);
-        $generation = max(0, (int) ($claim['generation'] ?? 0));
-        $token = isset($claim['token']) && is_scalar($claim['token']) ? (string) $claim['token'] : '';
-        if ($post_id <= 0 || !self::is_post_job_key($job_key, $post_id) || $generation <= 0 || $token === '' || strlen($token) > 64) {
-            return null;
+        $this->assert_minted_claim_shape($claim);
+        if (
+            $claim['kind'] !== 'post'
+            || $claim['post_id'] <= 0
+            || !self::is_post_job_key($claim['job_key'], $claim['post_id'])
+            || $claim['cursor_post_id'] !== 0
+            || $claim['scope_coverage'] !== ''
+            || $claim['scope_subject_type'] !== ''
+            || $claim['scope_subject_id'] !== 0
+            || $claim['scope_incarnation'] !== ''
+        ) {
+            throw new InvalidArgumentException('Invalid FTS post claim capability.');
         }
 
         return [
-            'job_key' => $job_key,
-            'post_id' => $post_id,
-            'generation' => $generation,
-            'attempts' => max(0, (int) ($claim['attempts'] ?? 0)),
-            'token' => $token,
+            'job_key' => $claim['job_key'],
+            'post_id' => $claim['post_id'],
+            'generation' => $claim['generation'],
+            'attempts' => $claim['attempts'],
+            'token' => $claim['token'],
         ];
     }
 
@@ -2324,15 +2515,19 @@ ON DUPLICATE KEY UPDATE
     private function normalize_claims(array $claims): array
     {
         $this->assert_bounded_claim_count($claims);
+        if (!array_is_list($claims)) {
+            throw new InvalidArgumentException('FTS work claims must be a list.');
+        }
         $normalized = [];
         foreach ($claims as $claim) {
             if (!is_array($claim)) {
-                continue;
+                throw new InvalidArgumentException('Every FTS work claim must be a native array.');
             }
             $claim = $this->normalize_claim($claim);
-            if ($claim !== null) {
-                $normalized[$claim['job_key']] = $claim;
+            if (isset($normalized[$claim['job_key']])) {
+                throw new InvalidArgumentException('FTS work claims must not contain duplicate job keys.');
             }
+            $normalized[$claim['job_key']] = $claim;
         }
 
         return $normalized;
@@ -2438,79 +2633,154 @@ LIMIT {$limit}";
 
     /**
      * @param array<string,mixed> $claim
-     * @return array{job_key:string,generation:int,token:string,scope_coverage:string,scope_subject_type:string,scope_subject_id:int,scope_incarnation:string}|null
+     * @return array{job_key:string,generation:int,attempts:int,token:string,cursor_post_id:int,scope_coverage:string,scope_subject_type:string,scope_subject_id:int,scope_incarnation:string}
      */
-    private function normalize_scope_claim(array $claim): ?array
+    private function normalize_scope_claim(array $claim): array
     {
-        if (count($claim) > 24) {
-            return null;
-        }
+        $this->assert_minted_claim_shape($claim);
         if (
-            (array_key_exists('job_key', $claim) && (!is_scalar($claim['job_key']) || strlen((string) $claim['job_key']) > 191))
-            || (array_key_exists('generation', $claim) && (!is_scalar($claim['generation']) || (is_string($claim['generation']) && strlen($claim['generation']) > 64)))
-            || (array_key_exists('token', $claim) && (!is_scalar($claim['token']) || strlen((string) $claim['token']) > 64))
+            $claim['kind'] !== 'scope'
+            || $claim['post_id'] !== 0
+            || !$this->is_scope_job_key($claim['job_key'])
         ) {
-            return null;
+            throw new InvalidArgumentException('Invalid FTS scope claim capability.');
         }
-        $job_key = isset($claim['job_key']) && is_scalar($claim['job_key']) ? (string) $claim['job_key'] : '';
-        $generation = max(0, (int) ($claim['generation'] ?? 0));
-        $token = isset($claim['token']) && is_scalar($claim['token']) ? (string) $claim['token'] : '';
-        if (!str_starts_with($job_key, 'scope:') || strlen($job_key) > 191 || $generation <= 0 || $token === '' || strlen($token) > 64) {
-            return null;
-        }
-        try {
-            $scopeAuthority = $this->validated_scope_authority(
-                is_scalar($claim['scope_coverage'] ?? null) ? (string) $claim['scope_coverage'] : '',
-                is_scalar($claim['scope_subject_type'] ?? null) ? (string) $claim['scope_subject_type'] : '',
-                is_scalar($claim['scope_subject_id'] ?? null) ? max(0, (int) $claim['scope_subject_id']) : 0,
-                is_scalar($claim['scope_incarnation'] ?? null) ? (string) $claim['scope_incarnation'] : ''
-            );
-        } catch (InvalidArgumentException) {
-            return null;
-        }
+        $scope_authority = $this->validated_scope_authority(
+            $claim['scope_coverage'],
+            $claim['scope_subject_type'],
+            $claim['scope_subject_id'],
+            $claim['scope_incarnation']
+        );
+        $this->encoded_scope_payload($claim['payload']);
 
         return [
-            'job_key' => $job_key,
-            'generation' => $generation,
-            'token' => $token,
-            'scope_coverage' => $scopeAuthority[0],
-            'scope_subject_type' => $scopeAuthority[1],
-            'scope_subject_id' => $scopeAuthority[2],
-            'scope_incarnation' => $scopeAuthority[3],
+            'job_key' => $claim['job_key'],
+            'generation' => $claim['generation'],
+            'attempts' => $claim['attempts'],
+            'token' => $claim['token'],
+            'cursor_post_id' => $claim['cursor_post_id'],
+            'scope_coverage' => $scope_authority[0],
+            'scope_subject_type' => $scope_authority[1],
+            'scope_subject_id' => $scope_authority[2],
+            'scope_incarnation' => $scope_authority[3],
         ];
     }
 
-    /**
-     * Release a claim after a newer generation superseded it.
-     *
-     * @param array{post_id:int,generation:int,token:string} $claim
-     */
-    private function release_superseded_claim(array $claim, int $now): int
+    /** Require the exact native claim shape minted by claim_batch(). */
+    private function assert_minted_claim_shape(array $claim): void
     {
-        return $this->query($this->wpdb->prepare(
-            "UPDATE {$this->table}
-SET state = 'ready',
-    attempts = 0,
-    available_at = %d,
-    claim_token = '',
-    claimed_generation = 0,
-    claim_expires_at = 0
-WHERE job_key = %s
-  AND claim_token = %s
-  AND claimed_generation = %d
-  AND generation > %d",
-            $now,
-            $claim['job_key'],
-            $claim['token'],
-            $claim['generation'],
-            $claim['generation']
-        ), 'release superseded FTS indexing work');
+        if (
+            count($claim) !== count(self::CLAIM_KEYS)
+            || array_keys($claim) !== self::CLAIM_KEYS
+            || !is_string($claim['job_key'])
+            || !is_string($claim['kind'])
+            || !is_int($claim['post_id'])
+            || !is_int($claim['generation'])
+            || $claim['generation'] <= 0
+            || !is_int($claim['attempts'])
+            || $claim['attempts'] < 0
+            || !is_string($claim['last_error_code'])
+            || strlen($claim['last_error_code']) > 64
+            || !$this->is_worker_claim_token($claim['token'])
+            || !is_int($claim['claim_expires_at'])
+            || $claim['claim_expires_at'] <= 0
+            || !is_int($claim['cursor_post_id'])
+            || $claim['cursor_post_id'] < 0
+            || !is_string($claim['scope_coverage'])
+            || !is_string($claim['scope_subject_type'])
+            || !is_int($claim['scope_subject_id'])
+            || $claim['scope_subject_id'] < 0
+            || !is_string($claim['scope_incarnation'])
+            || !is_array($claim['payload'])
+            || !is_bool($claim['source_exists'])
+            || !is_int($claim['source_bytes'])
+            || $claim['source_bytes'] < 0
+            || !is_int($claim['canonical_bytes'])
+            || $claim['canonical_bytes'] < 0
+            || ($claim['source_snapshot'] !== null && !is_object($claim['source_snapshot']))
+        ) {
+            throw new InvalidArgumentException('Invalid FTS claim capability.');
+        }
+        $this->assert_bounded_payload($claim['payload']);
+        $this->assert_minted_source_fields($claim);
+    }
+
+    /** Require the exact native source sidecar minted by claim_batch(). */
+    private function assert_minted_source_fields(array $claim): void
+    {
+        if (!$claim['source_exists']) {
+            if (
+                $claim['source_bytes'] !== 0
+                || $claim['canonical_bytes'] !== 0
+                || $claim['source_snapshot'] !== null
+            ) {
+                throw new InvalidArgumentException('An absent FTS claim source must have empty sidecars.');
+            }
+            return;
+        }
+        if (
+            $claim['kind'] !== 'post'
+            || $claim['post_id'] <= 0
+            || $claim['canonical_bytes'] < $claim['source_bytes']
+        ) {
+            throw new InvalidArgumentException('An FTS claim source has invalid post identity or byte bounds.');
+        }
+
+        $snapshot = $claim['source_snapshot'];
+        if ($snapshot === null) {
+            return;
+        }
+        $keys = [
+            'ID',
+            'post_title',
+            'post_content',
+            'post_excerpt',
+            'post_type',
+            'post_status',
+            'post_date_gmt',
+            'post_password',
+            'fts_post_source_bytes',
+            'fts_canonical_post_bytes',
+            'fts_existing_hash',
+        ];
+        if (
+            $snapshot::class !== stdClass::class
+            || array_keys(get_object_vars($snapshot)) !== $keys
+            || !is_int($snapshot->ID)
+            || $snapshot->ID !== $claim['post_id']
+            || !is_string($snapshot->post_title)
+            || !is_string($snapshot->post_content)
+            || !is_string($snapshot->post_excerpt)
+            || !is_string($snapshot->post_type)
+            || !is_string($snapshot->post_status)
+            || !is_string($snapshot->post_date_gmt)
+            || !is_string($snapshot->post_password)
+            || !is_int($snapshot->fts_post_source_bytes)
+            || $snapshot->fts_post_source_bytes !== $claim['source_bytes']
+            || !is_int($snapshot->fts_canonical_post_bytes)
+            || $snapshot->fts_canonical_post_bytes !== $claim['canonical_bytes']
+            || ($snapshot->fts_existing_hash !== null && !is_string($snapshot->fts_existing_hash))
+            || (is_string($snapshot->fts_existing_hash) && strlen($snapshot->fts_existing_hash) > 40)
+        ) {
+            throw new InvalidArgumentException('An FTS claim source snapshot has invalid aliases or native fields.');
+        }
+
+        $source_bytes = strlen($snapshot->post_title)
+            + strlen($snapshot->post_content)
+            + strlen($snapshot->post_excerpt);
+        if ($source_bytes !== $claim['source_bytes']) {
+            throw new InvalidArgumentException('An FTS claim source snapshot has inconsistent source bytes.');
+        }
     }
 
     /** Encode the public post id as the queue's exact direct-work identity. */
     private function post_job_key(int $post_id): string
     {
-        return 'post:' . max(0, $post_id);
+        if ($post_id <= 0) {
+            throw new LogicException('FTS post job keys require a positive post ID.');
+        }
+
+        return 'post:' . $post_id;
     }
 
     /** Hide an arbitrarily shaped scope identity behind one fixed-width key. */
@@ -2528,20 +2798,54 @@ WHERE job_key = %s
     /** Accept only the canonical exact-post identity. */
     public static function is_post_job_key(string $job_key, int $post_id): bool
     {
-        return hash_equals('post:' . max(0, $post_id), $job_key);
+        return $post_id > 0 && hash_equals('post:' . $post_id, $job_key);
+    }
+
+    /** Accept only the exact hashed identity minted for scope work. */
+    private function is_scope_job_key(string $job_key): bool
+    {
+        return strlen($job_key) === 70
+            && str_starts_with($job_key, 'scope:')
+            && $this->is_lower_hex(substr($job_key, 6), 64);
+    }
+
+    /** Accept only a worker lease minted by claim_batch(). */
+    private function is_worker_claim_token(mixed $token): bool
+    {
+        return is_string($token) && $this->is_lower_hex($token, 32);
+    }
+
+    /** Accept only the two durable foreground ownership token forms. */
+    private function validated_mutation_token(string $token): string
+    {
+        $valid = $this->is_lower_hex($token, 32)
+            || (
+                str_starts_with($token, 'guard:')
+                && $this->is_lower_hex(substr($token, 6), 32)
+            );
+        if (!$valid) {
+            throw new InvalidArgumentException('FTS mutation tokens must use the exact durable token grammar.');
+        }
+
+        return $token;
+    }
+
+    /** Test exact lowercase hexadecimal text without extension dependencies. */
+    private function is_lower_hex(string $value, int $bytes): bool
+    {
+        return strlen($value) === $bytes
+            && strspn($value, '0123456789abcdef') === $bytes;
     }
 
     /** Reject scope identities that cannot fit the bounded queue contract. */
     private function validated_scope_key(string $scope_key): string
     {
-        if (strlen($scope_key) > 1024) {
-            throw new InvalidArgumentException('FTS scope work keys may contain at most 1,024 bytes.');
+        if ($scope_key === '' || trim($scope_key) !== $scope_key || strlen($scope_key) > 1024) {
+            if (strlen($scope_key) > 1024) {
+                throw new InvalidArgumentException('FTS scope work keys may contain at most 1,024 bytes.');
+            }
+            throw new InvalidArgumentException('FTS scope work requires an unpadded non-empty key.');
         }
-        $scope_key = trim($scope_key);
-        if ($scope_key === '') {
-            throw new InvalidArgumentException('FTS scope work requires a non-empty key.');
-        }
-
         return $scope_key;
     }
 
@@ -2610,7 +2914,14 @@ WHERE job_key = %s
 
     private function timestamp(?int $value): int
     {
-        return max(1, $value ?? time());
+        if ($value === null) {
+            return time();
+        }
+        if ($value < 1) {
+            throw new InvalidArgumentException('FTS timestamps must be positive integers.');
+        }
+
+        return $value;
     }
 
     /** Use indexed state, not a token scan, as the worker eligibility source. */
@@ -2882,7 +3193,7 @@ WHERE job_key = %s
     private function refence_interrupted_claim(string $claimToken): void
     {
         $guardToken = 'guard:' . bin2hex(random_bytes(16));
-        $this->query($this->wpdb->prepare(
+        $affected = $this->query($this->wpdb->prepare(
             "UPDATE /* wp_fts:refence-interrupted-claim */ {$this->table}
 SET state = 'guarded', claim_token = %s,
     claimed_generation = generation, claim_expires_at = 0
@@ -2891,6 +3202,11 @@ WHERE state = 'leased' AND claim_token = %s
             $guardToken,
             $claimToken
         ), 'refence interrupted FTS claim');
+        $this->bounded_affected_rows(
+            $affected,
+            self::MAX_CLAIM_POSTS + 1,
+            'interrupted FTS claim refence'
+        );
     }
 
     /** SQLite has no multi-table UPDATE; its bounded IN form remains indexed. */
@@ -2927,8 +3243,34 @@ WHERE state = 'leased' AND claim_token = %s
             throw $this->database_exception($context);
         }
         $this->assert_no_database_error($context);
+        if (!is_int($result) || $result < 0) {
+            throw new UnexpectedValueException("The database returned an invalid affected-row count while attempting to {$context}.");
+        }
 
-        return is_int($result) ? max(0, $result) : 0;
+        return $result;
+    }
+
+    /** Reject impossible affected-row counts at a bounded DML boundary. */
+    private function bounded_affected_rows(int $affected, int $maximum, string $context): int
+    {
+        if ($maximum < 0 || $affected > $maximum) {
+            throw new UnexpectedValueException("The {$context} affected-row count exceeds its contract.");
+        }
+
+        return $affected;
+    }
+
+    /** Run transaction control while accepting only its documented success forms. */
+    private function control_query(string $statement, string $context): void
+    {
+        $result = $this->wpdb->query($statement);
+        if ($result === false) {
+            throw $this->database_exception($context);
+        }
+        $this->assert_no_database_error($context);
+        if ($result !== true && (!is_int($result) || $result < 0)) {
+            throw new UnexpectedValueException("The database returned an invalid control result while attempting to {$context}.");
+        }
     }
 
     /**
@@ -2938,8 +3280,16 @@ WHERE state = 'leased' AND claim_token = %s
     {
         $rows = $this->wpdb->get_results($statement);
         $this->assert_no_database_error($context);
+        if (!is_array($rows) || !array_is_list($rows)) {
+            throw new UnexpectedValueException("The database returned an invalid row collection while attempting to {$context}.");
+        }
+        foreach ($rows as $row) {
+            if (!is_object($row)) {
+                throw new UnexpectedValueException("The database returned a non-object row while attempting to {$context}.");
+            }
+        }
 
-        return is_array($rows) ? $rows : [];
+        return $rows;
     }
 
     private function get_var(mixed $statement, string $context): mixed
@@ -2952,14 +3302,20 @@ WHERE state = 'leased' AND claim_token = %s
 
     private function assert_no_database_error(string $context): void
     {
-        if (isset($this->wpdb->last_error) && trim((string) $this->wpdb->last_error) !== '') {
+        if (property_exists($this->wpdb, 'last_error') && !is_string($this->wpdb->last_error)) {
+            throw new UnexpectedValueException("The database exposed an invalid error value while attempting to {$context}.");
+        }
+        if (isset($this->wpdb->last_error) && trim($this->wpdb->last_error) !== '') {
             throw $this->database_exception($context);
         }
     }
 
     private function database_exception(string $context): RuntimeException
     {
-        $error = isset($this->wpdb->last_error) ? trim((string) $this->wpdb->last_error) : '';
+        if (property_exists($this->wpdb, 'last_error') && !is_string($this->wpdb->last_error)) {
+            throw new UnexpectedValueException("The database exposed an invalid error value while attempting to {$context}.");
+        }
+        $error = isset($this->wpdb->last_error) ? trim($this->wpdb->last_error) : '';
         $suffix = $error !== '' ? ": {$error}" : '.';
 
         return new RuntimeException("Failed to {$context}{$suffix}");

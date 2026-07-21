@@ -398,6 +398,43 @@ test_case('foreground bulk mutation owner guard rejects path replacement and sym
     }
 });
 
+test_case('foreground bulk mutation guard release accepts only its live tracked capability once', function (): void {
+    $queue = new WP_FTS_Index_Queue(new WP_FTS_Test_WPDB());
+    $guard = $queue->acquire_foreground_owner_guard();
+    $reordered = [
+        'path' => $guard['path'],
+        'kind' => $guard['kind'],
+        'handle' => $guard['handle'],
+    ];
+    $thrown = null;
+    try {
+        $queue->release_foreground_owner_guard($reordered);
+    } catch (InvalidArgumentException $error) {
+        $thrown = $error;
+    }
+    assert_true($thrown instanceof InvalidArgumentException, 'a reordered shared guard must not release the tracked descriptor');
+    assert_same(true, $queue->foreground_owner_guard_is_current($guard), 'a malformed release attempt must leave the live shared guard current');
+
+    $queue->release_foreground_owner_guard($guard);
+    $doubleRelease = null;
+    try {
+        $queue->release_foreground_owner_guard($guard);
+    } catch (InvalidArgumentException $error) {
+        $doubleRelease = $error;
+    }
+    assert_true($doubleRelease instanceof InvalidArgumentException, 'a shared guard may be released exactly once');
+
+    $exclusive = $queue->acquire_exclusive_foreground_owner_guard();
+    $queue->release_exclusive_foreground_owner_guard($exclusive);
+    $doubleExclusiveRelease = null;
+    try {
+        $queue->release_exclusive_foreground_owner_guard($exclusive);
+    } catch (InvalidArgumentException $error) {
+        $doubleExclusiveRelease = $error;
+    }
+    assert_true($doubleExclusiveRelease instanceof InvalidArgumentException, 'an exclusive guard may be released exactly once');
+});
+
 test_case('foreground bulk mutation path replacement after acquisition fails every later boundary closed', function (): void {
     if (getenv('WP_FTS_TEST_PATH_REPLACEMENT_CHILD') !== '1') {
         if (!function_exists('proc_open')) {
@@ -731,7 +768,7 @@ test_case('foreground bulk mutation rejects multi-scope ownership and deletes th
     try {
         $queue->handoff_foreground_mutation_scope(
             'oversized-global-sentinel',
-            str_repeat('g', 32),
+            str_repeat('6', 32),
             [],
             [],
             $oversizedTokens,
@@ -747,9 +784,9 @@ test_case('foreground bulk mutation rejects multi-scope ownership and deletes th
     assert_same([], $fake->queries, 'rejecting ownership above the structural one-scope maximum must issue no SQL');
 
     $targetedKey = 'maximum-owned-targeted-scope';
-    $targetedToken = str_repeat('t', 32);
+    $targetedToken = str_repeat('d', 32);
     $globalKey = 'maximum-owned-global-sentinel';
-    $globalToken = str_repeat('g', 32);
+    $globalToken = str_repeat('e', 32);
     $queue->fence_scope(
         $targetedKey,
         $targetedToken,
@@ -1058,8 +1095,8 @@ test_case('foreground bulk mutation corpus authority contains 100000 heterogeneo
             // the new high-water mark as the workload baseline. This preserves
             // true in-call transient peak detection rather than sampling only
             // after each hook returns.
-            $historicalPeak = memory_get_peak_usage(false);
-            $paddingBytes = max(0, $historicalPeak - $memoryBefore);
+            $processPeak = memory_get_peak_usage(false);
+            $paddingBytes = max(0, $processPeak - $memoryBefore);
             $peakPadding = $paddingBytes > 0 ? str_repeat('p', $paddingBytes) : null;
             $memoryBefore = memory_get_usage(false);
             $peakBaseline = memory_get_peak_usage(false);
@@ -1229,7 +1266,7 @@ test_case('foreground bulk mutation exact fence survives TTL and recovers curren
         // A worker must still make unrelated progress in exactly its ordinary
         // update+confirmation pair while excluding the overdue guarded post.
         $queue = new WP_FTS_Index_Queue($fake);
-        $queue->enqueue($directPostId, time() - 1);
+        $queue->enqueue_many([$directPostId], time() - 1);
         $claimQueriesBefore = count($fake->queries);
         $claims = $queue->claim_batch(100, time(), 30, 1048576);
         assert_same($claimQueriesBefore + 2, count($fake->queries), 'a busy owner guard must not add a database probe beyond claim and confirmation');
@@ -1247,7 +1284,7 @@ test_case('foreground bulk mutation exact fence survives TTL and recovers curren
         assert_contains('chosen_fts_work.generation', $claimSql, 'the MySQL claim driver must preserve the selected generation through its materialized relation');
         assert_contains('claim_target.generation = claim_driver.generation', $claimSql, 'the final MySQL join must reject a generation advanced after candidate selection');
         assert_true(!str_contains($claimSql, 'GET_LOCK') && !str_contains($claimSql, 'IS_'), 'the worker claim must not call a session advisory-lock function');
-        assert_true($queue->acknowledge($claims[0]), 'the unrelated ready claim should remain normally acknowledgeable');
+        assert_same(1, $queue->acknowledge_many([$claims[0]])['acknowledged'], 'the unrelated ready claim should remain normally acknowledgeable');
 
         $watchdogStarted = time();
         $nextAvailable = $queue->next_available_at();
@@ -1301,7 +1338,7 @@ test_case('foreground bulk mutation second worker probe refences every interrupt
         assert_contains('wp_fts:refence-interrupted-claim', wp_fts_foreground_bulk_sql($fake->queries[1] ?? ''), 'claim_batch must execute the explicit interrupted-claim refence');
         assert_same('guarded', $refencedBatch['state'] ?? null, 'claim_batch must restore guarded fence state rather than leave an expiring lease');
         assert_true(preg_match('/^guard:[a-f0-9]{32}$/D', (string) ($refencedBatch['claim_token'] ?? '')) === 1, 'claim_batch refence must publish a typed guard token');
-        assert_same(0, $refencedBatch['claim_expires_at'] ?? null, 'claim_batch refence must clear the obsolete worker lease expiry');
+        assert_same(0, $refencedBatch['claim_expires_at'] ?? null, 'claim_batch refence must clear the worker lease expiry');
         assert_same($now, $refencedBatch['available_at'] ?? null, 'claim_batch refence must remain immediately due after owner loss');
         assert_same($originalBatch['generation'] ?? null, $refencedBatch['generation'] ?? null, 'claim_batch refence must preserve the exact generation');
         assert_same($originalBatch['payload'] ?? null, $refencedBatch['payload'] ?? null, 'claim_batch refence must preserve the exact payload');
@@ -1317,7 +1354,7 @@ test_case('foreground bulk mutation second worker probe refences every interrupt
     }
     $recoveredBatch = $queue->claim_batch(10, $now + 31, 30);
     assert_same([47501], array_column($recoveredBatch, 'post_id'), 'claim_batch refence must recover immediately after owner release');
-    $queue->acknowledge_many($recoveredBatch, $now + 32);
+    $queue->acknowledge_many($recoveredBatch);
 
     // A canonical fence that wins after the interrupted lease but before the
     // synthetic refence must remain authoritative. The refence CAS is bound to
@@ -1808,7 +1845,7 @@ test_case('foreground bulk mutation busy flock excludes every fence but admits r
         $scopeKey = (string) ($scopeRows[0]['job_key'] ?? '');
         $fake->queue[$scopeKey]['available_at'] = time() - 2;
         $unguardedPostId = 41003;
-        $queue->fence_post($unguardedPostId, str_repeat('u', 32), time() - 1);
+        $queue->fence_post($unguardedPostId, str_repeat('e', 32), time() - 1);
         $queriesBefore = count($fake->queries);
         $liveOwnerClaims = $queue->claim_batch(100, time(), 30);
         assert_same($queriesBefore + 2, count($fake->queries), 'mixed ready and fenced work must use one bounded update and confirmation');
@@ -1819,7 +1856,7 @@ test_case('foreground bulk mutation busy flock excludes every fence but admits r
         )), 'an overdue global fence must remain closed while its request owner guard is live');
         assert_same('fenced', $fake->queue[$unguardedPostId]['state'] ?? null, 'a busy guard must defer even an unmarked overdue fence until ownership can be probed safely');
         foreach ($liveOwnerClaims as $liveOwnerClaim) {
-            assert_true($queue->acknowledge($liveOwnerClaim), 'ordinary ready work should remain normally acknowledgeable');
+            assert_same(1, $queue->acknowledge_many([$liveOwnerClaim])['acknowledged'], 'ordinary ready work should remain normally acknowledgeable');
         }
 
         WP_FTS_Plugin::reset_request_caches();
@@ -1841,10 +1878,14 @@ test_case('foreground bulk mutation busy flock excludes every fence but admits r
         assert_same('fenced', $fake->queue[$unguardedPostId]['state'] ?? null, 'the unmarked fallback must remain fail-closed after unrelated owner release');
         assert_same(null, $queue->next_available_at(), 'an unmarked fence alone must not keep cron polling for operator-only debt');
 
-        $queue->promote_post($unguardedPostId, str_repeat('u', 32), time());
+        $queue->promote_post($unguardedPostId, str_repeat('e', 32), time());
         $promotedClaims = $queue->claim_batch(100, time(), 30);
         assert_same([$unguardedPostId], array_column($promotedClaims, 'post_id'), 'the authoritative post-SQL promotion must make the unmarked generation ordinary ready work');
-        assert_true(isset($promotedClaims[0]) && $queue->acknowledge($promotedClaims[0]), 'the safely promoted fallback generation should acknowledge normally');
+        assert_true(
+            isset($promotedClaims[0])
+                && ($queue->acknowledge_many([$promotedClaims[0]])['acknowledged'] ?? 0) === 1,
+            'the safely promoted fallback generation should acknowledge normally'
+        );
     } finally {
         WP_FTS_Plugin::reset_request_caches();
         $wpdb = $oldWpdb;
@@ -1895,7 +1936,7 @@ test_case('foreground bulk mutation guarded state cannot be starved by more than
 
     assert_same(
         ['acknowledged' => WP_FTS_Index_Queue::MAX_CLAIM_POSTS, 'superseded' => 0],
-        $queue->acknowledge_many($recovered, $now + 1),
+        $queue->acknowledge_many($recovered),
         'the complete guarded window should acknowledge normally'
     );
     foreach ($fencedIds as $postId) {
@@ -1914,7 +1955,10 @@ test_case('foreground bulk mutation guarded state cannot be starved by more than
     $queue->promote_post($promotedId, str_repeat('0', 32), $now + 2);
     $promoted = $queue->claim_batch(WP_FTS_Index_Queue::MAX_CLAIM_POSTS, $now + 2, 30);
     assert_same([$promotedId], array_column($promoted, 'post_id'), 'an authoritative post-SQL promotion must make exactly that fenced generation ready');
-    assert_true(isset($promoted[0]) && $queue->acknowledge($promoted[0]), 'the safely promoted generation should acknowledge normally');
+    assert_true(
+        isset($promoted[0]) && ($queue->acknowledge_many([$promoted[0]])['acknowledged'] ?? 0) === 1,
+        'the safely promoted generation should acknowledge normally'
+    );
 });
 
 test_case('foreground bulk mutation concurrent scopes remove only the owned sentinel', function (): void {
@@ -1935,7 +1979,7 @@ test_case('foreground bulk mutation concurrent scopes remove only the owned sent
         [],
         [],
         false,
-        ['reason' => 'A handoff'],
+        [],
         $now
     );
     assert_same(true, $handoffA['global_scope_released'] ?? null, 'request A should observe its exact sentinel deletion');
@@ -1952,7 +1996,7 @@ test_case('foreground bulk mutation concurrent scopes remove only the owned sent
         [],
         [],
         false,
-        ['reason' => 'B handoff'],
+        [],
         $now
     );
     assert_same(true, $handoffB['global_scope_released'] ?? null, 'request B should observe its exact sentinel deletion');
@@ -1967,7 +2011,7 @@ test_case('foreground bulk mutation concurrent scopes remove only the owned sent
         [],
         [],
         false,
-        ['reason' => 'lost owner'],
+        [],
         $now
     );
     assert_same(false, $lostHandoff['global_scope_released'] ?? null, 'the queue API must report a lost exact sentinel compare-and-swap');
@@ -1988,7 +2032,7 @@ test_case('foreground bulk mutation successors stay on one canonical identity', 
     try {
         $queue = new WP_FTS_Index_Queue($fake);
         $postId = 43001;
-        $foreignPostToken = str_repeat('x', 32);
+        $foreignPostToken = str_repeat('a', 32);
         $queue->fence_post($postId, $foreignPostToken, time() + 300);
         $foreignPost = $fake->queue[$postId] ?? [];
         $fake->queries = [];
@@ -2014,7 +2058,7 @@ test_case('foreground bulk mutation successors stay on one canonical identity', 
         $wpdb = $fake;
         wp_fts_test_reset_wordpress_fakes();
         $queue = new WP_FTS_Index_Queue($fake);
-        $foreignScopeToken = str_repeat('y', 32);
+        $foreignScopeToken = str_repeat('b', 32);
         $scopeKey = 'taxonomy:category:9';
         $queue->fence_scope(
             $scopeKey,
@@ -2148,7 +2192,10 @@ test_case('foreground bulk mutation relationship post-hook survives switch-aband
         $fake->queries = [];
         $recovered = $queue->claim_batch(1, time(), 30);
         assert_same([$postId], array_column($recovered, 'post_id'), 'old-site recovery must claim the abandoned relationship fence');
-        assert_true(isset($recovered[0]) && $queue->acknowledge($recovered[0]), 'old-site recovery must be able to acknowledge the exact abandoned generation');
+        assert_true(
+            isset($recovered[0]) && ($queue->acknowledge_many([$recovered[0]])['acknowledged'] ?? 0) === 1,
+            'old-site recovery must be able to acknowledge the exact abandoned generation'
+        );
         $recoverySql = wp_fts_foreground_bulk_total_sql($fake);
         assert_same(4, count($recoverySql), 'abandoned relationship recovery must stay one claim UPDATE, one confirmation SELECT, and one atomic epoch-advance plus acknowledgement pair');
         assert_true(max(array_map('strlen', $recoverySql)) < 1048576, 'every abandoned relationship recovery statement must stay below one MiB');
@@ -2240,11 +2287,11 @@ test_case('foreground bulk mutation global metadata post-hook survives switch-ab
         $successor = $successorScopes[0] ?? [];
         $successorSql = wp_fts_foreground_bulk_total_sql($fake);
         assert_same(1, count($successorSql), 'the authoritative metadata post-hook must publish exactly one canonical successor after recovery');
-        assert_same(1, count($successorScopes), 'the metadata fallback must retain one canonical scope instead of per-post work');
+        assert_same(1, count($successorScopes), 'metadata recovery must retain one canonical scope instead of per-post work');
         assert_same($scopeJobKey, $successor['job_key'] ?? null, 'the metadata post-hook must reuse the canonical corpus identity');
         assert_same('corpus', $successor['scope_coverage'] ?? null, 'the metadata successor must retain complete-corpus authority');
         assert_same('ready', $successor['state'] ?? null, 'the committed metadata successor must be immediately claimable');
-        assert_same('post', wp_fts_foreground_bulk_static('post_meta_global_mutations')['subtitle'] ?? null, 'the fallback post-hook must retain a request-local fan-out marker');
+        assert_same('post', wp_fts_foreground_bulk_static('post_meta_global_mutations')['subtitle'] ?? null, 'the recovered post-hook must retain a request-local fan-out marker');
         assert_true(strlen($successorSql[0] ?? '') < 1048576, 'the metadata successor statement must stay below one MiB');
 
         $queriesAfterSuccessor = count($fake->queries);
@@ -2299,25 +2346,4 @@ test_case('foreground bulk mutation repeated global metadata delete re-fences af
         WP_FTS_Plugin::reset_request_caches();
         $wpdb = $oldWpdb;
     }
-});
-
-test_case('foreground bulk mutation reset removes legacy handoff tombstones but retains the epoch', function (): void {
-    $fake = new WP_FTS_Test_WPDB();
-    $fake->queue['legacy-random-handoff'] = [
-        'job_key' => 'legacy-random-handoff',
-        'kind' => 'meta',
-        'post_id' => 0,
-        'state' => 'handoff',
-    ];
-    $fake->queue[WP_FTS_Index_Queue::SEARCH_EPOCH_JOB_KEY] = [
-        'job_key' => WP_FTS_Index_Queue::SEARCH_EPOCH_JOB_KEY,
-        'kind' => 'meta',
-        'post_id' => 0,
-        'state' => 'meta',
-    ];
-    $queue = new WP_FTS_Index_Queue($fake);
-    $queue->clear();
-
-    assert_true(!isset($fake->queue['legacy-random-handoff']), 'reset must clean tombstones left by the former random handoff encoding');
-    assert_true(isset($fake->queue[WP_FTS_Index_Queue::SEARCH_EPOCH_JOB_KEY]), 'reset must retain the singleton cursor epoch');
 });

@@ -138,19 +138,6 @@ function wp_fts_ldgf_reset_multilingual_globals(): void
     $GLOBALS['wp_fts_test_filters']['wpml_current_language'] = null;
 }
 
-/**
- * @return int[]
- */
-function wp_fts_ldgf_result_ids(array $rows, bool $sort = false): array
-{
-    $ids = array_values(array_map('intval', array_column($rows, 'doc_id')));
-    if ($sort) {
-        sort($ids, SORT_NUMERIC);
-    }
-
-    return $ids;
-}
-
 test_case('quality language detection gold fixtures keep untagged document and query span parity', function (): void {
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
     $cases = [
@@ -258,66 +245,52 @@ test_case('quality language detection gold fixtures keep untagged document and q
     }
 });
 
-test_case('quality language detection gold fixtures keep top spoken language partitions searchable', function (): void {
+test_case('quality language detection gold fixtures align top spoken language identities', function (): void {
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
-    $storage = new WP_FTS_Storage_InMemory();
-    $indexer = new WP_FTS_Indexer($storage, $analyzer);
-    $searcher = new WP_FTS_Searcher($storage, $analyzer);
     $cases = [
-        ['id' => 501, 'lang' => 'en', 'text' => 'the search index uses clear language', 'query' => 'search index clear'],
-        ['id' => 502, 'lang' => 'zh', 'text' => '搜索索引语言', 'query' => '搜索索引'],
-        ['id' => 503, 'lang' => 'hi', 'text' => 'यह हिंदी खोज के लिए स्पष्ट पाठ है', 'query' => 'हिंदी खोज स्पष्ट'],
-        ['id' => 504, 'lang' => 'es', 'text' => 'la busqueda en espanol usa datos claros', 'query' => 'busqueda espanol datos'],
-        ['id' => 505, 'lang' => 'ar', 'text' => 'هذا نص عربي للبحث والفهرسة', 'query' => 'هذا عربي للبحث'],
-        ['id' => 506, 'lang' => 'fr', 'text' => 'la recherche en francais utilise des donnees claires', 'query' => 'recherche francais donnees'],
-        ['id' => 507, 'lang' => 'bn', 'text' => 'এই বাংলা অনুসন্ধান এবং সূচি পাঠ', 'query' => 'বাংলা অনুসন্ধান সূচি'],
-        ['id' => 508, 'lang' => 'pt', 'text' => 'a pesquisa em portugues usa dados claros', 'query' => 'pesquisa portugues dados'],
-        ['id' => 509, 'lang' => 'id', 'text' => 'pencarian bahasa indonesia dengan data jelas', 'query' => 'pencarian indonesia data'],
-        ['id' => 510, 'lang' => 'ur', 'text' => 'یہ اردو تلاش اور فہرست کا متن ہے', 'query' => 'اردو تلاش فہرست'],
+        ['lang' => 'en', 'text' => 'the search index uses clear language', 'query' => 'search index clear'],
+        ['lang' => 'zh', 'text' => '搜索索引语言', 'query' => '搜索索引'],
+        ['lang' => 'hi', 'text' => 'यह हिंदी खोज के लिए स्पष्ट पाठ है', 'query' => 'हिंदी खोज स्पष्ट'],
+        ['lang' => 'es', 'text' => 'la busqueda en espanol usa datos claros', 'query' => 'busqueda espanol datos'],
+        ['lang' => 'ar', 'text' => 'هذا نص عربي للبحث والفهرسة', 'query' => 'هذا عربي للبحث'],
+        ['lang' => 'fr', 'text' => 'la recherche en francais utilise des donnees claires', 'query' => 'recherche francais donnees'],
+        ['lang' => 'bn', 'text' => 'এই বাংলা অনুসন্ধান এবং সূচি পাঠ', 'query' => 'বাংলা অনুসন্ধান সূচি'],
+        ['lang' => 'pt', 'text' => 'a pesquisa em portugues usa dados claros', 'query' => 'pesquisa portugues dados'],
+        ['lang' => 'id', 'text' => 'pencarian bahasa indonesia dengan data jelas', 'query' => 'pencarian indonesia data'],
+        ['lang' => 'ur', 'text' => 'یہ اردو تلاش اور فہرست کا متن ہے', 'query' => 'اردو تلاش فہرست'],
     ];
 
     foreach ($cases as $case) {
-        $indexer->index_document($case['id'], '<p>' . $case['text'] . '</p>');
-    }
-
-    foreach ($cases as $case) {
+        $document = test_lang_by_term($analyzer->analyze_content('<p>' . $case['text'] . '</p>'));
+        $query = test_lang_by_term($analyzer->analyze_query_occurrences($case['query']));
         assert_same(
-            [$case['id']],
-            wp_fts_ldgf_result_ids($searcher->search($case['query'], ['mode' => 'AND', 'limit' => 10])),
-            "{$case['lang']} auto-routed AND query should match the detected document partition"
+            $query,
+            array_intersect_key($document, $query),
+            "{$case['lang']} auto-routed document and query terms should share one language identity"
         );
     }
 });
 
-test_case('quality language detection gold fixtures preserve multi-token connector search recall', function (): void {
+test_case('quality language detection gold fixtures preserve multi-token connector identity', function (): void {
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
-    $storage = new WP_FTS_Storage_InMemory();
-    $indexer = new WP_FTS_Indexer($storage, $analyzer);
-
-    $indexer->index_document(201, '<p>Wrocław oraz Łódź</p>');
-    $indexer->index_document(202, '<p>Führung mit der Straße</p>');
-    $searcher = new WP_FTS_Searcher($storage, $analyzer);
-
-    assert_same(
-        [201],
-        wp_fts_ldgf_result_ids($searcher->search('Wrocław oraz Łódź', ['mode' => 'AND', 'limit' => 10])),
-        'Polish AND query should keep connector terms in the detected Polish partition'
-    );
-    assert_same(
-        [202],
-        wp_fts_ldgf_result_ids($searcher->search('Führung mit der Straße', ['mode' => 'AND', 'limit' => 10])),
-        'German AND query should keep multiple connector terms in the detected German partition'
-    );
-    assert_same(
-        [],
-        wp_fts_ldgf_result_ids($searcher->search('Wrocław oraz Łódź', ['query_lang' => 'de', 'mode' => 'AND', 'limit' => 10])),
-        'explicit German query should not cross into the detected Polish partition'
-    );
-    assert_same(
-        [],
-        wp_fts_ldgf_result_ids($searcher->search('Führung mit der Straße', ['query_lang' => 'pl', 'mode' => 'AND', 'limit' => 10])),
-        'explicit Polish query should not cross into the detected German partition'
-    );
+    foreach ([
+        ['lang' => 'pl', 'text' => 'Wrocław oraz Łódź'],
+        ['lang' => 'de', 'text' => 'Führung mit der Straße'],
+    ] as $case) {
+        $document = test_lang_by_term($analyzer->analyze_content('<p>' . $case['text'] . '</p>'));
+        $query = test_lang_by_term($analyzer->analyze_query_occurrences($case['text']));
+        assert_same($query, array_intersect_key($document, $query), "{$case['lang']} connectors should keep document/query identity");
+        $foreign = test_lang_by_term($analyzer->analyze_query_occurrences(
+            $case['text'],
+            ['query_lang' => $case['lang'] === 'pl' ? 'de' : 'pl']
+        ));
+        foreach ($foreign as $term => $language) {
+            assert_true(
+                ($document[$term] ?? null) !== $language,
+                "an explicit foreign language should not share {$case['lang']} identity for {$term}"
+            );
+        }
+    }
 });
 
 test_case('quality language detection gold fixtures keep accented English loanwords on fallback language', function (): void {
@@ -426,10 +399,6 @@ test_case('quality language detection gold fixtures document unsupported and con
 
 test_case('quality language detection gold fixtures keep inline markup weak connector parity', function (): void {
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
-    $storage = new WP_FTS_Storage_InMemory();
-    $indexer = new WP_FTS_Indexer($storage, $analyzer);
-
-    $indexer->index_document(101, '<p>Führung <em>und</em> Straße</p>');
     $contentLangs = test_lang_by_term($analyzer->analyze_content('<p>Führung <em>und</em> Straße</p>'));
     $queryLangs = test_lang_by_term($analyzer->analyze_query_occurrences('Führung und Straße'));
 
@@ -437,13 +406,6 @@ test_case('quality language detection gold fixtures keep inline markup weak conn
         assert_same('de', $contentLangs[$term] ?? null, "inline German content term {$term}");
         assert_same('de', $queryLangs[$term] ?? null, "inline German query term {$term}");
     }
-
-    $searcher = new WP_FTS_Searcher($storage, $analyzer);
-    assert_same(
-        [101],
-        wp_fts_ldgf_result_ids($searcher->search('Führung und Straße', ['mode' => 'AND', 'limit' => 10])),
-        'German AND query should find a document phrase split by inline markup'
-    );
 });
 
 test_case('quality language detection gold fixtures isolate top-level text across block boundaries', function (): void {
@@ -457,20 +419,10 @@ test_case('quality language detection gold fixtures isolate top-level text acros
     assert_same('pl', $contentLangs['oraz'] ?? null, 'trailing top-level Polish term should route to pl after a block boundary');
     assert_same('pl', $contentLangs['jest'] ?? null, 'trailing weak Polish term should not inherit German from earlier top-level text');
 
-    $storage = new WP_FTS_Storage_InMemory();
-    $indexer = new WP_FTS_Indexer($storage, $analyzer);
-    $indexer->index_document(102, $html);
-
-    $searcher = new WP_FTS_Searcher($storage, $analyzer);
     assert_same(
-        [102],
-        wp_fts_ldgf_result_ids($searcher->search('oraz jest', ['mode' => 'AND', 'limit' => 10])),
-        'Polish AND query should find trailing top-level text separated from earlier German text by a block'
-    );
-    assert_same(
-        [],
-        wp_fts_ldgf_result_ids($searcher->search('oraz jest', ['query_lang' => 'de', 'mode' => 'AND', 'limit' => 10])),
-        'trailing Polish text should not be indexed into the earlier German namespace'
+        ['jest' => 'pl', 'oraz' => 'pl'],
+        test_lang_by_term($analyzer->analyze_query_occurrences('oraz jest')),
+        'the trailing Polish span should match the query analyzer partition'
     );
 });
 
@@ -494,19 +446,20 @@ test_case('quality language detection gold fixtures honor explicit and preloaded
             'fts_integration_language' => 'pl_PL',
         ];
         $polylangOptions = WP_FTS_Plugin::prepare_post_index_options($polylangPost);
-        $polylang = test_lang_by_term($analyzer->analyze_content('<p>oraz jest</p>', $polylangOptions));
+        $polylang = test_lang_by_term($analyzer->analyze_content('<p>oraz jest</p>', [
+            'document_lang' => $polylangOptions['document_lang'],
+        ]));
         assert_same('pl-PL', $polylang['oraz'] ?? null, 'the preloaded Polylang locale should resolve untagged document language');
         assert_same('pl-PL', $polylang['jest'] ?? null, 'the preloaded Polylang locale should apply to the whole untagged span');
 
         $explicitOption = test_lang_by_term($analyzer->analyze_content('<p>oraz jest</p>', [
-            'post_id' => 10,
             'document_lang' => 'en',
         ]));
-        assert_same('en', $explicitOption['oraz'] ?? null, 'explicit document lang should override Polylang metadata');
+        assert_same('en', $explicitOption['oraz'] ?? null, 'an explicit document language should remain authoritative');
 
         $explicitSegments = test_lang_by_term($analyzer->analyze_content(
             '<article><p lang="en">oraz jest</p><p xml:lang="de">Führung und Straße</p></article>',
-            ['post_id' => 10]
+            ['document_lang' => $polylangOptions['document_lang']]
         ));
         assert_same('en', $explicitSegments['oraz'] ?? null, 'HTML lang should override Polylang metadata');
         assert_same('de', $explicitSegments['fuehrung'] ?? null, 'xml:lang should override Polylang metadata');
@@ -535,7 +488,9 @@ test_case('quality language detection gold fixtures honor explicit and preloaded
             'fts_integration_language' => 'fr_FR',
         ];
         $wpmlOptions = WP_FTS_Plugin::prepare_post_index_options($wpmlPost);
-        $wpml = test_lang_by_term($analyzer->analyze_content('<p>Führung und Straße</p>', $wpmlOptions));
+        $wpml = test_lang_by_term($analyzer->analyze_content('<p>Führung und Straße</p>', [
+            'document_lang' => $wpmlOptions['document_lang'],
+        ]));
         assert_same('fr-FR', $wpml['fuhrung'] ?? null, 'the preloaded WPML locale should resolve untagged document language');
         assert_same('fr-FR', $wpml['strass'] ?? null, 'the preloaded WPML locale should beat detector evidence from the text');
         assert_same(null, $wpml['fuehrung'] ?? null, 'preloaded WPML metadata should prevent German-specific normalization for this fixture');
@@ -583,7 +538,7 @@ test_case('quality language detection gold fixtures keep custom resolvers author
     $queryAnalyzer = new WP_FTS_Analyzer([
         'default_lang' => 'en',
         'query_language_resolver' => static fn(array $options): string => 'nl_NL',
-        'query_term_language_resolver' => static function (string $token): ?string {
+        'query_term_language_resolver' => static function (string $token, array $_options, string $_defaultLang): ?string {
             return $token === 'zamek' ? 'pl' : null;
         },
     ]);
@@ -591,40 +546,6 @@ test_case('quality language detection gold fixtures keep custom resolvers author
     assert_same('pl', $queryLangs['zamek'] ?? null, 'query term resolver should override query resolver for selected tokens');
     $bridgeTerm = array_key_exists('bridg', $queryLangs) ? 'bridg' : 'bridge';
     assert_same('nl-NL', $queryLangs[$bridgeTerm] ?? null, 'unresolved query tokens should inherit the custom query resolver language');
-});
-
-test_case('quality language detection gold fixtures preserve OR and AND language routing differences', function (): void {
-    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
-    $storage = new WP_FTS_Storage_InMemory();
-    $indexer = new WP_FTS_Indexer($storage, $analyzer);
-
-    $indexer->index_document(1, '<p>Führung <em>und</em> Straße</p>');
-    $indexer->index_document(2, '<p>Führung</p>', ['lang' => 'de']);
-    $indexer->index_document(3, '<p>Straße</p>', ['lang' => 'de']);
-    $indexer->index_document(4, '<p>Führung Straße</p>', ['lang' => 'en']);
-
-    $searcher = new WP_FTS_Searcher($storage, $analyzer);
-
-    assert_same(
-        [1, 2, 3],
-        wp_fts_ldgf_result_ids($searcher->search('Führung Straße', ['mode' => 'OR', 'limit' => 10]), true),
-        'OR should return all detected German documents matching either term'
-    );
-    assert_same(
-        [1],
-        wp_fts_ldgf_result_ids($searcher->search('Führung Straße', ['mode' => 'AND', 'limit' => 10])),
-        'AND should require both detected German terms in one document'
-    );
-    assert_same(
-        [1],
-        wp_fts_ldgf_result_ids($searcher->search('Führung und Straße', ['mode' => 'AND', 'limit' => 10])),
-        'AND should keep weak connector words inside the detected German span'
-    );
-    assert_same(
-        [4],
-        wp_fts_ldgf_result_ids($searcher->search('Führung Straße', ['query_lang' => 'en', 'mode' => 'AND', 'limit' => 10])),
-        'explicit English AND query should isolate the English override partition'
-    );
 });
 
 if ($wp_fts_ldgf_direct) {

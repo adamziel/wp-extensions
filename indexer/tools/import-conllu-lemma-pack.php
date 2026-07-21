@@ -9,17 +9,26 @@ require_once dirname(__DIR__) . '/tools/import-lemma-tsv-pack.php';
  */
 final class WP_FTS_ConlluLemmaPackImporter
 {
+    private const SOURCE_OPTION_KEYS = [
+        'source_repo_url',
+        'source_commit',
+        'source_file_path',
+    ];
+
     /**
      * @param array<string,mixed> $options
      * @return array<string,mixed>
      */
     public function import(array $options): array
     {
+        $this->assert_option_keys($options);
         $sourcePath = $this->required_source_path($options, 'source');
         $outputPath = $this->required_output_path($options);
         WP_FTS_LemmaSourceImportLimits::assert_source_output_separate($sourcePath, $outputPath, 'CoNLL-U');
         $language = $this->required_language($options, 'language');
-        $tmpDir = $this->prepare_temp_directory($options['tmp_dir'] ?? null);
+        $tmpDir = $this->prepare_temp_directory(
+            array_key_exists('tmp_dir', $options) ? $this->required_string($options, 'tmp_dir') : null
+        );
         $packDir = null;
         $importComplete = false;
         try {
@@ -30,7 +39,10 @@ final class WP_FTS_ConlluLemmaPackImporter
                 throw new RuntimeException('CoNLL-U source did not yield any normalized runtime rows.');
             }
 
-            $tsvOptions = $options;
+            $tsvOptions = array_intersect_key(
+                $options,
+                array_fill_keys(WP_FTS_LemmaTsvPackImporter::IMPORT_OPTION_KEYS, true)
+            );
             $tsvOptions['source'] = $normalizedTsv;
             $tsvOptions['language'] = $language;
             $summary = (new WP_FTS_LemmaTsvPackImporter())->import($tsvOptions);
@@ -83,9 +95,7 @@ final class WP_FTS_ConlluLemmaPackImporter
     /** @param array<string,mixed> $options */
     private function required_output_path(array $options): string
     {
-        return isset($options['out'])
-            ? $this->required_string($options, 'out')
-            : $this->required_string($options, 'output_dir');
+        return $this->required_string($options, 'out');
     }
 
     /**
@@ -93,11 +103,30 @@ final class WP_FTS_ConlluLemmaPackImporter
      */
     private function required_string(array $options, string $key): string
     {
-        if (!isset($options[$key]) || !is_scalar($options[$key]) || trim((string) $options[$key]) === '') {
+        if (!array_key_exists($key, $options) || !is_string($options[$key]) || trim($options[$key]) === '') {
             throw new RuntimeException("Missing required option --" . str_replace('_', '-', $key) . '.');
         }
 
-        return (string) $options[$key];
+        return $options[$key];
+    }
+
+    /** Reject inputs outside the normalized TSV contract and CoNLL-U source metadata. */
+    private function assert_option_keys(array $options): void
+    {
+        $allowed = array_fill_keys([
+            ...WP_FTS_LemmaTsvPackImporter::IMPORT_OPTION_KEYS,
+            ...self::SOURCE_OPTION_KEYS,
+        ], true);
+        foreach (array_keys($options) as $key) {
+            if (!is_string($key) || !isset($allowed[$key])) {
+                throw new RuntimeException('CoNLL-U importer received an unsupported option.');
+            }
+        }
+        foreach (self::SOURCE_OPTION_KEYS as $key) {
+            if (array_key_exists($key, $options)) {
+                $this->required_string($options, $key);
+            }
+        }
     }
 
     /**
@@ -363,13 +392,13 @@ final class WP_FTS_ConlluLemmaPackImporter
         $manifest = $this->read_json_file($manifestPath);
         $sourceUrl = $this->required_string($options, 'source_url');
         $sourceName = $this->required_string($options, 'source_name');
-        $sourceVersion = (string) ($options['source_version'] ?? $manifest['version'] ?? 'unknown');
+        $sourceVersion = $options['source_version'] ?? $manifest['version'] ?? 'unknown';
         $license = $this->required_string($options, 'license');
-        $licenseUrl = is_scalar($options['license_url'] ?? null) ? trim((string) $options['license_url']) : '';
+        $licenseUrl = $options['license_url'] ?? '';
         $attribution = $this->required_string($options, 'attribution');
-        $repoUrl = is_scalar($options['source_repo_url'] ?? null) ? trim((string) $options['source_repo_url']) : '';
-        $sourceCommit = is_scalar($options['source_commit'] ?? null) ? trim((string) $options['source_commit']) : '';
-        $declaredSourceFile = is_scalar($options['source_file_path'] ?? null) ? trim((string) $options['source_file_path']) : '';
+        $repoUrl = $options['source_repo_url'] ?? '';
+        $sourceCommit = $options['source_commit'] ?? '';
+        $declaredSourceFile = $options['source_file_path'] ?? '';
         $publishedStats = $stats;
         $delegatedStats = $manifest['source']['parse_stats'] ?? [];
         if (is_array($delegatedStats)) {
@@ -411,16 +440,13 @@ final class WP_FTS_ConlluLemmaPackImporter
             ],
             'parse_stats' => $publishedStats,
         ], static fn(mixed $value): bool => $value !== null);
-        $runtimeCompression = $this->runtime_compression_from_manifest($manifest);
         $manifest['provenance']['importer'] = 'indexer/tools/import-conllu-lemma-pack.php';
         $manifest['provenance']['importer_command'] = $this->canonical_conllu_importer_command(
             $language,
             (string) $manifest['pack_id'],
             (string) $manifest['version'],
             $sourceUrl,
-            $license,
-            (bool) $manifest['fixture_only'],
-            $runtimeCompression
+            $license
         );
         $manifest['provenance']['source_importer'] = 'indexer/tools/import-conllu-lemma-pack.php';
         $manifest['provenance']['delegated_runtime_importer'] = 'indexer/tools/import-lemma-tsv-pack.php';
@@ -454,8 +480,7 @@ final class WP_FTS_ConlluLemmaPackImporter
             $summary,
             $license,
             $licenseUrl,
-            $attribution,
-            $runtimeCompression
+            $attribution
         ));
 
         $summary['manifest_sha256'] = $manifestSha;
@@ -512,27 +537,13 @@ final class WP_FTS_ConlluLemmaPackImporter
         }
     }
 
-    /** @param array<string,mixed> $manifest */
-    private function runtime_compression_from_manifest(array $manifest): ?string
-    {
-        foreach (($manifest['runtime']['files'] ?? []) as $file) {
-            if (is_array($file) && ($file['compression'] ?? null) === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
-                return WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP;
-            }
-        }
-
-        return null;
-    }
-
     /** Record a reproducible command without embedding machine-local paths. */
     private function canonical_conllu_importer_command(
         string $language,
         string $packId,
         string $version,
         string $sourceUrl,
-        string $license,
-        bool $fixtureOnly,
-        ?string $runtimeCompression
+        string $license
     ): string {
         $parts = [
             'php indexer/tools/import-conllu-lemma-pack.php',
@@ -546,13 +557,6 @@ final class WP_FTS_ConlluLemmaPackImporter
             '--license=' . $license,
             '--attribution=<required-attribution>',
         ];
-        if ($fixtureOnly) {
-            $parts[] = '--fixture-only=true';
-        }
-        if ($runtimeCompression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
-            $parts[] = '--runtime-compression=gzip';
-        }
-
         return implode(' ', $parts);
     }
 
@@ -607,8 +611,7 @@ final class WP_FTS_ConlluLemmaPackImporter
         array $summary,
         string $license,
         string $licenseUrl,
-        string $attribution,
-        ?string $runtimeCompression
+        string $attribution
     ): array {
         $runtime = [
             'manifest_sha256' => $manifestSha,
@@ -619,14 +622,12 @@ final class WP_FTS_ConlluLemmaPackImporter
             'digest_sha256' => $manifest['runtime']['total_sha256'],
             'contains_third_party_data' => true,
             'committed' => true,
-            'compression' => $runtimeCompression ?? 'none',
+            'compression' => WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+            'lookup_index_format' => $summary['lookup']['format'],
+            'lookup_index_file_count' => (int) $summary['lookup']['files'],
+            'lookup_index_block_count' => (int) ($summary['lookup']['blocks'] ?? 0),
+            'lookup_index_byte_count' => (int) ($summary['lookup']['bytes'] ?? 0),
         ];
-        if ((int) ($summary['lookup']['files'] ?? 0) > 0) {
-            $runtime['lookup_index_format'] = $summary['lookup']['format'] ?? null;
-            $runtime['lookup_index_file_count'] = (int) $summary['lookup']['files'];
-            $runtime['lookup_index_block_count'] = (int) ($summary['lookup']['blocks'] ?? 0);
-            $runtime['lookup_index_byte_count'] = (int) ($summary['lookup']['bytes'] ?? 0);
-        }
 
         return [
             'schema_version' => 'wp-fts-conllu-lemma-pack-source-lock/v1',
@@ -634,9 +635,8 @@ final class WP_FTS_ConlluLemmaPackImporter
                 'id' => $manifest['pack_id'],
                 'language' => $manifest['language'],
                 'kind' => 'lemmatizer',
-                'status' => ((bool) $manifest['fixture_only']) ? 'fixture' : 'production_candidate',
+                'status' => 'production_candidate',
                 'runtime_pack_committed' => true,
-                'default_enabled' => false,
             ],
             'source' => [
                 'name' => $manifest['source']['name'],
@@ -668,8 +668,7 @@ final class WP_FTS_ConlluLemmaPackImporter
                 'unsupported_language_policy' => 'return_original_normalized_term',
             ],
             'release' => [
-                'default_enabled' => false,
-                'claim_boundary' => 'Source-backed CoNLL-U lemmatizer evidence. Generated runtime remains default-disabled.',
+                'claim_boundary' => 'Source-backed CoNLL-U lemmatizer. Generated runtime activates only through plugin configuration.',
             ],
             'attribution' => ['upstream' => $attribution],
         ];
@@ -777,11 +776,11 @@ final class WP_FTS_ConlluLemmaPackImporter
         fclose($reader['handle']);
     }
 
-    private function prepare_temp_directory(mixed $requested): string
+    private function prepare_temp_directory(?string $requested): string
     {
         $parent = sys_get_temp_dir();
-        if (is_scalar($requested) && trim((string) $requested) !== '') {
-            $parent = (string) $requested;
+        if ($requested !== null) {
+            $parent = $requested;
         }
 
         if (is_file($parent)) {

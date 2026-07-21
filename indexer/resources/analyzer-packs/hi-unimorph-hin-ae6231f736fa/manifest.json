@@ -3,8 +3,6 @@
     "pack_id": "hi-unimorph-hin-ae6231f736fa",
     "language": "hi",
     "version": "ae6231f736fa-unimorph-v1",
-    "fixture_only": false,
-    "default_enabled": false,
     "capabilities": [
         "dictionary-lemmatizer",
         "ambiguous-form-noop",
@@ -120,14 +118,12 @@
     "provenance": {
         "importer": "indexer/tools/import-unimorph-lemma-pack.php",
         "importer_commit": "recorded-in-task-result",
-        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=hi --pack-id=hi-unimorph-hin-ae6231f736fa --version=ae6231f736fa-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/hin/blob/ae6231f736fa5a08205c768ca23ff6c19e80d25e/hin --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=hi --pack-id=hi-unimorph-hin-ae6231f736fa --version=ae6231f736fa-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/hin/blob/ae6231f736fa5a08205c768ca23ff6c19e80d25e/hin --license=CC-BY-SA-3.0 --attribution=<required-attribution>",
         "no_runtime_network_access": true,
         "no_full_third_party_dictionary_dump": false,
         "full_third_party_dictionary_dump_generated": true,
-        "generated_pack_default_enabled": false,
         "rows_per_file": 100000,
         "chunk_rows": 200000,
-        "runtime_compression": "gzip",
         "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
         "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
     }

@@ -33,6 +33,7 @@ if (function_exists('register_deactivation_hook')) {
 
 WP_FTS_Plugin::register_hooks();
 
-if (defined('WP_CLI') && WP_CLI && class_exists('WP_FTS_WPCLI_Command')) {
+if (defined('WP_CLI') && WP_CLI) {
+    require_once __DIR__ . '/src/WPCLICommand.php';
     WP_FTS_WPCLI_Command::register();
 }

@@ -82,7 +82,7 @@ The contract proves these deterministic cases and the matrix output contract:
   hook is conservatively classified, with only WordPress's stock comment-state
   `the_posts` callback treated as membership neutral.
 - Valid `WP_Query` shapes with uncompiled membership predicates—including
-  zero-valued parent/menu/comment filters, password filters, legacy page-size
+  zero-valued parent/menu/comment filters, password filters, non-default page-size
   overrides, meta/tax/date/ID arrays, and custom post-type query vars—remain on
   core with no FTS statement. Quoted phrases and token-leading exclusions also
   remain core-owned; ordinary internal hyphens do not trigger that stand-down.

@@ -279,7 +279,7 @@ function wp_fts_lifecycle_contract_inspection_payload(
     ] as $option) {
         $options[$option] = [
             'exists' => $optionExists,
-            'schema_version' => $option === 'wp_fts_schema_version' && $optionExists ? 9 : 0,
+            'schema_version' => $option === 'wp_fts_schema_version' && $optionExists ? 1 : 0,
         ];
     }
     $fenceExists = in_array($phase, [
@@ -595,16 +595,16 @@ test_case('quality disposable lifecycle smoke builds bounded lifecycle WP-CLI co
                 if (str_contains($joined, "\nfts\nstatus")) {
                     return ['exit' => 0, 'stdout' => wp_fts_lifecycle_contract_json([
                         'schema_status' => 'current',
-                        'schema_version' => 9,
-                        'expected_schema_version' => 9,
+                        'schema_version' => 1,
+                        'expected_schema_version' => 1,
                         'pending_queue_count' => 0,
                     ]), 'stderr' => ''];
                 }
                 if (str_contains($joined, "\nfts\nrepair")) {
                     return ['exit' => 0, 'stdout' => wp_fts_lifecycle_contract_json([
                         'schema_status' => 'current',
-                        'schema_version' => 9,
-                        'expected_schema_version' => 9,
+                        'schema_version' => 1,
+                        'expected_schema_version' => 1,
                     ]), 'stderr' => ''];
                 }
                 if (str_contains($joined, "\nfts\nprocess-batch")) {

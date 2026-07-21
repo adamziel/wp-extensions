@@ -52,7 +52,6 @@ try {
     // rejection.
     $html = str_repeat('&#97; ', 250000);
     $indexer = new WP_FTS_Indexer(
-        new WP_FTS_Storage_InMemory(),
         new WP_FTS_Analyzer([
             'auto_detect_language' => false,
             'enable_stemming' => false,
@@ -66,7 +65,7 @@ try {
         $indexer->prepare_document_fields(
             1,
             [['name' => 'content', 'text' => '', 'html' => $html]],
-            ['metadata' => []]
+            ['document_lang' => 'en']
         );
     } catch (Throwable $caught) {
         $error = [

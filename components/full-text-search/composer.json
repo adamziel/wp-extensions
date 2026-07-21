@@ -1,6 +1,6 @@
 {
   "name": "wp-php-toolkit/full-text-search",
-  "description": "Framework-agnostic pure-PHP full-text search engine extracted from the WordPress FTS Indexer plugin.",
+  "description": "Framework-agnostic text analysis, index preparation, and relational full-text search planning.",
   "type": "library",
   "license": "GPL-2.0-or-later",
   "require": {

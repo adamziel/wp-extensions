@@ -132,7 +132,7 @@ namespace {
 
     /**
      * Read one fake-MySQL term directly from the test adapter's relational
-     * state. Production MySQL deliberately has no posting-list read API.
+     * state. Relational storage deliberately has no posting-list read API.
      *
      * @return array{df:int,postings:array<int,int>}|null
      */
@@ -184,7 +184,7 @@ namespace {
      *
      * @return array{df:int,postings:array<int,int>}|null
      */
-    function wp_fts_quality_sqlite_term_state(WP_FTS_V4_Regression_SQLite_WPDB $wpdb, string $termKey, int $rowCap = 1000): ?array
+    function wp_fts_quality_sqlite_term_state(WP_FTS_Relational_Regression_SQLite_WPDB $wpdb, string $termKey, int $rowCap = 1000): ?array
     {
         $identity = WP_FTS_TermNamespace::split_term($termKey);
         $statement = $wpdb->dbh->prepare(
@@ -217,7 +217,7 @@ namespace {
     }
 
     /** @return string[] */
-    function wp_fts_quality_sqlite_term_keys(WP_FTS_V4_Regression_SQLite_WPDB $wpdb, int $rowCap = 2000): array
+    function wp_fts_quality_sqlite_term_keys(WP_FTS_Relational_Regression_SQLite_WPDB $wpdb, int $rowCap = 2000): array
     {
         $statement = $wpdb->dbh->prepare('SELECT lang,term FROM wp_fts_terms ORDER BY lang,term LIMIT ?');
         $statement->bindValue(1, $rowCap + 1, PDO::PARAM_INT);
@@ -233,9 +233,9 @@ namespace {
         );
     }
 
-    test_case('quality mysql schema declares compact relational v4 contracts', function (): void {
+    test_case('quality relational MySQL-dialect schema declares compact contracts', function (): void {
         $wpdb = new WP_FTS_Test_WPDB();
-        $storage = new WP_FTS_Storage_Mysql($wpdb);
+        $storage = new WP_FTS_Relational_Storage($wpdb);
         $storage->create_tables();
 
         $schemaSql = implode("\n\n", $wpdb->queries);
@@ -257,8 +257,8 @@ namespace {
             'KEY post_term_impact (post_id,term_id,impact)',
             'CREATE TABLE wp_fts_documents',
             "primary_lang varbinary(32) NOT NULL DEFAULT 'und'",
-            'content_hash varbinary(64) NULL',
-            'snippet_text mediumtext NULL',
+            'content_hash varbinary(40) NOT NULL',
+            'snippet_text mediumtext NOT NULL',
             'indexed_at bigint unsigned NOT NULL DEFAULT 0',
             'PRIMARY KEY  (post_id)',
             'CREATE TABLE wp_fts_work',
@@ -281,15 +281,13 @@ namespace {
         foreach ($schemaNeedles as $needle) {
             assert_contains($needle, $schemaSql, "schema should contain {$needle}");
         }
-        assert_true(!str_contains($schemaSql, 'doc_len'), 'current schema should not retain document-length storage used only by legacy PHP BM25');
-        assert_true(!str_contains($schemaSql, 'term_hash'), 'the unique language/kind/term identity should not carry a redundant hash column or index');
 
         foreach (['postings longblob', 'FULLTEXT', 'ENGINE=MyISAM', 'utf8mb4_general_ci'] as $forbidden) {
             assert_true(!str_contains(strtoupper($schemaSql), strtoupper($forbidden)), "schema should not contain {$forbidden}");
         }
 
         $customWpdb = new WP_FTS_Test_WPDB();
-        $custom = new WP_FTS_Storage_Mysql($customWpdb, 'custom_');
+        $custom = new WP_FTS_Relational_Storage($customWpdb, 'custom_');
         $custom->create_tables();
         $customSql = implode("\n", $customWpdb->queries);
         foreach (['custom_fts_terms', 'custom_fts_postings', 'custom_fts_documents', 'custom_fts_work'] as $table) {
@@ -297,26 +295,27 @@ namespace {
         }
     });
 
-    test_case('quality mysql bounded writer preserves binary namespaces without a hash identity', function (): void {
+    test_case('quality relational MySQL-dialect writer preserves binary namespaces without a hash identity', function (): void {
         $wpdb = new WP_FTS_Test_WPDB();
         $wpdb->recordReadQueries = true;
-        $storage = new WP_FTS_Storage_Mysql($wpdb);
+        $storage = new WP_FTS_Relational_Storage($wpdb);
         $fixtures = [
             ['en', 'shared', 11, 2],
             ['pl', 'shared', 12, 3],
-            ['pt_BR', 'organizar', 13, 4],
-            ['sr_Cyrl_RS', 'grad', 14, 1],
-            ['zh_Hant', 'search', 15, 5],
-            ['es_419', 'color', 16, 2],
+            ['pt-BR', 'organizar', 13, 4],
+            ['sr-Cyrl-RS', 'grad', 14, 1],
+            ['zh-Hant', 'search', 15, 5],
+            ['es-419', 'color', 16, 2],
             ['de-DE', 'strasse', 17, 7],
-            ['tr_TR', 'istanbul', 18, 2],
+            ['tr-TR', 'istanbul', 18, 2],
         ];
         $documents = [];
         foreach ($fixtures as [$language, $term, $postId, $frequency]) {
             $documents[] = [
                 'doc_id' => $postId,
                 'primary_lang' => $language,
-                'content_hash' => hash('sha256', $language . ':' . $postId),
+                'content_hash' => sha1($language . ':' . $postId),
+                'snippet_text' => '',
                 'term_frequencies' => [WP_FTS_TermNamespace::namespace_term($language, $term) => $frequency],
                 'surface_frequencies' => [],
             ];
@@ -333,7 +332,6 @@ namespace {
         assert_same(1, count($termUpserts), 'the bounded identities should share one dictionary VALUES write');
         assert_contains('(lang,kind,term,doc_freq)', $termUpserts[0], 'dictionary rows should use the unique composite identity directly');
         assert_contains('doc_freq = doc_freq + VALUES(doc_freq)', $termUpserts[0], 'dictionary writes should merge only bounded document-frequency deltas');
-        assert_true(!str_contains($termUpserts[0], 'term_hash'), 'dictionary SQL must not compute, bind, or persist a redundant term hash');
 
         foreach ($fixtures as [$language, $term, $postId, $frequency]) {
             $key = WP_FTS_TermNamespace::namespace_term($language, $term);
@@ -356,6 +354,8 @@ namespace {
         $storage->replace_prepared_documents([[
             'doc_id' => 99,
             'primary_lang' => 'en',
+            'content_hash' => sha1('99'),
+            'snippet_text' => '',
             'term_frequencies' => [$maxKey => 1],
             'surface_frequencies' => [],
         ]]);
@@ -367,6 +367,8 @@ namespace {
             $storage->replace_prepared_documents([[
                 'doc_id' => 100,
                 'primary_lang' => 'en',
+                'content_hash' => sha1('100'),
+                'snippet_text' => '',
                 'term_frequencies' => [WP_FTS_TermNamespace::namespace_term('en', str_repeat('x', 256)) => 1],
                 'surface_frequencies' => [],
             ]]);
@@ -378,9 +380,9 @@ namespace {
         assert_same($queriesBefore, count($wpdb->queries), 'an over-width identity must reject before SQL');
     });
 
-    test_case('quality mysql bounded replacement retains shared rows and exact document frequencies', function (): void {
+    test_case('quality relational MySQL-dialect replacement retains shared rows and exact document frequencies', function (): void {
         $wpdb = new WP_FTS_Test_WPDB();
-        $storage = new WP_FTS_Storage_Mysql($wpdb);
+        $storage = new WP_FTS_Relational_Storage($wpdb);
         $shared = WP_FTS_TermNamespace::namespace_term('en', 'shared');
         $unique = WP_FTS_TermNamespace::namespace_term('en', 'unique');
 
@@ -388,12 +390,16 @@ namespace {
             [
                 'doc_id' => 1001,
                 'primary_lang' => 'en',
+                'content_hash' => sha1('1001-shared'),
+                'snippet_text' => '',
                 'term_frequencies' => [$shared => 2],
                 'surface_frequencies' => [],
             ],
             [
                 'doc_id' => 1002,
                 'primary_lang' => 'en',
+                'content_hash' => sha1('1002-shared'),
+                'snippet_text' => '',
                 'term_frequencies' => [$shared => 3],
                 'surface_frequencies' => [],
             ],
@@ -407,6 +413,8 @@ namespace {
         $storage->replace_prepared_documents([[
             'doc_id' => 1001,
             'primary_lang' => 'en',
+            'content_hash' => sha1('1001-unique'),
+            'snippet_text' => '',
             'term_frequencies' => [$unique => 4],
             'surface_frequencies' => [],
         ]]);
@@ -418,19 +426,20 @@ namespace {
             static fn(mixed $query): string => is_array($query) ? (string) ($query[0] ?? '') : (string) $query,
             $wpdb->queries
         ));
-        assert_true(!str_contains($allSql, 'term_hash'), 'bounded replacement must remain hash-free in every SQL path');
         assert_true(!str_contains($allSql, 'postings longblob'), 'posting rows must never collapse back into a PHP blob write');
     });
 
-    test_case_with_pdo_sqlite_fixture('quality mysql SQLite fixture preserves typed surface rows without legacy collections', function (): void {
-        $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
-        wp_fts_v4_regression_create_schema($wpdb);
-        $storage = new WP_FTS_Storage_Mysql($wpdb);
+    test_case_with_pdo_sqlite_fixture('quality relational SQLite fixture preserves typed surface rows', function (): void {
+        $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
+        wp_fts_relational_regression_create_schema($wpdb);
+        $storage = new WP_FTS_Relational_Storage($wpdb);
         $lexical = WP_FTS_TermNamespace::namespace_term('pl', 'wroclaw');
         $surface = WP_FTS_TermNamespace::namespace_term('pl', 'wrocław');
         $storage->replace_prepared_documents([[
             'doc_id' => 401,
             'primary_lang' => 'pl',
+            'content_hash' => sha1('401'),
+            'snippet_text' => '',
             'term_frequencies' => [$lexical => 2],
             'surface_frequencies' => [$surface => 2],
         ]]);
@@ -445,66 +454,68 @@ namespace {
 
         $queriesBefore = count($wpdb->queries);
         foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'get_terms', 'get_postings', 'all_terms', 'all_doc_ids'] as $method) {
-            assert_true(!method_exists($storage, $method), "production storage should not expose {$method}");
+            assert_true(!method_exists($storage, $method), "relational storage should not expose {$method}");
         }
         assert_same($queriesBefore, count($wpdb->queries), 'capability inspection must not execute SQL');
     });
 
-    test_case('quality mysql documents retain bounded identity without component statistics', function (): void {
+    test_case('quality relational documents retain bounded identity without component statistics', function (): void {
         $wpdb = new WP_FTS_Test_WPDB();
-        $storage = new WP_FTS_Storage_Mysql($wpdb);
+        $storage = new WP_FTS_Relational_Storage($wpdb);
 
         $storage->replace_prepared_documents([[
             'doc_id' => 101,
             'primary_lang' => 'und',
-            'content_hash' => 'unspecified-hash',
+            'content_hash' => sha1('unspecified'),
+            'snippet_text' => '',
             'term_frequencies' => [],
             'surface_frequencies' => [],
         ]]);
         assert_same('und', $wpdb->docs[101]['primary_lang'] ?? null, 'the bounded writer should preserve the unspecified partition');
-        assert_same([101 => 'unspecified-hash'], $storage->document_hashes([101]), 'the set-oriented fingerprint reader should expose the stored hash');
+        assert_same(sha1('unspecified'), $wpdb->docs[101]['content_hash'] ?? null, 'the bounded writer should persist the exact source fingerprint');
 
         $docs = [
-            [201, 'pl_PL', ['pl_PL' => 4, 'en' => 2, 'empty' => 0], 'hash-pl', 'pl-PL', 6],
-            [202, 'pt_BR', ['pt_BR' => 3, 'es_419' => 1], 'hash-pt', 'pt-BR', 4],
-            [203, 'sr_Cyrl_RS', ['sr_Cyrl_RS' => 6], 'hash-sr', 'sr-Cyrl-RS', 6],
+            [201, 'pl-PL', sha1('pl'), 'pl-PL'],
+            [202, 'pt-BR', sha1('pt'), 'pt-BR'],
+            [203, 'sr-Cyrl-RS', sha1('sr'), 'sr-Cyrl-RS'],
         ];
 
-        foreach ($docs as [$docId, $primary, $_lengths, $hash, $expectedPrimary, $_expectedLength]) {
+        foreach ($docs as [$docId, $primary, $hash, $expectedPrimary]) {
             $storage->replace_prepared_documents([[
                 'doc_id' => $docId,
                 'primary_lang' => $primary,
                 'content_hash' => $hash,
+                'snippet_text' => '',
                 'term_frequencies' => [],
                 'surface_frequencies' => [],
             ]]);
-            assert_same($expectedPrimary, $wpdb->docs[$docId]['primary_lang'] ?? null, "{$docId} primary language should be canonicalized");
-            assert_same([$docId => $hash], $storage->document_hashes([$docId]), "{$docId} content hash should round trip");
+            assert_same($expectedPrimary, $wpdb->docs[$docId]['primary_lang'] ?? null, "{$docId} primary language should retain its canonical value");
+            assert_same($hash, $wpdb->docs[$docId]['content_hash'] ?? null, "{$docId} content hash should round trip");
         }
 
         $putSql = wp_fts_quality_last_prepared_like($wpdb, 'INSERT INTO wp_fts_documents');
         assert_contains('ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(content_hash)', $putSql['sql'], 'the bounded writer should upsert the current identity row');
         assert_true(!str_contains($putSql['sql'], 'doc_len'), 'the bounded writer should not write a document length');
         foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'get_doc_lengths', 'get_meta', 'add_meta'] as $method) {
-            assert_true(!method_exists($storage, $method), "production storage should not expose {$method}");
+            assert_true(!method_exists($storage, $method), "relational storage should not expose {$method}");
         }
 
         $storage->replace_prepared_documents([], [201]);
-        assert_same([], $storage->document_hashes([201]), 'physical deletion should not retain a tombstone document');
+        assert_true(!isset($wpdb->docs[201]), 'physical deletion should not retain a tombstone document');
         assert_same([101, 202, 203], wp_fts_quality_fake_mysql_document_ids($wpdb), 'bounded relational inspection should contain only physical document rows');
     });
 
-    test_case('quality mysql v4 optimize prunes one bounded empty-term page without rebuilding dictionary frequencies', function (): void {
+    test_case('quality relational MySQL-dialect optimize prunes one bounded empty-term page without rebuilding dictionary frequencies', function (): void {
         $wpdb = new WP_FTS_Test_WPDB();
-        $storage = new WP_FTS_Storage_Mysql($wpdb);
+        $storage = new WP_FTS_Relational_Storage($wpdb);
         $plAlpha = WP_FTS_TermNamespace::namespace_term('pl', 'alpha');
         $plBeta = WP_FTS_TermNamespace::namespace_term('pl', 'beta');
         $enAlpha = WP_FTS_TermNamespace::namespace_term('en', 'alpha');
 
         $storage->replace_prepared_documents([
-            ['doc_id' => 301, 'primary_lang' => 'pl', 'content_hash' => 'hash-301', 'term_frequencies' => [$plAlpha => 2, $plBeta => 1], 'surface_frequencies' => []],
-            ['doc_id' => 302, 'primary_lang' => 'pl', 'content_hash' => 'hash-302', 'term_frequencies' => [$plAlpha => 1, $enAlpha => 1], 'surface_frequencies' => []],
-            ['doc_id' => 303, 'primary_lang' => 'en', 'content_hash' => 'hash-303', 'term_frequencies' => [$enAlpha => 3], 'surface_frequencies' => []],
+            ['doc_id' => 301, 'primary_lang' => 'pl', 'content_hash' => sha1('301'), 'snippet_text' => '', 'term_frequencies' => [$plAlpha => 2, $plBeta => 1], 'surface_frequencies' => []],
+            ['doc_id' => 302, 'primary_lang' => 'pl', 'content_hash' => sha1('302'), 'snippet_text' => '', 'term_frequencies' => [$plAlpha => 1, $enAlpha => 1], 'surface_frequencies' => []],
+            ['doc_id' => 303, 'primary_lang' => 'en', 'content_hash' => sha1('303'), 'snippet_text' => '', 'term_frequencies' => [$enAlpha => 3], 'surface_frequencies' => []],
         ]);
         $plAlphaImpacts = wp_fts_quality_fake_mysql_term_state($wpdb, $plAlpha)['postings'] ?? [];
         $enAlphaImpacts = wp_fts_quality_fake_mysql_term_state($wpdb, $enAlpha)['postings'] ?? [];
@@ -512,7 +523,7 @@ namespace {
 
         assert_true(!isset($wpdb->ftsTerms[$plBeta]), 'bounded replacement should retire a dictionary row whose final posting was deleted');
 
-        for ($offset = 1; $offset <= WP_FTS_Storage_Mysql::MAX_EMPTY_TERM_CLEANUP + 1; $offset++) {
+        for ($offset = 1; $offset <= WP_FTS_Relational_Storage::MAX_EMPTY_TERM_CLEANUP + 1; $offset++) {
             $empty = WP_FTS_TermNamespace::namespace_term('en', 'empty-maintenance-row-' . $offset);
             $wpdb->ftsTerms[$empty] = ['doc_freq' => 0];
         }
@@ -547,14 +558,14 @@ namespace {
         assert_same($epochBefore, $wpdb->searchEpoch, 'removing rows that cannot match must not invalidate search cursors');
     });
 
-    test_case('quality mysql optimize leaves valid rows intact when empty-term cleanup fails', function (): void {
+    test_case('quality relational MySQL-dialect optimize leaves valid rows intact when empty-term cleanup fails', function (): void {
         $wpdb = new WP_FTS_Test_WPDB();
-        $storage = new WP_FTS_Storage_Mysql($wpdb);
+        $storage = new WP_FTS_Relational_Storage($wpdb);
         $term = WP_FTS_TermNamespace::namespace_term('en', 'rollback');
 
         $storage->replace_prepared_documents([
-            ['doc_id' => 311, 'primary_lang' => 'en', 'content_hash' => 'hash-311', 'term_frequencies' => [$term => 1], 'surface_frequencies' => []],
-            ['doc_id' => 312, 'primary_lang' => 'en', 'content_hash' => 'hash-312', 'term_frequencies' => [$term => 2], 'surface_frequencies' => []],
+            ['doc_id' => 311, 'primary_lang' => 'en', 'content_hash' => sha1('311'), 'snippet_text' => '', 'term_frequencies' => [$term => 1], 'surface_frequencies' => []],
+            ['doc_id' => 312, 'primary_lang' => 'en', 'content_hash' => sha1('312'), 'snippet_text' => '', 'term_frequencies' => [$term => 2], 'surface_frequencies' => []],
         ]);
         $storage->replace_prepared_documents([], [311]);
         $empty = WP_FTS_TermNamespace::namespace_term('en', 'rollback-empty');
@@ -589,10 +600,10 @@ namespace {
         assert_same($epochBefore, $wpdb->searchEpoch, 'failed optimize should not advance the visible search epoch');
     });
 
-    test_case('quality mysql mutation guard fences transaction commit after ownership loss', function (): void {
+    test_case('quality relational mutation guard fences transaction commit after ownership loss', function (): void {
         $wpdb = new WP_FTS_Test_WPDB();
         $owned = true;
-        $storage = new WP_FTS_Storage_Mysql(
+        $storage = new WP_FTS_Relational_Storage(
             $wpdb,
             null,
             static function () use (&$owned): void {
@@ -606,7 +617,8 @@ namespace {
         $storage->replace_prepared_documents([[
             'doc_id' => 321,
             'primary_lang' => 'en',
-            'content_hash' => 'hash-321',
+            'content_hash' => sha1('321'),
+            'snippet_text' => '',
             'term_frequencies' => [],
             'surface_frequencies' => [],
         ]]);
@@ -625,7 +637,7 @@ namespace {
         assert_true(!in_array('COMMIT', $wpdb->queries, true), 'fenced transaction should never issue COMMIT after ownership loss');
     });
 
-    test_case_with_pdo_sqlite_fixture('quality language inputs canonicalize consistently across mysql and cli', function (): void {
+    test_case_with_pdo_sqlite_fixture('quality trusted language canonicalization stays separate from strict CLI tags', function (): void {
         $cases = [
             [' pl_PL ', 'pl-PL'],
             ['PT_br', 'pt-BR'],
@@ -641,13 +653,14 @@ namespace {
         foreach ($cases as [$input, $expected]) {
             assert_same($expected, WP_FTS_TermNamespace::canonicalize_lang($input, 'en'), "{$input} should canonicalize through TermNamespace");
 
-            $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
-            wp_fts_v4_regression_create_schema($wpdb);
-            $storage = new WP_FTS_Storage_Mysql($wpdb);
+            $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
+            wp_fts_relational_regression_create_schema($wpdb);
+            $storage = new WP_FTS_Relational_Storage($wpdb);
             $storage->replace_prepared_documents([[
                 'doc_id' => 400,
-                'primary_lang' => $input,
-                'content_hash' => 'hash-' . md5($input),
+                'primary_lang' => WP_FTS_TermNamespace::canonicalize_lang($input, 'und'),
+                'content_hash' => sha1($input),
+                'snippet_text' => '',
                 'term_frequencies' => [],
                 'surface_frequencies' => [],
             ]]);
@@ -659,20 +672,42 @@ namespace {
             wp_fts_test_reset_wordpress_fakes();
             wp_fts_quality_reset_cli();
             wp_fts_quality_prepare_reindex();
+            $strictLanguage = null;
+            try {
+                $strictLanguage = WP_FTS_TermNamespace::parse_language_tag($input);
+            } catch (InvalidArgumentException) {
+                // Trusted storage normalization remains deliberately lenient;
+                // a supplied CLI tag must satisfy the public grammar instead.
+            }
+            if ($strictLanguage === null) {
+                $error = null;
+                try {
+                    wp_fts_quality_with_wpdb($fake, static function () use ($input): void {
+                        (new WP_FTS_WPCLI_Command())->reindex([], ['lang' => $input]);
+                    });
+                } catch (InvalidArgumentException $caught) {
+                    $error = $caught;
+                }
+                assert_true($error instanceof InvalidArgumentException, "{$input} should be rejected as a malformed supplied CLI language");
+                assert_same([], $fake->queries, "{$input} should create no durable scope after language rejection");
+                assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], "{$input} should schedule no worker after language rejection");
+                continue;
+            }
+
             $raw = wp_fts_quality_with_wpdb($fake, static function () use ($input): string {
                 return wp_fts_test_capture_cli(static function () use ($input): void {
                     (new WP_FTS_WPCLI_Command())->reindex([], [
-                        'language' => $input,
+                        'lang' => $input,
                         'limit' => '1',
                         'format' => 'json',
                     ]);
                 });
             });
 
-            $cliExpected = trim($input) === '' ? WP_FTS_TermNamespace::DEFAULT_LANG : $expected;
+            $cliExpected = $strictLanguage;
             $scope = wp_fts_quality_reindex_scope_payload($fake);
             assert_same(
-                ['lang' => $cliExpected, 'document_lang' => $cliExpected],
+                ['document_lang' => $cliExpected],
                 $scope['index_options'] ?? null,
                 "{$input} should canonicalize the durable scope language payload"
             );
@@ -683,6 +718,165 @@ namespace {
             assert_same(1, count($fake->queries), "{$input} reindex invocation should execute only its scope UPSERT");
             assert_same(1, count($GLOBALS['wp_fts_test_schedule_calls']), "{$input} reindex invocation should schedule one background worker event");
             assert_same([], WP_CLI::$successMessages, "{$input} asynchronous reindex should not emit a second success channel");
+        }
+    });
+
+    test_case('quality wp cli reindex defaults only when language and filters are absent', function (): void {
+        $fake = new WP_FTS_Test_WPDB();
+        wp_fts_test_reset_wordpress_fakes();
+        wp_fts_quality_reset_cli();
+        wp_fts_quality_prepare_reindex();
+        $raw = wp_fts_quality_with_wpdb($fake, static function (): string {
+            return wp_fts_test_capture_cli(static function (): void {
+                (new WP_FTS_WPCLI_Command())->reindex([], ['format' => 'json']);
+            });
+        });
+        $result = json_decode(trim($raw), true, flags: JSON_THROW_ON_ERROR);
+        assert_same(['draft', 'future', 'pending', 'private', 'publish'], $result['post_status'] ?? null, 'an absent reindex status filter should use the documented set');
+        assert_same(['post'], $result['post_type'] ?? null, 'an absent reindex post type should use post');
+        assert_same('', $result['language'] ?? null, 'an absent reindex language should preserve automatic language resolution');
+        $scope = wp_fts_quality_reindex_scope_payload($fake);
+        assert_same(false, array_key_exists('index_options', $scope), 'an absent reindex language should add no forced language option');
+
+        foreach (['post_status', 'post_type', 'lang'] as $key) {
+            $values = [null, false, 1, 1.0, [], new stdClass(), '', '   '];
+            if ($key !== 'lang') {
+                array_push($values, ',', 'value,', ',value', 'value,,other');
+            } else {
+                array_push($values, ' en', 'en ');
+            }
+            foreach ($values as $value) {
+                $rejectedFake = new WP_FTS_Test_WPDB();
+                wp_fts_test_reset_wordpress_fakes();
+                wp_fts_quality_reset_cli();
+                wp_fts_quality_prepare_reindex();
+                $error = null;
+                try {
+                    wp_fts_quality_with_wpdb($rejectedFake, static function () use ($key, $value): void {
+                        (new WP_FTS_WPCLI_Command())->reindex([], [$key => $value]);
+                    });
+                } catch (InvalidArgumentException $caught) {
+                    $error = $caught;
+                }
+                assert_true($error instanceof InvalidArgumentException, "a supplied malformed reindex {$key} must not use its absent-value default");
+                assert_same([], $rejectedFake->queries, "a malformed reindex {$key} should create no durable work");
+                assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], "a malformed reindex {$key} should schedule no worker");
+            }
+        }
+    });
+
+    test_case('quality plugin reindex entry points reject non-exact IDs filters and options before SQL', function (): void {
+        $assertRejected = static function (callable $operation, string $message): void {
+            $fake = new WP_FTS_Test_WPDB();
+            wp_fts_test_reset_wordpress_fakes();
+            wp_fts_quality_prepare_reindex();
+            $error = null;
+            try {
+                wp_fts_quality_with_wpdb($fake, $operation);
+            } catch (InvalidArgumentException $caught) {
+                $error = $caught;
+            }
+            assert_true($error instanceof InvalidArgumentException, $message);
+            assert_same([], $fake->queries, $message . ' before SQL');
+            assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], $message . ' before scheduling work');
+        };
+
+        foreach ([
+            [1 => 1],
+            ['post' => 1],
+            array_fill(0, WP_FTS_Index_Queue::MAX_ENQUEUE_POSTS + 1, 1),
+            [0],
+            [-1],
+            ['1'],
+            [1.0],
+            [true],
+            [false],
+            [null],
+            [[]],
+            [new stdClass()],
+        ] as $postIds) {
+            $assertRejected(
+                static fn(): int => WP_FTS_Plugin::enqueue_posts_for_reindex($postIds),
+                'direct reindex IDs should be a bounded list of positive native integers'
+            );
+        }
+
+        foreach ([
+            ['lang' => 'en'],
+            ['default_lang' => 'en'],
+            ['unknown' => true],
+            [0 => 'document_lang'],
+        ] as $indexOptions) {
+            $assertRejected(
+                static fn(): int => WP_FTS_Plugin::enqueue_posts_for_reindex([1], $indexOptions),
+                'direct reindex should accept only the document_lang option'
+            );
+        }
+        foreach ([null, false, true, 1, 1.0, [], new stdClass(), '', '   ', ' en', 'en ', str_repeat('l', 65)] as $language) {
+            $assertRejected(
+                static fn(): int => WP_FTS_Plugin::enqueue_posts_for_reindex([1], ['document_lang' => $language]),
+                'direct reindex document_lang should be an unpadded nonempty native string'
+            );
+        }
+
+        $baseScope = [
+            'post_status' => ['publish'],
+            'post_type' => ['post'],
+        ];
+        foreach ([
+            ['post_status' => ['publish']],
+            ['post_type' => ['post']],
+            $baseScope + ['lang' => 'en'],
+            $baseScope + ['unknown' => true],
+            $baseScope + [0 => 'post_status'],
+        ] as $scopeOptions) {
+            $assertRejected(
+                static fn(): string => WP_FTS_Plugin::enqueue_reindex_scope($scopeOptions),
+                'filtered reindex should require both filters and accept only its exact option keys'
+            );
+        }
+
+        foreach (['post_status', 'post_type'] as $filter) {
+            foreach ([
+                null,
+                'publish',
+                [],
+                [1 => 'publish'],
+                array_fill(0, 33, 'publish'),
+                [null],
+                [false],
+                [1],
+                [1.0],
+                [[]],
+                [new stdClass()],
+                [''],
+                ['   '],
+                [' publish'],
+                ['publish '],
+                [str_repeat('p', 65)],
+            ] as $value) {
+                $scopeOptions = $baseScope;
+                $scopeOptions[$filter] = $value;
+                $assertRejected(
+                    static fn(): string => WP_FTS_Plugin::enqueue_reindex_scope($scopeOptions),
+                    "filtered reindex {$filter} should be a bounded nonempty list of unpadded native strings"
+                );
+            }
+        }
+
+        foreach ([null, false, true, -1, 0.0, 1.0, '0', '1', [], new stdClass()] as $limit) {
+            $scopeOptions = $baseScope + ['limit' => $limit];
+            $assertRejected(
+                static fn(): string => WP_FTS_Plugin::enqueue_reindex_scope($scopeOptions),
+                'filtered reindex limit should be a nonnegative native integer'
+            );
+        }
+        foreach ([null, false, true, 1, 1.0, [], new stdClass(), '', '   ', ' en', 'en ', str_repeat('l', 65)] as $language) {
+            $scopeOptions = $baseScope + ['document_lang' => $language];
+            $assertRejected(
+                static fn(): string => WP_FTS_Plugin::enqueue_reindex_scope($scopeOptions),
+                'filtered reindex document_lang should be an unpadded nonempty native string'
+            );
         }
     });
 
@@ -703,9 +897,9 @@ namespace {
         $raw = wp_fts_quality_with_wpdb($fake, static function (): string {
             return wp_fts_test_capture_cli(static function (): void {
                 (new WP_FTS_WPCLI_Command())->reindex([], [
-                    'post-status' => 'publish, private, publish',
-                    'post-type' => 'post,page,post',
-                    'language' => 'pt_BR',
+                    'post_status' => 'publish, private, publish',
+                    'post_type' => 'post,page,post',
+                    'lang' => 'pt_BR',
                     'limit' => '100000',
                     'format' => 'json',
                 ]);
@@ -731,7 +925,7 @@ namespace {
             'post_status' => ['private', 'publish'],
             'post_type' => ['page', 'post'],
             'remaining_limit' => 100000,
-            'index_options' => ['lang' => 'pt-BR', 'document_lang' => 'pt-BR'],
+            'index_options' => ['document_lang' => 'pt-BR'],
         ], wp_fts_quality_reindex_scope_payload($fake), 'the one scope should retain every normalized selection constraint');
 
         $scopeUpserts = wp_fts_quality_prepared_like($fake, 'INSERT INTO wp_fts_work');
@@ -805,33 +999,7 @@ namespace {
         }
     });
 
-    test_case('quality wp cli reindex rejects both legacy batch-size spellings before work', function (): void {
-        foreach (['batch_size', 'batch-size'] as $name) {
-            $fake = new WP_FTS_Test_WPDB();
-            wp_fts_test_reset_wordpress_fakes();
-            wp_fts_quality_reset_cli();
-            wp_fts_quality_prepare_reindex();
-            $error = null;
-            try {
-                wp_fts_quality_with_wpdb($fake, static function () use ($name): void {
-                    (new WP_FTS_WPCLI_Command())->reindex([], [$name => '100']);
-                });
-            } catch (InvalidArgumentException $caught) {
-                $error = $caught;
-            }
-
-            assert_true($error instanceof InvalidArgumentException, "legacy --{$name} should fail rather than imply a synchronous batch size");
-            assert_contains('no longer accepts --batch_size', $error?->getMessage() ?? '', 'legacy rejection should explain the removed option');
-            assert_contains('wp fts process-batch --batch_size=...', $error?->getMessage() ?? '', 'legacy rejection should point to the one-pass worker command');
-            assert_same([], $fake->prepared, 'legacy option rejection should prepare zero SQL statements');
-            assert_same([], $fake->queries, 'legacy option rejection should execute zero SQL statements');
-            assert_same([], $fake->queue, 'legacy option rejection should create zero durable rows');
-            assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'legacy option rejection should schedule zero events');
-            assert_same([], WP_CLI::$successMessages, 'legacy option rejection should emit no success side channel');
-        }
-    });
-
-    test_case('quality wp cli reindex coalesces while an existing writer lease remains untouched', function (): void {
+        test_case('quality wp cli reindex coalesces while an existing writer lease remains untouched', function (): void {
         $fake = new WP_FTS_Test_WPDB();
         wp_fts_test_reset_wordpress_fakes();
         wp_fts_quality_reset_cli();
@@ -894,25 +1062,22 @@ namespace {
         assert_contains('WP_FTS_Plugin::search_page($query, $searchOptions)', $source, 'ordinary CLI search should use the visibility and readiness facade');
         assert_contains('WP_FTS_Plugin::search_with_explain($query, $searchOptions)', $source, 'CLI explain and diagnose should use the operator facade');
         assert_true(!str_contains($source, 'new WP_FTS_Searcher'), 'no CLI search path should instantiate a searcher directly');
-        assert_true(!str_contains($source, "'include_total'"), 'no CLI search path should request an exact interactive total');
         assert_contains('WP_FTS_Plugin::MAX_SEARCH_LIMIT', $source, 'CLI pages should clamp to the public facade limit before search work');
-        assert_contains('Full-text search no longer supports offsets', $source, 'legacy nonzero offsets should fail before search work');
-        assert_contains("\$payload['total_relation'] ?? 'unknown'", $source, 'CLI output should preserve unknown-total semantics');
     });
 
     test_case_with_pdo_sqlite_fixture('quality wp cli search forwards bounded filters and formats cursor pages', function (): void {
-        [$fake] = wp_fts_v4_regression_search_fixture();
-        wp_fts_v4_regression_add_post($fake, 901, '2026-04-01 00:00:00', 'post', 'publish');
-        wp_fts_v4_regression_add_post($fake, 902, '2026-04-02 00:00:00', 'page', 'draft');
-        wp_fts_v4_regression_add_post($fake, 903, '2026-04-03 00:00:00', 'post', 'publish');
+        [$fake] = wp_fts_relational_regression_search_fixture();
+        wp_fts_relational_regression_add_post($fake, 901, '2026-04-01 00:00:00', 'post', 'publish');
+        wp_fts_relational_regression_add_post($fake, 902, '2026-04-02 00:00:00', 'page', 'draft');
+        wp_fts_relational_regression_add_post($fake, 903, '2026-04-03 00:00:00', 'post', 'publish');
         $fake->execute("UPDATE wp_posts SET post_title='Zamek Published' WHERE ID=901", []);
         $fake->execute("UPDATE wp_posts SET post_title='Zamek Draft' WHERE ID=902", []);
         $fake->execute("UPDATE wp_posts SET post_title='Castle Published' WHERE ID=903", []);
         $fake->execute("UPDATE wp_fts_documents SET primary_lang='pl-PL', snippet_text='Zamek published snippet source' WHERE post_id=901", []);
         $fake->execute("UPDATE wp_fts_documents SET primary_lang='pl-PL', snippet_text='Zamek draft snippet source' WHERE post_id=902", []);
         $fake->execute("UPDATE wp_fts_documents SET primary_lang='en', snippet_text='Castle published snippet source' WHERE post_id=903", []);
-        wp_fts_v4_regression_add_term($fake, 'zamek', [901 => 3.0, 902 => 1.0], 'pl-PL');
-        wp_fts_v4_regression_add_term($fake, 'castl', [903 => 2.0], 'en');
+        wp_fts_relational_regression_add_term($fake, 'zamek', [901 => 3.0, 902 => 1.0], 'pl-PL');
+        wp_fts_relational_regression_add_term($fake, 'castl', [903 => 2.0], 'en');
 
         wp_fts_test_reset_wordpress_fakes();
         wp_fts_quality_reset_cli();
@@ -930,7 +1095,7 @@ namespace {
             }
             $command = new WP_FTS_WPCLI_Command();
             $command->search(['zamek'], [
-                'language' => 'pl_PL',
+                'lang' => 'pl_PL',
                 'limit' => '1',
                 'mode' => 'OR',
                 'post_status' => 'publish',
@@ -942,9 +1107,8 @@ namespace {
         $formats = $GLOBALS['wp_fts_quality_cli_format_items'] ?? [];
         assert_same(1, count($formats), 'search should format one result table');
         assert_same('table', $formats[0]['format'], 'search should request table output');
-        assert_same(['doc_id', 'score', 'post_id', 'post_type', 'post_status', 'post_date_gmt', 'title', 'total_relation', 'has_more', 'next_cursor', 'previous_cursor', 'snippet'], $formats[0]['fields'], 'search should expose product metadata and cursor-page fields');
+        assert_same(['doc_id', 'score', 'post_id', 'post_type', 'post_status', 'post_date_gmt', 'title', 'has_more', 'next_cursor', 'previous_cursor', 'snippet'], $formats[0]['fields'], 'search should expose product metadata and cursor-page fields');
         assert_same([901], array_column($formats[0]['items'], 'doc_id'), 'search filters should keep the published Polish post');
-        assert_same('unknown', $formats[0]['items'][0]['total_relation'], 'search should not compute an exact filtered total');
         assert_same('no', $formats[0]['items'][0]['has_more'], 'a one-result filtered corpus should not expose another page');
         assert_same('Zamek Published', $formats[0]['items'][0]['title'], 'search rows should include stored title metadata');
         assert_contains('Zamek published', $formats[0]['items'][0]['snippet'], 'search rows should include snippets when requested');
@@ -977,7 +1141,7 @@ namespace {
         assert_same([], $formats[0]['items'], 'missing search terms should format an empty result set');
     });
 
-    test_case('quality wp cli publishes documented hyphenated subcommands with compatibility aliases', function (): void {
+    test_case('quality wp cli publishes documented hyphenated subcommands', function (): void {
         $subcommands = [
             'failed_items' => 'failed-items',
             'retry_failed_item' => 'retry-failed-item',
@@ -998,7 +1162,6 @@ namespace {
                 explode("\n", (string) $comment)
             );
             assert_true(in_array("@subcommand {$subcommand}", $tags, true), "{$method} should publish the documented {$subcommand} command");
-            assert_true(in_array("@alias {$method}", $tags, true), "{$subcommand} should retain the former underscore spelling as a compatibility alias");
         }
 
         $resetComment = (string) (new ReflectionMethod(WP_FTS_WPCLI_Command::class, 'reset_index'))->getDocComment();
@@ -1021,6 +1184,7 @@ namespace {
             WP_FTS_Plugin::CRON_HOOK,
             WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK,
             WP_FTS_Plugin::SCHEMA_SITE_CRON_HOOK,
+            WP_FTS_Plugin::SITE_SCHEMA_RETRY_CRON_HOOK,
             'add_meta_boxes',
             'add_post_meta',
             'add_term_relationship',

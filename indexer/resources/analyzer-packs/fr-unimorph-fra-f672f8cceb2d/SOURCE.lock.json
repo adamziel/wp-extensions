@@ -5,8 +5,7 @@
         "language": "fr",
         "kind": "lemmatizer",
         "status": "production_candidate",
-        "runtime_pack_committed": true,
-        "default_enabled": false
+        "runtime_pack_committed": true
     },
     "source": {
         "name": "UniMorph fra fr inflection table",
@@ -42,10 +41,10 @@
         "path": "indexer/tools/import-unimorph-lemma-pack.php",
         "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
         "commit": "recorded-in-task-result",
-        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=fr --pack-id=fr-unimorph-fra-f672f8cceb2d --version=f672f8cceb2d-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/fra/blob/f672f8cceb2d5f5a1e2241b5622c8845f8274635/fra --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=fr --pack-id=fr-unimorph-fra-f672f8cceb2d --version=f672f8cceb2d-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/fra/blob/f672f8cceb2d5f5a1e2241b5622c8845f8274635/fra --license=CC-BY-SA-3.0 --attribution=<required-attribution>"
     },
     "runtime": {
-        "manifest_sha256": "e00fbba0c3d3aec87b2dc488ba1fde8e5202cfe7eff64600be32ef708586068f",
+        "manifest_sha256": "46107ce8de1ff1a0a3724aa959a7a5875d969fdaf709cc8dc97491119fc0e4e8",
         "row_count": 259061,
         "file_count": 3,
         "byte_count": 647930,
@@ -63,8 +62,7 @@
         "unsupported_language_policy": "return_original_normalized_term"
     },
     "release": {
-        "default_enabled": false,
-        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+        "claim_boundary": "Source-backed UniMorph lemmatizer. Runtime pack is bundled and activates only through plugin configuration."
     },
     "attribution": {
         "upstream": "UniMorph fra contributors; source repository https://github.com/unimorph/fra"

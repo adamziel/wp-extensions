@@ -1,9 +1,28 @@
 <?php
 declare(strict_types=1);
 
+/** @return array{doc_id:int,primary_lang:string,content_hash:string,snippet_text:string,term_frequencies:array<string,int>,surface_frequencies:array<string,int>} */
+function wp_fts_writer_document(
+    int $docId,
+    string $language,
+    array $terms,
+    array $surfaces = [],
+    ?string $contentHash = null,
+    string $snippetText = ''
+): array {
+    return [
+        'doc_id' => $docId,
+        'primary_lang' => $language,
+        'content_hash' => $contentHash ?? sha1('writer-document:' . $docId),
+        'snippet_text' => $snippetText,
+        'term_frequencies' => $terms,
+        'surface_frequencies' => $surfaces,
+    ];
+}
+
 test_case('relational writer rejects one poison document before building an oversized dictionary statement', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     $terms = [];
     for ($index = 0; $index < 4097; $index++) {
         $terms[WP_FTS_TermNamespace::namespace_term('en', 'poison' . $index)] = 1;
@@ -11,12 +30,7 @@ test_case('relational writer rejects one poison document before building an over
 
     $rejection = null;
     try {
-        $storage->replace_prepared_documents([[
-            'doc_id' => 41,
-            'primary_lang' => 'en',
-            'lang_lengths' => ['en' => count($terms)],
-            'term_frequencies' => $terms,
-        ]]);
+        $storage->replace_prepared_documents([wp_fts_writer_document(41, 'en', $terms)]);
     } catch (WP_FTS_Prepared_Document_Rejected $error) {
         $rejection = $error;
     }
@@ -30,20 +44,14 @@ test_case('relational writer rejects one poison document before building an over
 test_case('relational writer exact posting boundary uses one memory-safe INSERT', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
     $wpdb->recordReadQueries = true;
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     $terms = [];
     for ($index = 0; $index < 500; $index++) {
         $terms[WP_FTS_TermNamespace::namespace_term('en', 'sharedboundary' . $index)] = 1;
     }
     $documents = [];
     for ($postId = 1; $postId <= 100; $postId++) {
-        $documents[] = [
-            'doc_id' => $postId,
-            'primary_lang' => 'en',
-            'content_hash' => hash('sha256', (string) $postId),
-            'term_frequencies' => $terms,
-            'metadata' => ['search_text' => 'bounded'],
-        ];
+        $documents[] = wp_fts_writer_document($postId, 'en', $terms, [], null, 'bounded');
     }
 
     $result = $storage->replace_prepared_documents($documents);
@@ -52,7 +60,7 @@ test_case('relational writer exact posting boundary uses one memory-safe INSERT'
         static fn(mixed $query): bool => is_string($query)
             && str_starts_with($query, 'INSERT INTO wp_fts_postings')
     ));
-    assert_same(WP_FTS_Storage_Mysql::MAX_BATCH_POSTINGS, $result['postings'], 'the exact batch boundary should retain all 50,000 postings');
+    assert_same(WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS, $result['postings'], 'the exact batch boundary should retain all 50,000 postings');
     assert_same(1, count($postingWrites), 'the largest valid batch must issue exactly one posting INSERT');
     assert_true(
         strlen($postingWrites[0]) < 4194304,
@@ -99,7 +107,7 @@ test_case('relational writer exact posting boundary uses one memory-safe INSERT'
 test_case('relational writer resolves the maximum identity set in one packet-safe read', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
     $wpdb->recordReadQueries = true;
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     $lexical = [];
     for ($index = 0; $index < WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS; $index++) {
         $surface = str_repeat("'", 249) . 'l' . str_pad((string) $index, 5, '0', STR_PAD_LEFT);
@@ -111,12 +119,9 @@ test_case('relational writer resolves the maximum identity set in one packet-saf
         $surfaces[WP_FTS_TermNamespace::namespace_term('en', $surface)] = 1;
     }
 
-    $result = $storage->replace_prepared_documents([[
-        'doc_id' => 7001,
-        'primary_lang' => 'en',
-        'term_frequencies' => $lexical,
-        'surface_frequencies' => $surfaces,
-    ]]);
+    $result = $storage->replace_prepared_documents([
+        wp_fts_writer_document(7001, 'en', $lexical, $surfaces),
+    ]);
     $dictionaryIdReads = array_values(array_filter(
         $wpdb->queries,
         static function (mixed $query): bool {
@@ -167,7 +172,7 @@ test_case('mixed scope and maximum-identity post work alternates inside the work
     $GLOBALS['wp_fts_test_posts'][2] = $scopePost;
 
     $queue = new WP_FTS_Index_Queue($fake);
-    $queue->enqueue_many([1], null, ['index_options' => ['lang' => 'en']]);
+    $queue->enqueue_many([1], null, ['index_options' => ['document_lang' => 'en']]);
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['reconciliation_scope_completed_at'] = '';
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['reconciliation_scope_completed_incarnation'] = '';
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['reconciliation_scope_completed_profile_hash'] = '';
@@ -274,8 +279,8 @@ test_case('mixed scope and maximum-identity post work alternates inside the work
 
 test_case('relational writer preflights 100 maximum-old documents as one bounded complete prefix', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
-    $wpdb->replacementFrontierPostingCounts = array_fill_keys(range(1, 100), WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS);
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $wpdb->replacementFrontierPostingCounts = array_fill_keys(range(1, 100), WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     $deletions = array_fill_keys(range(1, 100), 0);
 
     $plan = $storage->plan_prepared_replacement($deletions);
@@ -284,7 +289,7 @@ test_case('relational writer preflights 100 maximum-old documents as one bounded
     assert_same(range(7, 100), $plan->deferred_post_ids, 'the partial seventh document and the whole ascending suffix must defer');
     assert_same(50001, $plan->scanned_old_postings, 'frontier discovery should stop after exactly the limit plus one indexed rows');
     assert_same(49152, $plan->posting_mutations, 'the admitted transaction should count only six complete old posting sets');
-    assert_same(array_fill_keys(range(1, 6), WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS), $plan->old_posting_counts, 'the plan should carry only complete per-document counts into storage');
+    assert_same(array_fill_keys(range(1, 6), WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS), $plan->old_posting_counts, 'the plan should carry only complete per-document counts into storage');
     $frontierReads = array_values(array_filter(
         $wpdb->prepared,
         static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:replacement-frontier */')
@@ -322,8 +327,8 @@ test_case('relational writer preflights 100 maximum-old documents as one bounded
         assert_contains("{$targetAlias} FORCE INDEX (PRIMARY)", $deleteWrites[0]['sql'], "the {$targetAlias} delete target must use primary-key lookups");
     }
 
-    $replacementPlan = (new WP_FTS_Storage_Mysql($wpdb))->plan_prepared_replacement(
-        array_fill_keys(range(1, 100), WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS)
+    $replacementPlan = (new WP_FTS_Relational_Storage($wpdb))->plan_prepared_replacement(
+        array_fill_keys(range(1, 100), WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS)
     );
     assert_same(range(1, 3), $replacementPlan->admitted_post_ids, 'old deletions plus 8,192 new rows should admit three whole documents');
     assert_same(49152, $replacementPlan->posting_mutations, 'combined old and new rows must share the same 50,000 ceiling');
@@ -332,7 +337,7 @@ test_case('relational writer preflights 100 maximum-old documents as one bounded
 test_case('direct relational writer callers auto-measure safe batches and get a pre-transaction typed split', function (): void {
     $safeWpdb = new WP_FTS_Test_WPDB();
     $safeWpdb->replacementFrontierPostingCounts = [11 => 8192, 12 => 8192];
-    $safeStorage = new WP_FTS_Storage_Mysql($safeWpdb);
+    $safeStorage = new WP_FTS_Relational_Storage($safeWpdb);
     $safe = $safeStorage->replace_prepared_documents([], [11, 12]);
     assert_same(16384, $safe['old_postings'] ?? null, 'a direct caller should auto-measure and apply an entirely safe old-posting batch');
     assert_same(1, count(array_filter(
@@ -342,7 +347,7 @@ test_case('direct relational writer callers auto-measure safe batches and get a 
 
     $splitWpdb = new WP_FTS_Test_WPDB();
     $splitWpdb->replacementFrontierPostingCounts = array_fill_keys(range(1, 100), 8192);
-    $splitStorage = new WP_FTS_Storage_Mysql($splitWpdb);
+    $splitStorage = new WP_FTS_Relational_Storage($splitWpdb);
     $split = null;
     try {
         $splitStorage->replace_prepared_documents([], range(1, 100));
@@ -352,7 +357,7 @@ test_case('direct relational writer callers auto-measure safe batches and get a 
     assert_true($split instanceof WP_FTS_Prepared_Batch_Split_Required, 'an oversized direct replacement should retain the existing typed aggregate split API');
     assert_same(100, $split?->document_count, 'the direct split should report every requested document');
     assert_same(6, $split?->split_after_documents, 'the direct split should identify the exact complete ascending prefix');
-    assert_same(WP_FTS_Storage_Mysql::MAX_BATCH_POSTINGS + 1, $split?->posting_count, 'the direct split should report the first proven over-limit posting mutation');
+    assert_same(WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS + 1, $split?->posting_count, 'the direct split should report the first proven over-limit posting mutation');
     assert_true(!in_array('START TRANSACTION', $splitWpdb->queries, true), 'the direct split must happen before BEGIN');
     assert_same(1, count(array_filter(
         $splitWpdb->prepared,
@@ -363,7 +368,7 @@ test_case('direct relational writer callers auto-measure safe batches and get a 
 test_case('relational replacement plans are opaque exact-prefix capabilities', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
     $wpdb->replacementFrontierPostingCounts = [21 => 4096, 22 => 4096];
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     $plan = $storage->plan_prepared_replacement([21 => 0]);
     $forged = new WP_FTS_Prepared_Replacement_Plan(
         $plan->new_posting_counts,
@@ -396,7 +401,7 @@ test_case('relational replacement plans are opaque exact-prefix capabilities', f
 
     $reuseWpdb = new WP_FTS_Test_WPDB();
     $reuseWpdb->replacementFrontierPostingCounts = [31 => 4096];
-    $reuseStorage = new WP_FTS_Storage_Mysql($reuseWpdb);
+    $reuseStorage = new WP_FTS_Relational_Storage($reuseWpdb);
     $abandoned = $reuseStorage->plan_prepared_replacement([31 => 0]);
     $issuedPlansProperty = (new ReflectionClass($reuseStorage))->getProperty('issuedReplacementPlans');
     $issuedPlans = $issuedPlansProperty->getValue($reuseStorage);
@@ -424,43 +429,34 @@ test_case('relational replacement plans are opaque exact-prefix capabilities', f
     assert_true(!in_array('START TRANSACTION', $reuseWpdb->queries, true), 'a field-identical abandoned-plan forgery must reject before BEGIN');
 });
 
-test_case('prepared-document partition returns the exact normalized payload used by its replacement plan', function (): void {
+test_case('prepared-document partition preserves the exact strict payload used by its replacement plan', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     $canonicalTerm = WP_FTS_TermNamespace::namespace_term('en', 'merged');
-    $partition = $storage->partition_prepared_documents([[
-        'doc_id' => 44,
-        'primary_lang' => 'EN',
-        'metadata' => ['content_search_text' => 'The normalized snippet survives writer revalidation.'],
-        'term_frequencies' => [
-            WP_FTS_TermNamespace::namespace_term('EN', 'merged') => 2,
-            $canonicalTerm => 5,
-            WP_FTS_TermNamespace::namespace_term('en', 'zero') => 0,
-            WP_FTS_TermNamespace::namespace_term('en', 'negative') => -1,
-        ],
-    ]]);
+    $document = wp_fts_writer_document(
+        44,
+        'en',
+        [$canonicalTerm => 5],
+        [],
+        sha1('partitioned-document'),
+        'The normalized snippet survives writer revalidation.'
+    );
+    $partition = $storage->partition_prepared_documents([$document]);
 
-    assert_same([], $partition['rejections'], 'normalizable aliases and non-positive frequencies are not poison documents');
-    assert_same([
-        'post_id' => 44,
-        'primary_lang' => 'en',
-        'content_hash' => '',
-        'snippet_text' => 'The normalized snippet survives writer revalidation.',
-        'term_frequencies' => [$canonicalTerm => 5],
-        'surface_frequencies' => [],
-    ], $partition['documents'][0] ?? null, 'the partition must return canonical identities, merged frequencies, and removed non-positive rows');
+    assert_same([], $partition['rejections'], 'a strict six-field document should pass partition validation');
+    assert_same([$document], $partition['documents'], 'partitioning must preserve the exact validated writer payload');
     $plan = $storage->plan_prepared_replacement([44 => 1]);
     $result = $storage->replace_prepared_documents($partition['documents'], [], $plan);
-    assert_same(1, $result['postings'] ?? null, 'the plan count and the writer renormalization must describe the same one-row document');
+    assert_same(1, $result['postings'] ?? null, 'the plan count and writer validation must describe the same one-row document');
     assert_same(
         'The normalized snippet survives writer revalidation.',
         (string) ($wpdb->docs[44]['snippet_text'] ?? ''),
-        'the writer must not erase the partitioned snippet while revalidating the exact planned payload'
+        'writer validation must preserve the partitioned snippet'
     );
     assert_same(1, count(array_filter(
         $wpdb->prepared,
         static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:replacement-frontier */')
-    )), 'normalization before planning must retain the sole bounded frontier read');
+    )), 'validation before planning must retain the sole bounded frontier read');
 });
 
 test_case('production worker commits and acknowledges only the measured old-posting prefix', function (): void {
@@ -470,7 +466,7 @@ test_case('production worker commits and acknowledges only the measured old-post
     $fake = new WP_FTS_Test_WPDB();
     $fake->options = 'wp_options';
     $postIds = range(31001, 31100);
-    $fake->replacementFrontierPostingCounts = array_fill_keys($postIds, WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS);
+    $fake->replacementFrontierPostingCounts = array_fill_keys($postIds, WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS);
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
@@ -538,9 +534,9 @@ test_case('production worker partitions storage-invalid documents before the val
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER] =
         static function (array $options, object $post) use ($validPostId): array {
             if ((int) ($post->ID ?? 0) !== $validPostId) {
-                // The analyzer accepts a 33-byte language tag, while the
+                // The analyzer accepts a long canonical language tag, while the
                 // relational primary-language column intentionally does not.
-                $options['lang'] = str_repeat('x', 33);
+                $options['document_lang'] = 'en-abcdefgh-abcdefgh-abcdefgh-abcdefgh';
             }
 
             return $options;
@@ -599,19 +595,14 @@ test_case('production worker partitions storage-invalid documents before the val
 
 test_case('relational writer splits disjoint vocabulary at the 8192-identity transaction boundary', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     $documents = [];
     for ($postId = 1; $postId <= 6; $postId++) {
         $terms = [];
         for ($index = 0; $index < 4096; $index++) {
             $terms[WP_FTS_TermNamespace::namespace_term('en', "doc{$postId}term{$index}")] = 1;
         }
-        $documents[] = [
-            'doc_id' => $postId,
-            'primary_lang' => 'en',
-            'lang_lengths' => ['en' => count($terms)],
-            'term_frequencies' => $terms,
-        ];
+        $documents[] = wp_fts_writer_document($postId, 'en', $terms);
     }
 
     $split = null;
@@ -631,37 +622,24 @@ test_case('relational writer splits disjoint vocabulary at the 8192-identity tra
 });
 
 test_case_with_pdo_sqlite_fixture('relational writer replaces a 6000-term old union without returning it to PHP', function (): void {
-    $wpdb = new WP_FTS_V4_Regression_SQLite_WPDB();
-    wp_fts_v4_regression_create_schema($wpdb);
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
+    wp_fts_relational_regression_create_schema($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     for ($postId = 1; $postId <= 2; $postId++) {
         $terms = [];
         for ($index = 0; $index < 3000; $index++) {
             $terms[WP_FTS_TermNamespace::namespace_term('en', "old{$postId}term{$index}")] = 1;
         }
-        $storage->replace_prepared_documents([[
-            'doc_id' => $postId,
-            'primary_lang' => 'en',
-            'lang_lengths' => ['en' => count($terms)],
-            'term_frequencies' => $terms,
-        ]]);
+        $storage->replace_prepared_documents([
+            wp_fts_writer_document($postId, 'en', $terms),
+        ]);
     }
 
     $wpdb->queries = [];
     $shared = WP_FTS_TermNamespace::namespace_term('en', 'replacement');
     $result = $storage->replace_prepared_documents([
-        [
-            'doc_id' => 1,
-            'primary_lang' => 'en',
-            'lang_lengths' => ['en' => 1],
-            'term_frequencies' => [$shared => 1],
-        ],
-        [
-            'doc_id' => 2,
-            'primary_lang' => 'en',
-            'lang_lengths' => ['en' => 1],
-            'term_frequencies' => [$shared => 1],
-        ],
+        wp_fts_writer_document(1, 'en', [$shared => 1], [], sha1('replacement-1')),
+        wp_fts_writer_document(2, 'en', [$shared => 1], [], sha1('replacement-2')),
     ]);
 
     assert_same(2, $result['replaced'], 'the bounded delta writer should replace both disjoint old documents');

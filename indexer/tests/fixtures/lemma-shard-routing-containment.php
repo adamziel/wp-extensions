@@ -35,7 +35,6 @@ function wp_fts_lemma_shard_routing_main(): array
             file_put_contents($runtimePath, $encoded);
             $lookup = WP_FTS_LemmaPackLookupIndex::build(
                 $runtimePath,
-                WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
                 (string) hash_file('sha256', $runtimePath),
                 $runtimePath . '.lookup'
             );
@@ -69,7 +68,7 @@ function wp_fts_lemma_shard_routing_main(): array
             $caseStarted = microtime(true);
             $error = null;
             try {
-                (new WP_FTS_AnalyzerPackValidator())->validate_metadata($manifestPath, false);
+                (new WP_FTS_AnalyzerPackValidator())->validate_metadata($manifestPath);
             } catch (Throwable $caught) {
                 $error = $caught;
             }
@@ -96,12 +95,11 @@ function wp_fts_lemma_shard_routing_main(): array
             ];
         }
 
-        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($validManifestPath, false);
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($validManifestPath);
 
         return [
             'runtime_file_limit' => WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES,
             'runtime_files' => count($runtimeFiles),
-            'lookup_decoded_byte_limit' => WP_FTS_LemmaPackLimits::MAX_RUNTIME_LOOKUP_DECODED_BYTES,
             'validated_runtime_rows' => $validation['runtime_rows'],
             'invalid' => $invalid,
             'lookups' => $lookups,
@@ -150,18 +148,26 @@ function wp_fts_lemma_shard_routing_invalid_files(array $runtimeFiles): array
  */
 function wp_fts_lemma_shard_routing_manifest(array $runtimeFiles): array
 {
+    $totalDigest = hash_init('sha256');
+    foreach (array_keys($runtimeFiles) as $index) {
+        hash_update(
+            $totalDigest,
+            sprintf("s%04d\tlemma%04d\n", $index, $index)
+        );
+    }
+
     return [
         'schema_version' => 1,
         'pack_id' => 'en-shard-routing-containment',
         'language' => 'en',
         'version' => '1',
-        'fixture_only' => false,
-        'default_enabled' => false,
         'capabilities' => ['dictionary-lemmatizer', 'indexed-runtime-lookups'],
         'runtime' => [
             'format' => WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV,
+            'normalization' => 'WP_FTS_Normalizer en with fold_diacritics=true',
             'ambiguity_policy' => 'ambiguous_surface_noop',
             'total_rows' => count($runtimeFiles),
+            'total_sha256' => hash_final($totalDigest),
             'files' => $runtimeFiles,
         ],
         'source' => [

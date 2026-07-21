@@ -111,6 +111,12 @@ try {
         {
             return false;
         }
+
+        /** Text events expose no attributes. */
+        public function get_attribute(string $_name): ?string
+        {
+            return null;
+        }
     };
 
     $peakBefore = memory_get_peak_usage(true);

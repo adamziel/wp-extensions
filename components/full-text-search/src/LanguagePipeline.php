@@ -5,8 +5,8 @@ declare(strict_types=1);
  * Converts raw visible text into normalized, optionally stemmed index terms.
  *
  * The pipeline owns tokenization, Unicode normalization, CJK segmentation,
- * optional term namespacing, and optional stemming. Analyzer classes use it for
- * both documents and queries so both sides apply the same lexical contract.
+ * and optional stemming. Analyzer classes use it for both documents and
+ * queries so both sides apply the same lexical contract.
  */
 final class WP_FTS_LanguagePipeline
 {
@@ -14,6 +14,19 @@ final class WP_FTS_LanguagePipeline
     private const MAX_CACHED_ANALYSES = 512;
     private const MAX_CACHED_LANGUAGE_BYTES = 64;
     private const MAX_CACHED_RAW_TOKEN_BYTES = 255;
+    private const CONSTRUCTOR_OPTION_KEYS = [
+        'lemma_packs_by_lang',
+        'stemmer',
+        'stemmers_by_lang',
+        'cjk_tokenizer',
+        'segmenter_packs_by_lang',
+        'token_normalizer',
+        'chinese_script_map',
+        'enable_stemming',
+        'min_term_len',
+        'max_term_bytes',
+        'fold_diacritics',
+    ];
 
     private WP_FTS_Normalizer $normalizer;
     private WP_FTS_SnowballStemmer $snowballStemmer;
@@ -26,9 +39,8 @@ final class WP_FTS_LanguagePipeline
     private array $lemmaPacksByLanguage;
     /** @var callable|null */
     private $cjkTokenizer;
-    private bool $cjkTokenizerAcceptsProducerLimit = false;
+    private bool $cjkTokenizerIsPackRouter = false;
     private bool $enableStemming;
-    private bool $namespaceTerms;
     private int $minTermLen;
     private int $maxTermBytes;
     private string $indexSignature;
@@ -38,49 +50,38 @@ final class WP_FTS_LanguagePipeline
     /**
      * Configure the token analysis pipeline.
      *
-     * Use `normalizer`, `snowball_stemmer`, or `polish_stemmer` to inject test
-     * doubles. Use `stemmer` for a custom stemmer; callables accept
-     * `($term, $language)`. Use `stemmers_by_lang` for verified
-     * language-specific custom stemmers. `cjk_tokenizer` may return dictionary
-     * segments for one CJK run; the built-in n-gram path remains the fallback.
-     * `namespace_terms` is normally false for the high-level indexer, which
-     * namespaces after weighting.
+     * Use `stemmer` for a custom stemmer; callables accept `($term, $language)`.
+     * Use `stemmers_by_lang` for verified language-specific custom stemmers.
+     * `cjk_tokenizer` receives the run, canonical language, and output ceiling,
+     * and returns a non-empty iterable of unpadded token strings.
      *
      * @param array{
-     *   normalizer?:WP_FTS_Normalizer,
-     *   snowball_stemmer?:WP_FTS_SnowballStemmer,
-     *   baseline_stemmer?:WP_FTS_BaselineLanguageStemmer,
-     *   polish_stemmer?:WP_FTS_Stemmer,
-     *   lemma_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
+     *   lemma_packs_by_lang?:array<string,string|false>,
      *   stemmer?:WP_FTS_Stemmer|callable|null,
      *   stemmers_by_lang?:array<string,WP_FTS_Stemmer|callable|null>,
      *   cjk_tokenizer?:callable|null,
-     *   segmenter_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
+     *   segmenter_packs_by_lang?:array<string,bool>,
      *   token_normalizer?:callable|null,
-     *   chinese_script_map?:array<string,string>|array<string,array<string,string>>,
+     *   chinese_script_map?:array<string,array<string,string>>,
      *   enable_stemming?:bool,
-     *   namespace_terms?:bool,
      *   min_term_len?:int,
      *   max_term_bytes?:int,
-     *   fold_diacritics?:bool,
-     *   polish_stemming?:string
+     *   fold_diacritics?:bool
      * } $options
      */
     public function __construct(array $options = [])
     {
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'Language pipeline options');
+        self::assertConstructorOptions($options);
 
-        $this->normalizer = $options['normalizer'] ?? new WP_FTS_Normalizer([
-            'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
+        $this->normalizer = new WP_FTS_Normalizer([
+            'fold_diacritics' => $options['fold_diacritics'] ?? true,
             'token_normalizer' => $options['token_normalizer'] ?? null,
             'chinese_script_map' => $options['chinese_script_map'] ?? [],
         ]);
-        $this->snowballStemmer = $options['snowball_stemmer'] ?? new WP_FTS_SnowballStemmer();
-        $this->baselineStemmer = $options['baseline_stemmer'] ?? new WP_FTS_BaselineLanguageStemmer();
-        $configuredPolishStemmer = $options['polish_stemmer'] ?? null;
-        $this->polishStemmer = $configuredPolishStemmer instanceof WP_FTS_Stemmer
-            ? $configuredPolishStemmer
-            : $this->default_polish_stemmer($options);
+        $this->snowballStemmer = new WP_FTS_SnowballStemmer();
+        $this->baselineStemmer = new WP_FTS_BaselineLanguageStemmer();
+        $this->polishStemmer = new WP_FTS_PolishStemmer();
         $this->customStemmer = $this->normalize_custom_stemmer($options['stemmer'] ?? null);
         $this->customStemmersByLanguage = $this->normalize_custom_stemmers_by_language(
             $options['stemmers_by_lang'] ?? []
@@ -89,17 +90,14 @@ final class WP_FTS_LanguagePipeline
             $this->lemma_pack_options_by_language($options)
         );
         $tokenizer = $options['cjk_tokenizer'] ?? null;
-        $tokenizerAcceptsProducerLimit = $tokenizer instanceof WP_FTS_ChineseJiebaSegmenter;
-        if (!is_callable($tokenizer)) {
+        if ($tokenizer === null) {
             $tokenizer = $this->segmenter_pack_tokenizer_for_options($options);
-            $tokenizerAcceptsProducerLimit = is_callable($tokenizer);
+            $this->cjkTokenizerIsPackRouter = $tokenizer !== null;
         }
-        $this->cjkTokenizer = is_callable($tokenizer) ? $tokenizer : null;
-        $this->cjkTokenizerAcceptsProducerLimit = $tokenizerAcceptsProducerLimit;
-        $this->enableStemming = (bool) ($options['enable_stemming'] ?? true);
-        $this->namespaceTerms = (bool) ($options['namespace_terms'] ?? false);
-        $this->minTermLen = max(1, (int) ($options['min_term_len'] ?? 2));
-        $this->maxTermBytes = max(1, (int) ($options['max_term_bytes'] ?? 255));
+        $this->cjkTokenizer = $tokenizer;
+        $this->enableStemming = $options['enable_stemming'] ?? true;
+        $this->minTermLen = $options['min_term_len'] ?? 2;
+        $this->maxTermBytes = $options['max_term_bytes'] ?? 255;
         $this->indexSignature = $this->buildIndexSignature($options, $tokenizer);
     }
 
@@ -125,9 +123,8 @@ final class WP_FTS_LanguagePipeline
      * Analyze text and keep the language attached to every returned term.
      *
      * The language is canonicalized once per call and applied to every token.
-     * When `namespace_terms` is enabled, each `term` value is stored as
-     * `lang . "\\x1e" . term`; otherwise terms are returned without the
-     * namespace and the caller can decide when to namespace them.
+     * Terms remain unprefixed; the relational indexer owns dictionary-key
+     * namespacing after weighting.
      *
      * @param string $text Plain visible text to tokenize.
      * @param string $language Document or query language hint.
@@ -182,25 +179,54 @@ final class WP_FTS_LanguagePipeline
      */
     public function analyze_detailed_batch_stream(array $segments, ?int $maxTerms = null): iterable
     {
+        if (!array_is_list($segments)) {
+            throw new InvalidArgumentException('FTS analysis segments must be a list.');
+        }
         if (count($segments) > WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES) {
             throw new WP_FTS_Analysis_Limit_Exceeded(
                 'occurrences',
                 'FTS analysis segment count exceeds the 20,000-occurrence limit.'
             );
         }
-        $maxTerms = $maxTerms === null
-            ? WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES
-            : max(0, min(WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES, $maxTerms));
+        if (
+            $maxTerms !== null
+            && ($maxTerms < 0 || $maxTerms > WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES)
+        ) {
+            throw new InvalidArgumentException('FTS analysis maxTerms must be between 0 and 20,000.');
+        }
+        $maxTerms ??= WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES;
 
         $prepared = [];
         $totalRawTokens = 0;
         $distinctSurfaces = [];
         $normalizedTerms = [];
         foreach ($segments as $segment) {
-            $language = $this->canonicalize_language((string) ($segment['language'] ?? ''));
+            if (!is_array($segment)) {
+                throw new InvalidArgumentException('Each FTS analysis segment must be an array.');
+            }
+            foreach (array_keys($segment) as $key) {
+                if (!is_string($key) || !in_array($key, ['text', 'language', 'include_surface'], true)) {
+                    throw new InvalidArgumentException('FTS analysis segments contain an unsupported field.');
+                }
+            }
+            if (!array_key_exists('text', $segment) || !is_string($segment['text'])) {
+                throw new InvalidArgumentException('FTS analysis segment text must be a string.');
+            }
+            if (
+                !array_key_exists('language', $segment)
+                || !is_string($segment['language'])
+            ) {
+                throw new InvalidArgumentException('FTS analysis segment language must be a string.');
+            }
+            self::assertLanguageKey($segment['language'], 'FTS analysis segment language');
+            if (array_key_exists('include_surface', $segment) && !is_bool($segment['include_surface'])) {
+                throw new InvalidArgumentException('FTS analysis segment include_surface must be a boolean.');
+            }
+
+            $language = $this->canonicalize_language($segment['language']);
             $rawTokens = [];
             foreach ($this->tokenize(
-                (string) ($segment['text'] ?? ''),
+                $segment['text'],
                 $language,
                 $maxTerms
             ) as $rawToken) {
@@ -237,7 +263,7 @@ final class WP_FTS_LanguagePipeline
             }
             $prepared[] = [
                 'language' => $language,
-                'include_surface' => (bool) ($segment['include_surface'] ?? false),
+                'include_surface' => $segment['include_surface'] ?? false,
                 'raw_tokens' => $rawTokens,
             ];
         }
@@ -294,7 +320,7 @@ final class WP_FTS_LanguagePipeline
                     }
                     $term = (string) $analysis['term'];
                     $row = [
-                        'term' => $this->namespaceTerms ? $this->namespace_term($language, $term) : $term,
+                        'term' => $term,
                         'lang' => $language,
                     ];
                     if ($includeSurface) {
@@ -341,18 +367,6 @@ final class WP_FTS_LanguagePipeline
     public function normalize_unicode_text(string $text): string
     {
         return $this->normalizer->normalize_unicode($text);
-    }
-
-    /**
-     * Build a namespaced term key using `lang . "\\x1e" . term`.
-     *
-     * @param string $language Language partition.
-     * @param string $term Normalized lexical term.
-     * @return string Namespaced storage key.
-     */
-    public function namespace_term(string $language, string $term): string
-    {
-        return $this->canonicalize_language($language) . "\x1e" . $term;
     }
 
     /**
@@ -441,24 +455,36 @@ final class WP_FTS_LanguagePipeline
         $valid = [];
         $seen = [];
         foreach ($analyses as $analysis) {
-            $candidate = $analysis['term'] ?? '';
-            if (!is_scalar($candidate)) {
-                continue;
+            if (
+                !is_array($analysis)
+                || array_keys($analysis) !== ['term', 'rank', 'source']
+                || !is_string($analysis['term'])
+                || $analysis['term'] === ''
+                || trim($analysis['term']) !== $analysis['term']
+                || !is_int($analysis['rank'])
+                || $analysis['rank'] < 0
+                || !is_string($analysis['source'])
+                || $analysis['source'] === ''
+                || trim($analysis['source']) !== $analysis['source']
+                || strlen($analysis['source']) > 256
+            ) {
+                throw new UnexpectedValueException(
+                    'Language analysis rows must contain exactly an unpadded term, nonnegative rank, and bounded unpadded source.'
+                );
             }
-            $candidate = (string) $candidate;
+            $candidate = $analysis['term'];
             // A stemmer may rewrite one bounded lexical run, not amplify it
             // into unbounded text. Check bytes before character-length work.
             WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($candidate));
-            $candidate = trim($candidate);
-            if ($candidate === '' || isset($seen[$candidate]) || !$this->term_passes_length_filters($candidate, $isCjk)) {
+            if (isset($seen[$candidate]) || !$this->term_passes_length_filters($candidate, $isCjk)) {
                 continue;
             }
 
             $seen[$candidate] = true;
             $valid[] = [
                 'term' => $candidate,
-                'rank' => max(0, (int) ($analysis['rank'] ?? 0)),
-                'source' => (string) ($analysis['source'] ?? 'analyzer'),
+                'rank' => $analysis['rank'],
+                'source' => $analysis['source'],
             ];
         }
 
@@ -585,8 +611,7 @@ final class WP_FTS_LanguagePipeline
      * Split text into raw tokens and CJK lexical units.
      *
      * The Unicode path first collects mixed-script word runs, then splits CJK and
-     * non-CJK runs so a Latin+CJK+Latin word run does not become one token. When
-     * Unicode regex support is unavailable, the fallback keeps ASCII tokens only.
+     * non-CJK runs so a Latin+CJK+Latin word run does not become one token.
      *
      * @param string $text Plain visible text.
      * @return iterable<int,array{text:string,is_cjk:bool}>
@@ -597,51 +622,44 @@ final class WP_FTS_LanguagePipeline
         $offset = 0;
         $length = strlen($text);
         $inspectedTokenizerYields = 0;
-        if (preg_match('//u', $text) === 1) {
-            while ($offset < $length) {
-                $matched = preg_match(
-                    '/[\p{L}\p{M}\p{N}_]+/u',
-                    $text,
-                    $match,
-                    PREG_OFFSET_CAPTURE,
-                    $offset
-                );
-                if ($matched !== 1) {
-                    return;
-                }
-
-                $rawToken = (string) $match[0][0];
-                $offset = (int) $match[0][1] + strlen($rawToken);
-                if ($rawToken !== '') {
-                    foreach ($this->split_script_runs($rawToken) as $run) {
-                        if ($run['is_cjk']) {
-                            foreach ($this->cjk_tokens(
-                                $run['text'],
-                                $language,
-                                $maxTerms,
-                                $inspectedTokenizerYields
-                            ) as $cjkToken) {
-                                yield ['text' => $cjkToken, 'is_cjk' => true];
-                            }
-                            continue;
-                        }
-
-                        yield ['text' => $run['text'], 'is_cjk' => false];
-                    }
-                }
-            }
-            return;
+        if (preg_match('//u', $text) !== 1) {
+            throw new RuntimeException('Language analysis received invalid normalized Unicode text.');
         }
+        while ($offset < $length) {
+            $matched = preg_match(
+                '/[\p{L}\p{M}\p{N}_]+/u',
+                $text,
+                $match,
+                PREG_OFFSET_CAPTURE,
+                $offset
+            );
+            if ($matched === false) {
+                throw new RuntimeException('Language analysis could not tokenize normalized Unicode text.');
+            }
+            if ($matched === 0) {
+                return;
+            }
 
-        // Invalid UTF-8 cannot use the Unicode expression. Scan only ASCII
-        // lexical runs without first copying the whole source or collecting
-        // every match into an array.
-        $offset = 0;
-        while ($offset < $length && preg_match('/[A-Za-z0-9_]+/', $text, $match, PREG_OFFSET_CAPTURE, $offset) === 1) {
-            $token = (string) $match[0][0];
-            $offset = (int) $match[0][1] + strlen($token);
-            WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($token));
-            yield ['text' => $token, 'is_cjk' => false];
+            $rawToken = (string) $match[0][0];
+            $offset = (int) $match[0][1] + strlen($rawToken);
+            if ($rawToken === '') {
+                continue;
+            }
+            foreach ($this->split_script_runs($rawToken) as $run) {
+                if ($run['is_cjk']) {
+                    foreach ($this->cjk_tokens(
+                        $run['text'],
+                        $language,
+                        $maxTerms,
+                        $inspectedTokenizerYields
+                    ) as $cjkToken) {
+                        yield ['text' => $cjkToken, 'is_cjk' => true];
+                    }
+                    continue;
+                }
+
+                yield ['text' => $run['text'], 'is_cjk' => false];
+            }
         }
     }
 
@@ -663,8 +681,11 @@ final class WP_FTS_LanguagePipeline
                 PREG_OFFSET_CAPTURE,
                 $offset
             );
-            if ($matched !== 1) {
-                return;
+            if ($matched === false) {
+                throw new RuntimeException('Unicode script-run tokenization failed.');
+            }
+            if ($matched === 0) {
+                throw new RuntimeException('Unicode script-run tokenization made no progress.');
             }
 
             $run = (string) $match[0][0];
@@ -698,34 +719,25 @@ final class WP_FTS_LanguagePipeline
     ): iterable
     {
         if ($this->cjkTokenizer !== null) {
-            try {
-                $canonicalLanguage = $this->canonicalize_language($language);
-                // The analyzer must observe the first excess item, but an
-                // array-returning producer must not build the rest of a
-                // maximum-size query before that rejection occurs. Bundled
-                // producers receive the ceiling; custom callables keep the
-                // public two-argument tokenizer contract.
-                $tokens = $this->cjkTokenizerAcceptsProducerLimit
-                    ? ($this->cjkTokenizer)($run, $canonicalLanguage, $maxTerms + 1)
-                    : ($this->cjkTokenizer)($run, $canonicalLanguage);
-                $emitted = false;
-                foreach ($this->normalize_tokenizer_result(
-                    $tokens,
-                    $maxTerms,
-                    $inspectedTokenizerYields
-                ) as $token) {
-                    WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($token));
-                    $emitted = true;
-                    yield $token;
-                }
-                if ($emitted) {
-                    return;
-                }
-            } catch (WP_FTS_Analysis_Limit_Exceeded $error) {
-                throw $error;
-            } catch (Throwable) {
-                // Segmenters are optional extension points; fall through to the
-                // deterministic built-in n-gram tokenizer on failures.
+            $canonicalLanguage = $this->canonicalize_language($language);
+            // The analyzer must observe the first excess item, but a producer
+            // must not build the rest of a maximum-size query before rejection.
+            $tokens = ($this->cjkTokenizer)($run, $canonicalLanguage, $maxTerms + 1);
+            $emitted = false;
+            foreach ($this->validated_tokenizer_tokens(
+                $tokens,
+                $maxTerms,
+                $inspectedTokenizerYields
+            ) as $token) {
+                WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($token));
+                $emitted = true;
+                yield $token;
+            }
+            if ($emitted) {
+                return;
+            }
+            if (!$this->cjkTokenizerIsPackRouter) {
+                throw new UnexpectedValueException('A CJK tokenizer must yield at least one token string.');
             }
         }
 
@@ -733,45 +745,39 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
-     * Normalize custom CJK tokenizer output to non-empty token strings.
+     * Validate custom CJK tokenizer output while consuming it incrementally.
      *
      * @param mixed $tokens User segmenter result.
      * @return iterable<int,string>
      */
-    private function normalize_tokenizer_result(
+    private function validated_tokenizer_tokens(
         mixed $tokens,
         int $maxTerms,
         int &$inspectedTokenizerYields
     ): iterable
     {
         if (!is_iterable($tokens)) {
-            return;
+            throw new UnexpectedValueException('A CJK tokenizer must return a non-empty iterable of token strings.');
         }
 
         foreach ($tokens as $token) {
-            // Count source yields before validating their shape. Counting only
-            // accepted strings lets an infinite extension generator evade the
-            // analyzer occurrence limit forever by yielding null, empty text,
-            // or arrays without a text/term field.
+            // Count source yields before validating their shape so an infinite
+            // extension generator cannot evade the occurrence limit.
             if (++$inspectedTokenizerYields > $maxTerms) {
                 throw new WP_FTS_Analysis_Limit_Exceeded(
                     'occurrences',
                     "FTS analysis exceeds its {$maxTerms}-occurrence limit."
                 );
             }
-            if (is_array($token)) {
-                $token = $token['text'] ?? $token['term'] ?? null;
-            }
-            if (!is_scalar($token)) {
-                continue;
+            if (!is_string($token)) {
+                throw new UnexpectedValueException('A CJK tokenizer must yield only token strings.');
             }
 
-            $token = (string) $token;
             WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($token));
-            $token = trim($token);
-            if ($token !== '') {
-                yield $token;
+            if ($token === '' || trim($token) !== $token) {
+                throw new UnexpectedValueException('A CJK tokenizer must yield unpadded non-empty token strings.');
             }
+            yield $token;
         }
     }
 
@@ -791,9 +797,9 @@ final class WP_FTS_LanguagePipeline
                 array_shift($window);
             }
 
-            // Emit every suffix ending at this code point. The set and term
-            // frequencies are identical to the former length-major loops, but
-            // memory is now a four-code-point rolling window.
+            // Emit every suffix ending at this code point. This produces the
+            // complete n-gram set and frequencies with a four-code-point
+            // rolling window.
             $windowCount = count($window);
             for ($length = 1; $length <= $windowCount; $length++) {
                 yield implode('', array_slice($window, $windowCount - $length));
@@ -804,8 +810,6 @@ final class WP_FTS_LanguagePipeline
     /**
      * Stream UTF-8 characters as individual strings.
      *
-     * Invalid UTF-8 ends the stream so callers can safely drop the bad suffix.
-     *
      * @param string $text UTF-8 text.
      * @return iterable<int,string>
      */
@@ -814,8 +818,12 @@ final class WP_FTS_LanguagePipeline
         $offset = 0;
         $length = strlen($text);
         while ($offset < $length) {
-            if (preg_match('/./usA', $text, $match, PREG_OFFSET_CAPTURE, $offset) !== 1) {
-                return;
+            $matched = preg_match('/./usA', $text, $match, PREG_OFFSET_CAPTURE, $offset);
+            if ($matched === false) {
+                throw new RuntimeException('Unicode character tokenization failed.');
+            }
+            if ($matched === 0) {
+                throw new RuntimeException('Unicode character tokenization made no progress.');
             }
 
             $char = (string) $match[0][0];
@@ -860,6 +868,133 @@ final class WP_FTS_LanguagePipeline
         return $this->snowballStemmer->stem($term, $language);
     }
 
+    /** Reject misspelled, coercible, or out-of-range constructor options. */
+    private static function assertConstructorOptions(array $options): void
+    {
+        foreach (array_keys($options) as $key) {
+            if (!is_string($key) || !in_array($key, self::CONSTRUCTOR_OPTION_KEYS, true)) {
+                throw new InvalidArgumentException('Unknown language pipeline constructor option: ' . (string) $key);
+            }
+        }
+
+        foreach (['enable_stemming', 'fold_diacritics'] as $key) {
+            if (array_key_exists($key, $options) && !is_bool($options[$key])) {
+                throw new InvalidArgumentException("Language pipeline option {$key} must be a boolean.");
+            }
+        }
+        foreach (['min_term_len', 'max_term_bytes'] as $key) {
+            if (!array_key_exists($key, $options)) {
+                continue;
+            }
+            if (
+                !is_int($options[$key])
+                || $options[$key] < 1
+                || $options[$key] > WP_FTS_Analysis_Limits::MAX_LEXICAL_RUN_BYTES
+            ) {
+                throw new InvalidArgumentException(
+                    "Language pipeline option {$key} must be an integer from 1 through "
+                    . WP_FTS_Analysis_Limits::MAX_LEXICAL_RUN_BYTES . '.'
+                );
+            }
+        }
+
+        if (array_key_exists('stemmer', $options)) {
+            self::assertStemmerOption($options['stemmer'], 'Language pipeline option stemmer');
+        }
+        if (array_key_exists('stemmers_by_lang', $options)) {
+            if (!is_array($options['stemmers_by_lang'])) {
+                throw new InvalidArgumentException('Language pipeline option stemmers_by_lang must be a language map.');
+            }
+            foreach ($options['stemmers_by_lang'] as $language => $stemmer) {
+                self::assertLanguageKey($language, 'Language pipeline stemmer language');
+                self::assertStemmerOption($stemmer, "Language pipeline stemmer for {$language}");
+            }
+        }
+
+        foreach (['cjk_tokenizer', 'token_normalizer'] as $key) {
+            if (
+                array_key_exists($key, $options)
+                && $options[$key] !== null
+                && !is_callable($options[$key])
+            ) {
+                throw new InvalidArgumentException("Language pipeline option {$key} must be callable or null.");
+            }
+        }
+
+        if (array_key_exists('lemma_packs_by_lang', $options)) {
+            if (!is_array($options['lemma_packs_by_lang'])) {
+                throw new InvalidArgumentException('Language pipeline option lemma_packs_by_lang must be a language map.');
+            }
+            foreach ($options['lemma_packs_by_lang'] as $language => $pack) {
+                self::assertLanguageKey($language, 'Language pipeline lemma-pack language');
+                if ($pack !== false && !is_string($pack)) {
+                    throw new InvalidArgumentException(
+                        "Language pipeline lemma pack for {$language} must be a manifest path or false."
+                    );
+                }
+                if (is_string($pack)) {
+                    if (trim($pack) === '') {
+                        throw new InvalidArgumentException(
+                            "Language pipeline lemma pack for {$language} must use a non-empty manifest path."
+                        );
+                    }
+                    WP_FTS_Analyzer_Config_Limits::assert_path($pack, "Language pipeline lemma pack for {$language}");
+                }
+            }
+        }
+
+        if (array_key_exists('segmenter_packs_by_lang', $options)) {
+            if (!is_array($options['segmenter_packs_by_lang'])) {
+                throw new InvalidArgumentException('Language pipeline option segmenter_packs_by_lang must be a language map.');
+            }
+            foreach ($options['segmenter_packs_by_lang'] as $language => $pack) {
+                self::assertLanguageKey($language, 'Language pipeline segmenter-pack language');
+                if (!is_bool($pack)) {
+                    throw new InvalidArgumentException(
+                        "Language pipeline segmenter pack for {$language} must be a boolean."
+                    );
+                }
+            }
+        }
+
+        if (array_key_exists('chinese_script_map', $options)) {
+            if (!is_array($options['chinese_script_map'])) {
+                throw new InvalidArgumentException('Language pipeline option chinese_script_map must be a language map.');
+            }
+            foreach ($options['chinese_script_map'] as $language => $map) {
+                self::assertLanguageKey($language, 'Chinese script-map language');
+                if (!is_array($map)) {
+                    throw new InvalidArgumentException("Chinese script map for {$language} must be a string map.");
+                }
+                foreach ($map as $source => $replacement) {
+                    if (!is_string($source) || $source === '' || !is_string($replacement)) {
+                        throw new InvalidArgumentException(
+                            "Chinese script map for {$language} must contain only non-empty string keys and string values."
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /** Assert one configured language map key before canonicalization. */
+    private static function assertLanguageKey(mixed $language, string $label): void
+    {
+        try {
+            WP_FTS_TermNamespace::parse_language_tag($language);
+        } catch (InvalidArgumentException $error) {
+            throw new InvalidArgumentException("{$label} is not a valid language tag.", 0, $error);
+        }
+    }
+
+    /** Assert one custom stemmer extension value. */
+    private static function assertStemmerOption(mixed $stemmer, string $label): void
+    {
+        if ($stemmer !== null && !$stemmer instanceof WP_FTS_Stemmer && !is_callable($stemmer)) {
+            throw new InvalidArgumentException("{$label} must implement WP_FTS_Stemmer, be callable, or be null.");
+        }
+    }
+
     /**
      * Normalize a caller-supplied stemmer option into a stemmer object.
      *
@@ -869,6 +1004,9 @@ final class WP_FTS_LanguagePipeline
      */
     private function normalize_custom_stemmer(mixed $stemmer): ?WP_FTS_Stemmer
     {
+        if ($stemmer === null) {
+            return null;
+        }
         if ($stemmer instanceof WP_FTS_Stemmer) {
             return $stemmer;
         }
@@ -877,7 +1015,7 @@ final class WP_FTS_LanguagePipeline
             return new WP_FTS_CallbackStemmer($stemmer);
         }
 
-        return null;
+        throw new InvalidArgumentException('Custom stemmer must implement WP_FTS_Stemmer, be callable, or be null.');
     }
 
     /**
@@ -886,15 +1024,16 @@ final class WP_FTS_LanguagePipeline
      * @param mixed $stemmers
      * @return array<string,WP_FTS_Stemmer>
      */
-    private function normalize_custom_stemmers_by_language(mixed $stemmers): array
+    private function normalize_custom_stemmers_by_language(array $stemmers): array
     {
-        if (!is_array($stemmers)) {
-            return [];
-        }
-
         $normalized = [];
+        $seenLanguages = [];
         foreach ($stemmers as $language => $stemmer) {
-            $canonicalLanguage = $this->canonicalize_language((string) $language);
+            $canonicalLanguage = $this->canonicalize_language($language);
+            if (isset($seenLanguages[$canonicalLanguage])) {
+                throw new InvalidArgumentException("Language pipeline stemmer map contains duplicate language {$canonicalLanguage}.");
+            }
+            $seenLanguages[$canonicalLanguage] = true;
             $stemmer = $this->normalize_custom_stemmer($stemmer);
             if ($stemmer !== null) {
                 $normalized[$canonicalLanguage] = $stemmer;
@@ -911,10 +1050,11 @@ final class WP_FTS_LanguagePipeline
         WP_FTS_Analyzer_Config_Limits::assert_language_map($map, 'Language pipeline lemma packs');
         $packs = [];
         foreach ($map as $language => $option) {
-            $canonicalLanguage = $this->canonicalize_language((string) $language);
-            if ($canonicalLanguage !== 'und') {
-                $packs[$canonicalLanguage] = $option;
+            $canonicalLanguage = $this->canonicalize_language($language);
+            if (array_key_exists($canonicalLanguage, $packs)) {
+                throw new InvalidArgumentException("Language pipeline lemma-pack map contains duplicate language {$canonicalLanguage}.");
             }
+            $packs[$canonicalLanguage] = $option;
         }
 
         return $packs;
@@ -932,27 +1072,13 @@ final class WP_FTS_LanguagePipeline
         $admission = new WP_FTS_ConfiguredLemmaPackAdmission();
         $descriptors = [];
         foreach ($packs as $canonicalLanguage => $option) {
-            $defaultManifest = $this->base_language($canonicalLanguage) === 'pl'
-                ? WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest()
-                : null;
-            $manifestPath = WP_FTS_LanguageLemmaPack::manifest_path_from_option($option, $defaultManifest);
+            $manifestPath = WP_FTS_LanguageLemmaPack::manifest_path_from_option($option);
             if ($manifestPath === null) {
                 continue;
             }
-            $realManifestPath = realpath($manifestPath);
-            if (!is_string($realManifestPath)) {
-                continue;
-            }
-
-            try {
-                $descriptor = $admission->preflight_manifest($realManifestPath, $canonicalLanguage);
-            } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
-                throw $error;
-            } catch (Throwable) {
-                continue;
-            }
+            $descriptor = $admission->preflight_manifest($manifestPath, $canonicalLanguage);
             if ($descriptor['language_matches'] !== true) {
-                continue;
+                throw new RuntimeException("Configured lemma-pack language does not match {$canonicalLanguage}.");
             }
             $descriptors[] = [$canonicalLanguage, $descriptor['manifest_path']];
         }
@@ -966,17 +1092,12 @@ final class WP_FTS_LanguagePipeline
                 : WP_FTS_LanguageLemmaPack::from_pack_option(
                     $realManifestPath,
                     $canonicalLanguage,
-                    null,
                     $admission
                 );
             if (!$reusedPack) {
-                // A corrupt physical manifest also has one bounded attempt.
-                // Cache null so aliases cannot repeat its hashes or decoding.
                 $packsByManifest[$manifestIdentity] = $pack;
             }
-            if ($pack !== null) {
-                $normalized[$canonicalLanguage] = $pack;
-            }
+            $normalized[$canonicalLanguage] = $pack;
         }
         ksort($normalized, SORT_STRING);
 
@@ -1008,7 +1129,7 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
-     * Build a CJK tokenizer from local source-backed segmenter pack options.
+     * Build a CJK tokenizer from bundled segmenter pack options.
      *
      * @param array<string,mixed> $options
      */
@@ -1022,10 +1143,10 @@ final class WP_FTS_LanguagePipeline
         $segmenters = [];
         $configuredBaseLanguages = [];
         foreach ($packs as $language => $option) {
-            $canonicalLanguage = $this->canonicalize_language((string) $language);
-            if ($canonicalLanguage === 'und') {
+            if ($option === false) {
                 continue;
             }
+            $canonicalLanguage = $this->canonicalize_language($language);
             $baseLanguage = $this->base_language($canonicalLanguage);
             if (isset($configuredBaseLanguages[$baseLanguage])) {
                 throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
@@ -1036,9 +1157,10 @@ final class WP_FTS_LanguagePipeline
             $configuredBaseLanguages[$baseLanguage] = true;
 
             $segmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option($option, $canonicalLanguage);
-            if ($segmenter !== null) {
-                $segmenters[$baseLanguage] = $segmenter;
+            if (!$segmenter instanceof WP_FTS_ChineseJiebaSegmenter) {
+                throw new LogicException('Enabled segmenter configuration must construct its pinned runtime.');
             }
+            $segmenters[$baseLanguage] = $segmenter;
         }
 
         if ($segmenters === []) {
@@ -1063,8 +1185,18 @@ final class WP_FTS_LanguagePipeline
     /** @return array<string,mixed> */
     private function segmenter_pack_options_by_language(array $options): array
     {
-        $packs = $options['segmenter_packs_by_lang'] ?? [];
-        WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'Language pipeline segmenter packs');
+        $map = $options['segmenter_packs_by_lang'] ?? [];
+        WP_FTS_Analyzer_Config_Limits::assert_language_map($map, 'Language pipeline segmenter packs');
+        $packs = [];
+        foreach ($map as $language => $option) {
+            $canonicalLanguage = $this->canonicalize_language($language);
+            if (array_key_exists($canonicalLanguage, $packs)) {
+                throw new InvalidArgumentException(
+                    "Language pipeline segmenter-pack map contains duplicate language {$canonicalLanguage}."
+                );
+            }
+            $packs[$canonicalLanguage] = $option;
+        }
 
         return $packs;
     }
@@ -1076,53 +1208,29 @@ final class WP_FTS_LanguagePipeline
      */
     private function buildIndexSignature(array $options, mixed $tokenizer): string
     {
-        $polishMode = strtolower(trim((string) ($options['polish_stemming'] ?? 'conservative')));
-        if (!in_array($polishMode, ['conservative', 'verified', 'none'], true)) {
-            $polishMode = 'conservative';
-        }
         $payload = [
             'contract' => 'wp-fts-language-pipeline',
             'version' => 20,
             'cjk_max_ngram_length' => self::CJK_MAX_NGRAM_LENGTH,
             'min_term_len' => $this->minTermLen,
             'max_term_bytes' => $this->maxTermBytes,
-            'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
+            'fold_diacritics' => $options['fold_diacritics'] ?? true,
             'unicode_normalizer' => $this->normalizer->index_signature(),
-            'namespace_terms' => $this->namespaceTerms,
             'enable_stemming' => $this->enableStemming,
-            'polish_stemming' => $polishMode,
             'stemmer' => $this->componentSignature($options['stemmer'] ?? null),
             'stemmers_by_lang' => $this->stemmersByLanguageSignature($options['stemmers_by_lang'] ?? []),
             'cjk_tokenizer' => $this->componentSignature($tokenizer),
             'token_normalizer' => $this->componentSignature($options['token_normalizer'] ?? null),
             'chinese_script_map' => $this->signatureValue($options['chinese_script_map'] ?? []),
-            'normalizer' => $this->componentSignature($options['normalizer'] ?? null),
-            'snowball_stemmer' => $this->componentSignature($options['snowball_stemmer'] ?? $this->snowballStemmer),
-            'baseline_stemmer' => $this->componentSignature($options['baseline_stemmer'] ?? $this->baselineStemmer),
-            'polish_stemmer' => $this->componentSignature($options['polish_stemmer'] ?? null),
+            'snowball_stemmer' => $this->componentSignature($this->snowballStemmer),
+            'baseline_stemmer' => $this->componentSignature($this->baselineStemmer),
+            'polish_stemmer' => $this->componentSignature($this->polishStemmer),
         ];
         $lemmaPackSignatures = $this->lemmaPacksByLanguageSignature();
         if ($lemmaPackSignatures !== []) {
             $payload['lemma_packs_by_lang'] = $lemmaPackSignatures;
         }
-        if ($polishMode === 'verified') {
-            $payload['polish_verified_stemmer'] = WP_FTS_PolishVerifiedStemmerData::VERSION;
-        }
-
         return 'wp-fts-language-pipeline-v20:' . sha1($this->stableJson($payload));
-    }
-
-    /**
-     * Build the default Polish stemmer.
-     *
-     * Lemma packs are resolved through the generic language-pack map so the
-     * selected Polish mode remains the fallback for invalid or missing packs.
-     *
-     * @param array<string,mixed> $options
-     */
-    private function default_polish_stemmer(array $options): WP_FTS_Stemmer
-    {
-        return new WP_FTS_PolishStemmer((string) ($options['polish_stemming'] ?? 'conservative'));
     }
 
     /**
@@ -1137,7 +1245,7 @@ final class WP_FTS_LanguagePipeline
 
         $result = [];
         foreach ($stemmers as $language => $stemmer) {
-            $lang = $this->canonicalize_language((string) $language);
+            $lang = $this->canonicalize_language($language);
             if ($lang === 'und') {
                 continue;
             }
@@ -1172,19 +1280,19 @@ final class WP_FTS_LanguagePipeline
             return null;
         }
 
-        if (is_object($component)) {
-            $signature = $this->explicitObjectSignature($component);
-            if ($signature !== null) {
-                return $signature;
+        if ($component instanceof Closure || is_string($component) || is_array($component)) {
+            if (!is_callable($component)) {
+                return $this->signatureValue($component);
             }
-        }
-
-        if (is_callable($component)) {
             return $this->callableSignature($component);
         }
 
         if (is_object($component)) {
-            return 'object:' . get_debug_type($component);
+            return $this->explicitObjectSignature($component);
+        }
+
+        if (is_callable($component)) {
+            return $this->callableSignature($component);
         }
 
         return $this->signatureValue($component);
@@ -1195,43 +1303,36 @@ final class WP_FTS_LanguagePipeline
      */
     private function callableSignature(callable $callback, bool $includeCapturedState = true): string
     {
-        try {
-            if (is_string($callback)) {
-                return 'function:' . strtolower($callback);
-            }
+        if (is_string($callback)) {
+            return 'function:' . strtolower($callback);
+        }
 
-            if (is_array($callback) && count($callback) === 2) {
-                $target = is_object($callback[0])
-                    ? ($this->explicitObjectSignature($callback[0]) ?? 'object:' . get_debug_type($callback[0]))
-                    : (string) $callback[0];
-                return 'method:' . $target . '::' . (string) $callback[1];
-            }
+        if (is_array($callback) && count($callback) === 2) {
+            $target = is_object($callback[0])
+                ? $this->explicitObjectSignature($callback[0])
+                : (string) $callback[0];
+            return 'method:' . $target . '::' . (string) $callback[1];
+        }
 
-            if ($callback instanceof Closure) {
-                $reflection = new ReflectionFunction($callback);
-                $capturedState = '';
-                if ($includeCapturedState) {
-                    $variables = $reflection->getStaticVariables();
-                    WP_FTS_Analyzer_Config_Limits::assert_option_graph($variables, 'Analyzer callback captured state');
-                    $capturedState = ':' . sha1($this->stableJson($this->signatureValue($variables)));
-                }
-                return sprintf(
-                    'closure:%s:%d-%d%s',
-                    $reflection->getFileName() ?: 'internal',
-                    $reflection->getStartLine(),
-                    $reflection->getEndLine(),
-                    $capturedState
-                );
+        if ($callback instanceof Closure) {
+            $reflection = new ReflectionFunction($callback);
+            $capturedState = '';
+            if ($includeCapturedState) {
+                $variables = $reflection->getStaticVariables();
+                WP_FTS_Analyzer_Config_Limits::assert_option_graph($variables, 'Analyzer callback captured state');
+                $capturedState = ':' . sha1($this->stableJson($this->signatureValue($variables)));
             }
+            return sprintf(
+                'closure:%s:%d-%d%s',
+                $reflection->getFileName() ?: 'internal',
+                $reflection->getStartLine(),
+                $reflection->getEndLine(),
+                $capturedState
+            );
+        }
 
-            if (is_object($callback)) {
-                $target = $this->explicitObjectSignature($callback) ?? 'object:' . get_debug_type($callback);
-                return 'invokable:' . $target;
-            }
-        } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
-            throw $error;
-        } catch (Throwable) {
-            return 'callable:' . get_debug_type($callback);
+        if (is_object($callback)) {
+            return 'invokable:' . $this->explicitObjectSignature($callback);
         }
 
         return 'callable:' . get_debug_type($callback);
@@ -1240,22 +1341,27 @@ final class WP_FTS_LanguagePipeline
     /**
      * Return an object's explicit index signature when it provides one.
      */
-    private function explicitObjectSignature(object $component): ?string
+    private function explicitObjectSignature(object $component): string
     {
         if (!is_callable([$component, 'index_signature'])) {
-            return null;
+            throw new LogicException(
+                'Injected analyzer objects must provide index_signature().'
+            );
         }
 
-        try {
-            $signature = $component->index_signature();
-            if (is_scalar($signature) && trim((string) $signature) !== '') {
-                return (string) $signature;
-            }
-        } catch (Throwable) {
-            // Fall through to the callable or class-level descriptor.
+        $signature = $component->index_signature();
+        if (
+            !is_string($signature)
+            || $signature === ''
+            || trim($signature) !== $signature
+            || strlen($signature) > 256
+        ) {
+            throw new UnexpectedValueException(
+                'Injected analyzer object index_signature() must return an unpadded non-empty string of at most 256 bytes.'
+            );
         }
 
-        return null;
+        return $signature;
     }
 
     /**
@@ -1293,10 +1399,6 @@ final class WP_FTS_LanguagePipeline
      */
     private function stableJson(mixed $payload): string
     {
-        try {
-            return json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-        } catch (Throwable) {
-            return serialize($payload);
-        }
+        return json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
     }
 }

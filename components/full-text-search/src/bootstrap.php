@@ -5,7 +5,7 @@ if (class_exists('WP_FTS_Analyzer', false)) {
     return;
 }
 
-/** Load optional Composer dependencies, then require runtime classes in dependency order. */
+/** Load Composer dependencies, then require runtime classes in dependency order. */
 $wp_fts_component_vendor_autoload = dirname(__DIR__) . '/vendor/autoload.php';
 if (is_file($wp_fts_component_vendor_autoload)) {
     require_once $wp_fts_component_vendor_autoload;
@@ -13,14 +13,13 @@ if (is_file($wp_fts_component_vendor_autoload)) {
 
 $wp_fts_component_files = [
     __DIR__ . '/StorageInterface.php',
-    __DIR__ . '/DocumentMetadataStorage.php',
     __DIR__ . '/TermNamespace.php',
     __DIR__ . '/Utf8.php',
     __DIR__ . '/HtmlTextStream.php',
     __DIR__ . '/AnalysisLimits.php',
+    __DIR__ . '/AnalyzerOccurrenceValidator.php',
     __DIR__ . '/AnalyzerConfigLimits.php',
     __DIR__ . '/LemmaPackLimits.php',
-    __DIR__ . '/StorageCompat.php',
     __DIR__ . '/Normalizer.php',
     __DIR__ . '/EnglishSnowballStemmer.php',
     __DIR__ . '/ArabicSnowballStemmer.php',
@@ -29,7 +28,6 @@ $wp_fts_component_files = [
     __DIR__ . '/HindiSnowballStemmer.php',
     __DIR__ . '/PortugueseSnowballStemmer.php',
     __DIR__ . '/IndonesianSnowballStemmer.php',
-    __DIR__ . '/PolishVerifiedStemmerData.php',
     __DIR__ . '/Stemmer.php',
     __DIR__ . '/AnalyzerPackValidator.php',
     __DIR__ . '/ConfiguredLemmaPackAdmission.php',
@@ -37,11 +35,8 @@ $wp_fts_component_files = [
     __DIR__ . '/LanguageLemmaPack.php',
     __DIR__ . '/ChineseJiebaSegmenter.php',
     __DIR__ . '/LanguageDetector.php',
-    __DIR__ . '/TokenizerSourceLockVerifier.php',
-    __DIR__ . '/TokenizerSourceCandidateLockVerifier.php',
     __DIR__ . '/LanguagePipeline.php',
     __DIR__ . '/Analyzer.php',
-    __DIR__ . '/PostingsCodec.php',
     __DIR__ . '/Indexer.php',
     __DIR__ . '/Searcher.php',
 ];

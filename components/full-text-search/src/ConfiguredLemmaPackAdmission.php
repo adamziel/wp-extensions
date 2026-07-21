@@ -4,11 +4,10 @@ declare(strict_types=1);
 /**
  * Admits one configured set of lemma packs against its shared resource limits.
  *
- * The manifest pass runs for the complete configuration before any eager map
- * is constructed. A later construction pass uses the pinned manifest digest
- * and reserves only the still-unconsumed decoded eager allowance. Callers keep
- * control of pack lifetime: the language pipeline retains one map per physical
- * manifest, while diagnostics may release each map after validating it.
+ * The manifest pass runs for the complete configuration before any pack is
+ * constructed. A later construction pass uses the pinned manifest digest.
+ * Aliases share one physical manifest envelope, so file, lookup-block, and
+ * sidecar-byte limits are charged exactly once.
  */
 final class WP_FTS_ConfiguredLemmaPackAdmission
 {
@@ -18,17 +17,9 @@ final class WP_FTS_ConfiguredLemmaPackAdmission
     private array $resourceEnvelopeFailures = [];
     /** @var array<string,true> */
     private array $admittedManifests = [];
-    /** @var array<string,array{declared_rows:int,decoded_byte_limit:int}> */
-    private array $eagerReservations = [];
-    /** @var array<string,true> */
-    private array $consumedEagerManifests = [];
     private int $runtimeFiles = 0;
     private int $lookupBlocks = 0;
     private int $runtimeLookupBytes = 0;
-    private int $declaredEagerRows = 0;
-    private int $plainEagerRuntimeBytes = 0;
-    private int $remainingEagerRows = WP_FTS_LemmaPackLimits::MAX_CONFIGURED_EAGER_FIXTURE_ROWS;
-    private int $remainingEagerRuntimeBytes = WP_FTS_LemmaPackLimits::MAX_CONFIGURED_EAGER_FIXTURE_RUNTIME_BYTES;
 
     /**
      * Inspect and, when language-compatible, charge one physical manifest.
@@ -38,6 +29,11 @@ final class WP_FTS_ConfiguredLemmaPackAdmission
      */
     public function preflight_manifest(string $manifestPath, string $expectedLanguage): array
     {
+        if ($manifestPath === '' || trim($manifestPath) !== $manifestPath) {
+            throw new InvalidArgumentException('Configured lemma-pack manifest path must be unpadded and non-empty.');
+        }
+        WP_FTS_Analyzer_Config_Limits::assert_path($manifestPath, 'Configured lemma-pack manifest path');
+        $expectedLanguage = WP_FTS_TermNamespace::parse_language_tag($expectedLanguage);
         $realManifestPath = realpath($manifestPath);
         if (!is_string($realManifestPath)) {
             throw new RuntimeException('Configured lemma-pack manifest could not be resolved.');
@@ -74,88 +70,13 @@ final class WP_FTS_ConfiguredLemmaPackAdmission
     /** Return the preflight-pinned digest for one construction attempt. */
     public function expected_manifest_sha256(string $manifestPath): string
     {
+        if ($manifestPath === '' || trim($manifestPath) !== $manifestPath) {
+            throw new InvalidArgumentException('Configured lemma-pack manifest path must be unpadded and non-empty.');
+        }
+        WP_FTS_Analyzer_Config_Limits::assert_path($manifestPath, 'Configured lemma-pack manifest path');
         $identity = $this->preflighted_manifest_identity($manifestPath);
 
         return (string) $this->resourceEnvelopes[$identity]['manifest_sha256'];
-    }
-
-    /**
-     * Reserve the remaining decoded allowance for one eager validation scan.
-     * The allowance is consumed only after the pack has been constructed.
-     */
-    public function reserve_eager_pack(string $manifestPath, int $declaredRows): int
-    {
-        $identity = $this->admitted_manifest_identity($manifestPath);
-        if (isset($this->consumedEagerManifests[$identity])) {
-            throw new LogicException('A configured eager lemma pack must be reused after construction.');
-        }
-        if (isset($this->eagerReservations[$identity])) {
-            return $this->eagerReservations[$identity]['decoded_byte_limit'];
-        }
-        if ($declaredRows < 0 || $declaredRows > $this->remainingEagerRows) {
-            self::throw_eager_rows_exceeded();
-        }
-        if ($this->remainingEagerRuntimeBytes < 1) {
-            self::throw_eager_runtime_bytes_exceeded();
-        }
-
-        $decodedByteLimit = min(
-            WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_BYTES,
-            $this->remainingEagerRuntimeBytes
-        );
-        $this->eagerReservations[$identity] = [
-            'declared_rows' => $declaredRows,
-            'decoded_byte_limit' => $decodedByteLimit,
-        ];
-
-        return $decodedByteLimit;
-    }
-
-    /** Consume one successful eager construction without retaining its map. */
-    public function consume_eager_pack(
-        string $manifestPath,
-        WP_FTS_LanguageLemmaPack $pack
-    ): void {
-        $identity = $this->admitted_manifest_identity($manifestPath);
-        if (isset($this->consumedEagerManifests[$identity])) {
-            return;
-        }
-        $reservation = $this->eagerReservations[$identity] ?? null;
-        if (!is_array($reservation)) {
-            throw new LogicException('Configured eager lemma-pack construction was not reserved.');
-        }
-
-        $rows = $pack->eager_runtime_rows();
-        $bytes = $pack->eager_runtime_bytes();
-        if ($rows !== $reservation['declared_rows'] || $rows > $this->remainingEagerRows) {
-            self::throw_eager_rows_exceeded();
-        }
-        if ($bytes > $reservation['decoded_byte_limit'] || $bytes > $this->remainingEagerRuntimeBytes) {
-            self::throw_eager_runtime_bytes_exceeded();
-        }
-
-        $this->remainingEagerRows -= $rows;
-        $this->remainingEagerRuntimeBytes -= $bytes;
-        $this->consumedEagerManifests[$identity] = true;
-        unset($this->eagerReservations[$identity]);
-    }
-
-    /** Throw the stable configured eager-row diagnostic. */
-    public static function throw_eager_rows_exceeded(): never
-    {
-        throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-            'configured_eager_fixture_rows',
-            'Configured eager fixture packs exceed the aggregate 50,000-row limit.'
-        );
-    }
-
-    /** Throw the stable configured eager decoded-byte diagnostic. */
-    public static function throw_eager_runtime_bytes_exceeded(): never
-    {
-        throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-            'configured_eager_fixture_bytes',
-            'Configured eager fixture packs exceed the aggregate 8 MiB decoded byte limit.'
-        );
     }
 
     /** Charge one language-compatible resource envelope atomically. */
@@ -164,16 +85,6 @@ final class WP_FTS_ConfiguredLemmaPackAdmission
         $runtimeFiles = $this->runtimeFiles + (int) $envelope['runtime_files'];
         $lookupBlocks = $this->lookupBlocks + (int) $envelope['lookup_blocks'];
         $runtimeLookupBytes = $this->runtimeLookupBytes + (int) $envelope['runtime_lookup_bytes'];
-        $declaredEagerRows = $this->declaredEagerRows;
-        $plainEagerRuntimeBytes = $this->plainEagerRuntimeBytes;
-        if ($envelope['eager_fixture_candidate'] === true) {
-            // Plain eager runtimes can be charged from physical bytes before
-            // construction. Compressed fixtures consume the same shared
-            // decoded budget during their bounded validation scan instead.
-            $declaredEagerRows += (int) $envelope['runtime_rows'];
-            $plainEagerRuntimeBytes += (int) $envelope['eager_fixture_decoded_bytes'];
-        }
-
         if ($runtimeFiles > WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_RUNTIME_FILES
             || $lookupBlocks > WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LOOKUP_BLOCKS
             || $runtimeLookupBytes > WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_RUNTIME_LOOKUP_BYTES
@@ -183,18 +94,9 @@ final class WP_FTS_ConfiguredLemmaPackAdmission
                 'Configured lemma packs exceed the 128-file, 16,384-block, or 32 MiB runtime envelope.'
             );
         }
-        if ($declaredEagerRows > WP_FTS_LemmaPackLimits::MAX_CONFIGURED_EAGER_FIXTURE_ROWS) {
-            self::throw_eager_rows_exceeded();
-        }
-        if ($plainEagerRuntimeBytes > WP_FTS_LemmaPackLimits::MAX_CONFIGURED_EAGER_FIXTURE_RUNTIME_BYTES) {
-            self::throw_eager_runtime_bytes_exceeded();
-        }
-
         $this->runtimeFiles = $runtimeFiles;
         $this->lookupBlocks = $lookupBlocks;
         $this->runtimeLookupBytes = $runtimeLookupBytes;
-        $this->declaredEagerRows = $declaredEagerRows;
-        $this->plainEagerRuntimeBytes = $plainEagerRuntimeBytes;
         $this->admittedManifests[$manifestPath] = true;
     }
 
@@ -210,17 +112,6 @@ final class WP_FTS_ConfiguredLemmaPackAdmission
         }
 
         throw new LogicException('Configured lemma-pack construction requires a successful manifest preflight.');
-    }
-
-    /** Resolve one path back to its language-compatible admission identity. */
-    private function admitted_manifest_identity(string $manifestPath): string
-    {
-        $identity = $this->preflighted_manifest_identity($manifestPath);
-        if (!isset($this->admittedManifests[$identity])) {
-            throw new LogicException('Configured lemma-pack construction requires a language-compatible manifest.');
-        }
-
-        return $identity;
     }
 
     /** Return the canonical primary language subtag. */

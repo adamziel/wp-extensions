@@ -90,7 +90,6 @@ function wp_fts_ppew_fixture_options(string $out, array $extra = []): array
         'source_version' => 'fixture',
         'max_rows_per_file' => 2,
         'chunk_rows' => 2,
-        'fixture_only' => false,
         'importer_commit' => 'test-commit',
     ];
 }
@@ -103,6 +102,124 @@ function wp_fts_ppew_check(bool $condition, string $message, array &$errors): vo
     if (!$condition) {
         $errors[] = $message;
     }
+}
+
+/** Invoke one builder input boundary without touching source or output paths. */
+function wp_fts_ppew_private(object $builder, string $method, mixed ...$args): mixed
+{
+    $reflection = new ReflectionMethod($builder::class, $method);
+    $reflection->setAccessible(true);
+
+    return $reflection->invoke($builder, ...$args);
+}
+
+/**
+ * @return string[]
+ */
+function wp_fts_ppew_case_rejects_noncanonical_programmatic_options(): array
+{
+    $errors = [];
+    $builder = new WP_FTS_PolishPolimorfExternalPackBuilder();
+    $base = wp_fts_ppew_fixture_options(wp_fts_ppew_temp_dir('typed_options'));
+    $invalidOptions = [
+        $base + ['unknown' => true],
+        $base + [0 => 'source'],
+        array_replace($base, ['source' => 1]),
+        array_replace($base, ['pack_id' => true]),
+        array_replace($base, ['download' => 'true']),
+        array_replace($base, ['allow_repo_cache' => 1]),
+        array_replace($base, ['replace_output' => null]),
+        array_replace($base, ['max_rows_per_file' => '2']),
+        array_replace($base, ['chunk_rows' => WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS + 1]),
+        array_replace($base, ['expect_source_bytes' => (string) $base['expect_source_bytes']]),
+        array_replace($base, ['expect_source_bytes' => WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PHYSICAL_BYTES + 1]),
+        array_replace($base, ['out' => str_repeat('x', WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PATH_BYTES + 1)]),
+        array_replace($base, ['tmp_dir' => "path\0tail"]),
+    ];
+
+    try {
+        wp_fts_ppew_private($builder, 'assert_option_shapes', $base);
+    } catch (Throwable $caught) {
+        $errors[] = 'the current external builder option shape should pass: ' . $caught->getMessage();
+    }
+    foreach ($invalidOptions as $index => $options) {
+        try {
+            wp_fts_ppew_private($builder, 'assert_option_shapes', $options);
+            $errors[] = "noncanonical external builder option case {$index} should fail";
+        } catch (RuntimeException $caught) {
+        }
+    }
+
+    return $errors;
+}
+
+/**
+ * @return string[]
+ */
+function wp_fts_ppew_case_uses_distinct_strict_cli_contracts(): array
+{
+    $errors = [];
+
+    try {
+        $importOptions = WP_FTS_PolishPolimorfImporter::parse_cli_options([
+            '--source=/tmp/source.tab',
+            '--out=/tmp/pack',
+            '--max-rows-per-file=2',
+        ]);
+        wp_fts_ppew_check(
+            $importOptions === [
+                'source' => '/tmp/source.tab',
+                'out' => '/tmp/pack',
+                'max_rows_per_file' => 2,
+            ],
+            'the importer parser should return only its native typed option bag',
+            $errors
+        );
+    } catch (Throwable $error) {
+        $errors[] = 'the importer parser rejected its native option bag: ' . $error->getMessage();
+    }
+
+    try {
+        WP_FTS_PolishPolimorfImporter::parse_cli_options(['--download']);
+        $errors[] = 'the importer parser should reject the external builder download switch';
+    } catch (RuntimeException $error) {
+    }
+
+    try {
+        $builderOptions = WP_FTS_PolishPolimorfExternalPackBuilder::parse_cli_options([
+            '--download',
+            '--allow-repo-cache=false',
+            '--expect-source-bytes=2',
+        ]);
+        wp_fts_ppew_check(
+            $builderOptions === [
+                'download' => true,
+                'allow_repo_cache' => false,
+                'expect_source_bytes' => 2,
+            ],
+            'the external builder parser should own and type its builder-only switches',
+            $errors
+        );
+    } catch (Throwable $error) {
+        $errors[] = 'the external builder parser rejected its native option bag: ' . $error->getMessage();
+    }
+
+    $importer = new WP_FTS_PolishPolimorfImporter();
+    $shapeMethod = new ReflectionMethod($importer, 'assert_option_shapes');
+    $shapeMethod->setAccessible(true);
+    foreach ([
+        ['source' => '/tmp/source.tab', 'out' => ' /tmp/pack'],
+        ['source' => '/tmp/source.tab', 'out' => '/tmp/pack', 'chunk_rows' => '2'],
+        ['source' => '/tmp/source.tab', 'out' => '/tmp/pack', 'source_name' => true],
+    ] as $invalidOptions) {
+        try {
+            $shapeMethod->invoke($importer, $invalidOptions);
+            $errors[] = 'the importer should reject every invalid option shape before extension or filesystem work';
+        } catch (RuntimeException $error) {
+        }
+    }
+
+    return $errors;
 }
 
 /**
@@ -272,7 +389,7 @@ function wp_fts_ppew_case_builds_local_fixture_and_stays_offline(): array
         wp_fts_ppew_check(str_contains((string) $summary['package_boundary'], 'not committed or bundled'), 'summary should state package boundary', $errors);
         wp_fts_ppew_check(isset($summary['configuration_example']['lemma_packs_by_lang']['pl']), 'summary should include the canonical Polish lemma-pack example', $errors);
 
-        $validation = (new WP_FTS_AnalyzerPackValidator())->validate((string) $summary['manifest_path'], false);
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate((string) $summary['manifest_path']);
         wp_fts_ppew_check(($validation['manifest']['pack_id'] ?? null) === 'pl-polimorf-external-fixture', 'generated external pack should validate', $errors);
         foreach ($validation['manifest']['runtime']['files'] ?? [] as $runtimeFile) {
             wp_fts_ppew_check(($runtimeFile['compression'] ?? null) === 'gzip', 'generated external runtime shards should use indexed gzip', $errors);
@@ -384,6 +501,8 @@ function wp_fts_ppew_case_refuses_non_empty_output(): array
 function wp_fts_ppew_run_verifier(): array
 {
     return array_merge(
+        wp_fts_ppew_case_rejects_noncanonical_programmatic_options(),
+        wp_fts_ppew_case_uses_distinct_strict_cli_contracts(),
         wp_fts_ppew_case_rejects_output_inside_plugin_root(),
         wp_fts_ppew_case_rejects_output_inside_repository_root(),
         wp_fts_ppew_case_rejects_cache_inside_repository_root(),
@@ -396,6 +515,14 @@ function wp_fts_ppew_run_verifier(): array
 }
 
 if (function_exists('test_case')) {
+    test_case('quality Polish PoliMorf external pack workflow rejects noncanonical programmatic options', function (): void {
+        assert_same([], wp_fts_ppew_case_rejects_noncanonical_programmatic_options(), 'external pack workflow should reject unknown keys, coercion, and values outside fixed bounds');
+    });
+
+    test_case('quality Polish PoliMorf tools use distinct strict CLI contracts', function (): void {
+        assert_same([], wp_fts_ppew_case_uses_distinct_strict_cli_contracts(), 'the importer and external builder should accept only their own typed switches');
+    });
+
     test_case('quality Polish PoliMorf external pack workflow rejects output inside plugin root', function (): void {
         assert_same([], wp_fts_ppew_case_rejects_output_inside_plugin_root(), 'external pack workflow should reject plugin-root output paths');
     });

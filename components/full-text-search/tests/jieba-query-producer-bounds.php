@@ -17,7 +17,8 @@ final class WP_FTS_Jieba_Query_Bound_Storage implements WP_FTS_Set_Oriented_Sear
         return [
             'results' => [['doc_id' => 77, 'score' => 1.0]],
             'has_more' => false,
-            'query_lang' => (string) ($options['query_lang'] ?? 'zh'),
+            'next_cursor' => null,
+            'previous_cursor' => null,
         ];
     }
 
@@ -65,7 +66,7 @@ function wp_fts_jieba_query_bound_segmenter(WP_FTS_Analyzer $analyzer): WP_FTS_C
 
 /**
  * Exercise both sides of the public twelve-occurrence boundary in one fresh
- * process and return source-bound work, result, time, and memory evidence.
+ * process and return source-bound work, result, time, and memory record.
  *
  * @param string[] $queryCharacters
  * @return array<string,mixed>
@@ -80,14 +81,8 @@ function wp_fts_jieba_query_bound_measure(string $maximumQuery, array $queryChar
         'segmenter_packs_by_lang' => ['zh' => true],
     ]);
     $segmenter = wp_fts_jieba_query_bound_segmenter($analyzer);
-    $pipeline = (new ReflectionProperty($analyzer, 'languagePipeline'))->getValue($analyzer);
-    $producerLimitEnabled = (bool) (new ReflectionProperty(
-        $pipeline,
-        'cjkTokenizerAcceptsProducerLimit'
-    ))->getValue($pipeline);
     $storage = new WP_FTS_Jieba_Query_Bound_Storage();
-    $searcher = WP_FTS_Searcher::for_set_oriented_storage($storage, $analyzer);
-    $scansBefore = wp_fts_jieba_query_bound_counter($segmenter, 'dictionaryScanCount');
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
     $readsBefore = wp_fts_jieba_query_bound_counter($segmenter, 'indexedRangeReadCount');
     $candidatesBefore = wp_fts_jieba_query_bound_counter($segmenter, 'cachedCandidateCount');
 
@@ -115,7 +110,6 @@ function wp_fts_jieba_query_bound_measure(string $maximumQuery, array $queryChar
     // query allocation below that mark.
     $allocatorPeakDelta = max(0, memory_get_peak_usage(true) - $usageBefore);
     $exactPeakDelta = max(0, memory_get_peak_usage(false) - $exactUsageBefore);
-    $scansAfterSearch = wp_fts_jieba_query_bound_counter($segmenter, 'dictionaryScanCount');
     $readsAfterSearch = wp_fts_jieba_query_bound_counter($segmenter, 'indexedRangeReadCount');
     $candidatesAfterSearch = wp_fts_jieba_query_bound_counter($segmenter, 'cachedCandidateCount');
     $rejectedStorageSearchCalls = $storage->searchCalls;
@@ -132,17 +126,29 @@ function wp_fts_jieba_query_bound_measure(string $maximumQuery, array $queryChar
     ]);
 
     $peakDelta = max($allocatorPeakDelta, $exactPeakDelta);
-    $searchScanDelta = $scansAfterSearch - $scansBefore;
     $searchReadDelta = $readsAfterSearch - $readsBefore;
     $searchCandidateDelta = $candidatesAfterSearch - $candidatesBefore;
     $producerReadDelta = wp_fts_jieba_query_bound_counter($segmenter, 'indexedRangeReadCount')
         - $readsAfterSearch;
-    $dictionaryEvidence = WP_FTS_ChineseJiebaSegmenter::default_source_evidence();
-    $lookupEvidence = WP_FTS_ChineseJiebaSegmenter::default_lookup_evidence();
+    $runtimeManifest = WP_FTS_ChineseJiebaSegmenter::runtime_manifest();
+    $upstream = $runtimeManifest['upstream'];
+    $dictionaryArtifact = $runtimeManifest['artifacts']['dictionary'];
+    $lookupArtifact = $runtimeManifest['artifacts']['lookup'];
+    $dictionaryPath = WP_FTS_ChineseJiebaSegmenter::default_source_file();
+    $lookupPath = WP_FTS_ChineseJiebaSegmenter::default_lookup_file();
+    $dictionaryRecord = [
+        'available' => is_file($dictionaryPath)
+            && filesize($dictionaryPath) === $dictionaryArtifact['bytes']
+            && hash_file('sha256', $dictionaryPath) === $dictionaryArtifact['sha256'],
+    ];
+    $lookupRecord = [
+        'available' => is_file($lookupPath)
+            && filesize($lookupPath) === $lookupArtifact['bytes']
+            && hash_file('sha256', $lookupPath) === $lookupArtifact['sha256'],
+    ];
     $passed = $rejection instanceof WP_FTS_Search_Budget_Exceeded
         && $rejection->budget() === 'analyzer occurrences'
         && $rejectedStorageSearchCalls === 0
-        && $searchScanDelta === 0
         && $searchReadDelta === 0
         && $searchCandidateDelta === 0
         && $elapsedSeconds < 1.0
@@ -154,9 +160,8 @@ function wp_fts_jieba_query_bound_measure(string $maximumQuery, array $queryChar
         && $storage->searchCalls === 1
         && count($storage->lastGroups) === 12
         && array_sum(array_map('count', $storage->lastGroups)) === 12
-        && $producerLimitEnabled
-        && $dictionaryEvidence['available'] === true
-        && $lookupEvidence['available'] === true;
+        && $dictionaryRecord['available'] === true
+        && $lookupRecord['available'] === true;
 
     return [
         'schema' => 'wp-fts-jieba-query-producer-bound-v1',
@@ -188,18 +193,17 @@ function wp_fts_jieba_query_bound_measure(string $maximumQuery, array $queryChar
             'php_peak_delta_bytes_lte' => 4 * 1024 * 1024,
         ],
         'bundled_source' => [
-            'repository' => WP_FTS_ChineseJiebaSegmenter::SOURCE_REPOSITORY,
-            'commit' => WP_FTS_ChineseJiebaSegmenter::SOURCE_COMMIT,
-            'file' => WP_FTS_ChineseJiebaSegmenter::SOURCE_FILE,
-            'dictionary_sha256' => WP_FTS_ChineseJiebaSegmenter::SOURCE_SHA256,
-            'dictionary_bytes' => WP_FTS_ChineseJiebaSegmenter::SOURCE_BYTE_SIZE,
-            'lookup_sha256' => WP_FTS_ChineseJiebaSegmenter::LOOKUP_SHA256,
-            'lookup_bytes' => WP_FTS_ChineseJiebaSegmenter::LOOKUP_BYTE_SIZE,
-            'lookup_ranges' => WP_FTS_ChineseJiebaSegmenter::LOOKUP_RANGE_COUNT,
-            'available' => $dictionaryEvidence['available'] === true
-                && $lookupEvidence['available'] === true,
+            'repository' => $upstream['repository'],
+            'commit' => $upstream['commit'],
+            'file' => $upstream['dictionary_path'],
+            'dictionary_sha256' => $dictionaryArtifact['sha256'],
+            'dictionary_bytes' => $dictionaryArtifact['bytes'],
+            'lookup_sha256' => $lookupArtifact['sha256'],
+            'lookup_bytes' => $lookupArtifact['bytes'],
+            'lookup_ranges' => $lookupArtifact['ranges'],
+            'available' => $dictionaryRecord['available'] === true
+                && $lookupRecord['available'] === true,
         ],
-        'complete_dictionary_scans' => $searchScanDelta,
         'indexed_range_reads' => $searchReadDelta,
         'cached_candidate_delta' => $searchCandidateDelta,
         'rejected_storage_search_calls' => $rejectedStorageSearchCalls,
@@ -213,7 +217,6 @@ function wp_fts_jieba_query_bound_measure(string $maximumQuery, array $queryChar
         'accepted_storage_search_calls' => $storage->searchCalls,
         'accepted_group_count' => count($storage->lastGroups),
         'accepted_alternative_count' => array_sum(array_map('count', $storage->lastGroups)),
-        'producer_limit_enabled' => $producerLimitEnabled,
     ];
 }
 
@@ -271,6 +274,10 @@ wp_fts_jieba_query_bound_check(
     "the fresh public Jieba query proof must finish cleanly: {$stderr}"
 );
 $measurement = json_decode(trim((string) $stdout), true, 64, JSON_THROW_ON_ERROR);
+$runtimeManifest = WP_FTS_ChineseJiebaSegmenter::runtime_manifest();
+$upstream = $runtimeManifest['upstream'];
+$dictionaryArtifact = $runtimeManifest['artifacts']['dictionary'];
+$lookupArtifact = $runtimeManifest['artifacts']['lookup'];
 wp_fts_jieba_query_bound_check(
     is_array($measurement)
         && ($measurement['schema'] ?? null) === 'wp-fts-jieba-query-producer-bound-v1'
@@ -285,7 +292,7 @@ wp_fts_jieba_query_bound_check(
             ['reset_peak_minus_pre_search_usage', 'lifetime_peak_minus_pre_search_usage'],
             true
         ),
-    'the public Jieba query evidence must be a passing fixed-schema artifact from an authoritative fresh 128M process'
+    'the public Jieba query record must be a passing fixed-schema artifact from an authoritative fresh 128M process'
 );
 wp_fts_jieba_query_bound_check(
     ($measurement['query_bytes'] ?? null) === 4095
@@ -298,12 +305,12 @@ wp_fts_jieba_query_bound_check(
         && ($measurement['limits']['producer_stop_items'] ?? null) === 13
         && ($measurement['limits']['elapsed_milliseconds_lt'] ?? null) === 1000
         && ($measurement['limits']['php_peak_delta_bytes_lte'] ?? null) === 4 * 1024 * 1024
-        && ($measurement['bundled_source']['commit'] ?? null) === WP_FTS_ChineseJiebaSegmenter::SOURCE_COMMIT
-        && ($measurement['bundled_source']['dictionary_sha256'] ?? null) === WP_FTS_ChineseJiebaSegmenter::SOURCE_SHA256
-        && ($measurement['bundled_source']['dictionary_bytes'] ?? null) === WP_FTS_ChineseJiebaSegmenter::SOURCE_BYTE_SIZE
-        && ($measurement['bundled_source']['lookup_sha256'] ?? null) === WP_FTS_ChineseJiebaSegmenter::LOOKUP_SHA256
-        && ($measurement['bundled_source']['lookup_bytes'] ?? null) === WP_FTS_ChineseJiebaSegmenter::LOOKUP_BYTE_SIZE
-        && ($measurement['bundled_source']['lookup_ranges'] ?? null) === WP_FTS_ChineseJiebaSegmenter::LOOKUP_RANGE_COUNT
+        && ($measurement['bundled_source']['commit'] ?? null) === $upstream['commit']
+        && ($measurement['bundled_source']['dictionary_sha256'] ?? null) === $dictionaryArtifact['sha256']
+        && ($measurement['bundled_source']['dictionary_bytes'] ?? null) === $dictionaryArtifact['bytes']
+        && ($measurement['bundled_source']['lookup_sha256'] ?? null) === $lookupArtifact['sha256']
+        && ($measurement['bundled_source']['lookup_bytes'] ?? null) === $lookupArtifact['bytes']
+        && ($measurement['bundled_source']['lookup_ranges'] ?? null) === $lookupArtifact['ranges']
         && ($measurement['bundled_source']['available'] ?? false) === true,
     'the artifact must bind its thresholds and exact bundled dictionary/index identities'
 );
@@ -317,10 +324,9 @@ wp_fts_jieba_query_bound_check(
     'the rejected maximum Han query must not reach set-oriented storage'
 );
 wp_fts_jieba_query_bound_check(
-    $measurement['complete_dictionary_scans'] === 0
-        && $measurement['indexed_range_reads'] === 0
+    $measurement['indexed_range_reads'] === 0
         && $measurement['cached_candidate_delta'] === 0,
-    'the rejected maximum Han query must perform no dictionary scan, range read, or candidate retention'
+    'the rejected maximum Han query must perform no range read or candidate retention'
 );
 wp_fts_jieba_query_bound_check(
     (float) ($measurement['elapsed_seconds'] ?? INF) < 1.0,
@@ -348,11 +354,6 @@ wp_fts_jieba_query_bound_check(
     ($measurement['accepted_group_count'] ?? null) === 12
         && ($measurement['accepted_alternative_count'] ?? null) === 12,
     'the accepted boundary must preserve exactly twelve logical groups and alternatives'
-);
-
-wp_fts_jieba_query_bound_check(
-    ($measurement['producer_limit_enabled'] ?? false) === true,
-    'the public bundled segmenter path must enable its finite producer ceiling'
 );
 
 $measurement['checks'] = $wp_fts_jieba_query_bound_checks;

@@ -19,8 +19,8 @@ clear reproducible bugs.
 The plugin is now a thin WordPress adapter around the reusable
 `wp-php-toolkit/full-text-search` Composer component in
 `components/full-text-search/`. The component owns the framework-neutral FTS
-engine; this plugin owns WordPress hooks, post extraction, MySQL storage, admin
-UI, WP-CLI, REST/search integration, and Playground packaging.
+engine; this plugin owns WordPress hooks, post extraction, relational database
+storage, admin UI, WP-CLI, REST/search integration, and Playground packaging.
 
 The Playground preview downloads the version-pinned core release ZIP, verifies
 its SHA-256 digest before activation, and opens the admin-only Settings >
@@ -102,25 +102,22 @@ wp fts search "example query" --lang=en --limit=5
 ```
 
 The output includes WordPress post IDs, deterministic relational scores,
-cursor-page state, stored metadata, and optional snippets. Interactive totals
-are deliberately unknown. `score` is relative to the current query; it is not a
-percentage and should not be compared across unrelated queries.
+cursor-page state, stored metadata, and optional snippets. It does not include
+a total. `score` is relative to the current query; it is not a percentage and
+should not be compared across unrelated queries.
 
 ## Ranking Field Weights
 
 Settings > Full-Text Search > Settings includes ranking weights for the
 WordPress post fields extracted into the index: title, main content, excerpt,
-taxonomy terms, selected custom fields, and the legacy rendered-only field. The controls
+taxonomy terms, and selected custom fields. The controls
 accept whole numbers from `1` through `100`; higher numbers make matches in that
 field count more strongly during ranking. To exclude a field entirely, remove
 it with the `wp_fts_post_index_fields` filter instead of assigning a zero weight.
 
 The defaults match the extractor defaults: title `5.0`, content `1.0`, excerpt
-`2.0`, taxonomy terms `2.0`, selected custom fields `1.0`, and rendered-only
-content `1.0`. The bounded relational worker rejects dynamic block, shortcode,
-and callback rendering before execution; the rendered weight remains only for
-test-only in-memory component callers. These are index-time
-weights stored with indexed content, so
+`2.0`, taxonomy terms `2.0`, and selected custom fields `1.0`. These are
+index-time weights stored with indexed content, so
 changed weights fully affect existing content only after it is reindexed.
 Saving changed weights marks stale reindex debt in Health/status; it does not
 index content during the settings save.
@@ -145,7 +142,7 @@ searched words, which can be slower or noisier.
 
 The saved minimum applies to front-end replacement, wp-admin Posts search
 replacement, the Sandbox, and `WP_FTS_Plugin::search()`. `wp fts search`
-accepts `--prefix_matching` and `--prefix_min_length` / `--prefix-min-length`.
+accepts `--prefix_matching` and `--prefix_min_length`.
 There is no relational completion cap: truncating the range would make valid
 matches depend on vocabulary order, while enumerating it would recreate the
 fanout this backend is designed to avoid.
@@ -158,14 +155,12 @@ the fixed query shape and deployment guidance.
 ## Architecture
 
 - `wp-php-toolkit/full-text-search` provides the analyzer, term generation,
-  storage contracts, `WP_FTS_Indexer`, and `WP_FTS_Searcher`. Its in-memory
-  storage oracle is loaded only by tests.
+  relational storage contract, `WP_FTS_Indexer`, and `WP_FTS_Searcher`.
 - WordPress activation, post-save/status/delete hooks, cron, optional REST, and WP-CLI
   live in the plugin adapter and wire WordPress posts into the component.
 - `WP_FTS_PostContentExtractor` extracts title, content, excerpt, taxonomy terms,
   and configured custom fields from the worker's authoritative attached
-  snapshot into weighted fields plus bounded result metadata. The relational
-  path rejects dynamic rendering before extraction.
+  snapshot into weighted fields plus a bounded saved-content snippet source.
 - `WP_FTS_Analyzer` strips non-visible HTML, normalizes and tokenizes text,
   routes language gaps, and stems or lemmatizes through the language pipeline.
 - Terms are stored under language namespaces and query occurrences use one
@@ -254,18 +249,18 @@ existing site per event; new sites use the same provisioning path.
 
 | Area | Current support |
 | --- | --- |
-| Indexing | Builds derived `fts_*` tables from WordPress posts, including title, static content, excerpt, batch-preloaded taxonomy terms and selected custom fields, boosts, and bounded result metadata. Dynamic rendering is rejected before callbacks run. |
+| Indexing | Builds derived `fts_*` tables from persisted WordPress post fields: title, content, excerpt, batch-preloaded taxonomy terms, selected custom fields, field boosts, and a bounded saved-content snippet source. |
 | Lifecycle updates | Activation repairs schema, WP-Cron drains bounded runtime work, save/status/taxonomy/selected-meta hooks coalesce durable generations, scope changes reconcile in keyset batches, documents that leave the corpus are physically removed, and `wp fts reindex` rebuilds through the same worker. |
 | Language routing | Terms are stored in language namespaces. Explicit `--lang`, the batch-preloaded wp-admin `FTS Language` field, set-oriented Polylang/WPML assignment snapshots, and HTML `lang`/`xml:lang` scopes route worker content before conservative detector fallback. No per-post multilingual API runs in the worker loop. |
 | Search | Exact `OR`/`AND`, final-word prefix ranges, morphology, field impact, optional recency, and signed adjacent cursors use at most planning, ranking, and page-hydration statements. Current canonical visibility and pending work are filtered before `LIMIT`; totals remain unknown. |
 | Snippets | Search can return snippets from bounded content-only sidecars, with analyzer-aware highlighting performed for the returned page only. |
 | Surfaces | WP-CLI is the main operational surface. The plugin also provides an explicitly enabled REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
-| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. Their bounded relational explain reports storage, logical groups and resolved alternatives, the selected AND anchor, final-prefix range use, statement count, unknown-total semantics, and recency state without a second result-posting pass. Traces also include performance-budget status, a bounded `posts_pre_query` hook pipeline around Language FTS, and redacted SQL summaries when the environment already collects `$wpdb->queries`; they are request-local rather than persistent logs. |
+| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. Their bounded relational explain reports storage, logical groups and resolved alternatives, the selected AND anchor, final-prefix range use, statement count, cursor state, and recency settings without a second result-posting pass. Traces also include performance-budget status, a bounded `posts_pre_query` hook pipeline around Language FTS, and redacted SQL summaries when the environment already collects `$wpdb->queries`; they are request-local rather than persistent logs. |
 
 ## Exact Relational Pages
 
-The WordPress/MySQL path never retrieves posting lists into PHP and has no
-candidate-cap mode. One dictionary statement resolves exact alternatives and,
+The WordPress/MySQL path never materializes per-term posting collections in PHP
+and has one relational execution mode. One dictionary statement resolves exact alternatives and,
 for a final-word prefix, sums `doc_freq` across one surface range without
 reading postings or returning completions to PHP. One set-oriented statement
 ranks exact membership. Multi-group prefix `AND` compares that range cost with
@@ -281,18 +276,13 @@ shape with page-sized PHP memory, but database work is proportional to matching
 postings; sites beyond that small/medium-site tradeoff should use a dedicated
 search service.
 
-Pages return `has_more`, signed forward/reverse cursors, `total: null`, and
-`total_relation: unknown`. Numbered deep offsets and synchronous exact totals
-would require repeated or exhaustive work. Valid WordPress query shapes with
+Pages return `has_more` and signed forward/reverse cursors. They do not carry
+a total. Numbered deep offsets and synchronous exact totals would require
+repeated or exhaustive work. Valid WordPress query shapes with
 unsupported membership, projection, ordering, page-size, or numbered-pagination
 constraints remain on core search. Once FTS owns an otherwise-supported search,
 an unavailable index or malformed/oversized adapter input fails closed instead
 of silently running an unindexed core `LIKE`/`OFFSET` query.
-
-Candidate-cap options remain inputs for the test-only in-memory component
-oracle. The plugin rejects them before relational planning;
-they cannot alter membership, add posting reads, or select another production
-path.
 
 Those traces also show a Performance budget row for completed search timing
 data. By default, total search time is compared with a `100ms` budget and the
@@ -336,9 +326,8 @@ that usually means `en-US`/`en` unless you choose another language.
 Terms are stored in language partitions such as `pl:chrzastka` or `en:search`,
 and query terms must resolve to the same partition to match. Automatic detection
 does not search every language because broad cross-language searches would add
-noisy matches and make ranking less useful. In the sandbox, use the `Indexed
-terms` column to inspect the actual stored postings when the visible preview
-text and indexed analyzer output differ.
+noisy matches and make ranking less useful. Use an explicit language when the
+same surface can belong to more than one language partition.
 
 The baseline selectable and detectable routing set covers English (`en`),
 Mandarin/Chinese (`zh`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French
@@ -350,13 +339,13 @@ morphology lane.
 
 | Language or partition | Current analyzer tier | Boundary |
 | --- | --- | --- |
-| Polish (`pl`) | The WordPress runtime keeps the bundled Polish lemmatizer behavior by default: it uses the compressed full Polish runtime pack when gzip support is available and falls back to the bundled fixture pack otherwise. `lemma_packs_by_lang['pl']` replaces or disables that default. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
-| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Bundled source-backed UniMorph analyzer packs are available as opt-in gzip-sharded lemma packs from Settings > Full-Text Search > Analyzer packs, or through `lemma_packs_by_lang`. | Packs are CC BY-SA-family or upstream-declared data, default-disabled for production runtime, and not synonym, phrase, or cross-language expansion. Built-in Snowball/baseline/no-op behavior remains the fallback when no pack is configured. |
-| Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Optional Wamania-backed Snowball support when Composer dependencies are installed and the compliance harness accepts them. | Dutch now has a source-backed UniMorph pack when configured; the Wamania path is only the no-pack fallback. Other Wamania languages are treated as no-ops unless they become verified. |
-| Chinese (`zh`) | Deterministic CJK fallback plus optional Jieba dictionary segmentation from the curated pinned runtime, or the initialized source checkout during development, via `segmenter_packs_by_lang`. | Release ZIPs carry only the verified MIT dictionary, license, and attested lookup. Source-only custom dictionaries are fixture-only and omitted by the WordPress runtime. Fallback n-grams remain enabled. |
+| Polish (`pl`) | The WordPress runtime loads the bundled compressed `pl-polimorf-20180722-full` pack when gzip support is available. `lemma_packs_by_lang['pl']` replaces or disables that default; without a valid pack, the conservative Polish stemmer runs. | The raw CLARIN-PL source archive and extracted TSV are not bundled. The small PoliMorf contract pack lives under `tests/fixtures/` and is never a runtime fallback. |
+| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Bundled source-backed UniMorph analyzer packs are available as opt-in gzip-sharded lemma packs from Settings > Full-Text Search > Analyzer packs, or through `lemma_packs_by_lang`. | Packs activate only through plugin configuration and are not synonym, phrase, or cross-language expansion. Built-in Snowball/baseline/no-op behavior remains the fallback when no pack is configured. |
+| Catalan (`ca`), Dutch Porter (`nl`) | Wamania-backed Snowball support from the required Composer runtime. | Dutch has a source-backed UniMorph pack when configured; the Wamania path is the no-pack fallback. Other Wamania languages are treated as no-ops unless they become verified. |
+| Chinese (`zh`) | Deterministic CJK fallback plus optional Jieba dictionary segmentation from the curated pinned runtime, or the initialized source checkout during development, via `segmenter_packs_by_lang`. | Release ZIPs carry the verified runtime manifest, MIT dictionary, license, and attested lookup. Custom dictionaries are not supported. Fallback n-grams remain enabled. |
 | Japanese (`ja`), Korean (`ko`) | Deterministic CJK/Hangul fallback tokenization with selectable/detectable language partitions. | No Japanese or Korean runtime lemma pack is committed because the current PHP pipeline has no source-backed word segmenter for those languages. Pinned UniMorph source submodules are retained for future external-pack work. |
 | Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common plural-oblique forms. | UniMorph Urdu imports technically, but the upstream `unimorph/urd` repository has no license evidence, so no generated Urdu pack is committed. |
-| Generic packs | `lemma_packs_by_lang` accept local manifest-backed packs with matching `language` values. | Missing, invalid, disabled, or language-mismatched packs fall back safely. |
+| Generic packs | `lemma_packs_by_lang` accepts local manifest-backed packs with matching `language` values. | An absent entry or native `false` selects the built-in analyzer. A configured missing, invalid, or language-mismatched pack stops analyzer construction. |
 
 Morphology support must come from verified algorithms, analyzers, or
 manifest-backed lemmatizer packs. The plugin does not use hard-coded word
@@ -365,11 +354,12 @@ families for product behavior.
 Importer availability is not the same as pack-backed language support. To audit
 top-language readiness, run
 `php tools/audit-top-language-lemma-packs.php --pack-root=/path --json --require-pack-backed`.
-Languages reported as missing, fixture-only, or license-blocked are not ready to
+Languages reported as missing, invalid, or license-blocked are not ready to
 claim pack-backed quality. Chinese, Japanese, and Korean are tokenizer lanes
 rather than missing UniMorph lemma packs. The source tree keeps their optional
 or future source data as gitlinks; the WordPress release builder additionally
-stages the verified Jieba dictionary, license, and lookup under its runtime path.
+stages the verified Jieba manifest, dictionary, license, and lookup under its
+runtime path.
 
 The analyzer also provides CJK fallback tokenization with one-character runs
 kept as-is and longer runs emitted as character unigrams plus deterministic
@@ -377,7 +367,7 @@ overlapping n-grams up to 4 characters. Release ZIPs contain the curated Jieba
 runtime. For a source checkout, initialize the optional Jieba source with:
 
 ```sh
-git submodule update --init --recursive components/full-text-search/resources/sources/jieba
+components/full-text-search/tools/initialize-jieba-source.sh
 ```
 
 The runtime uses an attested first-codepoint lookup and verifies each dictionary
@@ -388,9 +378,9 @@ ship Thai dictionary segmentation.
 
 ## Snippets And Highlighting
 
-Snippets come from bounded metadata extracted during indexing, not from live
-post rendering at search time. When indexed fields provide HTML, a bounded HTML
-source is stored alongside plain text for fallback extraction and diagnostics.
+Snippets come from bounded plain text extracted from saved `post_content` during
+indexing, not from live post rendering at search time. Source markup is not
+stored in the result-document row.
 
 When highlighting is enabled, the highlighter compares snippet tokens through
 the same analyzer path used for the query. The result contains escaped visible
@@ -428,7 +418,7 @@ wp fts schedule-queue --format=json
 # issue and rerun a bounded batch or scoped reindex.
 
 # Atomically replace only the derived FTS generation and runtime indexing state.
-# Requires confirmation, reports unknown rather than scanned row counts, and
+# Requires confirmation, does not scan or report removed-row counts, and
 # preserves WordPress posts, plugin settings, analyzer options, and schema
 # version. It automatically queues one complete background reconciliation; do
 # not add a manual filtered reindex. process-batch can advance the queued scope.
@@ -448,7 +438,7 @@ wp fts search "fast durable search" --mode=AND --lang=en --limit=10
 wp fts search "fast durable search" --post_type=post,page --post_status=publish --snippet
 
 # Give recent posts a bounded query-time lift using indexed post_date_gmt metadata.
-wp fts search "fast durable search" --recency_boost=0.3 --recency_boost_half_life_days=30
+wp fts search "fast durable search" --recency_boost_strength=0.3 --recency_boost_half_life_days=30
 
 # Reconcile one missing/ineligible canonical post. Eligible canonical posts are
 # rejected because deleting only their derived row would be self-reversing.
@@ -482,11 +472,8 @@ wp fts optimize
   pre-coding gate for any future Thai TCC/dictionary tokenizer and the narrow
   pinned-source boundary for optional Chinese Jieba segmentation. The current
   plugin does not ship real Thai word segmentation.
-- [Polish fixture pack](docs/polish-morfologik-fixture-pack.md) explains the
-  opt-in Morfologik/PoliMorf-compatible lemmatizer contract slice.
-- [Polish verified stemmer](docs/polish-verified-stemmer.md) explains the
-  opt-in fixture-backed Polish stemmer slice and how it differs from
-  dictionary lemmatization.
+- [Polish PoliMorf packs](docs/polish-morfologik-fixture-pack.md) separates
+  the bundled full runtime from the test-only contract pack.
 
 ## Current Caveats
 
@@ -536,7 +523,6 @@ Current caveats:
 - Settings > Full-Text Search covers operational search/index defaults, but
   analyzer pack paths and custom field indexing still use options and filters;
 - custom field indexing must be configured;
-- shortcode rendering is opt-in;
 - no Thai dictionary segmentation;
 - Chinese Jieba dictionary segmentation is optional; releases carry the curated
   runtime, while source checkouts require the pinned submodule to be initialized;

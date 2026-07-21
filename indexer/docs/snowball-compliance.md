@@ -15,8 +15,8 @@ adapter advertises:
 - Hindi (`hi`) through a bundled generated PHP Snowball Hindi path;
 - Portuguese (`pt`) through a bundled generated PHP Snowball Portuguese path;
 - Indonesian (`id`) through a bundled generated PHP Snowball Indonesian path;
-- Catalan (`ca`) and Dutch Porter (`nl`) through `wamania/php-stemmer` only when
-  that optional Composer package is installed.
+- Catalan (`ca`) and Dutch Porter (`nl`) through the required
+  `wamania/php-stemmer` Composer package.
 
 The bundled Arabic, English, Spanish, French, Hindi, Portuguese, and Indonesian
 implementations are generated from `algorithms/arabic.sbl`,
@@ -70,17 +70,15 @@ For convenience, Composer also exposes:
 SNOWBALL_DATA_DIR=/path/to/snowball-data composer test:snowball
 ```
 
-Expected counts with the current official dataset inventory are:
-
-- without `vendor/`: `7 pass, 30 skip, 0 fail`;
-- with `vendor/` installed from the committed `composer.lock`: `9 pass, 28 skip, 0 fail`.
+With production dependencies installed from the committed `composer.lock`, the
+expected count for the current official dataset inventory is
+`9 pass, 28 skip, 0 fail`.
 
 The passing runtime datasets are bundled Arabic, English, Spanish, French,
-Hindi, Portuguese, and Indonesian, plus Catalan and Dutch Porter when Wamania is
-installed. Any
-`fail` result means a fixture, algorithm, or advertised-language contract
-regressed; missing Wamania classes are reported as dependency skips, not
-algorithm failures.
+Hindi, Portuguese, and Indonesian, plus Wamania-backed Catalan and Dutch
+Porter. Any `fail` result means a fixture, algorithm, or advertised-language
+contract regressed. A missing Wamania factory stops analyzer construction, so
+the harness cannot silently reduce its supported-language set.
 
 This is a Snowball stemmer compliance suite for the multilingual full-text
 pipeline. Lucene `analysis/common` remains the broader analyzer reference for
@@ -97,6 +95,5 @@ Indonesian paths preserve the Snowball BSD-3-Clause notice in
 `components/full-text-search/src/HindiSnowballStemmer.php`,
 `components/full-text-search/src/PortugueseSnowballStemmer.php`, and
 `components/full-text-search/src/IndonesianSnowballStemmer.php`.
-Missing Composer dependencies do not affect bundled Arabic, English, Spanish,
-French, Hindi, Portuguese, or Indonesian compliance; they only skip Wamania-backed
-Catalan and Dutch Porter runtime comparisons.
+Run Composer install before the harness. Wamania-backed Catalan and Dutch Porter
+are required comparisons, not dependency-conditional skips.

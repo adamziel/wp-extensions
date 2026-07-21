@@ -11,10 +11,58 @@ require_once __DIR__ . '/lemma-chunk-merge.php';
  */
 final class WP_FTS_PolishPolimorfImporter
 {
-    private const RUNTIME_FORMAT = 'wp-fts-polish-lemma-tsv-v1';
+    private const RUNTIME_FORMAT = WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV;
     private const SOURCE_LOCK_SCHEMA = 'wp-fts-polish-polimorf-source-lock/v1';
     private const MAX_NOTICE_METADATA_LINES = 64;
     private const MAX_NOTICE_METADATA_BYTES = 65536;
+    public const IMPORT_OPTION_KEYS = [
+        'source',
+        'out',
+        'pack_id',
+        'version',
+        'source_url',
+        'max_rows_per_file',
+        'chunk_rows',
+        'source_name',
+        'source_version',
+        'source_retrieval_note',
+        'importer_commit',
+        'tmp_dir',
+    ];
+    private const CLI_INTEGER_OPTION_KEYS = [
+        'max-rows-per-file',
+        'chunk-rows',
+    ];
+    private const CLI_VALUE_OPTION_KEYS = [
+        'source',
+        'out',
+        'pack-id',
+        'version',
+        'source-url',
+        'source-name',
+        'source-version',
+        'source-retrieval-note',
+        'importer-commit',
+        'tmp-dir',
+        ...self::CLI_INTEGER_OPTION_KEYS,
+    ];
+    private const STRING_OPTION_KEYS = [
+        'source',
+        'out',
+        'pack_id',
+        'version',
+        'source_url',
+        'source_name',
+        'source_version',
+        'source_retrieval_note',
+        'importer_commit',
+        'tmp_dir',
+    ];
+    private const PATH_OPTION_KEYS = [
+        'source',
+        'out',
+        'tmp_dir',
+    ];
 
     /**
      * @param array<string,mixed> $options
@@ -22,6 +70,7 @@ final class WP_FTS_PolishPolimorfImporter
      */
     public function import(array $options): array
     {
+        $this->assert_option_shapes($options);
         if (
             !function_exists('gzopen')
             || !function_exists('gzwrite')
@@ -33,23 +82,34 @@ final class WP_FTS_PolishPolimorfImporter
         }
 
         $sourcePath = $this->required_path($options, 'source');
-        $outDir = $this->required_string($options, 'out');
+        $outDir = $this->required_path_string($options, 'out');
         WP_FTS_LemmaSourceImportLimits::assert_source_output_separate($sourcePath, $outDir, 'PoliMorf');
-        $packId = (string) ($options['pack_id'] ?? 'pl-polimorf-20180722-full');
-        $version = (string) ($options['version'] ?? '2018.07.22-import-v1');
-        $sourceUrl = (string) ($options['source_url'] ?? 'https://clarin-pl.eu/dspace/bitstream/handle/11321/577/polimorf-20180722.tab.gz?isAllowed=y&sequence=1');
-        $fixtureOnly = $this->bool_option($options['fixture_only'] ?? false);
-        $rowsPerFile = max(1, (int) ($options['max_rows_per_file'] ?? 100000));
-        $chunkRows = (int) ($options['chunk_rows'] ?? WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS);
-        if ($chunkRows < 1 || $chunkRows > WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS) {
-            throw new RuntimeException('PoliMorf importer chunk rows must be between 1 and 200,000.');
-        }
-        $sourceName = (string) ($options['source_name'] ?? 'PoliMorf Polish morphological dictionary');
-        $sourceVersion = (string) ($options['source_version'] ?? '2018.07.22');
-        $retrievalNote = (string) ($options['source_retrieval_note'] ?? 'Source bytes are locked by URL, SHA-256, and byte count; retrieval timestamp is recorded outside deterministic importer output.');
-        $importerCommit = (string) ($options['importer_commit'] ?? 'recorded-in-task-result');
+        $packId = $this->optional_string($options, 'pack_id', 'pl-polimorf-20180722-full');
+        $version = $this->optional_string($options, 'version', '2018.07.22-import-v1');
+        $sourceUrl = $this->optional_string(
+            $options,
+            'source_url',
+            'https://clarin-pl.eu/dspace/bitstream/handle/11321/577/polimorf-20180722.tab.gz?isAllowed=y&sequence=1'
+        );
+        $rowsPerFile = $this->bounded_positive_integer_option($options, 'max_rows_per_file', 100000);
+        $chunkRows = $this->bounded_positive_integer_option(
+            $options,
+            'chunk_rows',
+            WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS
+        );
+        $sourceName = $this->optional_string($options, 'source_name', 'PoliMorf Polish morphological dictionary');
+        $sourceVersion = $this->optional_string($options, 'source_version', '2018.07.22');
+        $retrievalNote = $this->optional_string(
+            $options,
+            'source_retrieval_note',
+            'Source bytes are locked by URL, SHA-256, and byte count; retrieval timestamp is recorded outside deterministic importer output.'
+        );
+        $importerCommit = $this->optional_string($options, 'importer_commit', 'recorded-in-task-result');
 
-        $tmpDir = $this->prepare_temp_directory($options['tmp_dir'] ?? null);
+        $tmpParent = array_key_exists('tmp_dir', $options)
+            ? $this->required_path_string($options, 'tmp_dir')
+            : null;
+        $tmpDir = $this->prepare_temp_directory($tmpParent);
         $importComplete = false;
         $outputPrepared = false;
         try {
@@ -223,7 +283,6 @@ final class WP_FTS_PolishPolimorfImporter
             $manifest = $this->build_manifest([
                 'pack_id' => $packId,
                 'version' => $version,
-                'fixture_only' => $fixtureOnly,
                 'source_name' => $sourceName,
                 'source_version' => $sourceVersion,
                 'source_url' => $sourceUrl,
@@ -306,9 +365,18 @@ final class WP_FTS_PolishPolimorfImporter
      */
     public static function parse_cli_options(array $argv): array
     {
+        if (!array_is_list($argv)) {
+            throw new RuntimeException('PoliMorf importer arguments must be a list of strings.');
+        }
+
+        $valueOptions = array_fill_keys(self::CLI_VALUE_OPTION_KEYS, true);
+        $integerOptions = array_fill_keys(self::CLI_INTEGER_OPTION_KEYS, true);
         $options = [];
         for ($i = 0, $count = count($argv); $i < $count; $i++) {
-            $arg = (string) $argv[$i];
+            if (!is_string($argv[$i])) {
+                throw new RuntimeException('PoliMorf importer arguments must be strings.');
+            }
+            $arg = $argv[$i];
             if (!str_starts_with($arg, '--')) {
                 throw new RuntimeException("Unexpected argument: {$arg}");
             }
@@ -319,16 +387,55 @@ final class WP_FTS_PolishPolimorfImporter
                 $value = substr($arg, $equals + 1);
             } else {
                 $key = $arg;
-                if (isset($argv[$i + 1]) && !str_starts_with((string) $argv[$i + 1], '--')) {
-                    $value = (string) $argv[++$i];
+                if (isset($argv[$i + 1]) && is_string($argv[$i + 1]) && !str_starts_with($argv[$i + 1], '--')) {
+                    $value = $argv[++$i];
                 } else {
                     $value = true;
                 }
             }
-            $options[str_replace('-', '_', $key)] = $value;
+            if (!isset($valueOptions[$key])) {
+                throw new RuntimeException("Unsupported PoliMorf importer option --{$key}.");
+            }
+            if ($value === true) {
+                throw new RuntimeException("PoliMorf importer option --{$key} requires a value.");
+            }
+            if (isset($integerOptions[$key])) {
+                $value = self::parse_cli_positive_integer($key, $value);
+            }
+
+            $optionKey = str_replace('-', '_', $key);
+            if (array_key_exists($optionKey, $options)) {
+                throw new RuntimeException("PoliMorf importer option --{$key} was supplied more than once.");
+            }
+            $options[$optionKey] = $value;
         }
 
         return $options;
+    }
+
+    private static function parse_cli_positive_integer(string $key, mixed $value): int
+    {
+        if (!is_string($value)
+            || $value === ''
+            || strspn($value, '0123456789') !== strlen($value)
+            || $value[0] === '0'
+        ) {
+            throw new RuntimeException("PoliMorf importer option --{$key} must be a canonical positive integer.");
+        }
+
+        $maximum = (string) PHP_INT_MAX;
+        if (strlen($value) > strlen($maximum)
+            || (strlen($value) === strlen($maximum) && strcmp($value, $maximum) > 0)
+        ) {
+            throw new RuntimeException("PoliMorf importer option --{$key} exceeds the integer range.");
+        }
+
+        $integer = (int) $value;
+        if ((string) $integer !== $value) {
+            throw new RuntimeException("PoliMorf importer option --{$key} exceeds the integer range.");
+        }
+
+        return $integer;
     }
 
     /**
@@ -336,7 +443,7 @@ final class WP_FTS_PolishPolimorfImporter
      */
     private function required_path(array $options, string $key): string
     {
-        $path = $this->required_string($options, $key);
+        $path = $this->required_path_string($options, $key);
         if (!is_file($path)) {
             throw new RuntimeException("Required file --{$key} does not exist: {$path}");
         }
@@ -349,23 +456,102 @@ final class WP_FTS_PolishPolimorfImporter
      */
     private function required_string(array $options, string $key): string
     {
-        if (!isset($options[$key]) || !is_scalar($options[$key]) || trim((string) $options[$key]) === '') {
-            throw new RuntimeException("Missing required option --{$key}.");
+        if (
+            !array_key_exists($key, $options)
+            || !is_string($options[$key])
+            || $options[$key] === ''
+            || trim($options[$key]) !== $options[$key]
+        ) {
+            throw new RuntimeException("Missing required option --" . str_replace('_', '-', $key) . '.');
         }
 
-        return (string) $options[$key];
+        return $options[$key];
     }
 
-    private function bool_option(mixed $value): bool
+    /** Reject options outside the one deterministic PoliMorf import contract. */
+    private function assert_option_keys(array $options): void
     {
-        if (is_bool($value)) {
-            return $value;
+        $allowed = array_fill_keys(self::IMPORT_OPTION_KEYS, true);
+        foreach (array_keys($options) as $key) {
+            if (!is_string($key) || !isset($allowed[$key])) {
+                throw new RuntimeException('PoliMorf importer received an unsupported option.');
+            }
         }
-        if (is_scalar($value)) {
-            return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
+    }
+
+    /** Validate the complete option bag before probing extensions or paths. */
+    private function assert_option_shapes(array $options): void
+    {
+        $this->assert_option_keys($options);
+        $this->required_string($options, 'source');
+        $this->required_string($options, 'out');
+
+        foreach (self::STRING_OPTION_KEYS as $key) {
+            if (array_key_exists($key, $options)) {
+                $this->required_string($options, $key);
+            }
+        }
+        foreach (self::PATH_OPTION_KEYS as $key) {
+            if (!array_key_exists($key, $options)) {
+                continue;
+            }
+            $path = $options[$key];
+            if (strlen($path) > WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PATH_BYTES || str_contains($path, "\0")) {
+                throw new RuntimeException(
+                    'PoliMorf importer option --' . str_replace('_', '-', $key)
+                    . ' must be a path of at most '
+                    . number_format(WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PATH_BYTES)
+                    . ' bytes without null bytes.'
+                );
+            }
+        }
+        foreach (['max_rows_per_file', 'chunk_rows'] as $key) {
+            if (array_key_exists($key, $options)) {
+                $this->bounded_positive_integer_option($options, $key, 1);
+            }
+        }
+    }
+
+    private function optional_string(array $options, string $key, string $default): string
+    {
+        if (!array_key_exists($key, $options)) {
+            return $default;
         }
 
-        return false;
+        return $this->required_string($options, $key);
+    }
+
+    private function bounded_positive_integer_option(array $options, string $key, int $default): int
+    {
+        if (!array_key_exists($key, $options)) {
+            return $default;
+        }
+        $value = $options[$key];
+        if (!is_int($value) || $value < 1 || $value > WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS) {
+            throw new RuntimeException(
+                'PoliMorf importer option --' . str_replace('_', '-', $key)
+                . ' must be an integer between 1 and '
+                . number_format(WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS)
+                . '.'
+            );
+        }
+
+        return $value;
+    }
+
+    private function required_path_string(array $options, string $key): string
+    {
+        $path = $this->required_string($options, $key);
+        if (strlen($path) > WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PATH_BYTES || str_contains($path, "\0")) {
+            throw new RuntimeException(
+                'PoliMorf importer option --' . str_replace('_', '-', $key)
+                . ' must be a path of at most '
+                . number_format(WP_FTS_LemmaSourceImportLimits::MAX_SOURCE_PATH_BYTES)
+                . ' bytes without null bytes.'
+            );
+        }
+
+        return $path;
     }
 
     /** Refuse caller-owned files, symlink roots, and non-empty pack targets. */
@@ -388,11 +574,11 @@ final class WP_FTS_PolishPolimorfImporter
     }
 
     /** Create a unique owned child beneath the optional caller-owned parent. */
-    private function prepare_temp_directory(mixed $requested): string
+    private function prepare_temp_directory(?string $requested): string
     {
         $parent = sys_get_temp_dir();
-        if (is_scalar($requested) && trim((string) $requested) !== '') {
-            $parent = (string) $requested;
+        if ($requested !== null) {
+            $parent = $requested;
         }
         if (is_file($parent)) {
             throw new RuntimeException("Temporary parent path is a file: {$parent}");
@@ -818,7 +1004,6 @@ final class WP_FTS_PolishPolimorfImporter
         $lookupPath = $shard['path'] . '.lookup';
         $lookup = WP_FTS_LemmaPackLookupIndex::build(
             $shard['path'],
-            WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
             $runtimeSha256,
             $lookupPath
         );
@@ -865,8 +1050,6 @@ final class WP_FTS_PolishPolimorfImporter
             'pack_id' => $data['pack_id'],
             'language' => 'pl',
             'version' => $data['version'],
-            'fixture_only' => $data['fixture_only'],
-            'default_enabled' => false,
             'capabilities' => [
                 'dictionary-lemmatizer',
                 'ambiguous-form-noop',
@@ -914,12 +1097,10 @@ final class WP_FTS_PolishPolimorfImporter
             'provenance' => [
                 'importer' => 'indexer/tools/import-polish-polimorf-lemmatizer.php',
                 'importer_commit' => $data['importer_commit'],
-                'importer_command' => $this->canonical_importer_command((string) $data['pack_id'], (string) $data['version'], (string) $data['source_url'], (bool) $data['fixture_only']),
-                'runtime_compression' => WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
+                'importer_command' => $this->canonical_importer_command((string) $data['pack_id'], (string) $data['version'], (string) $data['source_url']),
                 'no_runtime_network_access' => true,
-                'no_full_third_party_dictionary_dump' => (bool) $data['fixture_only'],
-                'full_third_party_dictionary_dump_generated' => !(bool) $data['fixture_only'],
-                'generated_pack_default_enabled' => false,
+                'no_full_third_party_dictionary_dump' => false,
+                'full_third_party_dictionary_dump_generated' => true,
             ],
         ];
     }
@@ -944,7 +1125,6 @@ final class WP_FTS_PolishPolimorfImporter
                 'language' => 'pl',
                 'kind' => 'lemmatizer',
                 'runtime_pack_committed' => false,
-                'default_enabled' => false,
             ],
             'source' => [
                 'name' => $manifest['source']['name'],
@@ -971,6 +1151,7 @@ final class WP_FTS_PolishPolimorfImporter
                 'decoded_byte_count' => $runtimeDecodedBytes,
                 'encoded_byte_count' => $runtimeBytes,
                 'compressed_byte_count' => $runtimeBytes,
+                'compression' => WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
                 'lookup_index_format' => WP_FTS_LemmaPackLookupIndex::FORMAT,
                 'lookup_index_file_count' => count($manifest['runtime']['files']),
                 'lookup_index_byte_count' => $lookupBytes,
@@ -986,13 +1167,12 @@ final class WP_FTS_PolishPolimorfImporter
                 'unsupported_language_policy' => 'return_original_normalized_term',
             ],
             'release' => [
-                'default_enabled' => false,
-                'claim_boundary' => 'Full PoliMorf-derived Polish lemmatizer evidence only. Runtime pack remains opt-in and is not committed unless packaging review approves the generated third-party data size.',
+                'claim_boundary' => 'Full PoliMorf-derived Polish lemmatizer only. Runtime pack activates only through plugin configuration and is not committed unless packaging review approves the generated third-party data size.',
             ],
         ];
     }
 
-    private function canonical_importer_command(string $packId, string $version, string $sourceUrl, bool $fixtureOnly): string
+    private function canonical_importer_command(string $packId, string $version, string $sourceUrl): string
     {
         $parts = [
             'php indexer/tools/import-polish-polimorf-lemmatizer.php',
@@ -1002,10 +1182,6 @@ final class WP_FTS_PolishPolimorfImporter
             '--version=' . $version,
             '--source-url=' . $sourceUrl,
         ];
-        if ($fixtureOnly) {
-            $parts[] = '--fixture-only=true';
-        }
-
         return implode(' ', $parts);
     }
 

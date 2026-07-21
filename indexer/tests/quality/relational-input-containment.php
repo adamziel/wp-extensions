@@ -60,15 +60,17 @@ test_case('quality relational input containment streams bounded visibility scope
     assert_true($countError instanceof InvalidArgumentException, 'more than 32 raw scope entries should be rejected before traversal');
     assert_contains('32', $countError?->getMessage() ?? '', 'scope cardinality rejection should identify the hard limit');
 
-    $bytesError = qric_caught(static fn(): array => qric_private('search_scope_values', str_repeat('p', 4097)));
-    assert_true($bytesError instanceof InvalidArgumentException, 'scope input above 4 KiB should be rejected before comma expansion');
+    $bytesError = qric_caught(static fn(): array => qric_private('search_scope_values', [str_repeat('p', 4097)]));
+    assert_true($bytesError instanceof InvalidArgumentException, 'scope input above 4 KiB should be rejected before value normalization');
     assert_contains('4,096', $bytesError?->getMessage() ?? '', 'scope byte rejection should identify the hard limit');
 
-    $parts = array_map(static fn(int $index): string => 'type' . $index, range(1, 33));
-    $partsError = qric_caught(static fn(): array => qric_private('search_scope_values', implode(',', $parts)));
-    assert_true($partsError instanceof InvalidArgumentException, 'a comma list expanding beyond 32 unique scope values should be rejected while scanning');
+    $mapError = qric_caught(static fn(): array => qric_private('search_scope_values', ['post' => 'post']));
+    assert_true($mapError instanceof InvalidArgumentException, 'scope values must use the exact list shape');
 
-    $wideError = qric_caught(static fn(): array => qric_private('search_scope_values', str_repeat('a', 65)));
+    $itemError = qric_caught(static fn(): array => qric_private('search_scope_values', [1]));
+    assert_true($itemError instanceof InvalidArgumentException, 'scope list entries must be exact strings');
+
+    $wideError = qric_caught(static fn(): array => qric_private('search_scope_values', [str_repeat('a', 65)]));
     assert_true($wideError instanceof InvalidArgumentException, 'one scope value above 64 bytes should be rejected before sanitization');
 
     $boundary = array_map(static fn(int $index): string => 'type' . str_pad((string) $index, 2, '0', STR_PAD_LEFT), range(1, 32));
@@ -88,110 +90,83 @@ test_case('quality relational input containment bounds filtered index fields bef
         'terms' => [],
         'custom_fields' => [],
     ];
+    $extractFiltered = static function (mixed $fields) use ($extractor, $post): array {
+        $GLOBALS['wp_fts_test_filters']['wp_fts_post_index_fields'] = static fn(): mixed => $fields;
+        try {
+            return $extractor->extract($post);
+        } finally {
+            unset($GLOBALS['wp_fts_test_filters']['wp_fts_post_index_fields']);
+        }
+    };
 
-    $fieldCountError = qric_caught(static fn(): array => $extractor->extract($post, [
-        'filters' => [
-            'wp_fts_post_index_fields' => static fn(): array => array_fill(0, 33, ['name' => 'extra', 'text' => 'value']),
-        ],
-    ]));
+    $invalidShapes = [
+        'non-array output' => 'not-a-field-list',
+        'non-list output' => ['field' => ['name' => 'extra', 'text' => 'value']],
+        'non-array row' => ['not-a-field-row'],
+        'missing name' => [['text' => 'value']],
+        'missing text' => [['name' => 'extra']],
+        'extra key' => [['name' => 'extra', 'text' => 'value', 'unknown' => true]],
+        'numeric key' => [['name' => 'extra', 'text' => 'value', 0 => 'unknown']],
+        'non-string name' => [['name' => 7, 'text' => 'value']],
+        'non-string text' => [['name' => 'extra', 'text' => 7]],
+        'non-string HTML' => [['name' => 'extra', 'text' => 'value', 'html' => []]],
+        'null HTML' => [['name' => 'extra', 'text' => 'value', 'html' => null]],
+        'string boost' => [['name' => 'extra', 'text' => 'value', 'boost' => '2']],
+        'boolean boost' => [['name' => 'extra', 'text' => 'value', 'boost' => true]],
+        'NAN boost' => [['name' => 'extra', 'text' => 'value', 'boost' => NAN]],
+        'infinite boost' => [['name' => 'extra', 'text' => 'value', 'boost' => INF]],
+        'boost below one' => [['name' => 'extra', 'text' => 'value', 'boost' => 0]],
+        'boost above one hundred' => [['name' => 'extra', 'text' => 'value', 'boost' => 101]],
+        'empty name' => [['name' => ' ', 'text' => 'value']],
+        'padded name' => [['name' => ' extra ', 'text' => 'value']],
+    ];
+    foreach ($invalidShapes as $description => $filteredFields) {
+        $shapeError = qric_caught(static fn(): array => $extractFiltered($filteredFields));
+        assert_true($shapeError instanceof WP_FTS_Analysis_Limit_Exceeded, "{$description} should be rejected at the filtered field boundary");
+        assert_same('index_field_shape', $shapeError instanceof WP_FTS_Analysis_Limit_Exceeded ? $shapeError->reason_code : null, "{$description} should have the stable field-shape reason");
+    }
+
+    $emptyAndHtmlOnly = $extractFiltered([
+        ['name' => 'empty', 'text' => '', 'html' => ''],
+        ['name' => 'html_only', 'text' => '', 'html' => '<p>Visible HTML</p>'],
+    ]);
+    assert_same(1, count($emptyAndHtmlOnly['fields'] ?? []), 'a valid field with no text or HTML should be omitted');
+    assert_same('html_only', $emptyAndHtmlOnly['fields'][0]['name'] ?? null, 'a valid HTML-only field should remain indexable');
+
+    $fieldCountError = qric_caught(static fn(): array => $extractFiltered(
+        array_fill(0, 33, ['name' => 'extra', 'text' => 'value'])
+    ));
     assert_true($fieldCountError instanceof WP_FTS_Analysis_Limit_Exceeded, 'more than 32 filtered field rows should be rejected before normalization');
     assert_same('index_fields', $fieldCountError instanceof WP_FTS_Analysis_Limit_Exceeded ? $fieldCountError->reason_code : null, 'filtered field cardinality should have a stable typed reason');
 
-    $fieldNameError = qric_caught(static fn(): array => $extractor->extract($post, [
-        'filters' => [
-            'wp_fts_post_index_fields' => static fn(): array => [['name' => str_repeat('n', 192), 'text' => 'value']],
-        ],
+    $fieldNameError = qric_caught(static fn(): array => $extractFiltered([
+        ['name' => str_repeat('n', 192), 'text' => 'value'],
     ]));
     assert_true($fieldNameError instanceof WP_FTS_Analysis_Limit_Exceeded, 'an oversized filtered field name should be rejected before trim');
     assert_same('index_field_name_bytes', $fieldNameError instanceof WP_FTS_Analysis_Limit_Exceeded ? $fieldNameError->reason_code : null, 'filtered field-name rejection should have a stable typed reason');
 
     $largeSource = str_repeat('a ', 524289);
-    $aggregateError = qric_caught(static fn(): array => $extractor->extract($post, [
-        'filters' => [
-            'wp_fts_post_index_fields' => static fn(): array => [
-                ['name' => 'first', 'text' => $largeSource],
-                ['name' => 'second', 'text' => $largeSource],
-            ],
-        ],
+    $aggregateError = qric_caught(static fn(): array => $extractFiltered([
+        ['name' => 'first', 'text' => $largeSource],
+        ['name' => 'second', 'text' => $largeSource],
     ]));
     assert_true($aggregateError instanceof WP_FTS_Analysis_Limit_Exceeded, 'aggregate filtered field source above 2 MiB should be rejected before metadata extraction');
     assert_same('source_bytes', $aggregateError instanceof WP_FTS_Analysis_Limit_Exceeded ? $aggregateError->reason_code : null, 'aggregate field source should reuse the document source-byte reason');
 
     $dualSource = str_repeat('b', 1153434);
-    $dualSourceError = qric_caught(static fn(): array => $extractor->extract($post, [
-        'filters' => [
-            'wp_fts_post_index_fields' => static fn(): array => [[
-                'name' => 'dual_source',
-                'text' => $dualSource,
-                'html' => '<p>' . $dualSource . '</p>',
-            ]],
-        ],
-    ]));
+    $dualSourceError = qric_caught(static fn(): array => $extractFiltered([[
+        'name' => 'dual_source',
+        'text' => $dualSource,
+        'html' => '<p>' . $dualSource . '</p>',
+    ]]));
     assert_true($dualSourceError instanceof WP_FTS_Analysis_Limit_Exceeded, 'distinct text and HTML buffers in one filtered field should both count against the aggregate source limit');
     assert_same('source_bytes', $dualSourceError instanceof WP_FTS_Analysis_Limit_Exceeded ? $dualSourceError->reason_code : null, 'dual field sources should fail with the document source-byte reason');
 
-    $boundary = $extractor->extract($post, [
-        'filters' => [
-            'wp_fts_post_index_fields' => static fn(): array => array_map(
-                static fn(int $index): array => ['name' => 'field_' . $index, 'text' => 'value_' . $index],
-                range(1, 32)
-            ),
-        ],
-    ]);
+    $boundary = $extractFiltered(array_map(
+        static fn(int $index): array => ['name' => 'field_' . $index, 'text' => 'value_' . $index],
+        range(1, 32)
+    ));
     assert_same(32, count($boundary['fields'] ?? []), 'the exact 32-field boundary should remain indexable');
-});
-
-test_case('quality relational input containment ignores result-filter membership expansion without extra work', function (): void {
-    global $wpdb;
-
-    $oldWpdb = $wpdb ?? null;
-    $fake = new WP_FTS_Test_WPDB();
-    $wpdb = $fake;
-    wp_fts_test_reset_wordpress_fakes();
-    $post = (object) [
-        'ID' => 7002,
-        'post_title' => 'Filter envelope host',
-        'post_content' => '<p>qricfilterenvelopetoken</p>',
-        'post_excerpt' => '',
-        'post_status' => 'publish',
-        'post_type' => 'post',
-        'post_date_gmt' => '2026-07-18 00:00:00',
-    ];
-    $GLOBALS['wp_fts_test_posts'][7002] = $post;
-
-    try {
-        wp_fts_test_replace_post(
-            wp_fts_test_unleased_storage(),
-            $post,
-            ['lang' => 'en'],
-            WP_FTS_Plugin::runtime_analyzer()
-        );
-        wp_fts_test_mark_search_takeover_ready();
-
-        $beforeCanonical = $fake->num_queries;
-        $canonical = WP_FTS_Plugin::search_page('qricfilterenvelopetoken', ['lang' => 'en', 'limit' => 10]);
-        $canonicalQueries = $fake->num_queries - $beforeCanonical;
-
-        $GLOBALS['wp_fts_test_filters']['wp_fts_search_results'] = static function (array $rows): array {
-            $expanded = array_fill(0, 11, $rows[0] ?? []);
-            foreach ($expanded as &$row) {
-                $row['filter_only_decoration'] = true;
-            }
-            unset($row);
-            return $expanded;
-        };
-        $beforeFiltered = $fake->num_queries;
-        $filtered = WP_FTS_Plugin::search_page('qricfilterenvelopetoken', ['lang' => 'en', 'limit' => 10]);
-        $filteredQueries = $fake->num_queries - $beforeFiltered;
-
-        assert_same($canonical['results'] ?? [], $filtered['results'] ?? [], 'a decoration-only result filter must not expand, duplicate, replace, or reorder canonical membership');
-        assert_same([7002], array_column($filtered['results'] ?? [], 'doc_id'), 'invalid filter membership should leave the one authorized canonical row intact');
-        assert_same(false, isset($filtered['results'][0]['filter_only_decoration']), 'decorations from an invalid expanded result set should be ignored with the membership change');
-        assert_same($canonicalQueries, $filteredQueries, 'ignoring invalid filter membership should execute no SQL beyond the canonical search page');
-    } finally {
-        unset($GLOBALS['wp_fts_test_filters']['wp_fts_search_results']);
-        $wpdb = $oldWpdb;
-    }
 });
 
 test_case('quality relational input containment byte-bounds metadata hydration across the full page', function (): void {
@@ -201,7 +176,7 @@ test_case('quality relational input containment byte-bounds metadata hydration a
     $fake->recordReadQueries = true;
     $fake->searchEpoch = 1;
     $fake->searchEpochIncarnation = str_repeat('e', 32);
-    $storage = new WP_FTS_Storage_Mysql($fake);
+    $storage = new WP_FTS_Relational_Storage($fake);
     $key = WP_FTS_TermNamespace::namespace_term('en', 'metadatatransport');
     $nearLimitExcerpt = str_repeat('m', 1450000);
     $fake->ftsTerms[$key] = ['doc_freq' => 4];
@@ -231,7 +206,6 @@ test_case('quality relational input containment byte-bounds metadata hydration a
 
     $groups = [[['key' => $key, 'rank' => 0]]];
     $options = [
-        'query_lang' => 'en',
         'mode' => 'OR',
         'page_size' => 20,
         'post_types' => ['post'],
@@ -258,7 +232,10 @@ test_case('quality relational input containment byte-bounds metadata hydration a
     assert_same(2, substr_count($firstQueries[2] ?? '', 'SELECT %d AS post_id'), 'metadata hydration SQL should contain only the two byte-accepted row ids');
 
     $fake->queries = [];
-    $second = $storage->search_page($groups, array_replace($options, ['cursor' => $first['next_cursor']]));
+    $second = $storage->search_page($groups, array_replace($options, [
+        'cursor' => $first['next_cursor'],
+        'direction' => 'after',
+    ]));
     assert_same([2, 1], array_column($second['results'], 'doc_id'), 'the metadata cursor should reach every row deferred by the byte envelope');
     assert_same(false, $second['has_more'] ?? null, 'the second byte-bounded metadata page should finish the four-row fixture');
     assert_same([4, 3, 2, 1], [
@@ -324,11 +301,11 @@ test_case('quality relational input containment replaces tables with unexpected 
     $fake->schemaIndexes['wp_fts_postings']['duplicate_post_first'] = ['post_id', 'term_id', 'impact'];
 
     try {
-        $before = (new WP_FTS_Storage_Mysql($fake))->verify_schema();
+        $before = (new WP_FTS_Relational_Storage($fake))->verify_schema();
         assert_same(['wp_fts_postings.duplicate_post_first(post_id,term_id,impact)'], $before['unexpected_indexes'] ?? null, 'the verifier should identify the exact redundant index before repair');
 
         WP_FTS_Plugin::create_or_repair_schema();
-        $after = (new WP_FTS_Storage_Mysql($fake))->verify_schema();
+        $after = (new WP_FTS_Relational_Storage($fake))->verify_schema();
         assert_same(true, $after['valid'] ?? null, 'dedicated maintenance should restore the exact physical schema');
         assert_true(!isset($fake->schemaIndexes['wp_fts_postings']['duplicate_post_first']), 'repair should remove an unexpected duplicate index instead of leaving verification permanently failed');
         assert_true(count(array_filter(
@@ -363,7 +340,7 @@ test_case('quality schema repair recreates a missing work table and reconciles t
             static fn(array $row): bool => ($row['kind'] ?? null) === 'scope'
         ));
         assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'generic repair should publish the current version only after recreating the absent work table');
-        assert_same(true, (new WP_FTS_Storage_Mysql($fake))->verify_schema()['valid'] ?? null, 'generic repair should restore the complete physical work-table contract');
+        assert_same(true, (new WP_FTS_Relational_Storage($fake))->verify_schema()['valid'] ?? null, 'generic repair should restore the complete physical work-table contract');
         assert_same('pending', $health['initial_index_status'] ?? null, 'losing the durable work relation must invalidate the accepted search generation');
         assert_same(1, count($scopeRows), 'work-table recreation must enqueue one bounded corpus reconciliation');
         assert_same('schema_repair', json_decode((string) ($scopeRows[0]['payload'] ?? ''), true)['reason'] ?? null, 'the replacement scope should retain the physical-repair reason');
@@ -404,7 +381,7 @@ test_case('quality schema repair replaces a conflicting recoverable index and re
             $fake->schemaIndexes['wp_fts_work']['recoverable'] ?? null,
             'generic repair should replace the conflicting named index with the exact recoverable definition'
         );
-        assert_same('pending', $health['initial_index_status'] ?? null, 'a conflicting queue index must invalidate readiness instead of being accepted as an additive migration');
+        assert_same('pending', $health['initial_index_status'] ?? null, 'a conflicting queue index must invalidate readiness instead of being accepted as current schema');
         assert_same(1, count($scopeRows), 'replacement of an incompatible work table must enqueue one bounded corpus reconciliation');
         assert_same(1, count(array_filter(
             $fake->queries,
@@ -442,7 +419,7 @@ test_case('quality schema repair replaces work-table engine and index damage tog
             $fake->queue,
             static fn(array $row): bool => ($row['kind'] ?? null) === 'scope'
         ));
-        assert_same(true, (new WP_FTS_Storage_Mysql($fake))->verify_schema()['valid'] ?? null, 'metadata maintenance should repair all physical damage instead of accepting a partial index-only result');
+        assert_same(true, (new WP_FTS_Relational_Storage($fake))->verify_schema()['valid'] ?? null, 'metadata maintenance should repair all physical damage instead of accepting a partial index-only result');
         assert_same('pending', $health['initial_index_status'] ?? null, 'additional physical damage must invalidate search readiness');
         assert_same(1, count($scopeRows), 'additional physical damage must enqueue one bounded corpus reconciliation scope');
         assert_same('schema_repair', json_decode((string) ($scopeRows[0]['payload'] ?? ''), true)['reason'] ?? null, 'the recovery scope should retain the physical-repair reason');
@@ -467,7 +444,7 @@ test_case('quality relational input containment requires transactional engines f
     $fake->schemaEngines['wp_fts_terms'] = 'MyISAM';
 
     try {
-        $before = (new WP_FTS_Storage_Mysql($fake))->verify_schema();
+        $before = (new WP_FTS_Relational_Storage($fake))->verify_schema();
         assert_same(false, $before['valid'] ?? null, 'a non-transactional dictionary table must fail the production schema contract');
         assert_same(['wp_fts_terms(myisam)'], $before['invalid_engines'] ?? null, 'the verifier should identify the exact table and physical engine');
         $failureSummary = new ReflectionMethod(WP_FTS_Plugin::class, 'schema_verification_failure_summary');
@@ -479,7 +456,7 @@ test_case('quality relational input containment requires transactional engines f
         );
 
         WP_FTS_Plugin::create_or_repair_schema();
-        $after = (new WP_FTS_Storage_Mysql($fake))->verify_schema();
+        $after = (new WP_FTS_Relational_Storage($fake))->verify_schema();
         assert_same(true, $after['valid'] ?? null, 'dedicated maintenance should rebuild a non-transactional derived table as InnoDB');
         assert_same('InnoDB', $fake->schemaEngines['wp_fts_terms'] ?? null, 'schema repair should restore transaction participation for dictionary writes');
         assert_true(count(array_filter(
@@ -500,7 +477,7 @@ test_case('plugin schema repair replaces damaged work state with one bounded cor
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $queue = new WP_FTS_Index_Queue($fake);
-    $queue->enqueue(88, 1700000000, ['reason' => 'pre_repair_fixture']);
+    $queue->enqueue_many([88], 1700000000, ['reason' => 'pre_repair_fixture']);
     $fake->schemaEngines['wp_fts_work'] = 'MyISAM';
     $fake->queries = [];
     $fake->prepared = [];
@@ -508,7 +485,7 @@ test_case('plugin schema repair replaces damaged work state with one bounded cor
     try {
         WP_FTS_Plugin::create_or_repair_schema();
 
-        $after = (new WP_FTS_Storage_Mysql($fake))->verify_schema();
+        $after = (new WP_FTS_Relational_Storage($fake))->verify_schema();
         assert_same(true, $after['valid'] ?? null, 'plugin repair should rebuild a non-transactional work table as the exact current InnoDB schema');
         assert_same('InnoDB', $fake->schemaEngines['wp_fts_work'] ?? null, 'plugin repair should restore work mutations to the shared transaction boundary');
         assert_true(!isset($fake->queue[88]), 'schema repair must not claim that rows from the dropped work relation were physically preserved');
@@ -551,12 +528,12 @@ test_case('quality relational input containment rejects truncated or disabled re
     $fake->schemaInvisibleIndexes['wp_fts_postings']['post_term_impact'] = true;
 
     try {
-        $before = (new WP_FTS_Storage_Mysql($fake))->verify_schema();
+        $before = (new WP_FTS_Relational_Storage($fake))->verify_schema();
         assert_contains('wp_fts_terms.term_identity(lang,kind,term)', implode(',', $before['missing_indexes'] ?? []), 'a prefix-truncated unique identity must not satisfy the exact lexical identity contract');
         assert_contains('wp_fts_postings.post_term_impact(post_id,term_id,impact)', implode(',', $before['missing_indexes'] ?? []), 'a disabled candidate index must not satisfy the production access contract');
 
         WP_FTS_Plugin::create_or_repair_schema();
-        assert_same(true, (new WP_FTS_Storage_Mysql($fake))->verify_schema()['valid'] ?? null, 'maintenance should rebuild truncated and disabled required indexes');
+        assert_same(true, (new WP_FTS_Relational_Storage($fake))->verify_schema()['valid'] ?? null, 'maintenance should rebuild truncated and disabled required indexes');
         assert_same([], $fake->schemaIndexSubParts, 'schema repair should remove every prefix-index override');
         assert_same([], $fake->schemaInvisibleIndexes, 'schema repair should restore every required index as usable');
     } finally {

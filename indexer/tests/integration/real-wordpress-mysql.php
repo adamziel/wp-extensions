@@ -117,7 +117,7 @@ doc_freq int unsigned NOT NULL DEFAULT 0,
 PRIMARY KEY  (term)
 ) ENGINE=InnoDB DEFAULT CHARSET=binary");
 
-    $storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
+    $storage = new WP_FTS_Relational_Storage($wpdb, $prefix);
     $storage->create_tables();
     $storage->create_tables();
 
@@ -135,7 +135,7 @@ PRIMARY KEY  (term)
 /** Round-trip binary term identities and maximum prepared posting payloads. */
 function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix): void
 {
-    $storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
+    $storage = new WP_FTS_Relational_Storage($wpdb, $prefix);
     $tables = wp_fts_real_integration_tables($prefix);
     $termsTable = wp_fts_real_integration_identifier($tables['terms']);
 
@@ -146,7 +146,8 @@ function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix
         $binaryDocuments[] = [
             'doc_id' => $postId,
             'primary_lang' => 'pl',
-            'content_hash' => hash('sha256', "binary:{$postId}"),
+            'content_hash' => sha1("binary:{$postId}"),
+            'snippet_text' => '',
             'term_frequencies' => [$binaryTerm => $frequency],
             'surface_frequencies' => [],
         ];
@@ -179,7 +180,8 @@ function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix
         $codecDocuments[] = [
             'doc_id' => $postId,
             'primary_lang' => 'pl',
-            'content_hash' => hash('sha256', "codec:{$postId}"),
+            'content_hash' => sha1("codec:{$postId}"),
+            'snippet_text' => '',
             'term_frequencies' => [$codecTerm => $frequency],
             'surface_frequencies' => [],
         ];
@@ -200,7 +202,7 @@ function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix
 /** Distinguish rolled-back and committed derived writes on the real engine. */
 function wp_fts_real_integration_transactions(object $wpdb, string $prefix): void
 {
-    $storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
+    $storage = new WP_FTS_Relational_Storage($wpdb, $prefix);
     $rolledBackTerm = WP_FTS_TermNamespace::namespace_term('en', 'rollback');
     $committedTerm = WP_FTS_TermNamespace::namespace_term('en', 'commit');
 
@@ -209,12 +211,15 @@ function wp_fts_real_integration_transactions(object $wpdb, string $prefix): voi
         'doc_id' => 2001,
         'primary_lang' => 'en',
         'content_hash' => sha1('rollback'),
+        'snippet_text' => '',
         'term_frequencies' => [$rolledBackTerm => 1],
         'surface_frequencies' => [],
     ]]);
     $storage->rollback();
 
-    wp_fts_real_integration_assert_same([], $storage->document_hashes([2001]), 'rolled back document should not persist.');
+    $documents = wp_fts_real_integration_identifier(wp_fts_real_integration_tables($prefix)['documents']);
+    $rolledBackHash = $wpdb->get_var($wpdb->prepare("SELECT content_hash FROM `{$documents}` WHERE post_id = %d", 2001));
+    wp_fts_real_integration_assert_same(null, $rolledBackHash, 'rolled back document should not persist.');
     wp_fts_real_integration_assert_same(null, wp_fts_real_integration_term_state($wpdb, $prefix, $rolledBackTerm, 10), 'rolled back term should not persist.');
 
     $storage->begin_transaction();
@@ -222,14 +227,15 @@ function wp_fts_real_integration_transactions(object $wpdb, string $prefix): voi
         'doc_id' => 2002,
         'primary_lang' => 'en',
         'content_hash' => sha1('commit'),
+        'snippet_text' => '',
         'term_frequencies' => [$committedTerm => 4],
         'surface_frequencies' => [],
     ]]);
     $storage->commit();
 
-    wp_fts_real_integration_assert_same([2002 => sha1('commit')], $storage->document_hashes([2002]), 'committed document should persist.');
+    $committedHash = $wpdb->get_var($wpdb->prepare("SELECT content_hash FROM `{$documents}` WHERE post_id = %d", 2002));
+    wp_fts_real_integration_assert_same(sha1('commit'), $committedHash, 'committed document should persist.');
     wp_fts_real_integration_assert(wp_fts_real_integration_term_state($wpdb, $prefix, $committedTerm, 10) !== null, 'committed term should persist.');
-    $documents = wp_fts_real_integration_identifier(wp_fts_real_integration_tables($prefix)['documents']);
     wp_fts_real_integration_assert_same(1, (int) $wpdb->get_var("SELECT COUNT(*) FROM `{$documents}`"), 'rollback should leave only the committed document row.');
 
     echo "ok MySQL transaction commit and rollback behavior verified\n";
@@ -237,7 +243,7 @@ function wp_fts_real_integration_transactions(object $wpdb, string $prefix): voi
 
 function wp_fts_real_integration_schema_version_path(object $wpdb, string $prefix, string $optionName): void
 {
-    $storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
+    $storage = new WP_FTS_Relational_Storage($wpdb, $prefix);
     $storage->create_tables();
 
     if (!function_exists('update_option') || !function_exists('get_option')) {
@@ -326,10 +332,9 @@ function wp_fts_real_integration_wp_cli_process(object $wpdb, string $prefix, st
     }
     wp_fts_real_integration_assert(!$hasMore, 'Ten explicit bounded worker passes should be sufficient for the one-post integration scope.');
 
-    $storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
-    $hashes = $storage->document_hashes([$postId]);
-    wp_fts_real_integration_assert(isset($hashes[$postId]) && $hashes[$postId] !== '', 'WP-CLI reindex should write the inserted post with a content fingerprint.');
     $documents = wp_fts_real_integration_identifier(wp_fts_real_integration_tables($prefix)['documents']);
+    $contentHash = $wpdb->get_var($wpdb->prepare("SELECT content_hash FROM `{$documents}` WHERE post_id = %d", $postId));
+    wp_fts_real_integration_assert(is_string($contentHash) && $contentHash !== '', 'WP-CLI reindex should write the inserted post with a content fingerprint.');
     $primaryLang = $wpdb->get_var($wpdb->prepare("SELECT primary_lang FROM `{$documents}` WHERE post_id = %d", $postId));
     wp_fts_real_integration_assert_same('pl', $primaryLang, 'WP-CLI reindex should store the requested language.');
 
@@ -337,8 +342,8 @@ function wp_fts_real_integration_wp_cli_process(object $wpdb, string $prefix, st
     $payload = $searcher->search('wpftsneedle', [
         'query_lang' => 'pl',
         'limit' => 3,
-        'post_type' => $postType,
-        'post_status' => 'publish',
+        'post_types' => [$postType],
+        'post_statuses' => ['publish'],
     ]);
     wp_fts_real_integration_assert_same($postId, $payload['results'][0]['doc_id'] ?? null, 'WP-CLI indexed document should be searchable.');
 
@@ -542,14 +547,14 @@ function wp_fts_real_integration_term_state(object $wpdb, string $prefix, string
     return ['df' => (int) $termRow->doc_freq, 'postings' => $result];
 }
 
-/** Require point and posting-list readers to be absent from production storage. */
-function wp_fts_real_integration_assert_point_reads_absent(WP_FTS_Storage_Mysql $storage, object $wpdb): void
+/** Require point and posting-list readers to be absent from relational storage. */
+function wp_fts_real_integration_assert_point_reads_absent(WP_FTS_Relational_Storage $storage, object $wpdb): void
 {
     $queriesBefore = (int) ($wpdb->num_queries ?? 0);
     foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'get_terms', 'get_postings', 'get_capped_postings', 'get_budgeted_postings'] as $method) {
-        wp_fts_real_integration_assert(!method_exists($storage, $method), "production storage should not expose {$method}.");
+        wp_fts_real_integration_assert(!method_exists($storage, $method), "relational storage should not expose {$method}.");
     }
-    wp_fts_real_integration_assert_same($queriesBefore, (int) ($wpdb->num_queries ?? 0), 'production capability inspection should not run SQL.');
+    wp_fts_real_integration_assert_same($queriesBefore, (int) ($wpdb->num_queries ?? 0), 'relational capability inspection should not run SQL.');
 }
 
 /** Reproduce the bounded integer impact expected from the production writer. */

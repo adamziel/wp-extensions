@@ -10,13 +10,13 @@ dictionary word segmentation.
 Chinese (`zh`) has a narrow optional exception: the source tree commits a compact
 attested lookup beside the pinned
 `components/full-text-search/resources/sources/jieba` gitlink. Release builds
-verify that checkout and stage only `dict.txt`, its MIT license, and the lookup
-under the curated runtime path; HMM/POS/IDF/model files and the raw checkout are
-not packaged. Runtime use requires the dictionary to match commit
-`67fa2e36e72f69d9134b8a1037b83fbb070b9775`, SHA-256
-`7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`, and byte
-size `5071852`; otherwise Chinese falls back to CJK n-grams. Source-only custom
-dictionaries are fixture-only and are omitted by the WordPress runtime.
+verify that checkout and stage `manifest.json`, `dict.txt`, its MIT license, and
+the lookup under the curated runtime path; HMM/POS/IDF/model files and the raw
+checkout are not packaged. The
+[Jieba runtime manifest](../../components/full-text-search/resources/runtime/jieba/manifest.json)
+is the single record for the upstream commit and the dictionary, license, and
+lookup identities. A mismatch falls back to CJK n-grams. Custom dictionaries
+are not supported.
 
 Future support for `thai_dictionary_tcc_v1` must start with a reviewed source
 lock before any adapter, importer, bundled Thai dictionary, generated TCC rules,
@@ -79,9 +79,11 @@ root:
 php indexer/tools/verify-tokenizer-source-lock.php path/to/source-lock.json
 ```
 
-The verifier checks only metadata completeness and guardrails. It does not
-download URLs, read source archives, validate real dictionary rows, or prove
-segmentation quality.
+The verifier checks only metadata completeness and guardrails. Its classes live
+under `indexer/tools/lib/` and are loaded only by the developer CLI wrappers;
+they are not component runtime classes or release-package files. The verifier
+does not download URLs, read source archives, validate real dictionary rows, or
+prove segmentation quality.
 
 The test fixture mode is reserved for committed verifier fixtures:
 

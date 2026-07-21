@@ -41,7 +41,6 @@
     "expected_result": "all cases keep the existing normalized token unchanged"
   },
   "release": {
-    "default_enabled": false,
     "claim_boundary": "Fixture-only no-op analyzer metadata. This is not evidence for English stemming, lemmatization, or dictionary support."
   }
 }

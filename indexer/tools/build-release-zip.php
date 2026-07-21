@@ -14,27 +14,19 @@ final class WP_FTS_ReleasePackageBuilder
     private const DEFAULT_ZIP_NAME = 'wp-fts-indexer.zip';
     private const DETERMINISTIC_ZIP_MTIME = 946684800; // 2000-01-01T00:00:00Z.
     private const BUILD_LOCK_FILE = '.wp-fts-release-build.lock';
-    private const JIEBA_DICTIONARY_SHA256 = '7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8';
-    private const JIEBA_DICTIONARY_BYTES = 5071852;
-    private const JIEBA_LICENSE_SHA256 = '18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37';
-    private const JIEBA_LICENSE_BYTES = 1075;
-    private const JIEBA_LOOKUP_SHA256 = '4c979fd244e59b8343c2e584dbd5ba062deb1f836b8ae9ca2b56b54f130b9046';
-    private const JIEBA_LOOKUP_BYTES = 329972;
     private const VENDOR_DEVELOPMENT_DIRS = ['test', 'tests', 'Tests', 'coverage'];
-    private const SHIPPED_TOOL_PATHS = [
+    public const SHIPPED_TOOL_PATHS = [
         'tools/import-lemma-tsv-pack.php',
         'tools/import-conllu-lemma-pack.php',
         'tools/import-unimorph-lemma-pack.php',
         'tools/import-polish-polimorf-lemmatizer.php',
         'tools/validate-analyzer-pack.php',
         'tools/audit-top-language-lemma-packs.php',
-        'tools/build-lemma-pack-lookup-index.php',
         'tools/build-polish-polimorf-external-pack.php',
         'tools/lemma-source-import-limits.php',
         'tools/lemma-chunk-merge.php',
     ];
     private const PROHIBITED_RELATIVE_PATHS = [
-        '.cao',
         '.distignore',
         '.git',
         '.gitignore',
@@ -47,6 +39,7 @@ final class WP_FTS_ReleasePackageBuilder
         '.composer',
         'vendor/bin',
         'vendor/wp-php-toolkit/full-text-search/resources/sources',
+        'vendor/wp-php-toolkit/full-text-search/tools',
     ];
 
     /**
@@ -245,6 +238,11 @@ final class WP_FTS_ReleasePackageBuilder
         self::assert_component_runtime_matches_source($componentStage, $stagePlugin);
         self::install_pinned_jieba_runtime($componentStage, $stagePlugin);
 
+        // The sibling component tree exists only to feed Composer's path
+        // repository. Keep the installed vendor package as the sole runtime
+        // source for every check that follows the build.
+        self::remove_path($componentStage);
+
         $installedSymlinks = self::find_symlink_paths($stagePlugin, self::PLUGIN_DIR_NAME);
         if ($installedSymlinks !== []) {
             throw new RuntimeException(
@@ -338,54 +336,79 @@ final class WP_FTS_ReleasePackageBuilder
     }
 
     /**
-     * Package only the pinned Jieba dictionary and its MIT license, not the
-     * upstream source checkout, tests, Python implementation, or model data.
+     * Package only the pinned Jieba runtime manifest, dictionary, license, and
+     * lookup, not the upstream source checkout, tests, implementation, or model
+     * data.
      */
     private static function install_pinned_jieba_runtime(
         string $componentStage,
         string $stagePlugin
     ): void {
+        $manifestPath = $componentStage . '/resources/runtime/jieba/manifest.json';
+        $validatorPath = $stagePlugin . '/vendor/wp-php-toolkit/full-text-search/src/ChineseJiebaSegmenter.php';
+        $manifest = self::jieba_runtime_manifest($manifestPath, $validatorPath);
+        $upstream = $manifest['upstream'];
+        $artifacts = $manifest['artifacts'];
         $sourceRoot = $componentStage . '/resources/sources/jieba';
-        $dictionary = $sourceRoot . '/jieba/dict.txt';
-        $license = $sourceRoot . '/LICENSE';
-        $lookup = $componentStage . '/resources/runtime/jieba/dict.idx';
-        if (
-            !is_file($dictionary)
-            || filesize($dictionary) !== self::JIEBA_DICTIONARY_BYTES
-            || hash_file('sha256', $dictionary) !== self::JIEBA_DICTIONARY_SHA256
-        ) {
-            throw new RuntimeException(
-                'The pinned Jieba submodule dictionary is missing or invalid; initialize the exact gitlink before building a release.'
-            );
-        }
-        if (
-            !is_file($license)
-            || filesize($license) !== self::JIEBA_LICENSE_BYTES
-            || hash_file('sha256', $license) !== self::JIEBA_LICENSE_SHA256
-        ) {
-            throw new RuntimeException('The pinned Jieba MIT license is missing or invalid.');
-        }
-        if (
-            !is_file($lookup)
-            || filesize($lookup) !== self::JIEBA_LOOKUP_BYTES
-            || hash_file('sha256', $lookup) !== self::JIEBA_LOOKUP_SHA256
-        ) {
-            throw new RuntimeException('The attested Jieba dictionary lookup index is missing or invalid.');
+        $sources = [
+            'dictionary' => $sourceRoot . '/' . $upstream['dictionary_path'],
+            'license' => $sourceRoot . '/' . $upstream['license_path'],
+            'lookup' => dirname($manifestPath) . '/' . $artifacts['lookup']['runtime_path'],
+        ];
+        foreach ($sources as $name => $path) {
+            if (!is_file($path)
+                || filesize($path) !== $artifacts[$name]['bytes']
+                || hash_file('sha256', $path) !== $artifacts[$name]['sha256']
+            ) {
+                throw new RuntimeException("The pinned Jieba {$name} artifact is missing or invalid.");
+            }
         }
 
         $runtime = $stagePlugin . '/vendor/wp-php-toolkit/full-text-search/resources/runtime/jieba';
         self::ensure_directory($runtime);
         $runtimeFiles = [
-            $dictionary => $runtime . '/dict.txt',
-            $license => $runtime . '/LICENSE',
-            $lookup => $runtime . '/dict.idx',
+            $manifestPath => $runtime . '/manifest.json',
         ];
+        foreach ($sources as $name => $source) {
+            $runtimeFiles[$source] = $runtime . '/' . $artifacts[$name]['runtime_path'];
+        }
         foreach ($runtimeFiles as $source => $destination) {
             if (!copy($source, $destination)) {
                 throw new RuntimeException("Could not stage the pinned Jieba runtime file: {$destination}");
             }
             @chmod($destination, 0644);
         }
+    }
+
+    /** @return array<string,mixed> */
+    private static function jieba_runtime_manifest(string $path, string $validatorPath): array
+    {
+        $json = is_file($path) ? file_get_contents($path, false, null, 0, 8193) : false;
+        if (!is_string($json) || $json === '' || strlen($json) > 8192) {
+            throw new RuntimeException('The Jieba runtime manifest is missing or oversized.');
+        }
+        try {
+            $manifest = json_decode($json, true, 32, JSON_THROW_ON_ERROR);
+        } catch (Throwable $error) {
+            throw new RuntimeException('The Jieba runtime manifest is invalid.', 0, $error);
+        }
+        if (!is_file($validatorPath)) {
+            throw new RuntimeException('The Jieba runtime manifest validator is missing.');
+        }
+
+        try {
+            self::run_command([
+                PHP_BINARY,
+                '-r',
+                'require $argv[1]; WP_FTS_ChineseJiebaSegmenter::validate_runtime_manifest(json_decode(file_get_contents($argv[2]), true, 32, JSON_THROW_ON_ERROR));',
+                $validatorPath,
+                $path,
+            ]);
+        } catch (Throwable $error) {
+            throw new RuntimeException('The Jieba runtime manifest contract is invalid.', 0, $error);
+        }
+
+        return $manifest;
     }
 
     /**

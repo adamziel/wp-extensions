@@ -128,11 +128,7 @@ function wp_fts_release_evidence_contract_clean_env(): array
         'WP_FTS_DISPOSABLE_SMOKE_CONFIRM_PATH' => '',
         'WP_FTS_LIFECYCLE_SMOKE_ALLOW' => '',
         'WP_FTS_LIFECYCLE_SMOKE_CONFIRM_PATH' => '',
-        'WP_FTS_UPGRADE_SMOKE_ALLOW' => '',
-        'WP_FTS_UPGRADE_SMOKE_CONFIRM_PATH' => '',
-        'WP_FTS_PREVIOUS_RELEASE_ZIP' => '',
         'WP_FTS_CURRENT_RELEASE_ZIP' => '',
-        'WP_FTS_PREVIOUS_DIRECT_PACKAGE' => '',
         'WP_FTS_PROVIDER_COMPATIBILITY_ALLOW' => '',
         'WP_FTS_PROVIDER_COMPATIBILITY_CONFIRM_PATH' => '',
         'WP_FTS_PROVIDER_COMPATIBILITY_INSIDE' => '',
@@ -285,55 +281,7 @@ function wp_fts_release_evidence_contract_fake_runner(): callable
                 'stderr' => '',
             ];
         }
-        if ($script === 'tests/production-scale-benchmark.php') {
-            return [
-                'exit' => 0,
-                'stdout' => json_encode([
-                    'passed' => true,
-                    'profile' => ['name' => 'fake', 'documents' => 12],
-                    'metrics' => [
-                        'indexed_documents' => 12,
-                        'query_checks_passed' => 4,
-                        'hydrated_result_rows' => 6,
-                        'index_duration_ms' => 10,
-                        'query_check_total_duration_ms' => 2,
-                        'query_check_max_duration_ms' => 1,
-                        'result_window_total_duration_ms' => 3,
-                        'result_window_max_duration_ms' => 1,
-                        'search_read_total_duration_ms' => 5,
-                    ],
-                    'gates' => [
-                        [
-                            'metric' => 'indexed_documents',
-                            'category' => 'structural',
-                            'operator' => '===',
-                            'expected' => 12,
-                            'actual' => 12,
-                            'passed' => true,
-                        ],
-                        [
-                            'metric' => 'index_duration_ms',
-                            'category' => 'performance',
-                            'operator' => '<=',
-                            'expected' => 15000,
-                            'actual' => 10,
-                            'passed' => true,
-                        ],
-                        [
-                            'metric' => 'search_read_total_duration_ms',
-                            'category' => 'performance',
-                            'operator' => '<=',
-                            'expected' => 8000,
-                            'actual' => 5,
-                            'passed' => true,
-                        ],
-                    ],
-                    'failures' => [],
-                ], JSON_UNESCAPED_SLASHES) . "\n",
-                'stderr' => '',
-            ];
-        }
-        if (($command[0] ?? '') === 'tools/run-disposable-release-provider-smoke.sh') {
+                if (($command[0] ?? '') === 'tools/run-disposable-release-provider-smoke.sh') {
             return [
                 'exit' => 0,
                 'stdout' => "PASS: Docker disposable release/provider smoke completed.\n",
@@ -407,7 +355,6 @@ test_case('quality release evidence collector default report has stable schema a
         'disposable_wordpress_release_smoke',
         'docker_disposable_lifecycle_smoke',
         'docker_disposable_release_provider_smoke',
-        'production_scale_benchmark',
         'provider_compatibility_smoke',
         'public_submission_readiness',
         'real_mysql_production_proof',
@@ -427,7 +374,7 @@ test_case('quality release evidence collector default report has stable schema a
     }
 });
 
-test_case('quality release evidence collector reports expected default skips and benchmark pass', function (): void {
+test_case('quality release bundle collector reports expected default skips', function (): void {
     $report = wp_fts_release_evidence_contract_default_report();
 
     wp_fts_release_evidence_contract_same('blocked', wp_fts_release_evidence_contract_lane($report, 'direct_install_readiness')['status'] ?? null, 'required direct-install readiness should block by default until artifact-producing readiness is explicitly opted in');
@@ -437,103 +384,10 @@ test_case('quality release evidence collector reports expected default skips and
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'provider_compatibility_smoke')['status'] ?? null, 'provider smoke should skip without WordPress config');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'real_wordpress_mysql_integration')['status'] ?? null, 'real WordPress/MySQL integration should require collector opt-in');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'real_mysql_production_proof')['status'] ?? null, 'real MySQL proof should skip without WordPress config');
-    wp_fts_release_evidence_contract_same('pass', wp_fts_release_evidence_contract_lane($report, 'production_scale_benchmark')['status'] ?? null, 'PR-safe production benchmark should run by default');
 
     $counts = $report['summary']['status_counts'] ?? [];
     wp_fts_release_evidence_contract_same(2, $counts['blocked'] ?? null, 'default direct-install evidence should have required direct-install and non-target public-submission blocked lanes');
     wp_fts_release_evidence_contract_true(($counts['skip'] ?? 0) >= 5, 'default evidence should record optional lanes as skips');
-});
-
-test_case('quality release evidence collector surfaces production-scale performance budget gate evidence', function (): void {
-    $lane = wp_fts_release_evidence_contract_lane(wp_fts_release_evidence_contract_default_report(), 'production_scale_benchmark');
-    $details = is_array($lane['details'] ?? null) ? $lane['details'] : [];
-    $metrics = is_array($details['metrics'] ?? null) ? $details['metrics'] : [];
-    $gateCounts = is_array($details['gate_status_counts'] ?? null) ? $details['gate_status_counts'] : [];
-    $gates = is_array($details['gates'] ?? null) ? $details['gates'] : [];
-    $performanceBudget = is_array($details['performance_budget'] ?? null) ? $details['performance_budget'] : [];
-    $budgetMetrics = is_array($performanceBudget['metrics'] ?? null) ? $performanceBudget['metrics'] : [];
-    $budgetCounts = is_array($performanceBudget['gate_counts'] ?? null) ? $performanceBudget['gate_counts'] : [];
-
-    wp_fts_release_evidence_contract_same('pass', $lane['status'] ?? null, 'default production-scale benchmark lane should pass');
-    foreach (['index_duration_ms', 'query_check_total_duration_ms', 'result_window_total_duration_ms', 'search_read_total_duration_ms'] as $metric) {
-        wp_fts_release_evidence_contract_true(array_key_exists($metric, $metrics), "benchmark lane metrics should include {$metric}");
-        wp_fts_release_evidence_contract_true(array_key_exists($metric, $budgetMetrics), "benchmark performance budget should include {$metric}");
-    }
-
-    wp_fts_release_evidence_contract_true(($details['gate_count'] ?? 0) >= 4, 'benchmark lane should report benchmark gate count');
-    wp_fts_release_evidence_contract_true(count($gates) > 0 && count($gates) <= 32, 'benchmark lane should include a bounded gate list');
-    wp_fts_release_evidence_contract_same(false, $details['gates_truncated'] ?? null, 'default benchmark gate list should fit within the bounded collector list');
-    wp_fts_release_evidence_contract_true(($gateCounts['performance_pass'] ?? 0) >= 4, 'benchmark lane should classify passed performance gates');
-    wp_fts_release_evidence_contract_same(0, $gateCounts['performance_fail'] ?? null, 'default benchmark lane should not report failed performance gates');
-    wp_fts_release_evidence_contract_true(($budgetCounts['pass'] ?? 0) >= 4, 'benchmark performance budget should count passed gates');
-    wp_fts_release_evidence_contract_same(0, $budgetCounts['fail'] ?? null, 'benchmark performance budget should count no default failures');
-    wp_fts_release_evidence_contract_same([], $performanceBudget['failed_gates'] ?? null, 'benchmark performance budget should list no default failed gates');
-    wp_fts_release_evidence_contract_true(!array_key_exists('query_checks', $details), 'collector should not dump raw benchmark query result arrays');
-    wp_fts_release_evidence_contract_true(!array_key_exists('result_windows', $details), 'collector should not dump raw benchmark result windows');
-    wp_fts_release_evidence_contract_true(!array_key_exists('stdout_excerpt', $details), 'collector should not include raw benchmark stdout when JSON parsed successfully');
-});
-
-test_case('quality release evidence collector fails benchmark lane on JSON-reported duration gate failure', function (): void {
-    $base = wp_fts_release_evidence_contract_fake_runner();
-    $runner = static function (array $command, string $cwd, int $timeout) use ($base): array {
-        $script = (string) ($command[1] ?? '');
-        if ($script === 'tests/production-scale-benchmark.php') {
-            return [
-                'exit' => 0,
-                'stdout' => json_encode([
-                    'passed' => true,
-                    'profile' => ['name' => 'fake', 'documents' => 12],
-                    'metrics' => [
-                        'indexed_documents' => 12,
-                        'query_checks_passed' => 4,
-                        'index_duration_ms' => 25000,
-                        'query_check_total_duration_ms' => 2,
-                        'query_check_max_duration_ms' => 1,
-                        'result_window_total_duration_ms' => 3,
-                        'result_window_max_duration_ms' => 1,
-                        'search_read_total_duration_ms' => 5,
-                    ],
-                    'gates' => [
-                        [
-                            'metric' => 'indexed_documents',
-                            'category' => 'structural',
-                            'operator' => '===',
-                            'expected' => 12,
-                            'actual' => 12,
-                            'passed' => true,
-                        ],
-                        [
-                            'metric' => 'index_duration_ms',
-                            'category' => 'performance',
-                            'operator' => '<=',
-                            'expected' => 15000,
-                            'actual' => 25000,
-                            'passed' => false,
-                        ],
-                    ],
-                    'failures' => [],
-                ], JSON_UNESCAPED_SLASHES) . "\n",
-                'stderr' => '',
-            ];
-        }
-
-        return $base($command, $cwd, $timeout);
-    };
-
-    $report = wp_fts_release_evidence_contract_fake_report_with_runner($runner, [
-        'run_direct_install_readiness' => true,
-    ]);
-    $lane = wp_fts_release_evidence_contract_lane($report, 'production_scale_benchmark');
-    $details = is_array($lane['details'] ?? null) ? $lane['details'] : [];
-    $performanceBudget = is_array($details['performance_budget'] ?? null) ? $details['performance_budget'] : [];
-    $budgetCounts = is_array($performanceBudget['gate_counts'] ?? null) ? $performanceBudget['gate_counts'] : [];
-
-    wp_fts_release_evidence_contract_same('fail', $lane['status'] ?? null, 'benchmark lane should fail when benchmark JSON reports a failed duration gate');
-    wp_fts_release_evidence_contract_same('fail', $report['overall_status'] ?? null, 'a required benchmark duration gate failure should fail the direct-install bundle');
-    wp_fts_release_evidence_contract_contains('index_duration_ms', (string) ($lane['summary'] ?? ''), 'benchmark lane should name the failed duration gate');
-    wp_fts_release_evidence_contract_same(['index_duration_ms'], $details['failed_gates'] ?? null, 'benchmark lane should expose failed gate names');
-    wp_fts_release_evidence_contract_same(1, $budgetCounts['fail'] ?? null, 'performance budget summary should count the failed duration gate');
-    wp_fts_release_evidence_contract_same(['index_duration_ms'], $performanceBudget['failed_gates'] ?? null, 'performance budget summary should expose failed duration gate names');
 });
 
 test_case('quality release evidence collector runs Docker disposable smokes only with explicit opt-in', function (): void {

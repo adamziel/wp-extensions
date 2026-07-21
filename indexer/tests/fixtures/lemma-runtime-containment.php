@@ -80,8 +80,6 @@ try {
         'pack_id' => 'en-compressed-runtime-containment',
         'language' => 'en',
         'version' => '1',
-        'fixture_only' => false,
-        'default_enabled' => false,
         'capabilities' => [
             'dictionary-lemmatizer',
             'ambiguous-form-noop',
@@ -93,6 +91,7 @@ try {
             'normalization' => 'WP_FTS_Normalizer en with fold_diacritics=true',
             'ambiguity_policy' => 'ambiguous_surface_noop',
             'total_rows' => 1,
+            'total_sha256' => hash('sha256', "target\tlemma\n"),
             'files' => [[
                 'path' => 'runtime.tsv.gz',
                 'sha256' => $runtimeSha,

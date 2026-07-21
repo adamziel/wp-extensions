@@ -51,8 +51,6 @@ wp_fts_portuguese_fixture_same(32016, count($voc), 'Portuguese voc.txt fixture l
 wp_fts_portuguese_fixture_same(count($voc), count($expected), 'Portuguese fixture input/output line counts should match');
 
 $stemmer = new WP_FTS_SnowballStemmer();
-wp_fts_portuguese_fixture_true($stemmer->supports_language('pt-BR'), 'Portuguese locale should be advertised');
-wp_fts_portuguese_fixture_true($stemmer->is_language_available('pt'), 'Portuguese should not require optional Wamania classes');
 wp_fts_portuguese_fixture_true(
     str_contains($stemmer->source_identity('pt'), 'Snowball Portuguese'),
     'Portuguese source identity should name the Snowball variant'
@@ -95,15 +93,19 @@ wp_fts_portuguese_fixture_same(
 );
 
 $analyzer = new WP_FTS_Analyzer(['default_lang' => 'pt']);
-$storage = new WP_FTS_Storage_InMemory();
-$indexer = new WP_FTS_Indexer($storage, $analyzer);
-$indexer->index_document(963, '<p>Estamos pesquisando dados claros rapidamente.</p>', ['lang' => 'pt']);
-$searcher = new WP_FTS_Searcher($storage, $analyzer);
+$documentTerms = array_column(
+    $analyzer->analyze_content(
+        '<p>Estamos pesquisando dados claros rapidamente.</p>',
+        ['document_lang' => 'pt']
+    ),
+    'term'
+);
+$queryTerms = $analyzer->analyze_query('pesquisar dado claro rapidamente', ['query_lang' => 'pt']);
 
 wp_fts_portuguese_fixture_same(
-    [963],
-    array_column($searcher->search('pesquisar dado claro rapidamente', ['query_lang' => 'pt', 'mode' => 'AND']), 'doc_id'),
-    'Portuguese query and document inflections should meet through the same stems'
+    [],
+    array_values(array_diff($queryTerms, $documentTerms)),
+    'Portuguese document and query analysis should produce the same stems'
 );
 
-fwrite(STDOUT, '[PASS] Portuguese Snowball fixtures: ' . count($voc) . " official line pairs plus analyzer/search parity\n");
+fwrite(STDOUT, '[PASS] Portuguese Snowball fixtures: ' . count($voc) . " official line pairs plus document/query parity\n");

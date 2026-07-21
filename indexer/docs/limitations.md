@@ -27,7 +27,8 @@ caveats operators need to account for.
   or repair affects the current site, new sites get empty FTS tables, uninstall
   discovers at most 100 site IDs per page and removes plugin tables/options per
   site, and WordPress site deletion can discover those tables. A failed
-  one-site provisioning event is retried from the same keyset cursor. This is not a
+  network provisioning event is retried from the same keyset cursor, while a
+  failed new-site hook retains that exact site ID in a separate retry event. This is not a
   complete enterprise multisite certification.
 - Deactivation retains the index and stops scheduled work. Uninstall is the
   explicit destructive boundary: it drops all current and deterministic
@@ -83,12 +84,10 @@ guard can interrupt a database statement already executing.
 - Full WP-CLI reindexing and runtime post-save indexing share the same
   `WP_FTS_PostContentExtractor` path.
 - The extractor indexes title, content, excerpt, taxonomy terms, selected custom
-  fields, field boosts, and bounded product metadata from the worker's attached
-  source snapshot. Rendered deltas are legacy component-only behavior; the
-  relational worker rejects rendering options before extraction.
-- Custom fields must be selected through `custom_fields`, `custom_field_keys`,
-  the `wp_fts_index_custom_fields` option, or the `wp_fts_post_custom_fields`
-  filter.
+  fields, and field boosts from the worker's attached source snapshot. It stores
+  only a bounded plain-text snippet source derived from saved `post_content`.
+- Custom fields must be selected through `custom_field_keys`, the
+  `wp_fts_index_custom_fields` option, or the `wp_fts_post_custom_fields` filter.
 - One document may contribute at most 2 MiB of saved title, body, excerpt,
   taxonomy labels, selected metadata keys, and selected metadata values. It may
   select at most 32 custom-field keys, contain at most 512 total canonical
@@ -140,12 +139,8 @@ guard can interrupt a database statement already executing.
   (production relational search still stops at 12 alternatives), and their
   term, language, surface, position, and rank scalars are checked before array
   reindexing or query-plan normalization.
-- The bounded relational worker rejects dynamic block/shortcode rendering and
-  custom render callbacks before extraction. Arbitrary renderer code cannot be
-  interrupted or assigned a fixed query/load bound. Save bounded static text in
-  `post_content` or a selected custom field instead. Explicit rendering remains
-  available only on the test-only component path without the production
-  relational guarantee.
+- Index preparation reads persisted post fields only. Save bounded computed text
+  in `post_content` or a selected custom field before enqueueing the post.
 - WordPress metadata and taxonomy API mutations enqueue affected posts. Direct
   SQL writes bypass those hooks and require explicit invalidation or reindexing.
 - On MySQL/MariaDB, an existing-object mutation installs one durable dirty
@@ -181,16 +176,16 @@ Current language support is best read by tier:
 
 | Language or partition | What works today | What it does not claim |
 | --- | --- | --- |
-| Polish (`pl`) | Explicit routing plus the bundled Polish lemmatizer runtime default: the compressed full Polish runtime pack when gzip support is available, falling back to the bundled fixture pack otherwise. `lemma_packs_by_lang['pl']` can replace or disable that default, and `polish_stemming => 'verified'` enables a compact fixture-backed stemmer slice when no valid pack is active. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
-| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Not synonym expansion, phrase search, cross-language merging, or a default-enabled production analyzer path. Built-in stemmers/baselines/no-op behavior remain fallback behavior when packs are not configured. |
+| Polish (`pl`) | Explicit routing plus the bundled compressed `pl-polimorf-20180722-full` pack when gzip support is available. `lemma_packs_by_lang['pl']` can replace or disable it; without a valid pack, the conservative Polish stemmer runs. | The raw CLARIN-PL source archive and extracted TSV are not bundled. The small PoliMorf contract pack lives under `tests/fixtures/` and is never a runtime fallback. |
+| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Not synonym expansion, phrase search, or cross-language merging. Packs activate only through plugin configuration; built-in stemmers/baselines/no-op behavior remain fallback behavior when packs are not configured. |
 | Japanese (`ja`), Korean (`ko`) | Selectable/detectable partitions using deterministic CJK/Hangul fallback tokenization. | No Japanese or Korean runtime lemma pack is committed because the current PHP pipeline lacks a source-backed word segmenter for those languages. |
-| Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Optional Wamania-backed Snowball stemming when Composer dependencies are present and the compliance harness accepts them. | Dutch now has a source-backed UniMorph pack when configured; no broad Wamania language claim is made beyond the allowlist. |
-| Chinese (`zh`) | Deterministic CJK fallback n-grams up to 4 characters, plus optional Jieba dictionary segmentation from the curated pinned runtime (or initialized source checkout during development). | Jieba is segmentation only, default-disabled outside the sandbox, and not morphology, synonym expansion, phrase search, broad Simplified/Traditional conversion, or a production custom-dictionary API. |
+| Catalan (`ca`), Dutch Porter (`nl`) | Wamania-backed Snowball stemming from the required Composer runtime. | Dutch has a source-backed UniMorph pack when configured; no broad Wamania language claim is made beyond the allowlist. |
+| Chinese (`zh`) | Deterministic CJK fallback n-grams up to 4 characters, plus optional Jieba dictionary segmentation from the curated pinned runtime (or initialized source checkout during development). | Jieba is segmentation only, activates only through plugin configuration outside the sandbox, and is not morphology, synonym expansion, phrase search, broad Simplified/Traditional conversion, or a production custom-dictionary API. |
 | Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common feminine, masculine, Arabic-loan, and plural-oblique forms. | UniMorph Urdu is license-blocked because `unimorph/urd` has no redistribution license evidence; no generated Urdu pack is bundled. Persian (`fa`) is now its own partition and is not merged into Urdu routing. |
-| Generic packs | `lemma_packs_by_lang` can enable local manifest-backed, language-matched packs. | Invalid, missing, disabled, or mismatched packs do not stop indexing; they fall back to the built-in analyzer path. Runtime lines are capped at 4 KiB. Only `fixture_only` packs with at most 50,000 rows and 8 MiB of decoded runtime data may use eager unindexed storage, and all distinct eager-eligible fixture manifests in one analyzer share both the 50,000-row and 8-MiB decoded allowances; every other shard requires indexed gzip plus a validated block-index sidecar. Multi-shard packs require complete normalized, strictly ordered, non-overlapping surface ranges so one lookup can select at most one shard. |
+| Generic packs | `lemma_packs_by_lang` can enable local manifest-backed, language-matched packs. | An absent entry or native `false` selects the built-in analyzer. A configured invalid, missing, or mismatched pack stops analyzer construction. Runtime lines are capped at 4 KiB. Every runtime shard requires indexed gzip plus a validated block-index sidecar. Multi-shard packs require complete normalized, strictly ordered, non-overlapping surface ranges so one lookup can select at most one shard. |
 
 Every valid lemma pack is limited to twelve lemmas for one surface across all
-shards. Full validation, eager fixture loading, and indexed runtime lookup
+shards. Full validation and indexed runtime lookup
 enforce the same bound. The source importer retains an exact twelve-candidate surface;
 when approved source data contains thirteen or more unique lemmas, it emits one
 explicit surface-to-itself row and records the replaced source-pair count. That
@@ -213,24 +208,23 @@ Stemming is enabled by default and can be disabled with
 
 - Advertised Snowball support is exactly bundled generated Arabic (`ar`),
   English Porter2 (`en`), Spanish (`es`), French (`fr`), Hindi (`hi`),
-  Portuguese (`pt`), and Indonesian (`id`), plus optional Wamania-backed
-  Catalan (`ca`) and Dutch Porter (`nl`) when Composer dependencies are
-  installed, because those are the implementations currently verified by the
-  Snowball fixture harness.
+  Portuguese (`pt`), and Indonesian (`id`), plus Wamania-backed Catalan (`ca`)
+  and Dutch Porter (`nl`), because those are the implementations currently
+  verified by the Snowball fixture harness. The Wamania package is a required
+  Composer runtime dependency.
 - Wamania exposes other language classes, but this branch treats unsupported or
   divergent algorithms as no-ops instead of claiming compliance.
-- Polish (`pl`) uses a conservative local suffix stemmer by default. A valid
-  opt-in Morfologik/PoliMorf-compatible fixture pack takes precedence over
-  `polish_stemming`; otherwise `polish_stemming => 'verified'` can enable a
-  compact fixture-backed stemmer slice. Neither path is a full Snowball,
-  Stempel, Morfologik, PoliMorf, or dictionary lemmatizer.
+- Polish (`pl`) uses the bundled full PoliMorf pack in the WordPress runtime
+  when gzip support is available. Without a valid configured pack, it uses the
+  conservative local stemmer. The small contract pack under `tests/fixtures/`
+  does not participate in runtime fallback.
 - Generic opt-in lemma-pack infrastructure exists through
   `lemma_packs_by_lang`. Bundled source-backed
   UniMorph packs exist for `en`, `es`, `fr`, `hi`, `ar`, `bn`, `pt`, `id`,
   `ru`, `de`, `te`, `tr`, `it`, `fa`, `uk`, and `nl`.
   They are enabled automatically only for the admin/Playground sandbox and
-  remain default-disabled elsewhere. The old synthetic `bn` contract pack
-  remains a fixture-only runtime contract test; it is not product Bengali
+  otherwise activate only through plugin configuration. The synthetic `bn` contract pack
+  remains a test-only runtime contract; it is not product Bengali
   morphology.
 - Hindi (`hi`) uses the bundled generated Snowball stemmer verified against the
   official 65,118-line Hindi fixture data. Bengali (`bn`) uses deterministic
@@ -255,8 +249,8 @@ Stemming is enabled by default and can be disabled with
   resulting manifest, and verifies that the pack can be activated with all
   lookup sidecars retained.
   The source archive and extracted TSV are not committed or bundled. Separately
-  generated external pack copies remain outside the release package,
-  opt-in/default-disabled, and operators must install them externally before
+  generated external pack copies remain outside the release package and
+  activate only through plugin configuration after operators install them before
   assigning the manifest to `lemma_packs_by_lang['pl']`.
 - Unsupported languages return the original normalized term.
 - Chinese (`zh`) continues to use deterministic CJK fallback n-grams up to 4
@@ -267,18 +261,12 @@ Stemming is enabled by default and can be disabled with
   LanguagePipeline-reachable rows across 5,628 Han prefixes (3,013,489 word
   bytes), below the complete 350,000-row/8-MiB cache admission. There is no
   prefix eviction or aggregate wide-run rejection. One prefix may contribute at
-  most 5,000 candidates and each dictionary row at most 8 KiB. Source-only
-  custom dictionaries are fixture-only and are omitted by the WordPress runtime;
-  production custom dictionaries are not currently supported.
+  most 5,000 candidates and each dictionary row at most 8 KiB. Custom
+  dictionaries are not supported.
 
 See [Snowball compliance](snowball-compliance.md) for the harness and rationale.
-See [Polish lemmatizer source-lock pilot](polish-lemmatizer-source-lock.md) for
-the pre-implementation gates required before any Stempel or Morfologik-style
-Polish pack can be imported.
-See [Polish fixture pack](polish-morfologik-fixture-pack.md) for the opt-in
-lemmatizer-pack contract slice.
-See [Polish verified stemmer](polish-verified-stemmer.md) for the fixture-backed
-Polish slice and its provenance boundary.
+See [Polish PoliMorf packs](polish-morfologik-fixture-pack.md) for the
+bundled full runtime and test-only contract boundaries.
 
 ## Multilingual Analyzer Roadmap
 
@@ -306,23 +294,23 @@ without external dictionaries, but it does not understand words, compounds, or
 language-specific segmentation rules.
 
 Chinese (`zh`) can optionally add Jieba dictionary segmentation. Release ZIPs
-contain the verified pinned `dict.txt`, MIT license, and compact attested lookup
-under the component runtime path. Source development initializes the pinned
+contain the verified runtime manifest, pinned `dict.txt`, MIT license, and
+compact attested lookup under the component runtime path. Source development initializes the pinned
 `components/full-text-search/resources/sources/jieba` git submodule with:
 
 ```sh
-git submodule update --init --recursive components/full-text-search/resources/sources/jieba
+components/full-text-search/tools/initialize-jieba-source.sh
 ```
 
-The attested lookup header binds `jieba/dict.txt` to commit
-`67fa2e36e72f69d9134b8a1037b83fbb070b9775`, SHA-256
-`7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`, and byte
-size `5071852`. Construction verifies the 329,972-byte lookup rather than
-hashing the complete dictionary; each requested source range is digest-checked
-when first read. Missing, uninitialized, or mismatched data fails closed to the
-default CJK n-grams. The source tree commits the gitlink and compact lookup, not
-copied dictionary rows, HMM/POS, IDF, or model files; the release builder stages
-only the verified dictionary, license, and lookup rather than the raw checkout.
+The [Jieba runtime manifest](../../components/full-text-search/resources/runtime/jieba/manifest.json)
+owns the upstream commit and the dictionary, license, and lookup identities.
+Construction verifies the attested lookup rather than hashing the complete
+dictionary; each requested source range is digest-checked when first read.
+Missing, uninitialized, or mismatched data fails closed to the default CJK
+n-grams. The source tree commits the gitlink and compact lookup, not copied
+dictionary rows, HMM/POS, IDF, or model files; the release builder stages only
+the verified manifest, dictionary, license, and lookup rather than the raw
+checkout.
 
 ## Thai Tokenization
 
@@ -387,12 +375,12 @@ per-result posting or metadata pass.
 
 ## Storage And Concurrency
 
-The MySQL backend stores analyzed lexical identities as `kind=0` and one full
+The relational backend stores analyzed lexical identities as `kind=0` and one full
 normalized source-surface identity as `kind=1` per distinct surface/document.
 It does not materialize every proper prefix. Each identity/document pair has one
 posting keyed by `(term_id, post_id)`, alongside one bounded result-document row
-and one generation-fenced work row. This avoids prefix-row amplification,
-whole-posting-blob lost updates, and duplicate metadata JSON.
+and one generation-fenced work row. Dictionary frequencies and row replacements
+are maintained transactionally by the bounded writer.
 Prefix planning sums `doc_freq` over the one complete dictionary range without
 reading postings or returning completion rows. A multi-group prefix `AND`
 compares that range cost with each resolved exact group. An exact anchor uses
@@ -417,7 +405,6 @@ Important caveats remain:
   `wp fts delete` never writes the index directly: it rejects an eligible
   canonical post and queues one exact reconciliation generation for a missing
   or ineligible post;
-- file and in-memory storage are not production concurrency backends;
 - the SQLite adapter is validated as a single-request WordPress Playground
   smoke, not as a multi-request production concurrency backend;
 - foreground canonical-write liveness requires every web, cron, and WP-CLI
@@ -445,10 +432,10 @@ Important caveats remain:
 Use one bulk writer at a time until the target environment has been validated,
 and check `wp fts status` when a command reports lock contention.
 
-## MySQL Error Handling
+## Relational Database Error Handling
 
-The MySQL backend issues `$wpdb` queries directly. It uses transactions around
-bounded document batches, a durable resumable schema migration, typed poison
+The relational backend issues `$wpdb` queries directly. It uses transactions around
+bounded document batches, exact current-schema creation and repair, typed poison
 document failures, generation-aware retries/backoff, and plugin-level writer
 coordination for cron/manual/WP-CLI indexing paths. The real-database acceptance
 runner is the supported-host validation contract; environments outside its

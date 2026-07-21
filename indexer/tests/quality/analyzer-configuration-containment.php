@@ -67,14 +67,14 @@ test_case('quality analyzer configuration rejects one hundred thousand languages
 test_case('quality analyzer configuration bounds maps generators captures graph shape and paths', function (): void {
     $boundary = [];
     for ($number = 0; $number < WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES; $number++) {
-        $boundary['q' . str_pad((string) $number, 2, '0', STR_PAD_LEFT)] = false;
+        $boundary['qa-' . str_pad((string) $number, 2, '0', STR_PAD_LEFT)] = false;
     }
     $pipeline = new WP_FTS_LanguagePipeline(['lemma_packs_by_lang' => $boundary]);
     assert_true(str_starts_with($pipeline->index_signature(), 'wp-fts-language-pipeline-v20:'), 'the exact 32-language disabled-pack boundary should remain valid');
 
     $otherBoundary = [];
     for ($number = 0; $number < WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES; $number++) {
-        $otherBoundary['r' . str_pad((string) $number, 2, '0', STR_PAD_LEFT)] = false;
+        $otherBoundary['ra-' . str_pad((string) $number, 2, '0', STR_PAD_LEFT)] = false;
     }
     $lemmaHalf = array_slice($boundary, 0, 16, true);
     $segmenterHalf = array_slice($otherBoundary, 0, 17, true);
@@ -165,7 +165,7 @@ test_case('quality analyzer configuration bounds maps generators captures graph 
     assert_same('path_bytes', $pathError instanceof WP_FTS_Analyzer_Config_Limit_Exceeded ? $pathError->reason_code : null, 'pack paths should be rejected before trim or filesystem access');
 
     if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
-        $fullPolish = WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest();
+        $fullPolish = WP_FTS_AnalyzerPackValidator::default_polish_manifest();
         if (is_file($fullPolish)) {
             $metadataError = acc_caught(static fn(): WP_FTS_LanguagePipeline => new WP_FTS_LanguagePipeline([
                 'lemma_packs_by_lang' => [
@@ -251,6 +251,7 @@ test_case('quality analyzer manifests bound bytes depth and runtime files before
     $root = sys_get_temp_dir() . '/wp-fts-analyzer-config-' . bin2hex(random_bytes(6));
     mkdir($root, 0777, true);
     try {
+        file_put_contents($root . '/NOTICE.txt', "Project-owned analyzer configuration fixture.\n");
         $oversized = $root . '/oversized.json';
         file_put_contents($oversized, str_repeat(' ', WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES + 1));
         $bytesError = acc_caught(static fn(): array => (new WP_FTS_AnalyzerPackValidator())->validate_metadata($oversized, false));
@@ -269,20 +270,26 @@ test_case('quality analyzer manifests bound bytes depth and runtime files before
             'pack_id' => 'qaa-runtime-file-overflow',
             'language' => 'qaa',
             'version' => 'test-v1',
-            'fixture_only' => true,
-            'default_enabled' => false,
             'capabilities' => ['dictionary-lemmatizer'],
             'runtime' => [
                 'format' => WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV,
+                'normalization' => 'WP_FTS_Normalizer qaa with fold_diacritics=true',
                 'ambiguity_policy' => 'ambiguous_surface_noop',
+                'total_rows' => count($files),
+                'total_sha256' => str_repeat('c', 64),
                 'files' => $files,
             ],
-            'source' => [],
-            'license' => [],
-            'attribution' => [],
+            'source' => [
+                'name' => 'Project-owned analyzer configuration source',
+                'version' => '1',
+                'url' => 'urn:wp-fts:test:analyzer-configuration',
+                'artifact_sha256' => str_repeat('b', 64),
+                'byte_count' => 1,
+            ],
+            'license' => ['spdx_id' => 'CC0-1.0', 'notice_path' => 'NOTICE.txt'],
+            'attribution' => ['note' => 'Project-owned analyzer configuration fixture.'],
             'provenance' => [
                 'no_runtime_network_access' => true,
-                'no_full_third_party_dictionary_dump' => true,
             ],
         ];
         $manyFiles = $root . '/many-files.json';

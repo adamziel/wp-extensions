@@ -1,0 +1,53 @@
+{
+    "schema_version": 1,
+    "pack_id": "pl-morfologik-polimorf-fixture",
+    "language": "pl",
+    "version": "0.1.0-fixture",
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "indexed-runtime-lookups"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer pl with fold_diacritics=true",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "44834010148e50f13b0213b47fd919e7c050a72da29e97d387d6f9076e6ecac2",
+                "rows": 21,
+                "first_surface": "drogi",
+                "last_surface": "zamkach",
+                "compression": "gzip",
+                "lookup": {
+                    "format": "wp-fts-lemma-block-index-v2",
+                    "path": "runtime/0001.tsv.gz.lookup",
+                    "sha256": "ef17690c44e8f3bd41799c92b4c20976666f549de6aa9870efa29a5cc59f33f9",
+                    "blocks": 1
+                }
+            }
+        ],
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 21,
+        "total_sha256": "d32f7b6f20b21a8594613a372c77654b12f32182247963cc9c94123fe195271c"
+    },
+    "source": {
+        "name": "Project-owned Polish morphology analyzer fixture",
+        "version": "0.1.0-fixture",
+        "url": "urn:wp-fts:test:pl-morfologik-polimorf-fixture",
+        "artifact_sha256": "ff80202d5dc519646c09e31312b955c7121996ec1a471e89fd2a0a0aab5d454d",
+        "byte_count": 361
+    },
+    "license": {
+        "spdx_id": "CC0-1.0",
+        "notice_path": "PROVENANCE.md"
+    },
+    "attribution": {
+        "note": "Project-owned analyzer test data."
+    },
+    "provenance": {
+        "local_note": "PROVENANCE.md",
+        "no_runtime_network_access": true
+    }
+}

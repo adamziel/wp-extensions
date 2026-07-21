@@ -15,6 +15,23 @@ require_once __DIR__ . '/lemma-chunk-merge.php';
 final class WP_FTS_LemmaTsvPackImporter
 {
     private const RUNTIME_FORMAT = WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV;
+    public const IMPORT_OPTION_KEYS = [
+        'source',
+        'out',
+        'language',
+        'pack_id',
+        'version',
+        'source_name',
+        'source_url',
+        'license',
+        'attribution',
+        'source_version',
+        'license_url',
+        'max_rows_per_file',
+        'chunk_rows',
+        'importer_commit',
+        'tmp_dir',
+    ];
 
     /**
      * @param array<string,mixed> $options
@@ -22,8 +39,13 @@ final class WP_FTS_LemmaTsvPackImporter
      */
     public function import(array $options): array
     {
+        if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+            throw new RuntimeException('Lemma pack generation requires the PHP zlib extension.');
+        }
+        $this->assert_option_keys($options);
+
         $sourcePath = $this->required_path($options, 'source');
-        $outDir = $this->required_output_dir($options);
+        $outDir = $this->required_string($options, 'out');
         WP_FTS_LemmaSourceImportLimits::assert_source_output_separate(
             $sourcePath,
             $outDir,
@@ -36,26 +58,24 @@ final class WP_FTS_LemmaTsvPackImporter
         $sourceUrl = $this->required_string($options, 'source_url');
         $license = $this->required_string($options, 'license');
         $attribution = $this->required_string($options, 'attribution');
-        $sourceVersion = (string) ($options['source_version'] ?? $version);
-        $licenseUrl = (string) ($options['license_url'] ?? '');
-        $fixtureOnly = $this->bool_option($options['fixture_only'] ?? false);
-        $rowsPerFile = max(1, (int) ($options['max_rows_per_file'] ?? 100000));
-        $chunkRows = (int) ($options['chunk_rows'] ?? WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS);
+        $sourceVersion = $this->optional_string($options, 'source_version', $version);
+        $licenseUrl = $this->optional_string($options, 'license_url', '');
+        $rowsPerFile = $this->positive_integer_option($options, 'max_rows_per_file', 100000);
+        $chunkRows = $this->positive_integer_option(
+            $options,
+            'chunk_rows',
+            WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS
+        );
         if ($chunkRows < 1 || $chunkRows > WP_FTS_LemmaSourceImportLimits::MAX_CHUNK_ROWS) {
             throw new RuntimeException('Lemma importer chunk rows must be between 1 and 200,000.');
         }
-        $importerCommit = (string) ($options['importer_commit'] ?? 'recorded-in-task-result');
-        $runtimeCompressionOption = $options['runtime_compression']
-            ?? $options['compression']
-            ?? ($fixtureOnly ? null : WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP);
-        $runtimeCompression = $this->runtime_compression_option($runtimeCompressionOption);
-        if (!$fixtureOnly && $runtimeCompression !== WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
-            throw new RuntimeException(
-                'Non-fixture lemma packs require --runtime-compression=gzip so every runtime shard has a lookup sidecar.'
-            );
-        }
+        $importerCommit = $this->optional_string($options, 'importer_commit', 'recorded-in-task-result');
 
-        $tmpDir = $this->prepare_temp_directory($options['tmp_dir'] ?? null);
+        $tmpDir = $this->prepare_temp_directory(
+            array_key_exists('tmp_dir', $options)
+                ? $this->optional_string($options, 'tmp_dir', '')
+                : null
+        );
         $importComplete = false;
         $outputPrepared = false;
         try {
@@ -182,7 +202,7 @@ final class WP_FTS_LemmaTsvPackImporter
             $chunkFiles = $chunkPlan['files'];
 
             try {
-                $merge = $this->merge_chunks($chunkFiles, $runtimeDir, $rowsPerFile, $runtimeCompression);
+                $merge = $this->merge_chunks($chunkFiles, $runtimeDir, $rowsPerFile);
             } catch (Throwable $error) {
                 $this->remove_tree($runtimeDir);
                 throw $error;
@@ -201,21 +221,6 @@ final class WP_FTS_LemmaTsvPackImporter
                     'Generated lemma runtime and lookup files exceed the 16 MiB per-pack limit.'
                 );
             }
-            if (
-                $runtimeCompression === null
-                && (
-                    $runtimeRows > WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_ROWS
-                    || $runtimeDecodedBytes > WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_BYTES
-                )
-            ) {
-                $this->remove_tree($runtimeDir);
-                throw new RuntimeException(
-                    'Unindexed fixture lemma packs may contain at most '
-                    . number_format(WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_ROWS)
-                    . ' rows and 8 MiB of decoded runtime data; rerun with --runtime-compression=gzip.'
-                );
-            }
-
             $noticePath = $outDir . DIRECTORY_SEPARATOR . 'NOTICE.txt';
             $this->write_text($noticePath, $this->build_notice(
                 $sourceName,
@@ -232,7 +237,6 @@ final class WP_FTS_LemmaTsvPackImporter
                 'pack_id' => $packId,
                 'language' => $language,
                 'version' => $version,
-                'fixture_only' => $fixtureOnly,
                 'source_name' => $sourceName,
                 'source_version' => $sourceVersion,
                 'source_url' => $sourceUrl,
@@ -271,7 +275,6 @@ final class WP_FTS_LemmaTsvPackImporter
                 'importer_commit' => $importerCommit,
                 'rows_per_file' => $rowsPerFile,
                 'chunk_rows' => $chunkRows,
-                'runtime_compression' => $runtimeCompression,
             ]);
             $manifestPath = $outDir . DIRECTORY_SEPARATOR . 'manifest.json';
             $this->write_json($manifestPath, $manifest);
@@ -306,12 +309,8 @@ final class WP_FTS_LemmaTsvPackImporter
                     'sha256' => $runtimeDigest,
                 ],
                 'lookup' => [
-                    'format' => $runtimeCompression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP
-                        ? WP_FTS_LemmaPackLookupIndex::FORMAT
-                        : null,
-                    'files' => $runtimeCompression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP
-                        ? count($runtimeFiles)
-                        : 0,
+                    'format' => WP_FTS_LemmaPackLookupIndex::FORMAT,
+                    'files' => count($runtimeFiles),
                     'blocks' => $lookupBlocks,
                     'bytes' => $lookupBytes,
                 ],
@@ -338,7 +337,10 @@ final class WP_FTS_LemmaTsvPackImporter
     {
         $options = [];
         for ($i = 0, $count = count($argv); $i < $count; $i++) {
-            $arg = (string) $argv[$i];
+            if (!is_string($argv[$i])) {
+                throw new RuntimeException('Importer arguments must be strings.');
+            }
+            $arg = $argv[$i];
             if (!str_starts_with($arg, '--')) {
                 throw new RuntimeException("Unexpected argument: {$arg}");
             }
@@ -349,8 +351,8 @@ final class WP_FTS_LemmaTsvPackImporter
                 $value = substr($arg, $equals + 1);
             } else {
                 $key = $arg;
-                if (isset($argv[$i + 1]) && !str_starts_with((string) $argv[$i + 1], '--')) {
-                    $value = (string) $argv[++$i];
+                if (isset($argv[$i + 1]) && is_string($argv[$i + 1]) && !str_starts_with($argv[$i + 1], '--')) {
+                    $value = $argv[++$i];
                 } else {
                     $value = true;
                 }
@@ -377,25 +379,62 @@ final class WP_FTS_LemmaTsvPackImporter
     /**
      * @param array<string,mixed> $options
      */
-    private function required_output_dir(array $options): string
-    {
-        if (isset($options['out'])) {
-            return $this->required_string($options, 'out');
-        }
-
-        return $this->required_string($options, 'output_dir');
-    }
-
-    /**
-     * @param array<string,mixed> $options
-     */
     private function required_string(array $options, string $key): string
     {
-        if (!isset($options[$key]) || !is_scalar($options[$key]) || trim((string) $options[$key]) === '') {
+        if (!array_key_exists($key, $options) || !is_string($options[$key]) || trim($options[$key]) === '') {
             throw new RuntimeException("Missing required option --" . str_replace('_', '-', $key) . '.');
         }
 
-        return (string) $options[$key];
+        return $options[$key];
+    }
+
+    /** Reject options that are not part of the one importer contract. */
+    private function assert_option_keys(array $options): void
+    {
+        $allowed = array_fill_keys(self::IMPORT_OPTION_KEYS, true);
+        foreach (array_keys($options) as $key) {
+            if (!is_string($key) || !isset($allowed[$key])) {
+                throw new RuntimeException('Lemma importer received an unsupported option.');
+            }
+        }
+    }
+
+    private function optional_string(array $options, string $key, string $default): string
+    {
+        if (!array_key_exists($key, $options)) {
+            return $default;
+        }
+        if (!is_string($options[$key]) || trim($options[$key]) === '') {
+            throw new RuntimeException('Importer option --' . str_replace('_', '-', $key) . ' must be a non-empty string.');
+        }
+
+        return $options[$key];
+    }
+
+    private function positive_integer_option(array $options, string $key, int $default): int
+    {
+        if (!array_key_exists($key, $options)) {
+            return $default;
+        }
+        $value = $options[$key];
+        if (is_string($value)) {
+            if ($value === ''
+                || strlen($value) > 20
+                || strspn($value, '0123456789') !== strlen($value)
+                || (strlen($value) > 1 && $value[0] === '0')
+            ) {
+                throw new RuntimeException('Importer option --' . str_replace('_', '-', $key) . ' must be a canonical positive integer.');
+            }
+            $value = (int) $value;
+            if ((string) $value !== $options[$key]) {
+                throw new RuntimeException('Importer option --' . str_replace('_', '-', $key) . ' exceeds the integer range.');
+            }
+        }
+        if (!is_int($value) || $value <= 0) {
+            throw new RuntimeException('Importer option --' . str_replace('_', '-', $key) . ' must be a canonical positive integer.');
+        }
+
+        return $value;
     }
 
     /**
@@ -409,41 +448,6 @@ final class WP_FTS_LemmaTsvPackImporter
         }
 
         return (new WP_FTS_Normalizer())->canonicalize_language($language);
-    }
-
-    private function bool_option(mixed $value): bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-        if (is_scalar($value)) {
-            return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
-        }
-
-        return false;
-    }
-
-    private function runtime_compression_option(mixed $value): ?string
-    {
-        if ($value === null || $value === false) {
-            return null;
-        }
-        if (!is_scalar($value)) {
-            throw new RuntimeException('Runtime compression must be none or gzip.');
-        }
-
-        $compression = strtolower(trim((string) $value));
-        if ($compression === '' || in_array($compression, ['0', 'false', 'no', 'none', 'off'], true)) {
-            return null;
-        }
-        if ($compression !== WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
-            throw new RuntimeException('Runtime compression must be none or gzip.');
-        }
-        if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
-            throw new RuntimeException('Gzip runtime compression requires the PHP zlib extension.');
-        }
-
-        return WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP;
     }
 
     /** Refuse caller-owned files, symlink roots, and non-empty pack targets. */
@@ -465,11 +469,11 @@ final class WP_FTS_LemmaTsvPackImporter
         }
     }
 
-    private function prepare_temp_directory(mixed $requested): string
+    private function prepare_temp_directory(?string $requested): string
     {
         $parent = sys_get_temp_dir();
-        if (is_scalar($requested) && trim((string) $requested) !== '') {
-            $parent = (string) $requested;
+        if ($requested !== null) {
+            $parent = $requested;
         }
 
         if (is_file($parent)) {
@@ -590,7 +594,7 @@ final class WP_FTS_LemmaTsvPackImporter
      * @param string[] $chunkFiles
      * @return array{files:array<int,array<string,mixed>>,rows:int,source_rows:int,sha256:string,ambiguous_surfaces:int,unambiguous_surfaces:int,ambiguity_noop_surfaces:int,ambiguity_noop_source_pairs:int,decoded_bytes:int,encoded_bytes:int,lookup_bytes:int,lookup_blocks:int}
      */
-    private function merge_chunks(array $chunkFiles, string $runtimeDir, int $rowsPerFile, ?string $runtimeCompression): array
+    private function merge_chunks(array $chunkFiles, string $runtimeDir, int $rowsPerFile): array
     {
         $files = [];
         $runtimeDigest = hash_init('sha256');
@@ -663,8 +667,7 @@ final class WP_FTS_LemmaTsvPackImporter
             &$totalRows,
             $closeShard,
             $runtimeDir,
-            $rowsPerFile,
-            $runtimeCompression
+            $rowsPerFile
         ): void {
             if ($currentSurface === null) {
                 return;
@@ -702,7 +705,7 @@ final class WP_FTS_LemmaTsvPackImporter
                 $closeShard();
             }
             if ($shard === null) {
-                $shard = $this->open_shard($runtimeDir, count($files) + 1, $runtimeCompression);
+                $shard = $this->open_shard($runtimeDir, count($files) + 1);
             }
             $this->start_surface_in_lookup_shard($shard, $currentSurface, $surfaceRows, $surfaceBytes);
             foreach ($currentSurfacePairs as $pair) {
@@ -751,18 +754,14 @@ final class WP_FTS_LemmaTsvPackImporter
                         'rows' => $file['rows'],
                         'first_surface' => $file['first_surface'],
                         'last_surface' => $file['last_surface'],
-                    ];
-                    if (isset($file['compression'])) {
-                        $entry['compression'] = $file['compression'];
-                    }
-                    if (isset($file['lookup']) && is_array($file['lookup'])) {
-                        $entry['lookup'] = [
+                        'compression' => $file['compression'],
+                        'lookup' => [
                             'format' => $file['lookup']['format'],
                             'path' => 'runtime/' . basename((string) $file['lookup']['path']),
                             'sha256' => $file['lookup']['sha256'],
                             'blocks' => $file['lookup']['blocks'],
-                        ];
-                    }
+                        ],
+                    ];
 
                     return $entry;
                 },
@@ -783,9 +782,9 @@ final class WP_FTS_LemmaTsvPackImporter
     }
 
     /**
-     * @return array{path:string,handle:resource,compression:?string,rows:int,decoded_bytes:int,lookup_blocks:int,lookup_block_rows:int,lookup_block_bytes:int,lookup_header_bytes:int,lookup_block_header_bytes:int,lookup_block_first_surface:?string,first_surface:?string,last_surface:?string}
+     * @return array{path:string,handle:resource,compression:string,rows:int,decoded_bytes:int,lookup_blocks:int,lookup_block_rows:int,lookup_block_bytes:int,lookup_header_bytes:int,lookup_block_header_bytes:int,lookup_block_first_surface:?string,first_surface:?string,last_surface:?string}
      */
-    private function open_shard(string $runtimeDir, int $number, ?string $runtimeCompression): array
+    private function open_shard(string $runtimeDir, int $number): array
     {
         if ($number > WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES) {
             throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
@@ -793,11 +792,8 @@ final class WP_FTS_LemmaTsvPackImporter
                 'Generated lemma pack exceeds the 64-runtime-file limit.'
             );
         }
-        $extension = $runtimeCompression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP ? '.tsv.gz' : '.tsv';
-        $path = $runtimeDir . DIRECTORY_SEPARATOR . sprintf('%04d%s', $number, $extension);
-        $handle = $runtimeCompression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP
-            ? gzopen($path, 'wb9')
-            : fopen($path, 'wb');
+        $path = $runtimeDir . DIRECTORY_SEPARATOR . sprintf('%04d.tsv.gz', $number);
+        $handle = gzopen($path, 'wb9');
         if (!is_resource($handle)) {
             throw new RuntimeException("Could not write runtime shard: {$path}");
         }
@@ -805,7 +801,7 @@ final class WP_FTS_LemmaTsvPackImporter
         return [
             'path' => $path,
             'handle' => $handle,
-            'compression' => $runtimeCompression,
+            'compression' => WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
             'rows' => 0,
             'decoded_bytes' => 0,
             'lookup_blocks' => 0,
@@ -900,16 +896,12 @@ final class WP_FTS_LemmaTsvPackImporter
     }
 
     /**
-     * @param array{path:string,handle:resource,compression:?string,rows:int,decoded_bytes:int,lookup_blocks:int,lookup_block_rows:int,lookup_block_bytes:int,lookup_header_bytes:int,lookup_block_header_bytes:int,lookup_block_first_surface:?string,first_surface:?string,last_surface:?string} $shard
+     * @param array{path:string,handle:resource,compression:string,rows:int,decoded_bytes:int,lookup_blocks:int,lookup_block_rows:int,lookup_block_bytes:int,lookup_header_bytes:int,lookup_block_header_bytes:int,lookup_block_first_surface:?string,first_surface:?string,last_surface:?string} $shard
      */
     private function write_pair_to_shard(array &$shard, string $pair, string $surface): void
     {
         $line = $pair . "\n";
-        if ($shard['compression'] === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
-            $written = gzwrite($shard['handle'], $line);
-        } else {
-            $written = fwrite($shard['handle'], $line);
-        }
+        $written = gzwrite($shard['handle'], $line);
         if ($written !== strlen($line)) {
             throw new RuntimeException("Could not write runtime shard: {$shard['path']}.");
         }
@@ -920,16 +912,12 @@ final class WP_FTS_LemmaTsvPackImporter
     }
 
     /**
-     * @param array{path:string,handle:resource,compression:?string,rows:int,decoded_bytes:int,lookup_blocks:int,lookup_block_rows:int,lookup_block_bytes:int,lookup_header_bytes:int,lookup_block_header_bytes:int,lookup_block_first_surface:?string,first_surface:?string,last_surface:?string} $shard
-     * @return array{path:string,sha256:string,rows:int,decoded_bytes:int,encoded_bytes:int,lookup_bytes:int,lookup_blocks:int,first_surface:string,last_surface:string,compression?:string,lookup?:array<string,mixed>}
+     * @param array{path:string,handle:resource,compression:string,rows:int,decoded_bytes:int,lookup_blocks:int,lookup_block_rows:int,lookup_block_bytes:int,lookup_header_bytes:int,lookup_block_header_bytes:int,lookup_block_first_surface:?string,first_surface:?string,last_surface:?string} $shard
+     * @return array{path:string,sha256:string,rows:int,decoded_bytes:int,encoded_bytes:int,lookup_bytes:int,lookup_blocks:int,first_surface:string,last_surface:string,compression:string,lookup:array<string,mixed>}
      */
     private function close_shard(array $shard): array
     {
-        if ($shard['compression'] === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
-            gzclose($shard['handle']);
-        } else {
-            fclose($shard['handle']);
-        }
+        gzclose($shard['handle']);
         if (!is_string($shard['first_surface']) || !is_string($shard['last_surface'])) {
             throw new RuntimeException('Cannot close an empty runtime shard.');
         }
@@ -948,39 +936,31 @@ final class WP_FTS_LemmaTsvPackImporter
             'decoded_bytes' => $shard['decoded_bytes'],
             'first_surface' => $shard['first_surface'],
             'last_surface' => $shard['last_surface'],
+            'compression' => WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
         ];
-        if ($shard['compression'] !== null) {
-            $file['compression'] = $shard['compression'];
+        $lookupPath = $shard['path'] . '.lookup';
+        $lookup = WP_FTS_LemmaPackLookupIndex::build(
+            $shard['path'],
+            $sha,
+            $lookupPath
+        );
+        if ((int) $lookup['blocks'] !== $shard['lookup_blocks']) {
+            throw new RuntimeException("Lookup block planning changed for {$shard['path']}.");
         }
-        if ($shard['compression'] === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
-            $lookupPath = $shard['path'] . '.lookup';
-            $lookup = WP_FTS_LemmaPackLookupIndex::build(
-                $shard['path'],
-                $shard['compression'],
-                $sha,
-                $lookupPath
-            );
-            if ((int) $lookup['blocks'] !== $shard['lookup_blocks']) {
-                throw new RuntimeException("Lookup block planning changed for {$shard['path']}.");
-            }
-            $file['sha256'] = $lookup['runtime_sha256'];
-            $file['lookup'] = ['path' => $lookupPath] + $lookup;
-        }
+        $file['sha256'] = $lookup['runtime_sha256'];
+        $file['lookup'] = ['path' => $lookupPath] + $lookup;
 
         $encodedBytes = filesize($shard['path']);
         if (!is_int($encodedBytes)) {
             throw new RuntimeException("Could not measure runtime shard: {$shard['path']}.");
         }
-        $lookupBytes = 0;
-        if (isset($file['lookup']['path'])) {
-            $lookupBytes = filesize((string) $file['lookup']['path']);
-            if (!is_int($lookupBytes)) {
-                throw new RuntimeException("Could not measure lookup sidecar for {$shard['path']}.");
-            }
+        $lookupBytes = filesize((string) $file['lookup']['path']);
+        if (!is_int($lookupBytes)) {
+            throw new RuntimeException("Could not measure lookup sidecar for {$shard['path']}.");
         }
         $file['encoded_bytes'] = $encodedBytes;
         $file['lookup_bytes'] = $lookupBytes;
-        $file['lookup_blocks'] = isset($file['lookup']) ? (int) $file['lookup']['blocks'] : 0;
+        $file['lookup_blocks'] = (int) $file['lookup']['blocks'];
 
         return $file;
     }
@@ -997,14 +977,9 @@ final class WP_FTS_LemmaTsvPackImporter
             'normalized-runtime-rows',
             'sharded-runtime-files',
             'source-backed-lemma-tsv-import',
+            'compressed-runtime-files',
+            'indexed-runtime-lookups',
         ];
-        if ((bool) $data['fixture_only']) {
-            $capabilities[] = 'synthetic-test-data';
-        }
-        if ($data['runtime_compression'] === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
-            $capabilities[] = 'compressed-runtime-files';
-            $capabilities[] = 'indexed-runtime-lookups';
-        }
         $license = [
             'spdx_id' => $data['license'],
             'notice_path' => 'NOTICE.txt',
@@ -1019,8 +994,6 @@ final class WP_FTS_LemmaTsvPackImporter
             'pack_id' => $data['pack_id'],
             'language' => $data['language'],
             'version' => $data['version'],
-            'fixture_only' => $data['fixture_only'],
-            'default_enabled' => false,
             'capabilities' => $capabilities,
             'runtime' => [
                 'format' => self::RUNTIME_FORMAT,
@@ -1059,17 +1032,13 @@ final class WP_FTS_LemmaTsvPackImporter
                     (string) $data['pack_id'],
                     (string) $data['version'],
                     (string) $data['source_url'],
-                    (string) $data['license'],
-                    (bool) $data['fixture_only'],
-                    $data['runtime_compression'] ?? null
+                    (string) $data['license']
                 ),
                 'no_runtime_network_access' => true,
-                'no_full_third_party_dictionary_dump' => (bool) $data['fixture_only'],
-                'full_third_party_dictionary_dump_generated' => !(bool) $data['fixture_only'],
-                'generated_pack_default_enabled' => false,
+                'no_full_third_party_dictionary_dump' => false,
+                'full_third_party_dictionary_dump_generated' => true,
                 'rows_per_file' => $data['rows_per_file'],
                 'chunk_rows' => $data['chunk_rows'],
-                'runtime_compression' => $data['runtime_compression'] ?? null,
             ],
         ];
     }
@@ -1079,9 +1048,7 @@ final class WP_FTS_LemmaTsvPackImporter
         string $packId,
         string $version,
         string $sourceUrl,
-        string $license,
-        bool $fixtureOnly,
-        ?string $runtimeCompression
+        string $license
     ): string {
         $parts = [
             'php indexer/tools/import-lemma-tsv-pack.php',
@@ -1095,12 +1062,6 @@ final class WP_FTS_LemmaTsvPackImporter
             '--license=' . $license,
             '--attribution=<required-attribution>',
         ];
-        if ($fixtureOnly) {
-            $parts[] = '--fixture-only=true';
-        }
-        if ($runtimeCompression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
-            $parts[] = '--runtime-compression=gzip';
-        }
 
         return implode(' ', $parts);
     }

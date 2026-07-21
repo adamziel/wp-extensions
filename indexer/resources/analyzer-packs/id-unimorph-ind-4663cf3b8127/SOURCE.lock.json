@@ -5,8 +5,7 @@
         "language": "id",
         "kind": "lemmatizer",
         "status": "production_candidate",
-        "runtime_pack_committed": true,
-        "default_enabled": false
+        "runtime_pack_committed": true
     },
     "source": {
         "name": "UniMorph ind id inflection table",
@@ -42,10 +41,10 @@
         "path": "indexer/tools/import-unimorph-lemma-pack.php",
         "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
         "commit": "recorded-in-task-result",
-        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=id --pack-id=id-unimorph-ind-4663cf3b8127 --version=4663cf3b8127-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/ind/blob/4663cf3b8127fb85cb7e8a0c1a4f07e96103fe34/ind --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=id --pack-id=id-unimorph-ind-4663cf3b8127 --version=4663cf3b8127-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/ind/blob/4663cf3b8127fb85cb7e8a0c1a4f07e96103fe34/ind --license=CC-BY-SA-3.0 --attribution=<required-attribution>"
     },
     "runtime": {
-        "manifest_sha256": "85858cabdd2fc7599e7808c4e3c4036f730593d36bd2f23275d972a495f37ff0",
+        "manifest_sha256": "bfccfd1e42081dcf8f947dc59205d0341432230924acdce23d61d3ad3ca434b8",
         "row_count": 17421,
         "file_count": 1,
         "byte_count": 80232,
@@ -63,8 +62,7 @@
         "unsupported_language_policy": "return_original_normalized_term"
     },
     "release": {
-        "default_enabled": false,
-        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+        "claim_boundary": "Source-backed UniMorph lemmatizer. Runtime pack is bundled and activates only through plugin configuration."
     },
     "attribution": {
         "upstream": "UniMorph ind contributors; source repository https://github.com/unimorph/ind"

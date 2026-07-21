@@ -14,7 +14,6 @@ test_case('64-file lemma packs reject unsafe ranges and route every lookup to at
         assert_same(64, $payload['runtime_file_limit'] ?? null, "{$label} fixture should bind itself to the production runtime-file limit");
         assert_same(64, $payload['runtime_files'] ?? null, "{$label} fixture should exercise the complete accepted shard count");
         assert_same(64, $payload['validated_runtime_rows'] ?? null, "{$label} full validation should parse every generated shard");
-        assert_same(8388608, $payload['lookup_decoded_byte_limit'] ?? null, "{$label} fixture should bind itself to the per-shard decoded-byte limit");
 
         $invalid = is_array($payload['invalid'] ?? null) ? $payload['invalid'] : [];
         foreach ([

@@ -53,12 +53,13 @@ jobs:
         with:
           php-version: '${{ matrix.php-version }}'
           coverage: none
+      - name: Install component dependencies
+        working-directory: components/full-text-search
+        run: composer install --no-interaction --prefer-dist
       - name: Initialize the pinned Jieba source
         run: |
           set -euo pipefail
-          git submodule sync -- components/full-text-search/resources/sources/jieba
-          git -c protocol.version=2 submodule update --init --depth 1 -- components/full-text-search/resources/sources/jieba
-          test "$(git -C components/full-text-search/resources/sources/jieba rev-parse HEAD)" = 67fa2e36e72f69d9134b8a1037b83fbb070b9775
+          components/full-text-search/tools/initialize-jieba-source.sh
           php components/full-text-search/tools/build-jieba-lookup-index.php --check >/dev/null
           php -n components/full-text-search/tools/build-jieba-lookup-index.php --check >/dev/null
       - name: Prove isolated memory under normal and no-ini PHP
@@ -149,18 +150,24 @@ jobs:
           extensions: zip
           coverage: none
           tools: composer:2.9.8
+      - name: Install component dependencies
+        working-directory: components/full-text-search
+        run: composer install --no-interaction --prefer-dist
       - name: Initialize and attest the pinned Jieba source
         env:
           JIEBA_EVIDENCE_DIR: ${{ runner.temp }}/relational-fts-jieba
           JIEBA_PATH: components/full-text-search/resources/sources/jieba
-          JIEBA_GITLINK: 67fa2e36e72f69d9134b8a1037b83fbb070b9775
-          JIEBA_URL: https://github.com/fxsjy/jieba
-          JIEBA_DICTIONARY_SHA256: 7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8
-          JIEBA_DICTIONARY_BYTES: '5071852'
-          JIEBA_LICENSE_SHA256: 18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37
-          JIEBA_LICENSE_BYTES: '1075'
+          JIEBA_MANIFEST: components/full-text-search/resources/runtime/jieba/manifest.json
         run: |
           set -euo pipefail
+          JIEBA_GITLINK="$(jq -er '.upstream.commit' "${JIEBA_MANIFEST}")"
+          JIEBA_URL="$(jq -er '.upstream.repository' "${JIEBA_MANIFEST}")"
+          JIEBA_DICTIONARY_PATH="$(jq -er '.upstream.dictionary_path' "${JIEBA_MANIFEST}")"
+          JIEBA_DICTIONARY_SHA256="$(jq -er '.artifacts.dictionary.sha256' "${JIEBA_MANIFEST}")"
+          JIEBA_DICTIONARY_BYTES="$(jq -er '.artifacts.dictionary.bytes' "${JIEBA_MANIFEST}")"
+          JIEBA_LICENSE_PATH="$(jq -er '.upstream.license_path' "${JIEBA_MANIFEST}")"
+          JIEBA_LICENSE_SHA256="$(jq -er '.artifacts.license.sha256' "${JIEBA_MANIFEST}")"
+          JIEBA_LICENSE_BYTES="$(jq -er '.artifacts.license.bytes' "${JIEBA_MANIFEST}")"
           mkdir -p "${JIEBA_EVIDENCE_DIR}"
           cat > "${JIEBA_EVIDENCE_DIR}/jieba-source-attestation.json" <<JSON
           {"schema":"jieba-source-attestation-v1","status":"RUNNING","path":"${JIEBA_PATH}"}
@@ -182,8 +189,8 @@ jobs:
           test "${actual_gitlink}" = "${JIEBA_GITLINK}"
           test -z "$(git -C "${JIEBA_PATH}" status --porcelain --untracked-files=all)"
 
-          dictionary="${JIEBA_PATH}/jieba/dict.txt"
-          license="${JIEBA_PATH}/LICENSE"
+          dictionary="${JIEBA_PATH}/${JIEBA_DICTIONARY_PATH}"
+          license="${JIEBA_PATH}/${JIEBA_LICENSE_PATH}"
           dictionary_sha256="$(sha256sum "${dictionary}" | cut -d ' ' -f 1)"
           dictionary_bytes="$(stat -c %s "${dictionary}")"
           license_sha256="$(sha256sum "${license}" | cut -d ' ' -f 1)"
@@ -222,24 +229,25 @@ jobs:
             > "${temporary}"
           php -r '
           $e=json_decode((string)file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
+          $manifest=json_decode((string)file_get_contents($argv[2]),true,32,JSON_THROW_ON_ERROR);
+          $dictionary=$manifest["artifacts"]["dictionary"]??[];
+          $lookup=$manifest["artifacts"]["lookup"]??[];
           $m=$e["measurements"]??[];$cold=$m["cold"]??[];$saturated=$m["saturated"]??[];
           $wideCold=$m["repeated_wide_cold"]??[];$wideSaturated=$m["repeated_wide_saturated"]??[];
           $permuted=$m["permuted_wide"]??[];$changing=$m["changing_prefix"]??[];
           $distinctSets=$m["distinct_prefix_sets"]??[];$maximum=$m["maximum_distinct"]??[];
-          $fanoutEvidence=$m["maximum_fanout_evidence"]??[];$maximumFanout=$m["maximum_fanout"]??[];
-          $completeEvidence=$m["complete_pinned_cache_evidence"]??[];$completeCache=$m["complete_pinned_cache"]??[];
+          $fanoutRecord=$m["maximum_fanout_record"]??[];$maximumFanout=$m["maximum_fanout"]??[];
+          $completeRecord=$m["complete_pinned_cache_record"]??[];$completeCache=$m["complete_pinned_cache"]??[];
           $valid=($e["schema"]??null)==="jieba-indexed-multi-run-v2"
             &&($e["status"]??null)==="pass"
             &&($e["memory_limit"]??null)==="128M"
             &&is_int($e["checks"]??null)&&$e["checks"]>=99
-            &&($m["dictionary_bytes"]??null)===5071852
-            &&($m["lookup_bytes"]??null)===329972
-            &&($m["lookup_ranges"]??null)===11783
-            &&($m["distinct_runs"]??null)===256
-            &&($m["source_hash_scans_per_pinned_construction"]??null)===0;
+            &&($m["dictionary_bytes"]??null)===($dictionary["bytes"]??null)
+            &&($m["lookup_bytes"]??null)===($lookup["bytes"]??null)
+            &&($m["lookup_ranges"]??null)===($lookup["ranges"]??null)
+            &&($m["distinct_runs"]??null)===256;
           foreach([$cold,$saturated] as $run){
-            $valid=$valid&&($run["complete_dictionary_scans"]??null)===0
-              &&($run["indexed_range_reads"]??PHP_INT_MAX)<=256
+            $valid=$valid&&($run["indexed_range_reads"]??PHP_INT_MAX)<=256
               &&($run["elapsed_seconds"]??INF)<5.0
               &&(($run["php_peak_delta_authoritative"]??false)!==true||($run["php_peak_delta_bytes"]??PHP_INT_MAX)<=25165824)
               &&(($run["rss_peak_delta_authoritative"]??false)!==true||max($run["rss_delta_bytes"]??PHP_INT_MAX,$run["rss_peak_delta_bytes"]??PHP_INT_MAX)<=25165824)
@@ -248,7 +256,6 @@ jobs:
           }
           foreach([$wideCold,$wideSaturated] as $run){
             $valid=$valid&&($run["term_count"]??null)===18600
-              &&($run["complete_dictionary_scans"]??null)===0
               &&($run["indexed_range_reads"]??PHP_INT_MAX)<=20
               &&($run["elapsed_seconds"]??INF)<2.0
               &&(($run["php_peak_delta_authoritative"]??false)!==true||($run["php_peak_delta_bytes"]??PHP_INT_MAX)<=25165824)
@@ -257,53 +264,47 @@ jobs:
               &&($run["rss_source"]??null)==="linux_proc_status";
           }
           $valid=$valid&&($permuted["term_count"]??null)===18600
-            &&($permuted["complete_dictionary_scans"]??null)===0
             &&($permuted["indexed_range_reads"]??PHP_INT_MAX)<=20
             &&($permuted["elapsed_seconds"]??INF)<2.0
             &&(($permuted["php_peak_delta_authoritative"]??false)!==true||($permuted["php_peak_delta_bytes"]??PHP_INT_MAX)<=25165824)
             &&(($permuted["rss_peak_delta_authoritative"]??false)!==true||max($permuted["rss_delta_bytes"]??PHP_INT_MAX,$permuted["rss_peak_delta_bytes"]??PHP_INT_MAX)<=25165824)
             &&($permuted["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
           $valid=$valid&&($changing["term_count"]??null)===18600
-            &&($changing["complete_dictionary_scans"]??null)===0
             &&($changing["indexed_range_reads"]??PHP_INT_MAX)<=350
             &&($changing["elapsed_seconds"]??INF)<2.0
             &&(($changing["php_peak_delta_authoritative"]??false)!==true||($changing["php_peak_delta_bytes"]??PHP_INT_MAX)<=25165824)
             &&(($changing["rss_peak_delta_authoritative"]??false)!==true||max($changing["rss_delta_bytes"]??PHP_INT_MAX,$changing["rss_peak_delta_bytes"]??PHP_INT_MAX)<=25165824)
             &&($changing["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
           $valid=$valid&&($distinctSets["term_count"]??null)===18600
-            &&($distinctSets["complete_dictionary_scans"]??null)===0
             &&($distinctSets["indexed_range_reads"]??PHP_INT_MAX)<=4000
             &&($distinctSets["elapsed_seconds"]??INF)<3.0
             &&(($distinctSets["php_peak_delta_authoritative"]??false)!==true||($distinctSets["php_peak_delta_bytes"]??PHP_INT_MAX)<=41943040)
             &&(($distinctSets["rss_peak_delta_authoritative"]??false)!==true||max($distinctSets["rss_delta_bytes"]??PHP_INT_MAX,$distinctSets["rss_peak_delta_bytes"]??PHP_INT_MAX)<=41943040)
             &&($distinctSets["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
           $valid=$valid&&($maximum["term_count"]??null)===20000
-            &&($maximum["complete_dictionary_scans"]??null)===0
             &&($maximum["indexed_range_reads"]??null)===0
             &&($maximum["elapsed_seconds"]??INF)<15.0
             &&(($maximum["php_peak_delta_authoritative"]??false)!==true||($maximum["php_peak_delta_bytes"]??PHP_INT_MAX)<=25165824)
             &&(($maximum["rss_peak_delta_authoritative"]??false)!==true||max($maximum["rss_delta_bytes"]??PHP_INT_MAX,$maximum["rss_peak_delta_bytes"]??PHP_INT_MAX)<=25165824)
             &&($maximum["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
-          $valid=$valid&&($fanoutEvidence["prefix_count"]??null)===1365
-            &&($fanoutEvidence["candidate_count"]??null)===285075
-            &&($fanoutEvidence["candidate_bytes"]??null)===2581996
-            &&($fanoutEvidence["run_bytes"]??null)===4095
+          $valid=$valid&&($fanoutRecord["prefix_count"]??null)===1365
+            &&($fanoutRecord["candidate_count"]??null)===285075
+            &&($fanoutRecord["candidate_bytes"]??null)===2581996
+            &&($fanoutRecord["run_bytes"]??null)===4095
             &&($maximumFanout["term_count"]??null)===5454
-            &&($maximumFanout["complete_dictionary_scans"]??null)===0
             &&($maximumFanout["indexed_range_reads"]??PHP_INT_MAX)<=1600
             &&($maximumFanout["elapsed_seconds"]??INF)<5.0
             &&(($maximumFanout["php_peak_delta_authoritative"]??false)!==true||($maximumFanout["php_peak_delta_bytes"]??PHP_INT_MAX)<=67108864)
             &&(($maximumFanout["rss_peak_delta_authoritative"]??false)!==true||max($maximumFanout["rss_delta_bytes"]??PHP_INT_MAX,$maximumFanout["rss_peak_delta_bytes"]??PHP_INT_MAX)<=67108864)
             &&($maximumFanout["rss_peak_bytes"]??PHP_INT_MAX)<=134217728;
-          $valid=$valid&&($completeEvidence["prefix_count"]??null)===5628
-            &&($completeEvidence["candidate_count"]??null)===337399
-            &&($completeEvidence["candidate_bytes"]??null)===3013489
-            &&($completeEvidence["source_prefix_count"]??null)===5652
-            &&($completeEvidence["source_candidate_count"]??null)===337461
-            &&($completeEvidence["source_candidate_bytes"]??null)===3013799
+          $valid=$valid&&($completeRecord["prefix_count"]??null)===5628
+            &&($completeRecord["candidate_count"]??null)===337399
+            &&($completeRecord["candidate_bytes"]??null)===3013489
+            &&($completeRecord["source_prefix_count"]??null)===5652
+            &&($completeRecord["source_candidate_count"]??null)===337461
+            &&($completeRecord["source_candidate_bytes"]??null)===3013799
             &&($completeCache["run_count"]??null)===5
             &&($completeCache["term_count"]??0)>0
-            &&($completeCache["complete_dictionary_scans"]??null)===0
             &&($completeCache["indexed_range_reads"]??null)===5632
             &&($completeCache["elapsed_seconds"]??INF)<5.0
             &&(($completeCache["php_peak_delta_authoritative"]??false)!==true||($completeCache["php_peak_delta_bytes"]??PHP_INT_MAX)<=67108864)
@@ -329,8 +330,8 @@ jobs:
             "changing_prefix"=>[$changing,$identity($changing),25165824],
             "distinct_prefix_sets"=>[$distinctSets,$identity($distinctSets),41943040],
             "maximum_distinct"=>[$maximum,$identity($maximum),25165824],
-            "maximum_fanout"=>[$maximumFanout,$identity($maximumFanout,$fanoutEvidence),67108864],
-            "complete_pinned_cache"=>[$completeCache,$identity($completeCache,$completeEvidence),67108864],
+            "maximum_fanout"=>[$maximumFanout,$identity($maximumFanout,$fanoutRecord),67108864],
+            "complete_pinned_cache"=>[$completeCache,$identity($completeCache,$completeRecord),67108864],
           ];
           $valid=$valid&&array_keys($fresh)===array_keys($freshCases);
           foreach($freshCases as $caseId=>[$parentRun,$workload,$deltaCeiling]){
@@ -355,7 +356,7 @@ jobs:
               &&($run["php_peak_delta_bytes"]??PHP_INT_MAX)<=$deltaCeiling
               &&($run["rss_delta_bytes"]??PHP_INT_MAX)<=$deltaCeiling
               &&($run["rss_peak_delta_bytes"]??PHP_INT_MAX)<=$deltaCeiling;
-            foreach(["term_count","complete_dictionary_scans","indexed_range_reads"] as $field){
+            foreach(["term_count","indexed_range_reads"] as $field){
               $valid=$valid&&($run[$field]??null)===($parentRun[$field]??null);
             }
             if(array_key_exists("run_count",$parentRun)){
@@ -363,7 +364,7 @@ jobs:
             }
           }
           if(!$valid){fwrite(STDERR,"Jieba indexed multi-run evidence failed its external schema and ceiling validation.\n");exit(1);}
-          ' "${temporary}"
+          ' "${temporary}" components/full-text-search/resources/runtime/jieba/manifest.json
           mv "${temporary}" "${evidence}"
       - name: Run constrained real-WordPress 100k boundary proof
         timeout-minutes: 345

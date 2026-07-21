@@ -73,6 +73,12 @@ final class WP_FTS_IB_Infinite_Cjk_Tokenizer
     public int $calls = 0;
     public int $yields = 0;
 
+    /** Keep the injected tokenizer's index behavior identity explicit. */
+    public function index_signature(): string
+    {
+        return 'wp-fts-isolated-infinite-cjk-tokenizer-v1';
+    }
+
     /** Never terminate on its own; only the analyzer's occurrence guard may stop it. */
     public function __invoke(string $run, string $language): Generator
     {
@@ -97,16 +103,14 @@ final class WP_FTS_IB_Distinct_Term_Analyzer
     ) {
     }
 
-    /** @return array<int,array{term:string,lang:string,weight:float}> */
-    public function analyze_plain_content(string $text, array $options = []): array
+    /** @return array<int,array<int,array{term:string,lang:string,weight:float}>> */
+    public function analyze_document_fields(array $fields, array $options = []): array
     {
-        return $this->occurrences($options);
-    }
+        if (!array_is_list($fields) || count($fields) !== 1) {
+            throw new LogicException('Distinct-term boundary analysis requires one field.');
+        }
 
-    /** @return array<int,array{term:string,lang:string,weight:float}> */
-    public function analyze_content(string $html, array $options = []): array
-    {
-        return $this->occurrences($options);
+        return [$this->occurrences($options)];
     }
 
     /** Keep fixture output deterministic across the isolated boundary cases. */
@@ -274,7 +278,7 @@ function wp_fts_ib_preflight(): array
 
     foreach ([
         'WP_FTS_Plugin',
-        'WP_FTS_Storage_Mysql',
+        'WP_FTS_Relational_Storage',
         'WP_FTS_Index_Queue',
         'WP_FTS_Indexer',
         'WP_FTS_Analyzer',
@@ -293,10 +297,10 @@ function wp_fts_ib_preflight(): array
     wp_fts_ib_assert(WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_GROUPS === 12, 'The logical-group contract drifted from 12.');
     wp_fts_ib_assert(WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_ALTERNATIVES === 12, 'The query-alternative contract drifted from 12.');
     wp_fts_ib_assert(WP_FTS_Index_Queue::MAX_ENQUEUE_POSTS === 1000, 'The enqueue-many contract drifted from 1,000.');
-    wp_fts_ib_assert(WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS === 8192, 'The relational document contract drifted from 8,192 postings.');
-    wp_fts_ib_assert(WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS === WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS + WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES, 'The relational document contract is not the lexical-plus-surface envelope.');
-    wp_fts_ib_assert(WP_FTS_Storage_Mysql::MAX_BATCH_TERMS === 8192, 'The relational writer term contract drifted from 8,192 identities.');
-    wp_fts_ib_assert(WP_FTS_Storage_Mysql::MAX_BATCH_POSTINGS === 50000, 'The relational writer mutation contract drifted from 50,000 postings.');
+    wp_fts_ib_assert(WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS === 8192, 'The relational document contract drifted from 8,192 postings.');
+    wp_fts_ib_assert(WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS === WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS + WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_SURFACES, 'The relational document contract is not the lexical-plus-surface envelope.');
+    wp_fts_ib_assert(WP_FTS_Relational_Storage::MAX_BATCH_TERMS === 8192, 'The relational writer term contract drifted from 8,192 identities.');
+    wp_fts_ib_assert(WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS === 50000, 'The relational writer mutation contract drifted from 50,000 postings.');
 
     $memory_limit_bytes = wp_fts_ib_ini_bytes((string) ini_get('memory_limit'));
     wp_fts_ib_assert($memory_limit_bytes === WP_FTS_IB_MEMORY_LIMIT_BYTES, 'PHP memory_limit must be exactly 128 MiB.');
@@ -382,9 +386,9 @@ function wp_fts_ib_preflight(): array
         wp_fts_ib_assert((int) $fixture->{$field} === 0, "The isolated fixture has pre-existing {$field} rows.");
     }
 
-    // Constructing the public production backend is deliberately schema-I/O free.
-    $storage = WP_FTS_Plugin::storage(false);
-    wp_fts_ib_assert($storage instanceof WP_FTS_Storage_Mysql, 'The plugin did not construct the production MySQL storage backend.');
+    // Constructing the public relational backend is deliberately schema-I/O free.
+    $storage = wp_fts_ib_storage_fixture(false);
+    wp_fts_ib_assert($storage instanceof WP_FTS_Relational_Storage, 'The plugin did not construct the relational storage backend.');
 
     return [
         'binding' => [
@@ -425,7 +429,7 @@ function wp_fts_ib_run_cases(array $evidence): array
     // These cases capture only the relational writer statements. The public
     // factory was verified above; a shared writer lease would add unrelated
     // ownership SQL to the isolated boundary evidence.
-    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage = new WP_FTS_Relational_Storage($wpdb);
     $gates = [];
     $captures = [];
 
@@ -473,12 +477,12 @@ function wp_fts_ib_run_cases(array $evidence): array
  * @param array<int,array<string,mixed>> $gates
  * @return array{evidence:array<string,mixed>,captures:array<string,array{summary:array<string,mixed>,reject_path:bool}>}
  */
-function wp_fts_ib_case_html_markup_limits(WP_FTS_Storage_Mysql $storage, array &$gates): array
+function wp_fts_ib_case_html_markup_limits(WP_FTS_Relational_Storage $storage, array &$gates): array
 {
     $nested_source = str_repeat('<span>', 100000) . 'boundedword' . str_repeat('</span>', 100000);
     $language_source = '<p lang="' . str_repeat('en-', 600000) . '">boundedword</p>';
     $analyzer = WP_FTS_Plugin::runtime_analyzer();
-    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer = new WP_FTS_Indexer($analyzer);
 
     $nested_before = wp_fts_ib_resource_row(true);
     $nested = wp_fts_ib_attempt(static fn(): array => $indexer->prepare_document_fields(
@@ -557,7 +561,7 @@ function wp_fts_ib_case_html_markup_limits(WP_FTS_Storage_Mysql $storage, array 
  * @param array<int,array<string,mixed>> $gates
  * @return array{evidence:array<string,mixed>,captures:array<string,array{summary:array<string,mixed>,reject_path:bool}>}
  */
-function wp_fts_ib_case_cjk_lexical_run(WP_FTS_Storage_Mysql $storage, array &$gates): array
+function wp_fts_ib_case_cjk_lexical_run(WP_FTS_Relational_Storage $storage, array &$gates): array
 {
     $accepted_source = str_repeat('中', 1365);
     $rejected_source = str_repeat('中', 1366);
@@ -567,7 +571,7 @@ function wp_fts_ib_case_cjk_lexical_run(WP_FTS_Storage_Mysql $storage, array &$g
         'document_lang' => 'zh',
         'enable_stemming' => false,
     ]);
-    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer = new WP_FTS_Indexer($analyzer);
 
     $accepted = wp_fts_ib_attempt(static function () use ($indexer, $storage, $accepted_source): array {
         $prepared = $indexer->prepare_document_fields(WP_FTS_IB_DOCUMENT_ID + 2, [[
@@ -668,7 +672,7 @@ function wp_fts_ib_case_cjk_lexical_run(WP_FTS_Storage_Mysql $storage, array &$g
                 'input' => ['kind' => 'contiguous_han_lexical_run', 'code_points' => 1365, 'bytes' => strlen($accepted_source), 'sha256' => hash('sha256', $accepted_source)],
                 'outcome' => $accepted['error'],
                 'duration_ms' => $accepted['duration_ms'],
-                'production_path' => [WP_FTS_Analyzer::class, WP_FTS_Indexer::class, WP_FTS_Storage_Mysql::class],
+                'production_path' => [WP_FTS_Analyzer::class, WP_FTS_Indexer::class, WP_FTS_Relational_Storage::class],
                 'result' => $accepted_result,
                 'sql' => $accepted_sql,
             ],
@@ -697,7 +701,7 @@ function wp_fts_ib_case_cjk_lexical_run(WP_FTS_Storage_Mysql $storage, array &$g
  * @param array<int,array<string,mixed>> $gates
  * @return array{evidence:array<string,mixed>,captures:array<string,array{summary:array<string,mixed>,reject_path:bool}>}
  */
-function wp_fts_ib_case_infinite_tokenizer(WP_FTS_Storage_Mysql $storage, array &$gates): array
+function wp_fts_ib_case_infinite_tokenizer(WP_FTS_Relational_Storage $storage, array &$gates): array
 {
     $probe = new WP_FTS_IB_Infinite_Cjk_Tokenizer();
     $analyzer = new WP_FTS_Analyzer([
@@ -707,7 +711,7 @@ function wp_fts_ib_case_infinite_tokenizer(WP_FTS_Storage_Mysql $storage, array 
         'enable_stemming' => false,
         'cjk_tokenizer' => $probe,
     ]);
-    $searcher = WP_FTS_Searcher::for_set_oriented_storage($storage, $analyzer);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
     $attempt = wp_fts_ib_attempt(static fn(): array => $searcher->search('中文', [
         'query_lang' => 'zh',
         'limit' => 1,
@@ -740,7 +744,7 @@ function wp_fts_ib_case_infinite_tokenizer(WP_FTS_Storage_Mysql $storage, array 
  * @param array<int,array<string,mixed>> $gates
  * @return array{evidence:array<string,mixed>,captures:array<string,array{summary:array<string,mixed>,reject_path:bool}>}
  */
-function wp_fts_ib_case_logical_plans(WP_FTS_Storage_Mysql $storage, array &$gates): array
+function wp_fts_ib_case_logical_plans(WP_FTS_Relational_Storage $storage, array &$gates): array
 {
     $ready = get_option(WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION, null);
     $ready_incarnation = is_array($ready) ? ($ready['incarnation'] ?? null) : null;
@@ -759,7 +763,7 @@ function wp_fts_ib_case_logical_plans(WP_FTS_Storage_Mysql $storage, array &$gat
         'query_lang' => 'en',
         'enable_stemming' => false,
     ]);
-    $searcher = WP_FTS_Searcher::for_set_oriented_storage($storage, $analyzer);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
     $terms = [];
     for ($index = 0; $index < 13; $index++) {
         $terms[] = 'wpftsibgroup' . chr(97 + $index) . chr(97 + $index);
@@ -793,16 +797,12 @@ function wp_fts_ib_case_logical_plans(WP_FTS_Storage_Mysql $storage, array &$gat
         $term = 'wpftsibalternative' . chr(97 + $index) . chr(97 + $index);
         $alternative_candidates[] = [
             'key' => WP_FTS_TermNamespace::namespace_term('en', $term),
-            'lang' => 'en',
-            'term' => $term,
             'rank' => $index,
         ];
     }
     $storage_options = [
         'mode' => 'OR',
         'page_size' => 1,
-        'limit' => 2,
-        'query_lang' => 'en',
         'prefix_matching' => false,
         'include_metadata' => false,
         'include_snippets' => false,
@@ -876,19 +876,18 @@ function wp_fts_ib_case_logical_plans(WP_FTS_Storage_Mysql $storage, array &$gat
  * @param array<int,array<string,mixed>> $gates
  * @return array{evidence:array<string,mixed>,cleanup:array<string,mixed>,captures:array<string,array{summary:array<string,mixed>,reject_path:bool}>}
  */
-function wp_fts_ib_case_document_terms(WP_FTS_Storage_Mysql $storage, array &$gates): array
+function wp_fts_ib_case_document_terms(WP_FTS_Relational_Storage $storage, array &$gates): array
 {
     $term_prefix = wp_fts_ib_term_prefix(wp_fts_ib_required_env('WP_FTS_SOURCE_SHA'));
     $accepted_analyzer = new WP_FTS_IB_Distinct_Term_Analyzer(4096, $term_prefix);
-    $accepted_indexer = new WP_FTS_Indexer($storage, $accepted_analyzer);
+    $accepted_indexer = new WP_FTS_Indexer($accepted_analyzer);
     $accepted = wp_fts_ib_attempt(static function () use ($accepted_indexer, $storage): array {
         $prepared = $accepted_indexer->prepare_document_fields(WP_FTS_IB_DOCUMENT_ID, [[
             'name' => 'content',
             'text' => 'isolated 4096-distinct-term boundary',
             'boost' => 1.0,
         ]], [
-            'lang' => 'en',
-            'metadata' => ['search_text' => 'isolated distinct-term boundary'],
+            'document_lang' => 'en',
         ]);
         $prepared_terms = count($prepared['term_frequencies']);
         $write = $storage->replace_prepared_documents([$prepared]);
@@ -900,13 +899,13 @@ function wp_fts_ib_case_document_terms(WP_FTS_Storage_Mysql $storage, array &$ga
     unset($accepted['queries'], $accepted['result']);
 
     $rejected_analyzer = new WP_FTS_IB_Distinct_Term_Analyzer(4097, $term_prefix . 'reject');
-    $rejected_indexer = new WP_FTS_Indexer($storage, $rejected_analyzer);
+    $rejected_indexer = new WP_FTS_Indexer($rejected_analyzer);
     $rejected = wp_fts_ib_attempt(static function () use ($rejected_indexer, $storage): array {
         $prepared = $rejected_indexer->prepare_document_fields(WP_FTS_IB_DOCUMENT_ID + 1, [[
             'name' => 'content',
             'text' => 'isolated 4097-distinct-term boundary',
             'boost' => 1.0,
-        ]], ['lang' => 'en']);
+        ]], ['document_lang' => 'en']);
 
         // If analysis ever stops enforcing the limit, the real storage writer
         // is still inside this capture and the zero-SQL rejection gate fails.
@@ -1169,18 +1168,17 @@ function wp_fts_ib_is_analysis_limit(array $error, string $reason_code): bool
         && ($error['reason_code'] ?? null) === $reason_code;
 }
 
-/** @return array{result_count:int,has_more:?bool,total_relation:?string,query_lang:?string} */
+/** @return array{result_count:int,has_more:?bool,query_lang:?string} */
 function wp_fts_ib_page_row(mixed $page): array
 {
     if (!is_array($page)) {
-        return ['result_count' => 0, 'has_more' => null, 'total_relation' => null, 'query_lang' => null];
+        return ['result_count' => 0, 'has_more' => null, 'query_lang' => null];
     }
     $results = isset($page['results']) && is_array($page['results']) ? $page['results'] : $page;
 
     return [
         'result_count' => count($results),
         'has_more' => array_key_exists('has_more', $page) ? (bool) $page['has_more'] : null,
-        'total_relation' => is_scalar($page['total_relation'] ?? null) ? (string) $page['total_relation'] : null,
         'query_lang' => is_scalar($page['query_lang'] ?? null) ? (string) $page['query_lang'] : null,
     ];
 }
@@ -1631,4 +1629,13 @@ function wp_fts_ib_canonical_value(mixed $value): mixed
     }
 
     return $value;
+}
+
+/** Reach the private production storage factory only from this fixture. */
+function wp_fts_ib_storage_fixture(bool $ensureSchema = false): WP_FTS_Relational_Storage
+{
+    $method = new ReflectionMethod(WP_FTS_Plugin::class, 'storage');
+    $method->setAccessible(true);
+
+    return $method->invoke(null, $ensureSchema);
 }

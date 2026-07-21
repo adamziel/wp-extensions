@@ -6,55 +6,51 @@ declare(strict_types=1);
  *
  * This is not statistical language detection. It only fills gaps when callers
  * provide no explicit language, using script ranges, distinctive Latin letters,
- * and compact stopword/evidence lists. Explicit language options, HTML lang
+ * and compact stopword/signal lists. Explicit language options, HTML lang
  * attributes, and multilingual plugin metadata still win in the analyzer.
  */
 final class WP_FTS_LanguageDetector
 {
-    private WP_FTS_Normalizer $normalizer;
-    private int $minimumScore;
-    private int $minimumLead;
-    /** @var array<string,array<string,bool>> */
-    private array $evidenceTerms;
+    private const MINIMUM_SCORE = 3;
+    private const MINIMUM_LEAD = 1;
 
-    /**
-     * @param array{
-     *   minimum_score?:int,
-     *   minimum_lead?:int,
-     *   evidence_terms?:array<string,string[]>
-     * } $options
-     */
-    public function __construct(array $options = [])
+    private WP_FTS_Normalizer $normalizer;
+    /** @var array<string,array<string,bool>> */
+    private array $signalTerms;
+
+    /** Build the fixed detector used by every analyzer instance. */
+    public function __construct()
     {
+        if (func_num_args() !== 0) {
+            throw new InvalidArgumentException('Language detector does not accept constructor options.');
+        }
         $this->normalizer = new WP_FTS_Normalizer(['fold_diacritics' => true]);
-        $this->minimumScore = max(1, (int) ($options['minimum_score'] ?? 3));
-        $this->minimumLead = max(0, (int) ($options['minimum_lead'] ?? 1));
-        $this->evidenceTerms = $this->normalize_evidence_terms($options['evidence_terms'] ?? $this->default_evidence_terms());
+        $this->signalTerms = $this->normalize_signal_terms($this->default_signal_terms());
     }
 
     /**
-     * Detect a language for a text sample, or return null when evidence is weak.
+     * Detect a language for a text sample, or return null when signal is weak.
      *
-     * @param string[] $candidateLanguages Optional allowlist of canonical or
-     *        locale-style language tags. Empty means all bundled detector
-     *        evidence is eligible.
+     * @param string[] $candidateLanguages Optional native list of unpadded
+     *        canonical or locale-style language tags. Empty means all bundled
+     *        detector signal is eligible.
      * @return string|null Canonical primary language such as `pl`, or null when
      *         the best score is below threshold or tied.
      */
     public function detect_text(string $text, array $candidateLanguages = []): ?string
     {
+        $allowed = $this->candidate_lookup($candidateLanguages);
         $text = trim($this->normalizer->normalize_unicode($text));
         if ($text === '') {
             return null;
         }
 
-        $allowed = $this->candidate_lookup($candidateLanguages);
         $scores = [];
-        $this->score_script_evidence($text, $scores, $allowed);
-        $this->score_distinctive_latin_evidence($text, $scores, $allowed);
+        $this->score_script_signal($text, $scores, $allowed);
+        $this->score_distinctive_latin_signal($text, $scores, $allowed);
 
         foreach ($this->tokens($text) as $token) {
-            foreach ($this->evidenceTerms as $lang => $terms) {
+            foreach ($this->signalTerms as $lang => $terms) {
                 if ($allowed !== [] && !isset($allowed[$lang])) {
                     continue;
                 }
@@ -75,7 +71,7 @@ final class WP_FTS_LanguageDetector
         $langs = array_keys($scores);
         $bestScore = (int) $ranked[0];
         $secondScore = (int) ($ranked[1] ?? 0);
-        if ($bestScore < $this->minimumScore || ($bestScore - $secondScore) < $this->minimumLead) {
+        if ($bestScore < self::MINIMUM_SCORE || ($bestScore - $secondScore) < self::MINIMUM_LEAD) {
             return null;
         }
 
@@ -91,16 +87,16 @@ final class WP_FTS_LanguageDetector
             'contract' => 'wp-fts-language-detector',
             'version' => 7,
             'unicode_normalizer' => $this->normalizer->index_signature(),
-            'minimum_score' => $this->minimumScore,
-            'minimum_lead' => $this->minimumLead,
-            'evidence_terms' => $this->sortedStringSetMap($this->evidenceTerms),
+            'score_floor' => self::MINIMUM_SCORE,
+            'lead_floor' => self::MINIMUM_LEAD,
+            'signal_terms' => $this->sortedStringSetMap($this->signalTerms),
         ]));
     }
 
     /**
      * @return array<string,array<string,bool>>
      */
-    private function normalize_evidence_terms(array $termsByLanguage): array
+    private function normalize_signal_terms(array $termsByLanguage): array
     {
         $normalized = [];
         foreach ($termsByLanguage as $language => $terms) {
@@ -133,7 +129,7 @@ final class WP_FTS_LanguageDetector
     /**
      * @return array<string,string[]>
      */
-    private function default_evidence_terms(): array
+    private function default_signal_terms(): array
     {
         return [
             'ar' => ['هذا', 'هذه', 'التي', 'الذي', 'على', 'مع', 'بحث', 'للبحث', 'عربي'],
@@ -166,16 +162,34 @@ final class WP_FTS_LanguageDetector
      */
     private function candidate_lookup(array $candidateLanguages): array
     {
+        if (!array_is_list($candidateLanguages)) {
+            throw new InvalidArgumentException('Candidate languages must be a list.');
+        }
+        if (count($candidateLanguages) > WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES) {
+            throw new InvalidArgumentException(
+                'Candidate languages exceed the '
+                . WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES
+                . '-language limit.'
+            );
+        }
+
         $lookup = [];
         foreach ($candidateLanguages as $language) {
-            if (!is_scalar($language)) {
-                continue;
+            if (
+                !is_string($language)
+                || $language === ''
+                || trim($language) !== $language
+                || strlen($language) > WP_FTS_Analyzer_Config_Limits::MAX_LANGUAGE_BYTES
+            ) {
+                throw new InvalidArgumentException(
+                    'Candidate languages must be unpadded non-empty strings of at most 64 bytes.'
+                );
             }
 
-            $lang = $this->normalizer->base_language((string) $language);
-            if ($lang !== 'und') {
-                $lookup[$lang] = true;
-            }
+            $canonical = WP_FTS_TermNamespace::parse_language_tag($language);
+            $separator = strpos($canonical, '-');
+            $lang = $separator === false ? $canonical : substr($canonical, 0, $separator);
+            $lookup[$lang] = true;
         }
 
         return $lookup;
@@ -185,9 +199,9 @@ final class WP_FTS_LanguageDetector
      * @param array<string,int> $scores
      * @param array<string,bool> $allowed
      */
-    private function score_script_evidence(string $text, array &$scores, array $allowed): void
+    private function score_script_signal(string $text, array &$scores, array $allowed): void
     {
-        $scriptEvidence = [
+        $scriptSignal = [
             'zh' => ['pattern' => '/\p{Han}/u', 'score' => 4],
             'ja' => ['pattern' => '/[\p{Hiragana}\p{Katakana}]/u', 'score' => 6],
             'ko' => ['pattern' => '/\p{Hangul}/u', 'score' => 4],
@@ -198,17 +212,17 @@ final class WP_FTS_LanguageDetector
             'te' => ['pattern' => '/[\x{0C00}-\x{0C7F}]/u', 'score' => 4],
             'fa' => ['pattern' => '/[\x{067E}\x{0686}\x{0698}\x{06AF}\x{06A9}\x{06CC}]/u', 'score' => 5],
             'ur' => ['pattern' => '/[\x{0679}\x{0688}\x{0691}\x{06BA}\x{06BE}\x{06C1}\x{06D2}\x{06D3}]/u', 'score' => 6],
-            // Arabic script is shared by unsupported Perso-Arabic languages; require lexical evidence too.
+            // Arabic script is shared by unsupported Perso-Arabic languages; require lexical signal too.
             'ar' => ['pattern' => '/[\x{0600}-\x{06FF}\x{0750}-\x{077F}\x{08A0}-\x{08FF}]/u', 'score' => 2],
         ];
 
-        foreach ($scriptEvidence as $lang => $evidence) {
+        foreach ($scriptSignal as $lang => $signal) {
             if ($allowed !== [] && !isset($allowed[$lang])) {
                 continue;
             }
 
-            if (@preg_match($evidence['pattern'], $text) === 1) {
-                $scores[$lang] = ($scores[$lang] ?? 0) + $evidence['score'];
+            if (@preg_match($signal['pattern'], $text) === 1) {
+                $scores[$lang] = ($scores[$lang] ?? 0) + $signal['score'];
             }
         }
     }
@@ -217,7 +231,7 @@ final class WP_FTS_LanguageDetector
      * @param array<string,int> $scores
      * @param array<string,bool> $allowed
      */
-    private function score_distinctive_latin_evidence(string $text, array &$scores, array $allowed): void
+    private function score_distinctive_latin_signal(string $text, array &$scores, array $allowed): void
     {
         $patterns = [
             'de' => ['pattern' => '/[ÄÖÜäöüß]/u', 'score' => 3],
@@ -227,7 +241,7 @@ final class WP_FTS_LanguageDetector
             'pl' => ['pattern' => '/[ĄĆĘŁŃÓŚŹŻąćęłńóśźż]/u', 'score' => 3],
             // Productive -uj- verbs and -alnia/-elnia/-ajnia nouns remain
             // distinctive after a user omits Polish diacritics. Dictionary
-            // membership alone is not language evidence: large morphology
+            // membership alone is not language signal: large morphology
             // packs contain many short words shared with other languages.
             'pl_ascii_inflection' => [
                 'lang' => 'pl',
@@ -238,14 +252,14 @@ final class WP_FTS_LanguageDetector
             'tr' => ['pattern' => '/[ĞİŞğıış]/u', 'score' => 3],
         ];
 
-        foreach ($patterns as $key => $evidence) {
-            $lang = $evidence['lang'] ?? $key;
+        foreach ($patterns as $key => $signal) {
+            $lang = $signal['lang'] ?? $key;
             if ($allowed !== [] && !isset($allowed[$lang])) {
                 continue;
             }
 
-            if (@preg_match($evidence['pattern'], $text) === 1) {
-                $scores[$lang] = ($scores[$lang] ?? 0) + $evidence['score'];
+            if (@preg_match($signal['pattern'], $text) === 1) {
+                $scores[$lang] = ($scores[$lang] ?? 0) + $signal['score'];
             }
         }
     }
@@ -256,17 +270,14 @@ final class WP_FTS_LanguageDetector
     private function tokens(string $text): array
     {
         $matches = [];
-        if (@preg_match_all('/[\p{L}\p{M}\p{N}_]+/u', $text, $matches) !== false) {
-            return array_values(array_filter(
-                $matches[0] ?? [],
-                static fn(string $token): bool => $token !== ''
-            ));
+        if (preg_match_all('/[\p{L}\p{M}\p{N}_]+/u', $text, $matches) === false) {
+            throw new RuntimeException('Language detection could not tokenize normalized Unicode text.');
         }
 
-        $ascii = preg_replace('/[^\x20-\x7E]+/', ' ', $text) ?? '';
-        preg_match_all('/[A-Za-z0-9_]+/', $ascii, $matches);
-
-        return $matches[0] ?? [];
+        return array_values(array_filter(
+            $matches[0] ?? [],
+            static fn(string $token): bool => $token !== ''
+        ));
     }
 
     /**
@@ -291,10 +302,6 @@ final class WP_FTS_LanguageDetector
      */
     private function stableJson(mixed $payload): string
     {
-        try {
-            return json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-        } catch (Throwable) {
-            return serialize($payload);
-        }
+        return json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
     }
 }

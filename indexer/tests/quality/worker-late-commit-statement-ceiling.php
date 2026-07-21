@@ -339,19 +339,19 @@ function wp_fts_test_run_late_commit_ceiling_scenario(bool $commitApplied): arra
         'post_id' => 1,
         'primary_lang' => 'en',
         'lang' => 'en',
-        'doc_len' => WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS,
+        'doc_len' => WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS,
         'content_hash' => 'pre-commit-hash',
         'snippet_text' => 'pre-commit snippet',
         'indexed_at' => 1,
         'is_deleted' => 0,
     ];
-    $fake->replacementFrontierPostingCounts[1] = WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS;
+    $fake->replacementFrontierPostingCounts[1] = WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS;
 
     $queue = new WP_FTS_Index_Queue($fake);
     $queue->enqueue_many(range(1, 6), null, [
         'index_options' => [
-            'lang' => 'en',
-            'custom_fields' => ['selected_signal'],
+            'document_lang' => 'en',
+            'custom_field_keys' => ['selected_signal'],
         ],
     ]);
     wp_fts_test_seed_scope($fake, 'late-commit-statement-ceiling');

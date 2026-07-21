@@ -33,11 +33,11 @@ final class WP_FTS_LemmaPackLookupIndex
     private static int $lookupHeaderOpens = 0;
 
     /**
-     * Report process-local indexed payload I/O for acceptance diagnostics.
-     * Metadata-header reads and complete-file integrity hashes are reported by
-     * their respective validator diagnostics instead.
+     * Report process-local indexed payload and lookup-header I/O for acceptance
+     * diagnostics. Complete-file integrity hashes are reported by the validator
+     * diagnostics instead.
      *
-     * @return array{runtime_file_opens:int,runtime_payload_reads:int,compressed_payload_bytes_read:int,decoded_payload_bytes_loaded:int,decoded_block_cache_hits:int}
+     * @return array{runtime_file_opens:int,runtime_payload_reads:int,compressed_payload_bytes_read:int,decoded_payload_bytes_loaded:int,decoded_block_cache_hits:int,lookup_header_opens:int}
      */
     public static function io_diagnostics(): array
     {
@@ -47,13 +47,8 @@ final class WP_FTS_LemmaPackLookupIndex
             'compressed_payload_bytes_read' => self::$compressedPayloadBytesRead,
             'decoded_payload_bytes_loaded' => self::$decodedPayloadBytesLoaded,
             'decoded_block_cache_hits' => self::$decodedBlockCacheHits,
+            'lookup_header_opens' => self::$lookupHeaderOpens,
         ];
-    }
-
-    /** @return array{lookup_header_opens:int} */
-    public static function metadata_diagnostics(): array
-    {
-        return ['lookup_header_opens' => self::$lookupHeaderOpens];
     }
 
     /**
@@ -64,16 +59,12 @@ final class WP_FTS_LemmaPackLookupIndex
      */
     public static function build(
         string $runtimePath,
-        ?string $compression,
         string $runtimeSha256,
         string $outputPath,
         int $blockRows = self::DEFAULT_BLOCK_ROWS
     ): array {
         if ($blockRows < 1) {
             throw new InvalidArgumentException('Lemma lookup index block row limit must be positive.');
-        }
-        if ($compression !== 'gzip') {
-            throw new InvalidArgumentException('Lemma lookup indexes require a gzip runtime shard.');
         }
         if (!function_exists('gzencode') || !function_exists('gzdecode')) {
             throw new RuntimeException('Lemma lookup index generation requires PHP zlib support.');
@@ -121,7 +112,7 @@ final class WP_FTS_LemmaPackLookupIndex
             }
 
             try {
-                $runtimeHandle = self::open_runtime_file($sourceSnapshotPath, $compression);
+                $runtimeHandle = self::open_runtime_file($sourceSnapshotPath);
             } catch (Throwable $e) {
                 @unlink($stagedRuntimePath);
                 @unlink($stagedPath);
@@ -129,7 +120,7 @@ final class WP_FTS_LemmaPackLookupIndex
             }
             $stagedRuntimeHandle = fopen($stagedRuntimePath, 'w+b');
             if (!is_resource($stagedRuntimeHandle)) {
-                self::close_runtime_file($runtimeHandle, $compression);
+                self::close_runtime_file($runtimeHandle);
                 @unlink($stagedRuntimePath);
                 @unlink($stagedPath);
                 throw new RuntimeException('Could not open the staged indexed runtime shard.');
@@ -233,7 +224,7 @@ final class WP_FTS_LemmaPackLookupIndex
 
             try {
                 try {
-                    while (($line = WP_FTS_LemmaPackLimits::read_runtime_line($runtimeHandle, $compression)) !== false) {
+                    while (($line = WP_FTS_LemmaPackLimits::read_runtime_line($runtimeHandle)) !== false) {
                         $line = rtrim(rtrim((string) $line, "\n"), "\r");
                         if ($line === '' || $line[0] === '#') {
                             continue;
@@ -274,7 +265,7 @@ final class WP_FTS_LemmaPackLookupIndex
                     $flushSurface();
                     $flushBlock();
                 } finally {
-                    self::close_runtime_file($runtimeHandle, $compression);
+                    self::close_runtime_file($runtimeHandle);
                     fclose($stagedRuntimeHandle);
                 }
             } catch (Throwable $e) {
@@ -555,24 +546,6 @@ final class WP_FTS_LemmaPackLookupIndex
         if ($rows !== $metadata['rows'] || !hash_equals(strtolower($expectedRowsSha256), strtolower($actualDigest))) {
             throw new RuntimeException('Lemma lookup index rows do not match the runtime shard.');
         }
-    }
-
-    /**
-     * Lookup one surface by inflating only its indexed block.
-     *
-     * @param array{blocks:array<int,array{first_surface:string,last_surface:string,offset:int,length:int,decoded_bytes:int,rows:int}>,path:string,runtime_path:string} $metadata
-     * @return array{lemmas:array<string,bool>,lines_read:int,compressed_bytes:int,decoded_bytes:int}
-     */
-    public static function lookup(array $metadata, string $term): array
-    {
-        $result = self::lookup_many($metadata, [$term]);
-
-        return [
-            'lemmas' => $result['lemmas_by_term'][$term] ?? [],
-            'lines_read' => $result['lines_read'],
-            'compressed_bytes' => $result['compressed_bytes'],
-            'decoded_bytes' => $result['decoded_bytes'],
-        ];
     }
 
     /**
@@ -1066,18 +1039,14 @@ final class WP_FTS_LemmaPackLookupIndex
     /**
      * @return resource
      */
-    private static function open_runtime_file(string $path, ?string $compression): mixed
+    private static function open_runtime_file(string $path): mixed
     {
-        if ($compression === 'gzip') {
-            if (!function_exists('gzopen') || !function_exists('gzgets') || !function_exists('gzclose')) {
-                throw new RuntimeException('Compressed lemma runtime files require PHP zlib support.');
-            }
-            $handle = @gzopen($path, 'rb');
-        } else {
-            $handle = fopen($path, 'rb');
+        if (!function_exists('gzopen') || !function_exists('gzgets') || !function_exists('gzeof') || !function_exists('gzclose')) {
+            throw new RuntimeException('Lemma lookup index generation requires PHP zlib support.');
         }
+        $handle = @gzopen($path, 'rb');
         if (!is_resource($handle)) {
-            throw new RuntimeException("Could not read lemma runtime file: {$path}");
+            throw new RuntimeException("Could not read gzip lemma runtime file: {$path}");
         }
 
         return $handle;
@@ -1086,13 +1055,9 @@ final class WP_FTS_LemmaPackLookupIndex
     /**
      * @param resource $handle
      */
-    private static function close_runtime_file(mixed $handle, ?string $compression): void
+    private static function close_runtime_file(mixed $handle): void
     {
-        if ($compression === 'gzip') {
-            gzclose($handle);
-            return;
-        }
-        fclose($handle);
+        gzclose($handle);
     }
 
     /**

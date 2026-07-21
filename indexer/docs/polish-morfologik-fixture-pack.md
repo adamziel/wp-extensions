@@ -1,35 +1,41 @@
 # Polish Morfologik/PoliMorf Packs
 
-The plugin bundles two Polish analyzer-pack resources:
+The source tree has one shipped Polish runtime pack and one test-only contract
+pack:
 
-- `pl-polimorf-20180722-full-playground`, a compressed full Polish runtime pack
-  used by the WordPress runtime when gzip support is available and by the
-  admin/Playground sandbox;
-- `pl-morfologik-polimorf-fixture`, a tiny fixture pack that proves the
-  Morfologik/PoliMorf-compatible runtime contract and is used as the Polish
-  fallback when the compressed pack cannot be read.
+- `resources/analyzer-packs/pl-polimorf-20180722-full/` is the compressed full
+  runtime used by WordPress when gzip support is available;
+- `tests/fixtures/analyzer-packs/pl-morfologik-polimorf-fixture/` contains the
+  small reviewed contract rows used by tests. It is not shipped and never
+  participates in runtime fallback.
 
-Use the fixture explicitly in programmatic analyzer construction when you want
-the small contract pack instead of the bundled full runtime pack:
+The WordPress plugin selects the full bundled manifest automatically. A
+framework-neutral caller can select the same manifest explicitly:
 
 ```php
 $analyzer = new WP_FTS_Analyzer([
     'default_lang' => 'pl',
-    'lemma_packs_by_lang' => ['pl' => true],
+    'lemma_packs_by_lang' => [
+        'pl' => WP_FTS_AnalyzerPackValidator::default_polish_manifest(),
+    ],
 ]);
 ```
 
 When enabled and valid, the pack maps normalized Polish surface forms from its
 local TSV rows to normalized lemma keys. Ambiguous rows and missing forms return
-the original normalized token. When the pack is disabled, missing, or invalid,
-the selected `polish_stemming` mode runs; without an explicit mode, that remains
-the existing conservative Polish suffix stemmer.
+the original normalized token. When the pack is disabled, missing, invalid, or
+unreadable without gzip, the conservative Polish suffix stemmer runs. There
+is no fixture-pack fallback.
 
-Validate the bundled fixture locally:
+Validate each manifest explicitly:
 
 ```sh
-php tools/validate-analyzer-pack.php
-php -n tools/validate-analyzer-pack.php
+php tools/validate-analyzer-pack.php \
+  resources/analyzer-packs/pl-polimorf-20180722-full/manifest.json
+php tools/validate-analyzer-pack.php \
+  tests/fixtures/analyzer-packs/pl-morfologik-polimorf-fixture/manifest.json
+php -n tools/validate-analyzer-pack.php \
+  tests/fixtures/analyzer-packs/pl-morfologik-polimorf-fixture/manifest.json
 ```
 
 The repository also includes a package-safe external builder for the full
@@ -56,12 +62,12 @@ php tools/build-polish-polimorf-external-pack.php \
   --acknowledge-license=BSD-2-Clause
 ```
 
-The builder writes a full-pack manifest, notice, source-lock evidence, and
+The builder writes a full-pack manifest, notice, source-lock record, and
 indexed-gzip runtime shards with one digest-attested lookup sidecar per shard.
 The summary includes the generated manifest path, source-lock path, runtime
 row/file/byte counts, lookup file/block/byte counts, runtime digest, activation
 result, and a `lemma_packs_by_lang` configuration example.
-Externally generated full packs remain opt-in and `default_enabled: false` until
+Externally generated full packs activate only through plugin configuration after
 an operator installs and configures them.
 
 Configure an externally generated pack by path:

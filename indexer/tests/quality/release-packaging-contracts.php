@@ -103,27 +103,10 @@ function wp_fts_release_packaging_contract_shipped_tool_paths(): array
         'tools/import-polish-polimorf-lemmatizer.php',
         'tools/validate-analyzer-pack.php',
         'tools/audit-top-language-lemma-packs.php',
-        'tools/build-lemma-pack-lookup-index.php',
         'tools/build-polish-polimorf-external-pack.php',
         'tools/lemma-source-import-limits.php',
         'tools/lemma-chunk-merge.php',
     ];
-}
-
-/** @return string[] */
-function wp_fts_release_packaging_contract_private_array_constant(string $class, string $name): array
-{
-    $constant = (new ReflectionClass($class))->getReflectionConstant($name);
-    if (!$constant instanceof ReflectionClassConstant) {
-        throw new RuntimeException("Missing {$class}::{$name} package-policy constant.");
-    }
-
-    $value = $constant->getValue();
-    if (!is_array($value) || array_filter($value, 'is_string') !== $value) {
-        throw new RuntimeException("{$class}::{$name} must be a string array.");
-    }
-
-    return array_values($value);
 }
 
 /** @return string[] */
@@ -157,13 +140,8 @@ function wp_fts_release_packaging_contract_run(): void
     $shippedTools = wp_fts_release_packaging_contract_shipped_tool_paths();
     wp_fts_release_packaging_contract_same(
         $shippedTools,
-        wp_fts_release_packaging_contract_private_array_constant(WP_FTS_ReleasePackageBuilder::class, 'SHIPPED_TOOL_PATHS'),
+        WP_FTS_ReleasePackageBuilder::SHIPPED_TOOL_PATHS,
         'release builder should require exactly the shipped importer and pack-management tool modules'
-    );
-    wp_fts_release_packaging_contract_same(
-        $shippedTools,
-        wp_fts_release_packaging_contract_private_array_constant(WP_FTS_ReleaseReadinessChecker::class, 'SHIPPED_TOOL_PATHS'),
-        'release readiness should require exactly the shipped importer and pack-management tool modules'
     );
     wp_fts_release_packaging_contract_same(
         $shippedTools,
@@ -179,7 +157,6 @@ function wp_fts_release_packaging_contract_run(): void
         '+ /tools/import-polish-polimorf-lemmatizer.php',
         '+ /tools/validate-analyzer-pack.php',
         '+ /tools/audit-top-language-lemma-packs.php',
-        '+ /tools/build-lemma-pack-lookup-index.php',
         '+ /tools/build-polish-polimorf-external-pack.php',
         '+ /tools/lemma-source-import-limits.php',
         '+ /tools/lemma-chunk-merge.php',
@@ -208,7 +185,7 @@ function wp_fts_release_packaging_contract_run(): void
     foreach ([
         'dependency-internal test and coverage fixtures under `vendor/`',
         'php indexer/tools/build-release-zip.php',
-        'prunes staged dotfiles anywhere in the package before ZIP creation',
+        'staged dotfiles anywhere in the package before ZIP creation',
         'indexer/vendor/wamania/php-stemmer/.gitignore',
         'vendor/wp-php-toolkit/full-text-search/tests/',
         'vendor/bin',
@@ -225,7 +202,7 @@ function wp_fts_release_packaging_contract_run(): void
         'fresh package-local Composer home and cache',
         '`--no-plugins --no-scripts`',
         'must remain outside both immutable source trees',
-        'the ten `tools/` modules that back the shipped WP-CLI import commands',
+        'the nine `tools/` modules that back the shipped WP-CLI import commands',
         'all other `tools/` source-checkout build, test, release, corpus-generation,',
     ] as $needle) {
         wp_fts_release_packaging_contract_contains(
@@ -272,6 +249,7 @@ function wp_fts_release_packaging_contract_prune_run(): void
         wp_fts_release_packaging_contract_write_fixture($stage . '/vendor/wamania/php-stemmer/.distignore');
         wp_fts_release_packaging_contract_write_fixture($stage . '/vendor/wamania/php-stemmer/.gitattributes');
         wp_fts_release_packaging_contract_write_fixture($stage . '/vendor/wp-php-toolkit/full-text-search/tests/smoke.php');
+        wp_fts_release_packaging_contract_write_fixture($stage . '/vendor/wp-php-toolkit/full-text-search/tools/build-jieba-lookup-index.php');
         wp_fts_release_packaging_contract_write_fixture($stage . '/vendor/wp-php-toolkit/full-text-search/resources/sources/jieba/jieba/dict.txt');
         wp_fts_release_packaging_contract_write_fixture($stage . '/vendor/example/library/Tests/UnitTest.php');
         wp_fts_release_packaging_contract_write_fixture($stage . '/vendor/example/library/coverage/report.xml');
@@ -314,6 +292,10 @@ function wp_fts_release_packaging_contract_prune_run(): void
             'release verifier should detect dependency-internal tests before pruning'
         );
         wp_fts_release_packaging_contract_true(
+            in_array('indexer/vendor/wp-php-toolkit/full-text-search/tools', $before, true),
+            'release verifier should detect component build tools before pruning'
+        );
+        wp_fts_release_packaging_contract_true(
             in_array('indexer/vendor/wp-php-toolkit/full-text-search/resources/sources', $before, true),
             'release verifier should detect raw component source checkouts before pruning'
         );
@@ -346,6 +328,10 @@ function wp_fts_release_packaging_contract_prune_run(): void
             'release prune should report the removed raw component source checkout'
         );
         wp_fts_release_packaging_contract_true(
+            in_array('indexer/vendor/wp-php-toolkit/full-text-search/tools', $removed, true),
+            'release prune should report the removed component build tools'
+        );
+        wp_fts_release_packaging_contract_true(
             is_file($stage . '/vendor/wamania/php-stemmer/src/Stemmer.php'),
             'release prune should preserve runtime dependency source files'
         );
@@ -371,6 +357,96 @@ function wp_fts_release_packaging_contract_prune_run(): void
             !file_exists($stage . '/vendor/wp-php-toolkit/full-text-search/resources/sources'),
             'release prune should remove raw component source checkouts from vendor'
         );
+        wp_fts_release_packaging_contract_true(
+            !file_exists($stage . '/vendor/wp-php-toolkit/full-text-search/tools'),
+            'release prune should remove component build tools from vendor'
+        );
+    } finally {
+        wp_fts_release_packaging_contract_remove_tree($tmp);
+    }
+}
+
+/** Reject manifest additions and paths that could escape the pinned runtime layout. */
+function wp_fts_release_packaging_contract_jieba_manifest_validation_run(): void
+{
+    $manifestPath = dirname(__DIR__, 3) . '/components/full-text-search/resources/runtime/jieba/manifest.json';
+    $manifest = json_decode((string) file_get_contents($manifestPath), true, flags: JSON_THROW_ON_ERROR);
+    wp_fts_release_packaging_contract_true(is_array($manifest), 'the repository Jieba runtime manifest should decode to an object');
+
+    $method = new ReflectionMethod(WP_FTS_ReleasePackageBuilder::class, 'jieba_runtime_manifest');
+    $method->setAccessible(true);
+    $validatorPath = dirname(__DIR__, 3) . '/components/full-text-search/src/ChineseJiebaSegmenter.php';
+    wp_fts_release_packaging_contract_same(
+        $manifest,
+        $method->invoke(null, $manifestPath, $validatorPath),
+        'the release builder should accept the exact repository Jieba runtime manifest'
+    );
+
+    $invalid = [];
+
+    $case = $manifest;
+    $case['upstream']['dictionary_path'] = '../jieba/dict.txt';
+    $invalid['traversing upstream dictionary path'] = $case;
+
+    $case = $manifest;
+    $case['upstream']['license_path'] = '/LICENSE';
+    $invalid['absolute upstream license path'] = $case;
+
+    $case = $manifest;
+    $case['artifacts']['dictionary']['runtime_path'] = 'nested/dict.txt';
+    $invalid['nested dictionary runtime path'] = $case;
+
+    $case = $manifest;
+    $case['artifacts']['lookup']['runtime_path'] = '../dict.idx';
+    $invalid['traversing lookup runtime path'] = $case;
+
+    $case = $manifest;
+    $case['unexpected'] = true;
+    $invalid['extra top-level key'] = $case;
+
+    $case = $manifest;
+    $case['upstream']['unexpected'] = true;
+    $invalid['extra upstream key'] = $case;
+
+    $case = $manifest;
+    $case['artifacts']['unexpected'] = $case['artifacts']['dictionary'];
+    $invalid['extra artifact'] = $case;
+
+    $case = $manifest;
+    $case['artifacts']['lookup']['unexpected'] = true;
+    $invalid['extra lookup key'] = $case;
+
+    $case = $manifest;
+    $case['schema'] = 'unexpected-schema';
+    $invalid['wrong schema'] = $case;
+
+    $case = $manifest;
+    $case['artifacts']['lookup']['ranges'] = '11783';
+    $invalid['string lookup range count'] = $case;
+
+    $case = $manifest;
+    unset($case['artifacts']['lookup']['ranges']);
+    $invalid['missing lookup range count'] = $case;
+
+    $tmp = wp_fts_release_packaging_contract_temp_dir();
+    try {
+        foreach ($invalid as $description => $candidate) {
+            $path = $tmp . '/' . str_replace(' ', '-', $description) . '.json';
+            wp_fts_release_packaging_contract_write_fixture(
+                $path,
+                json_encode($candidate, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n"
+            );
+            $error = null;
+            try {
+                $method->invoke(null, $path, $validatorPath);
+            } catch (RuntimeException $caught) {
+                $error = $caught;
+            }
+            wp_fts_release_packaging_contract_true(
+                $error instanceof RuntimeException,
+                "release builder should reject {$description}"
+            );
+        }
     } finally {
         wp_fts_release_packaging_contract_remove_tree($tmp);
     }
@@ -425,7 +501,7 @@ function wp_fts_release_packaging_contract_composer_env_run(): void
         );
         wp_fts_release_packaging_contract_same($tmp . '/explicit-build/composer-home', $explicitCache['COMPOSER_HOME'] ?? null, 'an explicit offline cache must not re-enable an ambient Composer home');
         wp_fts_release_packaging_contract_same($tmp . '/explicit-offline-cache', $explicitCache['COMPOSER_CACHE_DIR'] ?? null, 'an explicit caller-owned offline cache should remain available without ambient cache discovery');
-        wp_fts_release_packaging_contract_true(is_file($tmp . '/explicit-offline-cache/archive.zip'), 'an explicit offline cache should be preserved for a source-archived historical dependency');
+        wp_fts_release_packaging_contract_true(is_file($tmp . '/explicit-offline-cache/archive.zip'), 'an explicit offline cache should be preserved for a source-archived dependency');
 
         $builder = (string) file_get_contents(dirname(__DIR__, 2) . '/tools/build-release-zip.php');
         foreach (['\'--no-plugins\'', '\'--no-scripts\'', '\'--no-progress\'', '\'--prefer-dist\''] as $flag) {
@@ -626,7 +702,6 @@ function wp_fts_release_packaging_contract_public_install_run(): void
     wp_fts_release_packaging_contract_true(!str_contains($quickstart, 'composer install'), 'Quickstart should not run Composer without the path repository');
     wp_fts_release_packaging_contract_contains(WP_FTS_RELEASE_PACKAGE_URL, (string) file_get_contents($repoRoot . '/README.md'), 'repository overview should identify the Playground release artifact');
     wp_fts_release_packaging_contract_contains('self-contained Language FTS core ZIP', (string) file_get_contents($pluginRoot . '/readme.txt'), 'WordPress install instructions should require the packaged runtime');
-    wp_fts_release_packaging_contract_true(!file_exists($pluginRoot . '/playground/indexer-preview.zip'), 'obsolete committed preview ZIP should not compete with the release artifact');
 }
 
 /**
@@ -681,18 +756,30 @@ function wp_fts_release_packaging_contract_standalone_bootstrap_run(): void
         wp_fts_release_packaging_contract_true($zip->locateName('indexer/src/WPCLICommand.php') !== false, 'release ZIP should contain the runtime WP-CLI command');
         wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/autoload.php') !== false, 'release ZIP should contain the Composer autoloader');
         wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/wp-php-toolkit/full-text-search/src/bootstrap.php') !== false, 'release ZIP should contain the FTS component runtime');
-        wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/wp-php-toolkit/full-text-search/src/InMemoryStorage.php') === false, 'release ZIP should not contain an in-memory application backend');
-        wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/wp-php-toolkit/full-text-search/src/FileStorage.php') === false, 'release ZIP should not contain a file application backend');
-        wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/wp-php-toolkit/full-text-search/tests/fixtures/InMemoryStorage.php') === false, 'release ZIP should prune the test-only in-memory oracle');
+        wp_fts_release_packaging_contract_true($zip->locateName('indexer/vendor/wp-php-toolkit/full-text-search/src/AnalyzerOccurrenceValidator.php') !== false, 'release ZIP should contain the shared analyzer occurrence validator');
+        wp_fts_release_packaging_contract_true(!is_dir($result['build_dir'] . '/components/full-text-search'), 'release staging should remove the temporary component source after Composer installs the vendor package');
         $jiebaRuntime = 'indexer/vendor/wp-php-toolkit/full-text-search/resources/runtime/jieba/';
+        $jiebaManifest = WP_FTS_ChineseJiebaSegmenter::runtime_manifest();
+        $jiebaManifestContents = (string) file_get_contents(WP_FTS_ChineseJiebaSegmenter::runtime_manifest_path());
         $expectedJiebaRuntime = [
-            $jiebaRuntime . 'LICENSE' => ['bytes' => 1075, 'sha256' => '18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37'],
-            $jiebaRuntime . 'dict.idx' => ['bytes' => 329972, 'sha256' => '4c979fd244e59b8343c2e584dbd5ba062deb1f836b8ae9ca2b56b54f130b9046'],
-            $jiebaRuntime . 'dict.txt' => ['bytes' => 5071852, 'sha256' => '7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8'],
+            $jiebaRuntime . 'manifest.json' => [
+                'bytes' => strlen($jiebaManifestContents),
+                'sha256' => hash('sha256', $jiebaManifestContents),
+            ],
         ];
+        foreach (['dictionary', 'license', 'lookup'] as $artifactName) {
+            $artifact = $jiebaManifest['artifacts'][$artifactName] ?? null;
+            wp_fts_release_packaging_contract_true(is_array($artifact), "Jieba runtime manifest should describe {$artifactName}");
+            $expectedJiebaRuntime[$jiebaRuntime . (string) $artifact['runtime_path']] = [
+                'bytes' => (int) $artifact['bytes'],
+                'sha256' => (string) $artifact['sha256'],
+            ];
+        }
+        ksort($expectedJiebaRuntime, SORT_STRING);
         $actualJiebaRuntime = [];
         $rawJiebaSourceEntries = [];
         $toolEntries = [];
+        $componentToolEntries = [];
         for ($index = 0; $index < $zip->numFiles; $index++) {
             $name = $zip->getNameIndex($index);
             if (!is_string($name)) {
@@ -700,6 +787,11 @@ function wp_fts_release_packaging_contract_standalone_bootstrap_run(): void
             }
             if ($name === 'indexer/tools' || str_starts_with($name, 'indexer/tools/')) {
                 $toolEntries[] = $name;
+            }
+            if ($name === 'indexer/vendor/wp-php-toolkit/full-text-search/tools'
+                || str_starts_with($name, 'indexer/vendor/wp-php-toolkit/full-text-search/tools/')
+            ) {
+                $componentToolEntries[] = $name;
             }
             if (str_ends_with($name, '/')) {
                 continue;
@@ -723,9 +815,10 @@ function wp_fts_release_packaging_contract_standalone_bootstrap_run(): void
         );
         sort($expectedToolEntries, SORT_STRING);
         sort($toolEntries, SORT_STRING);
-        wp_fts_release_packaging_contract_same($expectedJiebaRuntime, $actualJiebaRuntime, 'release ZIP should contain exactly the attested Jieba dictionary, lookup index, and MIT license');
+        wp_fts_release_packaging_contract_same($expectedJiebaRuntime, $actualJiebaRuntime, 'release ZIP should contain the Jieba runtime manifest and exactly its attested artifacts');
         wp_fts_release_packaging_contract_same([], $rawJiebaSourceEntries, 'release ZIP should contain no raw Jieba source checkout files');
-        wp_fts_release_packaging_contract_same($expectedToolEntries, $toolEntries, 'release ZIP should contain exactly the ten shipped importer and pack-management tool modules');
+        wp_fts_release_packaging_contract_same($expectedToolEntries, $toolEntries, 'release ZIP should contain exactly the shipped importer and pack-management tool modules');
+        wp_fts_release_packaging_contract_same([], $componentToolEntries, 'release ZIP should contain no component build tools');
 
         $plugins = $tmp . '/wp-content/plugins';
         wp_fts_release_packaging_contract_true(mkdir($plugins, 0777, true), 'standalone plugins directory should be created');
@@ -751,26 +844,26 @@ require $pluginRoot . '/indexer.php';
 if (
     ! is_file($pluginRoot . '/vendor/autoload.php')
     || ! class_exists('WP_FTS_Analyzer', false)
+    || ! class_exists('WP_FTS_Analyzer_Occurrence_Validator', false)
     || ! class_exists('WP_FTS_Plugin', false)
     || ! class_exists('WP_FTS_WPCLI_Command', false)
-    || class_exists('WP_FTS_Storage_InMemory', false)
-    || class_exists('WP_FTS_Storage_File', false)
     || (WP_CLI::$commands['fts'] ?? null) !== WP_FTS_WPCLI_Command::class
 ) {
     exit(1);
 }
 $expectedSource = realpath($pluginRoot . '/vendor/wp-php-toolkit/full-text-search/resources/runtime/jieba/dict.txt');
+$expectedLookup = realpath($pluginRoot . '/vendor/wp-php-toolkit/full-text-search/resources/runtime/jieba/dict.idx');
 $segmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option(true, 'zh');
-$lookup = WP_FTS_ChineseJiebaSegmenter::default_lookup_evidence();
 $segmented = $segmenter instanceof WP_FTS_ChineseJiebaSegmenter
     ? $segmenter('中华人民共和国', 'zh')
     : [];
 if (
     !is_string($expectedSource)
+    || !is_string($expectedLookup)
     || realpath(WP_FTS_ChineseJiebaSegmenter::default_source_file()) !== $expectedSource
+    || realpath(WP_FTS_ChineseJiebaSegmenter::default_lookup_file()) !== $expectedLookup
     || !$segmenter instanceof WP_FTS_ChineseJiebaSegmenter
-    || ($lookup['available'] ?? false) !== true
-    || (new ReflectionProperty($segmenter, 'sourceHashScanCount'))->getValue($segmenter) !== 0
+    || (new ReflectionProperty($segmenter, 'indexedRangeReadCount'))->getValue($segmenter) !== 7
     || !in_array('中华人民共和国', $segmented, true)
 ) {
     exit(2);
@@ -786,8 +879,6 @@ $output = $argv[3];
     'source-url' => 'urn:wp-fts:test:packaged-command-smoke',
     'license' => 'CC0-1.0',
     'attribution' => 'Project-owned packaged command smoke row.',
-    'fixture-only' => true,
-    'runtime-compression' => 'none',
     'max-rows-per-file' => 2,
     'chunk-rows' => 2,
     'out' => $output,
@@ -814,9 +905,13 @@ PHP;
         $stderr = (string) stream_get_contents($pipes[2]);
         fclose($pipes[1]);
         fclose($pipes[2]);
-        wp_fts_release_packaging_contract_same(0, proc_close($process), 'packaged plugin should bootstrap without the monorepo component: ' . trim($stderr));
+        wp_fts_release_packaging_contract_same(
+            0,
+            proc_close($process),
+            'packaged plugin should bootstrap without the monorepo component: ' . trim($stderr . "\n" . $stdout)
+        );
         wp_fts_release_packaging_contract_contains('SELF_CONTAINED_RELEASE_OK', $stdout, 'fresh PHP should load runtime classes from packaged vendor files');
-        wp_fts_release_packaging_contract_contains('PACKAGED_DEFAULT_JIEBA_OK', $stdout, 'fresh packaged true/default construction should use the curated dictionary and indexed lookup without a full source hash');
+        wp_fts_release_packaging_contract_contains('PACKAGED_DEFAULT_JIEBA_OK', $stdout, 'fresh packaged true/default construction should use the curated dictionary through seven indexed first-character range reads');
         wp_fts_release_packaging_contract_contains('PACKAGED_LEMMA_IMPORT_OK', $stdout, 'fresh packaged WP-CLI command should execute the shipped lemma importer and write a manifest');
     } finally {
         if ($zip instanceof ZipArchive) {
@@ -1034,6 +1129,13 @@ function wp_fts_release_packaging_contract_stale_vendor_run(): void
         wp_fts_release_packaging_contract_write_fixture($component . '/src/Runtime.php', $staleRuntime);
         $repositoryComponent = dirname(__DIR__, 3) . '/components/full-text-search';
         wp_fts_release_packaging_contract_true(
+            copy(
+                $repositoryComponent . '/src/ChineseJiebaSegmenter.php',
+                $component . '/src/ChineseJiebaSegmenter.php'
+            ),
+            'stale-vendor fixture should include the current Jieba manifest validator'
+        );
+        wp_fts_release_packaging_contract_true(
             mkdir($component . '/resources/sources/jieba/jieba', 0777, true),
             'stale-vendor fixture should create the exact current Jieba source layout'
         );
@@ -1045,6 +1147,7 @@ function wp_fts_release_packaging_contract_stale_vendor_run(): void
             $repositoryComponent . '/resources/sources/jieba/jieba/dict.txt' => $component . '/resources/sources/jieba/jieba/dict.txt',
             $repositoryComponent . '/resources/sources/jieba/LICENSE' => $component . '/resources/sources/jieba/LICENSE',
             $repositoryComponent . '/resources/runtime/jieba/dict.idx' => $component . '/resources/runtime/jieba/dict.idx',
+            $repositoryComponent . '/resources/runtime/jieba/manifest.json' => $component . '/resources/runtime/jieba/manifest.json',
         ] as $source => $destination) {
             wp_fts_release_packaging_contract_true(
                 is_file($source) && copy($source, $destination),
@@ -1151,6 +1254,9 @@ if (function_exists('test_case')) {
     test_case('quality release packaging prunes nested dependency dotfiles from staging', function (): void {
         wp_fts_release_packaging_contract_prune_run();
     });
+    test_case('quality release builder rejects malformed Jieba manifest paths and shapes', function (): void {
+        wp_fts_release_packaging_contract_jieba_manifest_validation_run();
+    });
     test_case('quality release packaging scrubs nested Composer environment', function (): void {
         wp_fts_release_packaging_contract_composer_env_run();
     });
@@ -1189,6 +1295,7 @@ if (function_exists('test_case')) {
 } elseif (PHP_SAPI === 'cli' && realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === __FILE__) {
     wp_fts_release_packaging_contract_run();
     wp_fts_release_packaging_contract_prune_run();
+    wp_fts_release_packaging_contract_jieba_manifest_validation_run();
     wp_fts_release_packaging_contract_composer_env_run();
     wp_fts_release_packaging_contract_symlink_escape_run();
     wp_fts_release_packaging_contract_vcs_metadata_run();

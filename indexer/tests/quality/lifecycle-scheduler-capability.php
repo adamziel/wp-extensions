@@ -373,7 +373,7 @@ test_case('lifecycle scheduler capability readiness watchdog cannot write after 
 test_case('lifecycle scheduler capability direct reindex batch cannot write after uninstall', function (): void {
     wp_fts_lifecycle_scheduler_assert_writer_blocked(
         'direct reindex batch',
-        static fn(): int => WP_FTS_Plugin::enqueue_posts_for_reindex([88101], ['lang' => 'en'])
+        static fn(): int => WP_FTS_Plugin::enqueue_posts_for_reindex([88101], ['document_lang' => 'en'])
     );
 });
 
@@ -419,7 +419,7 @@ test_case('lifecycle scheduler capability direct writers retain their normal sta
             WP_FTS_Plugin::maybe_schedule_initial_index_readiness();
         }],
         'direct reindex batch' => [3, 1, static function (): void {
-            WP_FTS_Plugin::enqueue_posts_for_reindex([88301], ['lang' => 'en']);
+            WP_FTS_Plugin::enqueue_posts_for_reindex([88301], ['document_lang' => 'en']);
         }],
         'filtered reindex scope' => [3, 1, static function (): void {
             WP_FTS_Plugin::enqueue_reindex_scope([

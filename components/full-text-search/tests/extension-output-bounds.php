@@ -31,12 +31,20 @@ final class WP_FTS_Extension_Input_Bounds_Probe
 {
     public int $calls = 0;
     public int $receivedBytes = 0;
+    public ?int $receivedCeiling = null;
+
+    /** Identify this stateless probe in analyzer fingerprints. */
+    public function index_signature(): string
+    {
+        return 'wp-fts-extension-input-bounds-probe-v1';
+    }
 
     /** @return string[] */
-    public function __invoke(string $run, string $language): array
+    public function __invoke(string $run, string $language, int $maxTokens): array
     {
         $this->calls++;
         $this->receivedBytes = strlen($run);
+        $this->receivedCeiling = $maxTokens;
 
         return ['中文'];
     }
@@ -58,6 +66,10 @@ $validInputTerms = $validInputPipeline->analyze_detailed($largestValidCjkRun, 'z
 wp_fts_extension_output_check($validInputTerms !== [], 'the largest valid CJK run should remain analyzable');
 wp_fts_extension_output_check($validInputProbe->calls === 1, 'the largest valid CJK run should reach its configured tokenizer exactly once');
 wp_fts_extension_output_check($validInputProbe->receivedBytes === 4095, 'the tokenizer should receive the complete exact-boundary UTF-8 run');
+wp_fts_extension_output_check(
+    $validInputProbe->receivedCeiling === WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES + 1,
+    'the tokenizer should receive the document producer ceiling'
+);
 
 $firstOversizedCjkRun = $largestValidCjkRun . '中';
 wp_fts_extension_output_check(
@@ -85,14 +97,16 @@ wp_fts_extension_output_check(
 $tokenizerAttempt = static function (int $outputBytes): array {
     $pipeline = new WP_FTS_LanguagePipeline([
         'enable_stemming' => false,
-        'cjk_tokenizer' => static fn(): array => [str_repeat(' ', $outputBytes)],
+        'cjk_tokenizer' => static fn(string $_run, string $_language, int $_maxTokens): array => [
+            str_repeat('a', $outputBytes),
+        ],
     ]);
 
     return $pipeline->analyze_detailed('中文', 'zh');
 };
 wp_fts_extension_output_check(
-    count($tokenizerAttempt($lexicalLimit)) === 3,
-    'a tokenizer output at the 4-KiB boundary should remain valid and fall back when empty after trim'
+    $tokenizerAttempt($lexicalLimit) === [],
+    'a tokenizer output at the 4-KiB boundary should remain valid before the term-key filter'
 );
 $tokenizerError = wp_fts_extension_output_caught(static fn(): array => $tokenizerAttempt($lexicalLimit + 1));
 wp_fts_extension_output_check(
@@ -103,7 +117,7 @@ wp_fts_extension_output_check(
 $normalizerAttempt = static function (int $outputBytes): array {
     $pipeline = new WP_FTS_LanguagePipeline([
         'enable_stemming' => false,
-        'token_normalizer' => static fn(): string => str_repeat(' ', $outputBytes),
+        'token_normalizer' => static fn(): string => str_repeat('a', $outputBytes),
     ]);
 
     return $pipeline->analyze_detailed('needle', 'en');
@@ -121,7 +135,7 @@ wp_fts_extension_output_check(
 $stemmerAttempt = static function (int $outputBytes): array {
     $pipeline = new WP_FTS_LanguagePipeline([
         'enable_stemming' => true,
-        'stemmer' => static fn(string $_term, string $_language): string => str_repeat(' ', $outputBytes),
+        'stemmer' => static fn(string $_term, string $_language): string => str_repeat('a', $outputBytes),
     ]);
 
     return $pipeline->analyze_detailed('needle', 'en');
@@ -137,63 +151,116 @@ wp_fts_extension_output_check(
 );
 
 $searcher = new WP_FTS_Searcher(
-    new WP_FTS_Storage_InMemory(),
+    new WP_FTS_Test_Set_Oriented_Search_Storage(),
     new WP_FTS_Analyzer(['auto_detect_language' => false, 'enable_stemming' => false])
 );
 $normalizeQueryAnalysis = new ReflectionMethod($searcher, 'normalize_query_analysis');
 $normalizeQueryAnalysis->setAccessible(true);
 $occurrenceLimit = WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES;
-$exactAnalysis = array_fill(0, $occurrenceLimit, 'term');
+$exactAnalysis = array_fill(0, $occurrenceLimit, ['term' => 'term', 'lang' => 'en']);
 $normalizedAnalysis = $normalizeQueryAnalysis->invoke($searcher, $exactAnalysis);
 wp_fts_extension_output_check(
     is_array($normalizedAnalysis) && count($normalizedAnalysis) === $occurrenceLimit,
-    'a legacy analyzer array at the 20,000-occurrence boundary should remain valid'
+    'an analyzer array at the 20,000-occurrence boundary should remain valid'
 );
 unset($normalizedAnalysis, $exactAnalysis);
 
-$overAnalysis = array_fill(0, $occurrenceLimit + 1, 'term');
+$overAnalysis = array_fill(0, $occurrenceLimit + 1, ['term' => 'term', 'lang' => 'en']);
 $analysisError = wp_fts_extension_output_caught(
     static fn(): array => $normalizeQueryAnalysis->invoke($searcher, $overAnalysis)
 );
 wp_fts_extension_output_check(
     $analysisError instanceof WP_FTS_Analysis_Limit_Exceeded && $analysisError->reason_code === 'occurrences',
-    'a legacy analyzer array one occurrence above 20,000 should reject before array_values'
+    'an analyzer array one occurrence above 20,000 should reject before array_values'
 );
 unset($overAnalysis);
 
 foreach ([
     'term' => [
-        ['term' => str_repeat('t', WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES)],
-        ['term' => str_repeat('t', WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES + 1)],
-        'analyzer occurrence bytes',
+        ['term' => str_repeat('t', WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES), 'lang' => 'en'],
+        ['term' => str_repeat('t', WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES + 1), 'lang' => 'en'],
     ],
     'language' => [
-        ['term' => 'term', 'lang' => str_repeat('l', 64)],
-        ['term' => 'term', 'lang' => str_repeat('l', 65)],
-        'analyzer language bytes',
+        ['term' => 'term', 'lang' => 'aa' . str_repeat('-aaaaaaaa', 6) . '-aaaaaaa'],
+        ['term' => 'term', 'lang' => 'aa' . str_repeat('-aaaaaaaa', 7)],
+    ],
+    'canonical language' => [
+        ['term' => 'term', 'lang' => 'en'],
+        ['term' => 'term', 'lang' => 'EN'],
+    ],
+    'term whitespace' => [
+        ['term' => 'term', 'lang' => 'en'],
+        ['term' => 'two terms', 'lang' => 'en'],
+    ],
+    'term namespace separator' => [
+        ['term' => 'term', 'lang' => 'en'],
+        ['term' => 'en' . WP_FTS_TermNamespace::SEPARATOR . 'term', 'lang' => 'en'],
     ],
     'surface' => [
-        ['term' => 'term', 'surface' => str_repeat('s', 4096)],
-        ['term' => 'term', 'surface' => str_repeat('s', 4097)],
-        'analyzer occurrence bytes',
+        ['term' => 'term', 'lang' => 'en', 'surface' => str_repeat('s', 4096)],
+        ['term' => 'term', 'lang' => 'en', 'surface' => str_repeat('s', 4097)],
+    ],
+    'normalized surface' => [
+        ['term' => 'term', 'lang' => 'en', 'normalized_surface' => str_repeat('s', 4096)],
+        ['term' => 'term', 'lang' => 'en', 'normalized_surface' => str_repeat('s', 4097)],
+    ],
+    'normalized surface whitespace' => [
+        ['term' => 'term', 'lang' => 'en', 'normalized_surface' => 'surface'],
+        ['term' => 'term', 'lang' => 'en', 'normalized_surface' => 'two surfaces'],
+    ],
+    'normalized surface namespace separator' => [
+        ['term' => 'term', 'lang' => 'en', 'normalized_surface' => 'surface'],
+        ['term' => 'term', 'lang' => 'en', 'normalized_surface' => 'en' . WP_FTS_TermNamespace::SEPARATOR . 'surface'],
+    ],
+    'padded surface' => [
+        ['term' => 'term', 'lang' => 'en', 'surface' => 'surface'],
+        ['term' => 'term', 'lang' => 'en', 'surface' => ' surface'],
+    ],
+    'source' => [
+        ['term' => 'term', 'lang' => 'en', 'source' => str_repeat('s', 256)],
+        ['term' => 'term', 'lang' => 'en', 'source' => str_repeat('s', 257)],
+    ],
+    'padded source' => [
+        ['term' => 'term', 'lang' => 'en', 'source' => 'analyzer'],
+        ['term' => 'term', 'lang' => 'en', 'source' => ' analyzer'],
     ],
     'position' => [
-        ['term' => 'term', 'position' => str_repeat('1', 64)],
-        ['term' => 'term', 'position' => str_repeat('1', 65)],
-        'analyzer occurrence bytes',
+        ['term' => 'term', 'lang' => 'en', 'position' => PHP_INT_MAX],
+        ['term' => 'term', 'lang' => 'en', 'position' => '1'],
     ],
-] as $label => [$exactOccurrence, $overOccurrence, $budget]) {
+] as $label => [$exactOccurrence, $invalidOccurrence]) {
     $exactError = wp_fts_extension_output_caught(
         static fn(): array => $normalizeQueryAnalysis->invoke($searcher, [$exactOccurrence])
     );
     wp_fts_extension_output_check($exactError === null, "an exact {$label} analyzer scalar should remain valid");
 
-    $overError = wp_fts_extension_output_caught(
-        static fn(): array => $normalizeQueryAnalysis->invoke($searcher, [$overOccurrence])
+    $invalidError = wp_fts_extension_output_caught(
+        static fn(): array => $normalizeQueryAnalysis->invoke($searcher, [$invalidOccurrence])
     );
     wp_fts_extension_output_check(
-        $overError instanceof WP_FTS_Search_Budget_Exceeded && $overError->budget() === $budget,
-        "the first oversized {$label} analyzer scalar should reject before array reindexing"
+        $invalidError instanceof InvalidArgumentException,
+        "the first invalid {$label} analyzer scalar should reject before array reindexing"
+    );
+}
+
+WP_FTS_Analyzer_Occurrence_Validator::assert_document([
+    'term' => 'term',
+    'lang' => 'en',
+    'weight' => 100,
+]);
+foreach ([100.01, PHP_FLOAT_MAX] as $invalidWeight) {
+    $weightError = wp_fts_extension_output_caught(
+        static function () use ($invalidWeight): void {
+            WP_FTS_Analyzer_Occurrence_Validator::assert_document([
+                'term' => 'term',
+                'lang' => 'en',
+                'weight' => $invalidWeight,
+            ]);
+        }
+    );
+    wp_fts_extension_output_check(
+        $weightError instanceof InvalidArgumentException,
+        'document analyzer weights above the fixed ceiling must reject before field multiplication'
     );
 }
 

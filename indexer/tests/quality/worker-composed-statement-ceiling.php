@@ -32,8 +32,8 @@ test_case('maximum mixed worker composition stays inside the complete statement 
         'posting_replacement',
         'document_replacement',
         'scope_yield_and_post_batch_release',
-        'search_epoch_advance',
         'atomic_worker_ack',
+        'search_epoch_advance',
         'transaction_commit',
         'lease_release',
     ], $roles, 'the strongest successful worker protocol must remain exact and ordered');
@@ -163,18 +163,18 @@ function wp_fts_test_run_composed_worker_ceiling(bool $injectFailure): array
         'post_id' => $maximumId,
         'primary_lang' => 'en',
         'lang' => 'en',
-        'doc_len' => WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS,
+        'doc_len' => WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS,
         'content_hash' => 'old-hash',
         'snippet_text' => 'old',
         'indexed_at' => 1,
         'is_deleted' => 0,
     ];
-    $fake->replacementFrontierPostingCounts[$maximumId] = WP_FTS_Storage_Mysql::MAX_DOCUMENT_POSTINGS;
+    $fake->replacementFrontierPostingCounts[$maximumId] = WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS;
     $selectedDependencyRows = 0;
-    $payload = ['index_options' => ['lang' => 'en']];
+    $payload = ['index_options' => ['document_lang' => 'en']];
     if (!$injectFailure) {
         $GLOBALS['wp_fts_test_post_meta'][$maximumId]['subtitle'] = [$tokens[0]];
-        $payload['index_options']['custom_fields'] = ['subtitle'];
+        $payload['index_options']['custom_field_keys'] = ['subtitle'];
         $selectedDependencyRows = 1;
     }
 

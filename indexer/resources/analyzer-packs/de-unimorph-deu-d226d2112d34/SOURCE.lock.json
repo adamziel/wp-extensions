@@ -5,8 +5,7 @@
         "language": "de",
         "kind": "lemmatizer",
         "status": "production_candidate",
-        "runtime_pack_committed": true,
-        "default_enabled": false
+        "runtime_pack_committed": true
     },
     "source": {
         "name": "UniMorph deu German inflection table",
@@ -42,10 +41,10 @@
         "path": "indexer/tools/import-unimorph-lemma-pack.php",
         "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
         "commit": "recorded-in-task-result",
-        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=de --pack-id=de-unimorph-deu-d226d2112d34 --version=d226d2112d34-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/deu/blob/d226d2112d3490d8f04ece10d4538123d4297a39/deu --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=de --pack-id=de-unimorph-deu-d226d2112d34 --version=d226d2112d34-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/deu/blob/d226d2112d3490d8f04ece10d4538123d4297a39/deu --license=CC-BY-SA-3.0 --attribution=<required-attribution>"
     },
     "runtime": {
-        "manifest_sha256": "4aafcda91d13ec3f886b3625b81a20bcb9d1ffb0b5cde56e6c962c49d761a977",
+        "manifest_sha256": "92dd7bbe6e8235f0c5460c758739be17e1a40286bdf800171c55c9b3d7a86d9e",
         "row_count": 170700,
         "file_count": 2,
         "byte_count": 575387,
@@ -63,8 +62,7 @@
         "unsupported_language_policy": "return_original_normalized_term"
     },
     "release": {
-        "default_enabled": false,
-        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+        "claim_boundary": "Source-backed UniMorph lemmatizer. Runtime pack is bundled and activates only through plugin configuration."
     },
     "attribution": {
         "upstream": "UniMorph deu contributors; source repository https://github.com/unimorph/deu"

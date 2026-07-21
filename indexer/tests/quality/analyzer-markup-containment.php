@@ -197,6 +197,12 @@ test_case('custom HTML processor tokens accept the exact envelope and contain on
             {
                 return '';
             }
+
+            /** Comments expose no attributes. */
+            public function get_attribute(string $_name): ?string
+            {
+                return null;
+            }
         };
         $analyzer = new WP_FTS_Analyzer([
             'auto_detect_language' => false,
@@ -270,6 +276,12 @@ test_case('custom HTML processor absolute depth rejects before allocating state 
         {
             return 'boundedword';
         }
+
+        /** Text events expose no attributes. */
+        public function get_attribute(string $_name): ?string
+        {
+            return null;
+        }
     };
     $analyzer = new WP_FTS_Analyzer([
         'html_processor_factory' => static fn(): object => $processor,
@@ -340,6 +352,12 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
                 $this->textCalls++;
 
                 return $this->chunks[$this->cursor];
+            }
+
+            /** Text events expose no attributes. */
+            public function get_attribute(string $_name): ?string
+            {
+                return null;
             }
         };
         $analyzer = new WP_FTS_Analyzer([
@@ -422,10 +440,10 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
                 return '';
             }
 
-            /** Return the exact tag byte count before uppercase or trim copies. */
+            /** Return the exact canonical tag byte count before retained copies. */
             public function get_tag(): string
             {
-                return str_repeat('p', $this->tagBytes);
+                return str_repeat('P', $this->tagBytes);
             }
 
             /** Return hostile bytes only for the language attribute the analyzer reads. */
@@ -444,7 +462,7 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
 
     assert_same(null, $runTag(WP_FTS_Analysis_Limits::MAX_HTML_TAG_BYTES, 2), 'an exact processor tag output should remain valid');
     $tagError = $runTag(WP_FTS_Analysis_Limits::MAX_HTML_TAG_BYTES + 1, 2);
-    assert_same('html_tag_bytes', $tagError instanceof WP_FTS_Analysis_Limit_Exceeded ? $tagError->reason_code : null, 'the first processor tag byte above 16 KiB should reject before trim or uppercase copies');
+    assert_same('html_tag_bytes', $tagError instanceof WP_FTS_Analysis_Limit_Exceeded ? $tagError->reason_code : null, 'the first processor tag byte above 16 KiB should reject before retained copies');
     assert_same(null, $runTag(1, WP_FTS_Analysis_Limits::MAX_HTML_LANGUAGE_ATTRIBUTE_BYTES), 'an exact processor language output should remain bounded even when it is not a valid tag');
     $languageError = $runTag(1, WP_FTS_Analysis_Limits::MAX_HTML_LANGUAGE_ATTRIBUTE_BYTES + 1);
     assert_same('html_language_attribute_bytes', $languageError instanceof WP_FTS_Analysis_Limit_Exceeded ? $languageError->reason_code : null, 'the first processor language byte above 64 should reject before canonicalization');
@@ -487,7 +505,7 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
             /** Produce the configured maximum-size tag on demand. */
             public function get_tag(): string
             {
-                return str_repeat('p', $this->tagBytes);
+                return str_repeat('P', $this->tagBytes);
             }
 
             /** Avoid close-event state changes during aggregate byte measurement. */
@@ -506,6 +524,12 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
             public function get_modifiable_text(): string
             {
                 return '';
+            }
+
+            /** Atomic opening tags in this probe declare no attributes. */
+            public function get_attribute(string $_name): ?string
+            {
+                return null;
             }
         };
         $analyzer = new WP_FTS_Analyzer([
@@ -583,6 +607,12 @@ test_case('custom HTML processor output bytes accept exact limits and reject bef
             public function get_modifiable_text(): string
             {
                 return '';
+            }
+
+            /** Synthetic non-tag tokens expose no attributes. */
+            public function get_attribute(string $_name): ?string
+            {
+                return null;
             }
         };
         $analyzer = new WP_FTS_Analyzer([
@@ -716,7 +746,7 @@ test_case('processor event state does not leak atomic tags and treats BR as a le
     assert_same(['foo', 'bar'], array_column($processorTerms, 'term'), 'processor extraction should not join lexical words across BR');
 });
 
-test_case('processors without the WordPress 6.6 depth event contract use the fallback parser', function (): void {
+test_case('configured processors must implement the complete WordPress 6.6 depth event contract', function (): void {
     $processor = new class {
         public int $calls = 0;
 
@@ -733,11 +763,10 @@ test_case('processors without the WordPress 6.6 depth event contract use the fal
         'html_processor_factory' => static fn(): object => $processor,
     ]);
 
-    assert_same(
-        ['fallbackword'],
-        array_column($analyzer->analyze_content('<p>fallbackword</p>', ['document_lang' => 'en']), 'term'),
-        'an incomplete processor should preserve complete analysis through the fallback parser'
+    $error = wp_fts_markup_caught(
+        static fn(): array => $analyzer->analyze_content('<p>fallbackword</p>', ['document_lang' => 'en'])
     );
+    assert_true($error instanceof UnexpectedValueException, 'an incomplete configured processor should reject');
     assert_same(0, $processor->calls, 'processor capability checks should reject an incomplete provider before its first token');
 });
 
@@ -825,16 +854,339 @@ test_case('post extraction and field preparation reject markup before either vis
             return [];
         }
     };
-    $indexer = new WP_FTS_Indexer(new WP_FTS_Storage_InMemory(), $analyzer);
+    $indexer = new WP_FTS_Indexer($analyzer);
     foreach ($invalidSources as $reason => $source) {
         $error = wp_fts_markup_caught(static fn(): array => $indexer->prepare_document_fields(
             1,
             [['name' => 'content', 'text' => 'boundedword', 'html' => $source]],
-            ['metadata' => []]
+            ['document_lang' => 'en']
         ));
-        assert_same($reason, $error instanceof WP_FTS_Analysis_Limit_Exceeded ? $error->reason_code : null, "field preparation should reject {$reason} before metadata parsing");
+        assert_same($reason, $error instanceof WP_FTS_Analysis_Limit_Exceeded ? $error->reason_code : null, "field preparation should reject {$reason} before analysis");
     }
     assert_same(0, $analyzer->calls, 'invalid field markup should reject before a custom analyzer is invoked');
+});
+
+test_case('component Indexer rejects malformed field and post ID shapes before analysis', function (): void {
+    $analyzer = new WP_FTS_Analyzer([
+        'auto_detect_language' => false,
+        'default_lang' => 'en',
+    ]);
+    $indexer = new WP_FTS_Indexer($analyzer);
+    $invalidFields = [
+        'non-list map' => ['content' => ['name' => 'content', 'text' => 'value']],
+        'unknown key' => [['name' => 'content', 'text' => 'value', 'unknown' => true]],
+        'numeric key' => [['name' => 'content', 'text' => 'value', 0 => 'unknown']],
+        'non-string name' => [['name' => 1, 'text' => 'value']],
+        'non-string text' => [['name' => 'content', 'text' => 1]],
+        'non-string HTML' => [['name' => 'content', 'text' => 'value', 'html' => 1]],
+        'null HTML' => [['name' => 'content', 'text' => 'value', 'html' => null]],
+        'empty name' => [['name' => ' ', 'text' => 'value']],
+        'string boost' => [['name' => 'content', 'text' => 'value', 'boost' => '2']],
+        'boolean boost' => [['name' => 'content', 'text' => 'value', 'boost' => true]],
+        'fractional boost' => [['name' => 'content', 'text' => 'value', 'boost' => 2.5]],
+        'NAN boost' => [['name' => 'content', 'text' => 'value', 'boost' => NAN]],
+        'positive infinite boost' => [['name' => 'content', 'text' => 'value', 'boost' => INF]],
+        'negative infinite boost' => [['name' => 'content', 'text' => 'value', 'boost' => -INF]],
+        'zero boost' => [['name' => 'content', 'text' => 'value', 'boost' => 0]],
+        'negative boost' => [['name' => 'content', 'text' => 'value', 'boost' => -1]],
+        'oversized boost' => [['name' => 'content', 'text' => 'value', 'boost' => 101]],
+    ];
+    foreach ($invalidFields as $description => $fields) {
+        $error = wp_fts_markup_caught(static fn(): array => $indexer->prepare_document_fields(
+            1,
+            $fields,
+            ['document_lang' => 'en']
+        ));
+        assert_true($error instanceof InvalidArgumentException, "{$description} should be rejected at the Indexer field boundary");
+    }
+
+    foreach ([
+        'unknown option' => ['unknown' => true],
+        'numeric option key' => [0 => 'document_lang'],
+        'post-only custom fields' => ['custom_field_keys' => []],
+        'post-only field boosts' => ['field_boosts' => []],
+        'null document language' => ['document_lang' => null],
+        'boolean document language' => ['document_lang' => true],
+        'integer document language' => ['document_lang' => 1],
+        'empty document language' => ['document_lang' => ''],
+        'blank document language' => ['document_lang' => '   '],
+        'oversized document language' => ['document_lang' => str_repeat('l', 65)],
+        'null default language' => ['default_lang' => null],
+        'boolean default language' => ['default_lang' => false],
+        'integer default language' => ['default_lang' => 1],
+        'empty default language' => ['default_lang' => ''],
+        'blank default language' => ['default_lang' => '   '],
+        'oversized default language' => ['default_lang' => str_repeat('l', 65)],
+    ] as $description => $options) {
+        $error = wp_fts_markup_caught(static fn(): array => $indexer->prepare_document_fields(
+            1,
+            [['name' => 'content', 'text' => 'value']],
+            $options
+        ));
+        assert_true($error instanceof InvalidArgumentException, "direct Indexer options should reject {$description}");
+    }
+
+    $prepared = $indexer->prepare_document_fields(1, [[
+        'name' => 'content',
+        'text' => 'valid field',
+        'html' => '<p>valid field</p>',
+        'boost' => 2.0,
+    ]], ['document_lang' => 'en']);
+    assert_same(1, $prepared['doc_id'] ?? null, 'a list with exact native field values should remain valid');
+
+    $extractor = new class {
+        public int $calls = 0;
+
+        /** Return one exact current field if post-ID validation permits extraction. */
+        public function extract(object $_post, array $_options): array
+        {
+            $this->calls++;
+
+            return [
+                'fields' => [['name' => 'content', 'text' => 'value', 'boost' => 1]],
+                'snippet_text' => 'value',
+            ];
+        }
+    };
+    $postIndexer = new WP_FTS_Indexer($analyzer, $extractor);
+    foreach ([true, 1.0, 'garbage'] as $postId) {
+        $post = (object) [
+            'ID' => $postId,
+            'terms' => [],
+            'custom_fields' => [],
+        ];
+        $error = wp_fts_markup_caught(static fn(): array => $postIndexer->prepare_post($post, [
+            'document_lang' => 'en',
+        ]));
+        assert_true($error instanceof InvalidArgumentException, 'malformed post IDs should reject before extraction');
+    }
+    $post = (object) [
+        'ID' => 1,
+        'post_title' => '',
+        'post_content' => '',
+        'post_excerpt' => '',
+        'terms' => [],
+        'custom_fields' => [],
+    ];
+    foreach ([
+        ['unknown' => true],
+        [0 => 'document_lang'],
+        ['query_lang' => 'en'],
+        ['document_lang' => null],
+        ['default_lang' => ''],
+    ] as $options) {
+        $error = wp_fts_markup_caught(static fn(): array => $postIndexer->prepare_post($post, $options));
+        assert_true($error instanceof InvalidArgumentException, 'post Indexer options should reject unsupported keys and malformed languages');
+    }
+    assert_same(0, $extractor->calls, 'malformed post IDs and options should never reach the post extractor');
+
+    foreach ([
+        'non-array output' => null,
+        'missing fields' => ['snippet_text' => 'value'],
+        'missing snippet text' => ['fields' => []],
+        'reversed fields' => ['snippet_text' => 'value', 'fields' => []],
+        'unknown field' => ['fields' => [], 'snippet_text' => 'value', 'unknown' => true],
+        'non-list fields' => ['fields' => ['content' => ['name' => 'content', 'text' => 'value']], 'snippet_text' => 'value'],
+        'non-string snippet text' => ['fields' => [], 'snippet_text' => 1],
+    ] as $description => $output) {
+        $malformedExtractor = new class($output) {
+            public function __construct(private mixed $output)
+            {
+            }
+
+            /** Return one configured malformed shape without changing it. */
+            public function extract(object $_post, array $_options): mixed
+            {
+                return $this->output;
+            }
+        };
+        $error = wp_fts_markup_caught(static fn(): array => (new WP_FTS_Indexer(
+            $analyzer,
+            $malformedExtractor
+        ))->prepare_post_source($post, ['document_lang' => 'en']));
+        assert_true($error instanceof InvalidArgumentException, "Indexer should reject extractor {$description}");
+    }
+
+    $capturingAnalyzer = new class {
+        /** @var array<int,array<string,mixed>> */
+        public array $options = [];
+
+        public function index_signature(): string
+        {
+            return 'strict-option-split';
+        }
+
+        /** Return one valid document occurrence per extracted field. */
+        public function analyze_document_fields(array $fields, array $options): array
+        {
+            $this->options[] = $options;
+
+            return array_map(static fn(): array => [[
+                'term' => 'alpha',
+                'weight' => 1.0,
+                'lang' => 'en',
+                'position' => 0,
+                'rank' => 0,
+                'source' => 'token',
+                'surface' => 'Alpha',
+                'normalized_surface' => 'alpha',
+            ]], $fields);
+        }
+    };
+    $capturingExtractor = new class {
+        /** @var array<int,array<string,mixed>> */
+        public array $options = [];
+
+        /** Record the exact extraction-only options. */
+        public function extract(object $_post, array $options): array
+        {
+            $this->options[] = $options;
+
+            return [
+                'fields' => [['name' => 'content', 'text' => 'alpha', 'boost' => 1]],
+                'snippet_text' => 'alpha',
+            ];
+        }
+    };
+    $splitIndexer = new WP_FTS_Indexer($capturingAnalyzer, $capturingExtractor);
+    $source = $splitIndexer->prepare_post_source($post, [
+        'document_lang' => 'en',
+        'custom_field_keys' => ['subtitle'],
+        'field_boosts' => ['content' => 2],
+    ]);
+    assert_same([
+        'custom_field_keys' => ['subtitle'],
+        'field_boosts' => ['content' => 2],
+    ], $capturingExtractor->options[0] ?? null, 'post extraction should receive only custom-field and field-boost options');
+    assert_same(['document_lang' => 'en'], $source['analysis_options'] ?? null, 'prepared post analysis should retain only language options');
+    $splitIndexer->prepare_post_from_source($source);
+    $analysisOptions = $capturingAnalyzer->options[0] ?? [];
+    assert_same('en', $analysisOptions['document_lang'] ?? null, 'document analysis should receive the explicit language');
+    assert_true(!array_key_exists('custom_field_keys', $analysisOptions), 'document analysis must not receive custom-field selection');
+    assert_true(!array_key_exists('field_boosts', $analysisOptions), 'document analysis must not receive extractor field boosts');
+});
+
+test_case('analyzer occurrence contracts reject malformed query and document rows without coercion', function (): void {
+    $queryOccurrence = [
+        'term' => 'alpha',
+        'lang' => 'en',
+        'position' => 0,
+        'rank' => 0,
+        'source' => 'token',
+        'surface' => 'Alpha',
+        'normalized_surface' => 'alpha',
+    ];
+    WP_FTS_Analyzer_Occurrence_Validator::assert_query($queryOccurrence);
+    WP_FTS_Analyzer_Occurrence_Validator::assert_query([
+        'term' => '',
+        'lang' => 'en',
+        'surface' => 'the',
+        'normalized_surface' => 'the',
+    ]);
+
+    $invalidQueryOccurrences = [
+        'non-array row' => 'alpha',
+        'numeric key' => $queryOccurrence + [0 => 'extra'],
+        'unknown key' => $queryOccurrence + ['unknown' => true],
+        'missing term' => array_diff_key($queryOccurrence, ['term' => true]),
+        'non-string term' => array_replace($queryOccurrence, ['term' => 1]),
+        'unnormalized term' => array_replace($queryOccurrence, ['term' => ' alpha']),
+        'missing language' => array_diff_key($queryOccurrence, ['lang' => true]),
+        'non-string language' => array_replace($queryOccurrence, ['lang' => 1]),
+        'blank language' => array_replace($queryOccurrence, ['lang' => ' ']),
+        'string position' => array_replace($queryOccurrence, ['position' => '0']),
+        'negative position' => array_replace($queryOccurrence, ['position' => -1]),
+        'float rank' => array_replace($queryOccurrence, ['rank' => 0.0]),
+        'negative rank' => array_replace($queryOccurrence, ['rank' => -1]),
+        'non-string source' => array_replace($queryOccurrence, ['source' => 1]),
+        'empty source' => array_replace($queryOccurrence, ['source' => '']),
+        'non-string surface' => array_replace($queryOccurrence, ['surface' => 1]),
+        'empty surface' => array_replace($queryOccurrence, ['surface' => '']),
+        'non-string normalized surface' => array_replace($queryOccurrence, ['normalized_surface' => 1]),
+        'empty normalized surface' => array_replace($queryOccurrence, ['normalized_surface' => '']),
+        'empty term with position' => array_replace($queryOccurrence, ['term' => '']),
+        'surface-only row without normalized surface' => ['term' => '', 'lang' => 'en', 'surface' => 'the'],
+    ];
+    foreach ($invalidQueryOccurrences as $description => $occurrence) {
+        $error = wp_fts_markup_caught(static fn(): mixed => WP_FTS_Analyzer_Occurrence_Validator::assert_query($occurrence));
+        assert_true($error instanceof InvalidArgumentException, "query occurrence should reject {$description}");
+    }
+
+    $documentOccurrence = $queryOccurrence + ['weight' => 2.0];
+    WP_FTS_Analyzer_Occurrence_Validator::assert_document($documentOccurrence);
+    WP_FTS_Analyzer_Occurrence_Validator::assert_document(array_replace($documentOccurrence, ['weight' => 1.5]));
+    $invalidDocumentOccurrences = [
+        'missing weight' => $queryOccurrence,
+        'string weight' => array_replace($documentOccurrence, ['weight' => '2']),
+        'boolean weight' => array_replace($documentOccurrence, ['weight' => true]),
+        'zero weight' => array_replace($documentOccurrence, ['weight' => 0]),
+        'negative weight' => array_replace($documentOccurrence, ['weight' => -1]),
+        'NAN weight' => array_replace($documentOccurrence, ['weight' => NAN]),
+        'infinite weight' => array_replace($documentOccurrence, ['weight' => INF]),
+        'empty term' => array_replace($documentOccurrence, ['term' => '']),
+        'unknown key' => $documentOccurrence + ['unknown' => true],
+    ];
+    foreach ($invalidDocumentOccurrences as $description => $occurrence) {
+        $error = wp_fts_markup_caught(static fn(): mixed => WP_FTS_Analyzer_Occurrence_Validator::assert_document($occurrence));
+        assert_true($error instanceof InvalidArgumentException, "document occurrence should reject {$description}");
+    }
+
+    $storage = new class implements WP_FTS_Set_Oriented_Search_Storage {
+        public int $calls = 0;
+
+        public function search_page(array $_groups, array $_options): array
+        {
+            $this->calls++;
+
+            return ['results' => [], 'has_more' => false, 'next_cursor' => null, 'previous_cursor' => null];
+        }
+    };
+    foreach ([
+        'non-list output' => ['row' => $queryOccurrence],
+        'string position' => [array_replace($queryOccurrence, ['position' => '0'])],
+    ] as $description => $output) {
+        $analyzer = new class($output) {
+            public function __construct(private mixed $output)
+            {
+            }
+
+            public function analyze_query_occurrences(string $_query, array $_options): mixed
+            {
+                return $this->output;
+            }
+        };
+        $error = wp_fts_markup_caught(static fn(): array => (new WP_FTS_Searcher($storage, $analyzer))->search('alpha'));
+        assert_true($error instanceof InvalidArgumentException, "Searcher should reject {$description} before storage");
+    }
+    assert_same(0, $storage->calls, 'malformed query analyzer output should never reach storage');
+
+    foreach ([
+        'non-list batch output' => ['field' => [$documentOccurrence]],
+        'non-list field output' => [['row' => $documentOccurrence]],
+        'string weight' => [[array_replace($documentOccurrence, ['weight' => '2'])]],
+    ] as $description => $output) {
+        $analyzer = new class($output) {
+            public function __construct(private mixed $output)
+            {
+            }
+
+            public function index_signature(): string
+            {
+                return 'strict-occurrence-test';
+            }
+
+            public function analyze_document_fields(array $_fields, array $_options): mixed
+            {
+                return $this->output;
+            }
+        };
+        $error = wp_fts_markup_caught(static fn(): array => (new WP_FTS_Indexer($analyzer))->prepare_document_fields(
+            1,
+            [['name' => 'content', 'text' => 'alpha']],
+            ['document_lang' => 'en']
+        ));
+        assert_true($error instanceof InvalidArgumentException || $error instanceof WP_FTS_Analysis_Limit_Exceeded, "Indexer should reject {$description}");
+    }
 });
 
 test_case('encoded metadata extraction stays bounded until the analyzer rejects dense source', function (): void {
@@ -965,66 +1317,4 @@ test_case('inline lexical coalescing accepts 4 KiB exactly and rejects worst-cas
             }
         }
     }
-});
-
-test_case('streamed HTML metadata preserves exact boundary output and never truncates indexed fields', function (): void {
-    $indexer = new WP_FTS_Indexer(
-        new WP_FTS_Storage_InMemory(),
-        new WP_FTS_Analyzer([
-            'auto_detect_language' => false,
-            'enable_stemming' => false,
-            'default_lang' => 'en',
-        ])
-    );
-
-    $underBoundaryHtml = '<em data-source="first">&#97;</em> <strong data-source="second">&#98;</strong>';
-    $underBoundary = $indexer->prepare_document_fields(
-        1,
-        [['name' => 'content', 'text' => 'a b', 'html' => $underBoundaryHtml]],
-        ['metadata' => ['required_marker' => 'preserve-me'], 'metadata_html_limit' => 20000]
-    );
-    assert_same($underBoundaryHtml, $underBoundary['metadata']['search_html'] ?? null, 'streamed compaction should remain byte-for-byte equivalent below the sidecar boundary');
-    assert_same('preserve-me', $underBoundary['metadata']['required_marker'] ?? null, 'HTML sidecar construction must preserve independent metadata fields');
-
-    $fragments = [];
-    $fragmentBytes = 0;
-    for ($number = 0; ; $number++) {
-        $fragment = '<i data-n="' . str_pad((string) $number, 4, '0', STR_PAD_LEFT) . '">&#97;</i>';
-        $nextBytes = $fragmentBytes + ($fragments === [] ? 0 : 1) + strlen($fragment);
-        if ($nextBytes > 19500) {
-            break;
-        }
-        $fragments[] = $fragment;
-        $fragmentBytes = $nextBytes;
-    }
-    $lastPrefix = '<i data-pad="';
-    $lastSuffix = '">&#97;</i>';
-    $separatorBytes = $fragments === [] ? 0 : 1;
-    $paddingBytes = 20000 - $fragmentBytes - $separatorBytes - strlen($lastPrefix) - strlen($lastSuffix);
-    assert_true($paddingBytes >= 0 && $paddingBytes <= 4096, 'the exact-boundary fixture should need one valid bounded attribute');
-    $fragments[] = $lastPrefix . str_repeat('x', $paddingBytes) . $lastSuffix;
-    $exactBoundaryHtml = implode(' ', $fragments);
-    assert_same(20000, strlen($exactBoundaryHtml), 'the streamed-sidecar fixture should be exactly 20 KiB');
-
-    $fields = [
-        ['name' => 'content', 'text' => 'semantic alpha', 'html' => $exactBoundaryHtml],
-        ['name' => 'second', 'text' => 'semantic omega'],
-    ];
-    $metadata = ['required_marker' => 'preserve-me'];
-    $exactBoundary = $indexer->prepare_document_fields(2, $fields, [
-        'metadata' => $metadata,
-        'metadata_html_limit' => 20000,
-    ]);
-    $shortSidecar = $indexer->prepare_document_fields(2, $fields, [
-        'metadata' => $metadata,
-        'metadata_html_limit' => 19999,
-    ]);
-
-    assert_same($exactBoundaryHtml, $exactBoundary['metadata']['search_html'] ?? null, 'the exact 20-KiB sidecar boundary should be preserved without truncation or reordering');
-    assert_same(20000, strlen((string) ($exactBoundary['metadata']['search_html'] ?? '')), 'the exact sidecar boundary should retain every fitting byte');
-    assert_same(19999, strlen((string) ($shortSidecar['metadata']['search_html'] ?? '')), 'one smaller configured sidecar should stop at its declared presentation byte limit');
-    assert_same($exactBoundary['term_frequencies'], $shortSidecar['term_frequencies'], 'a presentation-sidecar limit must not truncate or change semantic field analysis');
-    assert_same($exactBoundary['content_hash'], $shortSidecar['content_hash'], 'a presentation-sidecar limit must not change the indexed-source fingerprint');
-    assert_same($exactBoundary['metadata']['search_fields'], $shortSidecar['metadata']['search_fields'], 'a presentation-sidecar limit must preserve independently bounded field metadata');
-    assert_same('preserve-me', $shortSidecar['metadata']['required_marker'] ?? null, 'a full sidecar must not prevent later required metadata from being retained');
 });

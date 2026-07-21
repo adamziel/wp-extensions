@@ -164,8 +164,6 @@ function wp_fts_lwc_run(string $kind, string $source, string $root, string $labe
             'license' => 'CC0-1.0',
             'license_url' => 'urn:wp-fts:test:wrapper-containment-license',
             'attribution' => 'Project-owned generated wrapper containment data.',
-            'fixture_only' => true,
-            'runtime_compression' => 'none',
             'chunk_rows' => 200000,
             'max_rows_per_file' => 200000,
             'importer_commit' => 'test',

@@ -63,16 +63,12 @@ final class WP_FTS_Utf8
         return self::strip_invalid_sequences($text, ' ');
     }
 
-    /**
-     * Truncate to at most `$limit` bytes without splitting a UTF-8 character.
-     *
-     * A zero limit preserves the historic "unlimited" behavior.
-     */
+    /** Truncate to at most `$limit` bytes without splitting a UTF-8 character. */
     public static function truncate_bytes(string $text, int $limit): string
     {
         $text = self::repair($text);
         $limit = max(0, $limit);
-        if ($limit === 0 || strlen($text) <= $limit) {
+        if (strlen($text) <= $limit) {
             return $text;
         }
 
@@ -103,7 +99,7 @@ final class WP_FTS_Utf8
         }
 
         if (preg_match_all('/./us', $text, $matches) === false) {
-            return '';
+            throw new RuntimeException('UTF-8 slicing failed after input repair.');
         }
 
         return implode('', array_slice($matches[0], $start, $length));

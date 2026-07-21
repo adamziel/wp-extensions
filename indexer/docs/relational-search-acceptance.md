@@ -8,8 +8,8 @@ MySQL or MariaDB; larger installations should use a dedicated search service.
 WordPress Playground's
 SQLite adapter remains a functional single-request smoke target, not a claimed
 multi-request production-concurrency backend. The generation-CAS mutation proof,
-50,000-document compatibility lane, and 100,000-document boundary lane run on
-both supported database families. None uses an in-memory substitute.
+50,000-document scale lane, and 100,000-document boundary lane run on
+both supported database families with their real relational storage.
 
 A change passes only when the machine-readable real-database evidence described
 below passes. A missing dependency, `SKIP`, `PENDING`, timeout, OOM, absent
@@ -18,10 +18,8 @@ metric, or incomplete report is a failure.
 ## Search-path invariants
 
 Every production WordPress PHP, REST, front-end, admin, Sandbox/AJAX, and WP-CLI
-search path must satisfy all of these invariants. The component's File and
-InMemory posting-list engines are test-only fixtures: the production
-factory rejects them, and a source-level call-graph contract prevents a
-WordPress adapter from bypassing that factory.
+search path uses the relational storage contract and must satisfy all of these
+invariants.
 
 1. Analyze the query once without SQL.
 2. Preserve one logical group per source occurrence. Surface, lemma, stem, and
@@ -98,13 +96,14 @@ WordPress adapter from bypassing that factory.
     4,096-byte public search ceiling.
 12. Perform no `SHOW`, `DESCRIBE`, `information_schema`, schema inspection, or
     repair work during normal readiness/search.
-13. Keep every valid worst-case search statement at or below 32 KiB, PHP
-    allocation, live RSS, and Linux high-water RSS deltas at or below 16 MiB,
-    and both PHP peak and absolute Linux `VmHWM` at or below 128 MiB.
+13. Keep every valid worst-case search statement at or below 32 KiB. Ordinary
+    PHP allocation, live RSS, and Linux high-water RSS deltas stay at or below
+    16 MiB. The distinct 3.8-MiB maximum-valid canonical page stays at or below
+    24 MiB. PHP peak and absolute Linux `VmHWM` stay at or below 128 MiB.
 14. Reject source text above 2 MiB, more than 20,000 analyzed occurrences,
     more than 4,096 distinct terms per document, a lexical run above 4 KiB,
     query text above 4 KiB, or a query plan above 12 groups/12 alternatives
-    before an unbounded value, posting list, or SQL statement is materialized.
+    before an unbounded value, posting collection, or SQL statement is materialized.
     Plain unquoted ten-to-twelve-group input deliberately keeps the relational
     twelve-group semantics instead of core's fallback that collapses more than
     nine parsed terms into one sentence; phrase and exclusion syntax never uses
@@ -459,7 +458,8 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    provisioning failure, including a declined `switch_to_blog()`, schedules the
    **same input cursor**; only success may schedule that site's ID as the next
    keyset cursor. No event holds or mutates a multi-site schema page.
-5. `wp fts reindex` rejects both old synchronous `--batch_size` spellings. With
+5. `wp fts reindex` accepts only scope controls; worker batch and time controls
+   belong to `wp fts process-batch`. With
    **100,000** source rows available, it executes exactly **one scope UPSERT**,
    schedules exactly **one** WP-Cron event, and returns exactly seven normalized
    fields (`status`, `post_status`, `post_type`, `language`, `requested_limit`,
@@ -476,19 +476,20 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
 7. Sandbox detail ID input is rejected before expansion above **2,048 scalar
    bytes**, **50 array items**, or **20 bytes per item**. The exact 50-ID page
    boundary remains accepted.
-8. Normal status/Health trusts stored readiness and reports
-   `counts_exact=false`; exact eligible/indexed/remaining counts are `null`.
-   A logically ready init/readiness/storage/search-takeover/empty-shutdown request
-   performs **0 uninstall-fence probes, 0 plugin SQL, 0 option mutations, and 0
+8. Normal status/Health trusts stored readiness and reports bounded pending
+   post/scope work counts, their exact-or-lower-bound relations, and the active
+   reconciliation cursor. It does not expose whole-corpus totals. A logically
+   ready init/readiness/storage/search-takeover/empty-shutdown request performs
+   **0 uninstall-fence probes, 0 plugin SQL, 0 option mutations, and 0
    schedules**; the direct non-autoloaded fence probe exists only at an actual
    writer, schema, foreground-persistence, or scheduling boundary.
    A stale-schema Health render executes **0 SQL** and current-schema status
    executes **1 bounded durable-work aggregate** in the contract adapter. It
    executes no `SHOW`, `information_schema`, or corpus/document-table count.
    Only explicit diagnose/support-snapshot paths set
-   `schema_verification=physical`; they still report `counts_exact=false` and
-   `null` corpus counts. No operator status path exhaustively counts posts,
-   documents, or remaining work. Status, diagnose, and support snapshots remain
+   `schema_verification=physical`; they retain the bounded queue and
+   reconciliation fields. No operator status path exhaustively counts posts or
+   documents. Status, diagnose, and support snapshots remain
    read-only when physical verification reports a damaged schema: they perform
    no repair, enqueue, option mutation, or queue scheduling.
    On MySQL and MariaDB, a cold explicit operator status or support snapshot is
@@ -532,11 +533,12 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
     unfiltered complete-corpus scope UPSERT and **one** bounded schedule attempt.
     The complete plugin path therefore has exactly **10 plugin-owned
     storage/queue statements**—one epoch read plus **9 writes**—with WordPress's
-    schedule-option machinery measured separately. It reports
-    `reconciliation_queued=true`, and that exact scope is sufficient to restore
-    readiness after bounded discovery and physical verification. Publication,
-    retired-DROP, scope-UPSERT, and schedule failures remain pending and do not
-    emit reset success. Operators must not queue a second filtered CLI reindex;
+    schedule-option machinery measured separately. The response reports
+    `reset_strategy`, `reconciliation_queued=true`, and normal status fields,
+    with no removed-row or queue counters. That exact scope is sufficient to
+    restore readiness after bounded discovery and physical verification.
+    Publication, retired-DROP, scope-UPSERT, and schedule failures remain
+    pending and do not emit reset success. Operators must not queue a second filtered CLI reindex;
     `process-batch` only advances the automatic scope when a manual pass is
     needed.
 
@@ -584,14 +586,10 @@ WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='streamed HTML metadata' php indexer/test
 WP_FTS_MIN_CHECKS=12 WP_FTS_FAIL_ON_PENDING=1 WP_FTS_TEST_FILTER='HTML raw-text contents cannot invent markup depth or tokens' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='lemma runtime lines' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=60 WP_FTS_FAIL_ON_PENDING=1 WP_FTS_TEST_FILTER='lazy lemma block reads stay bound to the attested file generation' php indexer/tests/run.php
-WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='non-eager lemma packs require sidecars' php indexer/tests/run.php
-WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='non-eager compressed packs reject' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='compressed lemma pack importer emits' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='64-file lemma packs' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='bundled multi-file lemma pack' php indexer/tests/run.php
-WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='non-fixture lemma importer rejects unindexed' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='lemma source importers' php indexer/tests/run.php
-WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='generic importer refuses plain fixtures' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='top-language pack audit' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='PoliMorf external pack workflow' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='Jieba dictionary giant line' php indexer/tests/run.php
@@ -646,17 +644,17 @@ their shape in smaller profiles:
   surface range, proving completion vocabulary cannot create a candidate×range
   cross product or defeat rare-group anchoring;
 - a corpus-wide exact group combined with a one-document final prefix, proving
-  the prefix becomes the AND anchor and the common posting list is not scanned;
+  the prefix becomes the AND anchor and the common posting range is not scanned;
 - all distributable analyzer packs active without query-plan fanout;
 - 5,000 higher-impact hidden rows and 20,000 higher-impact dirty rows ahead of
   clean public results;
 - an absent mandatory group, ambiguous morphology, field-impact sentinels, and
   100 pages of cursor traversal.
 
-The former 1,024-word explosive input is a separate containment probe. It must
+The 1,024-word explosive input is a separate containment probe. It must
 be rejected before FTS SQL with a typed error and no silent provider switch.
 A fresh isolated 128 MiB process exercises every exact public boundary through
-the production analyzer, indexer, MySQL storage, searcher, and queue:
+the production analyzer, indexer, relational storage, searcher, and queue:
 
 - a 4,095-byte contiguous CJK run is accepted, produces four distinct terms and
   5,454 bounded occurrences, and is written through the real relational writer;
@@ -712,10 +710,10 @@ the production analyzer, indexer, MySQL storage, searcher, and queue:
   below and at the exact 20,000-byte sidecar boundary and proves a smaller
   presentation cap cannot change term frequencies, the content hash, other
   field metadata, or later required metadata;
-- plain and gzip lemma runtime rows accept exactly 4,096 bytes and reject byte
-  4,097 with one typed reason. Eager fixture validation and lookup-index
-  construction enforce the same decoded-line boundary. A fresh 128 MiB process
-  then creates a valid, sorted, non-fixture gzip shard containing exactly
+- gzip lemma runtime rows accept exactly 4,096 bytes and reject byte 4,097 with
+  one typed reason. Validation and lookup-index construction enforce the same
+  decoded-line boundary. A fresh 128 MiB process then creates a valid, sorted
+  gzip shard containing exactly
   8,388,608 decoded bytes and 32,768 rows. Without a sidecar it must reject at
   pack construction before any document/query token lookup, complete-runtime
   digest, or indexed payload read. The indexed equivalent auto-shards into two
@@ -751,13 +749,7 @@ the production analyzer, indexer, MySQL storage, searcher, and queue:
   most 64 and at most 192 live temporary files, and complete within ten seconds and
   128 MiB PHP/RSS. High-entropy 300,000-row children (39.6 / 41.4 MB sources) must reject at
   the 16-MiB physical runtime-plus-lookup boundary before a manifest, remove all
-  partial output, and complete within fifteen seconds and 128 MiB PHP/RSS. A final fresh
-  child proves unindexed fixture
-  output accepts exactly 50,000 rows and 8,388,608 decoded bytes, then rejects
-  row 50,001 and decoded byte 8,388,609 before manifest publication and removes
-  every partial pack artifact while directing the operator to indexed gzip.
-  Eager construction consumes validator rows as it builds the sole retained
-  surface map, rather than holding both complete representations. Every child
+  partial output, and complete within fifteen seconds and 128 MiB PHP/RSS. Every child
   records its loaded ini path, and a parent launched with `php -n` must keep all
   descendants on `php -n`; none may silently reload shared extensions;
 - fresh normal and `php -n` children drive all four source importers through
@@ -806,31 +798,13 @@ the production analyzer, indexer, MySQL storage, searcher, and queue:
   stay below 128 MiB PHP/RSS. Two distinct physical copies are
   accepted; a third declares 192 files and must raise `configured_pack_metadata`
   before opening any lookup header or payload, in normal PHP and `php -n`;
-- fresh normal and `php -n` 128 MiB processes configure 32 distinct
-  eager-eligible fixture manifests. Exactly 50,000 declared rows must construct
-  all 32 maps, total exactly 8,388,608 decoded bytes, and retain one long,
-  pack-specific morphology per language. Row 50,001 must raise
-  `configured_eager_fixture_rows` before pack construction, even when an earlier
-  runtime digest is corrupt and the complete set remains below the physical
-  configured-pack ceiling. A companion two-manifest proof configures one
-  manifest under two language aliases: exact 8-MiB plain and gzip pairs must
-  construct through `WP_FTS_LanguagePipeline` and report all three aliases active
-  through `WP_FTS_Plugin::runtime_analyzer_pack_statuses()`; decoded byte
-  8,388,609 must raise `configured_eager_fixture_bytes` through both paths. The
-  plain +1 case must beat an earlier corrupt digest during metadata preflight;
-  the gzip +1 case must use valid digests and discover the overflow during its
-  bounded decoded scan. Every case must complete within five seconds, add at
-  most 32 MiB PHP allocation, remain below 128 MiB PHP/RSS, and perform zero
-  lookup-header or indexed-payload I/O;
 - runtime and sidecar attestation must not trust a pre-read `stat()`: a
   deterministic stream that reports one byte and then grows stops after reading byte
   16,777,217 with `runtime_lookup_bytes`, within two seconds and 128 MiB. A
-  direct lookup-builder source of 16 MiB plus one rejects from its initial
-  `fstat()` before hashing or staging, preserves its prefix/suffix and size, and
-  leaves no temporary artifact. A same-size in-place current-second replacement
+  same-size in-place current-second replacement
   with identical coarse `dev`/`ino`/size/mtime/ctime is rehashed and rejected in
   the next lookup batch without sleeping; one batch still hashes each selected
-  file only once. All three gates run under normal PHP and `php -n`;
+  file only once. Both gates run under normal PHP and `php -n`;
 - one document with exactly 4,096 distinct terms is written with all 4,096
   terms and postings, while 4,097 terms are rejected before SQL;
 - eighty distinct 252-byte source surfaces create exactly eighty `kind=1`
@@ -878,7 +852,7 @@ statements for every path, requires zero statements across all rejecting paths,
 removes and verifies every fixture row, and retains PHP peak allocation plus
 Linux `VmHWM`/`VmRSS`; each must remain within 128 MiB.
 
-Analyzer-pack validation, eager fixture loading, and indexed runtime lookup
+Analyzer-pack validation and indexed runtime lookup
 enforce the same maximum of twelve lemmas for one surface, including candidates
 split across shards. Twelve
 must round-trip. The streamed source compiler must turn thirteen or more source
@@ -886,53 +860,16 @@ lemmas into one explicit surface-to-itself ambiguity no-op and publish the
 source-pair count; it must never retain a lexical first-twelve subset. A raw or
 corrupt runtime containing candidate thirteen must fail validation and lookup
 rather than disappear or create a thirteenth query alternative. Optional Jieba
-segmentation preserves exact dictionary matching when a run has more than 32
-distinct prefixes. A custom source is admitted only through explicit
-fixture-only construction; production custom dictionaries are unsupported
-instead of being rebuilt and rehashed on each request. Construction streams at
-most 16 MiB through one opened generation while hashing and copying the exact
-bytes to a private snapshot; every later custom-dictionary scan uses that
-snapshot. Replacing the original in place with same-size bytes and a restored
-mtime therefore cannot alter the accepted analyzer, and destruction removes the
-snapshot. The shared stat-to-read growth gate stops on byte 16,777,217 even when
-the initial `fstat()` reports one byte. A fixture builds one bounded
-range index and proves complete-cache admission in that one source scan;
-candidate prefix maps then populate lazily from indexed ranges, each at most
-once, without eviction. The pinned source uses its attested first-codepoint
-range index and never scans the complete dictionary during an analyzer
-invocation. The declared hard case is exactly 5,000 candidates sharing 1,333
-source offsets plus 32 other prefixes: it must
-finish within five seconds, add at most 16 MiB PHP/RSS, and remain below 128 MiB
-RSS. Candidate 5,001 must raise `jieba_dictionary_candidates` in that same
-single scan. Complete-cache admission accepts at most 350,000 candidates and
-8 MiB of candidate-word bytes. Accepted fixtures retain every loaded candidate
-row without eviction once its prefix range is loaded, so alternating prefixes
-never reread; rejected admission is permanent for that segmenter instance, so
-retrying cannot rescan the source. The shared source scanner accepts an exact
-8,192-byte dictionary row and rejects byte 8,193 with
-`jieba_dictionary_line_bytes`. A fresh 128 MiB
-process must also fill the complete accepted 16 MiB custom-dictionary envelope
-with one unterminated row and reject it during the first scan within one second,
-with at most 8 MiB additional PHP allocation and less than 128 MiB PHP/RSS.
-An exact 8-MiB candidate-word cache remains accepted; byte 8,388,609 raises
-`jieba_dictionary_candidates`, installs no partial cache, and remains a
-constant-work rejection on retry. Candidate 4,097 across two prefixes remains
-resident alongside the first 4,096 rather than causing eviction or a streaming
-fallback.
-A separate fresh 128 MiB process supplies exactly 32 prefixes with 5,000
-candidates each (160,000 rows in a 2,524,583-byte valid custom dictionary).
-It must preserve a five-character dictionary-only match in one scan within five
-seconds, add at most 24 MiB PHP allocation, retain all 160,000 candidates and
-their exact 1,280,007 candidate-word bytes, and remain below 128 MiB PHP/RSS.
-The pinned source digest and 5,071,852-byte
-size must remain unchanged.
+segmentation uses only the pinned runtime. It preserves exact dictionary
+matching for wide runs, reads attested indexed ranges, and never scans the
+complete dictionary during an analyzer invocation.
+The pinned source digest and size must match the
+[Jieba runtime manifest](../../components/full-text-search/resources/runtime/jieba/manifest.json).
 
 Synthetic dictionaries are not sufficient for the release boundary. CI
-initializes and attests gitlink
-`67fa2e36e72f69d9134b8a1037b83fbb070b9775`, its configured
-`https://github.com/fxsjy/jieba` URL, the 5,071,852-byte dictionary digest, and
-the 1,075-byte MIT license digest. The worst-case runner repeats that operation
-inside the detached current package worktree at
+initializes and attests the gitlink, upstream URL, dictionary, and MIT license
+against the identities in the Jieba runtime manifest. The worst-case runner
+repeats that operation inside the detached current package worktree at
 `components/full-text-search/resources/sources/jieba`. A source-bound
 128 MiB process then analyzes **256 punctuation-separated, distinct CJK runs**
 both cold and after saturating the high-fanout cache. Each complete analysis
@@ -970,12 +907,11 @@ eviction, in under five seconds, with at most 64 MiB PHP peak and less than
 finish within 15 seconds under a 24 MiB PHP/RSS delta, remain below 128 MiB RSS,
 and perform zero dictionary scans and zero indexed range reads. The committed
 lookup is deterministically rebuilt and byte-compared from the pinned source
-under a 128 MiB/60-second process ceiling. It is exactly
-329,972 bytes, digest
-`4c979fd244e59b8343c2e584dbd5ba062deb1f836b8ae9ca2b56b54f130b9046`,
-with 11,783 source ranges. The production ZIP must contain exactly that lookup,
-the pinned dictionary, and its license under the curated runtime path; it must
-contain no raw Jieba checkout. A fresh process extracted from the ZIP must make
+under a 128 MiB/60-second process ceiling. Its size, digest, and source-range
+count must match the Jieba runtime manifest. The production ZIP must contain
+exactly that lookup, the pinned dictionary, and its license under the curated
+runtime path; it must contain no raw Jieba checkout. A fresh process extracted
+from the ZIP must make
 `from_pack_option(true, 'zh')` select that runtime source and lookup with zero
 full-source hash scans before real segmentation succeeds.
 
@@ -1010,17 +946,21 @@ memory after earlier adversaries have raised that process high-water mark.
 Twenty additional posts carry exactly 1.9 MB of canonical source each. Their
 padding is valid ignored HTML comment content, so the analyzer sees one bounded
 visible token rather than a forbidden lexical run. Indexing must accept all
-twenty. `relational-fts-max-valid-setup-v2` binds that setup to the source,
-package, preliminary report, and one Linux process, and retains every worker
-pass's exact statement count, ordered byte/hash/role vectors, duration, and
-conservative PHP/`VmHWM` attribution. Setup runs in one fresh phase process:
-PHP's peak counter is reset before each worker pass, while Linux `VmHWM` remains
-a conservative lifetime high-water mark. The retained aggregate peak must
-dominate every per-pass peak. Housekeeping passes may acknowledge older durable
-work before the target rows progress; the aggregate must still index all twenty
-rows in at most 100 passes. Every pass executes at most 20 recognized statements
-with no statement above 4 MiB, finishes within 30 seconds,
-add at most 32 MiB PHP and RSS, and remain below 128 MiB absolute PHP and RSS.
+twenty. `relational-fts-max-valid-setup-v3` binds that setup to the source,
+package, preliminary report, and distinct Linux seed/worker process identities.
+Source construction finishes in the seed process. The worker checks the exact
+ID, byte-count, and source-hash handoff against the database before consuming
+it, then releases that validation state before enqueueing and measuring work.
+Every worker pass retains its exact statement count, ordered byte/hash/role
+vectors, duration, PHP peak delta, and conservative Linux RSS peak delta. PHP's
+peak counter is reset before each pass. Linux attribution remains `VmHWM` after
+minus live `VmRSS` before in the fresh worker process, never high-water mark
+minus an older high-water mark. The retained aggregate peak must dominate every
+per-pass peak. Housekeeping passes may acknowledge older durable work before
+the target rows progress; the aggregate must still index all twenty rows in at
+most 100 passes. Every pass executes at most 20 recognized statements and emits
+no statement above 4 MiB. Those passes finish within 30 seconds and
+add at most 32 MiB PHP and RSS while remaining below 128 MiB absolute PHP and RSS.
 The one enqueue is at most 1 MiB and five seconds. Fresh-process front-end
 cursor traversal must then return every complete, hash-identical body without
 truncation while respecting the 4-MiB hydration transport bound. Its v2
@@ -1037,7 +977,8 @@ on all ten pages, so final validation independently reconstructs all twenty
   Performance Schema current/global statement history. Account, host, user,
   connection-attribute, stage, transaction, and wait histories are disabled
   because no acceptance check reads them;
-- WordPress/PHP: 1 CPU, 512 MiB container, no swap, 128 MiB PHP memory;
+- WordPress/PHP: 1 CPU, 512 MiB container, no swap, 128 MiB PHP memory, and
+  Apache prefork capped at eight request workers with one to two spare children;
 - a persistent database volume, never tmpfs;
 - source-bound direct-install ZIP, image digests, corpus manifest hash, database
   variables, and effective cgroup limits in evidence.
@@ -1081,11 +1022,13 @@ schema because its own fields did not change.
 The runner also records database usage, cumulative peak, limit events, OOM
 events, and OOM kills after the isolated maximum replacement frontier, after
 the forced rebuild, immediately before all 40 planned cold-cache database
-restarts (four cases × ten samples), and once after the final measured
-workload. Both phase checkpoints precede database restarts so later workloads
-do not inherit process and page-cache pressure from earlier write-heavy work.
+restarts (four cases × ten samples), before the cold restart that isolates the
+populated scope-index DDL proof, and once after the final measured workload.
+Each restart boundary has a preceding checkpoint so later workloads do not
+inherit process and page-cache pressure from earlier write-heavy work without
+first retaining that segment's cumulative counters.
 Together with the pre-corpus sample, the finalizer requires the
-exact ordered 44-checkpoint inventory;
+exact ordered 45-checkpoint inventory;
 deleting or reordering one checkpoint fails. A restart therefore cannot erase the preceding
 cgroup segment's high-water mark or failure counters.
 cgroup v2 reads `memory.current`, `memory.peak`, and `memory.events`; cgroup v1
@@ -1106,12 +1049,24 @@ Because that container is never restarted, its final cumulative high-water
 mark is the whole measured-workload peak. It must remain within the hard 512-MiB/no-swap
 limit with exact remaining headroom and zero limit, OOM, and OOM-kill events at
 both checkpoints. This covers Apache and every simultaneous `docker exec` PHP
-worker in the persistent service. Ephemeral WP-CLI containers are separate and
-remain fail-closed through their process exit and PHP limits. The 128-MiB PHP
+writer in the persistent service. Ephemeral WP-CLI and HTTP load-generator
+containers are separate and remain fail-closed through their process exit and
+PHP limits. The 128-MiB PHP
 limit is a per-process allocator ceiling, not a claim that aggregate container
 RSS is below 128 MiB; no tighter cache-sensitive WordPress-container peak is
 invented. The final checkpoint covers all measured workloads and precedes the
 report-assembly PHP process, which still cannot publish PASS if it fails.
+The eight REST clients use a source-hashed standalone cURL harness in separate
+ephemeral containers on the same Docker network, so client memory is not
+misreported as server memory and only Apache loads WordPress for reader
+requests. Each artifact retains its own PHP and RSS peaks. The two writers
+still load the production queue and indexing runtime in independent processes
+inside the persistent server cgroup.
+The runner compares the mounted prefork configuration byte-for-byte after
+startup. Its eight-worker maximum serves every measured reader concurrently,
+while one to two spare children replace Apache's default five-to-ten idle
+children instead of spending the low-resource server budget on unused PHP
+runtimes.
 
 Finalization revalidates the complete raw image/cgroup artifact, including its
 empty failure list. A dirty local smoke is explicitly marked
@@ -1147,6 +1102,12 @@ seconds so the measured intersection of all ten workers must still be at least
 reader must remain on its frozen result oracle. Each writer must acquire the
 real lease in at least one batch, process work, and finish with the exact last
 canonical excerpt, indexed timestamp/state, and no pending assigned work.
+An epoch change between the plan and rank statements intentionally returns the
+typed `wp_fts_search_unavailable` 503 rather than a mixed publication snapshot.
+Each standalone client may retry only that exact response three times. It
+records every HTTP attempt, each completed sample includes its retry count and
+full end-to-end latency, terminal errors remain zero, and aggregate publication
+retries may not exceed the number of completed logical requests.
 Every process records its own elapsed time plus start, finish, overlap, samples,
 and progress; the
 finalizer rejects a short, non-overlapping, incomplete, or zero-progress
@@ -1179,7 +1140,9 @@ conditioned cold samples uses the same formula and absolute gates in its own
 source-bound process, with an exact forty-file and forty-process inventory.
 The ten-page maximum-valid front-end traversal likewise uses its complete fresh
 process lifetime, records the raw before/after values, and is self-hashed and
-source-bound. Long-lived dependency-LOB and populated scope-index-repair
+source-bound. Its two complete 1.9-MiB rows require at most 24 MiB PHP/RSS
+growth while retaining the same 128-MiB absolute caps. Long-lived
+dependency-LOB and populated scope-index-repair
 measurements cannot reset Linux high water, so they deliberately use the same
 conservative `VmHWM`-after minus `VmRSS`-before attribution plus the positive
 128 MiB absolute ceiling.
@@ -1226,7 +1189,8 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | cold maximum: valid 12-group OR+prefix | <=4,000 ms |
 | concurrent mixed HTTP p95 / p99 | <=1,000 / <=1,500 ms |
 | concurrent errors, timeouts, wrong result sets | 0 |
-| concurrent p95 degradation | <=2× idle HTTP |
+| concurrent typed publication retries | <= logical requests; <=3 per request |
+| concurrent p95 degradation | <=16× idle HTTP |
 | plugin-owned search statements | <=3; impossible AND <=1 |
 | missing-table request on every public adapter | exactly 1 failed plan and 0 rank/hydrate; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 total plugin-owned statements; unhealthy/latch/single-event repair state present before harness restoration |
 | injected plan / rank / hydration database failure | exact ordered plan / plan+rank / plan+rank+hydrate shape with only the final statement failing; no later search or core `LIKE`; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 / <=6 / <=7 total plugin-owned statements; exact capability/Health/cron restoration between requests |
@@ -1238,15 +1202,14 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | one requested identity with 4,096 unrelated dictionary identities | exactly 1 plan row; `term_identity` access |
 | deleted-identity stale cursor statements | exactly 1 plan / 0 rank / 0 hydrate |
 | injected non-transactional engine | rejected; 1 drop; restored InnoDB; 1 bounded global-corpus recovery scope (harness-only state restoration is fixture cleanup) |
-| authoritative search PHP allocation, live RSS, PHP peak delta, and Linux `VmHWM`-after minus `VmRSS`-before | each <=16 MiB in every one of 13 fresh case processes, all 40 cold processes, and the maximum-valid front-end process |
+| authoritative search PHP allocation, live RSS, PHP peak delta, and Linux `VmHWM`-after minus `VmRSS`-before | each <=16 MiB in every one of 13 fresh case processes and all 40 cold processes; <=24 MiB for the two-row maximum-valid canonical page |
 | PHP peak and absolute Linux `VmHWM` | each positive and <=128 MiB in those source-bound processes |
 | twenty 1.9-MiB maximum-valid setup rows | one <=1-MiB/5-second enqueue; every worker pass <=20 recognized statements, <=4-MiB SQL, <=30 seconds, <=32-MiB PHP/RSS delta, and <=128-MiB absolute PHP/RSS |
 | 100k nested tags / 1.8 MiB language attribute | typed rejection; 0 SQL; <=1 second; <=16 MiB PHP allocation delta; <=128 MiB RSS |
 | exact 20k markup tokens x 256 depth | 89,490-byte/0-occurrence and 99,235-byte/9,745-occurrence documents preserved; each <=2 seconds; <=16 MiB PHP allocation delta; <=128 MiB RSS |
 | 20k one-byte inline text segments | typed 4-KiB lexical-run rejection; <=2 seconds; <=16 MiB PHP allocation delta; <=128 MiB RSS; exact 4,096-byte run preserved |
 | 1.5 MiB / 250k encoded-word metadata source | typed occurrence rejection; <=2 seconds; <=16 MiB PHP allocation delta; <=128 MiB RSS; exact 20,000-byte sidecar preserved |
-| exact 8,388,608-byte / 32,768-row lemma runtime | unindexed non-fixture construction rejects before token lookup with 0 hashes and 0 payload reads; indexed equivalent auto-shards into 2 files / 512 blocks, preserves 4,096 document morphologies with 2 opens / 64 reads / 1 MiB decoded and twelve query groups with 2 opens / 12 reads / 192 KiB decoded; 253,603 attested bytes; reject <=1 second; indexed proof <=5 seconds; <=128 MiB PHP/RSS |
-| aggregate eager-eligible fixture packs, normal PHP and `php -n` | exact 50,000 retained rows totaling 8,388,608 decoded bytes construct 32 pack-specific morphologies; row 50,001 raises `configured_eager_fixture_rows` before an earlier corrupt digest; two-manifest plain/gzip pairs accept exact 8 MiB through pipeline and public status paths while decoded byte 8,388,609 raises `configured_eager_fixture_bytes`; duplicate aliases are charged once; zero lookup-header/indexed-payload I/O; <=5 seconds / <=32 MiB PHP delta / <=128 MiB PHP/RSS |
+| exact 8,388,608-byte / 32,768-row lemma runtime | importer auto-shards into 2 files / 512 blocks, preserves 4,096 document morphologies with 2 opens / 64 reads / 1 MiB decoded and twelve query groups with 2 opens / 12 reads / 192 KiB decoded; 253,603 attested bytes; <=5 seconds; <=128 MiB PHP/RSS |
 | compressed lemma shard expanding beyond 180 MiB without a sidecar | structural construction rejection; 0 payload hashes/reads; expansion never attempted; <=128 MiB PHP/RSS |
 | 32-MiB plain/gzip lemma source line through four importers | all 8 paths reject at 64 KiB before manifest publication; each four-importer child <=10 seconds / <=32 MiB PHP peak / <=128 MiB RSS |
 | original lemma source envelopes, all four importers, normal PHP and `php -n` | 64-KiB line / 64-MiB physical / 512-MiB decoded / 8,000,000-line exact boundaries accepted; every max+1 rejects without partial output; <=5 / 10 / 10 / 90 seconds; <=32 MiB PHP / <=128 MiB RSS |
@@ -1259,25 +1222,30 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | 300,000 high-entropy generic/PoliMorf rows | typed 16-MiB physical pack rejection; no manifest or partial output; each child <=15 seconds / <=128 MiB PHP/RSS |
 | CoNLL-U / UniMorph recursive source and staging maxima | 256 files / 8 KiB paths / depth 8 accepted; exact-path manifests are 60,009 / 59,973 bytes beneath the 64-KiB runtime read bound; every max+1 and symlink escape rejects before staging/hash; 1,250,000 rows and 64 MiB staging accepted, next row/byte rejects and cleans; <=128 MiB PHP/RSS |
 | sparse 140-MiB audit manifest, normal PHP and `php -n` | normal exit with `invalid_pack`; bounded 64-KiB read; 16 MiB PHP peak; recursive manifest/entry/path/depth max+1 and symlink escapes bounded |
-| unindexed fixture row 50,001 / decoded byte 8,388,609 | rejected before manifest publication; no partial output; error directs to indexed gzip; combined child <=15 seconds / <=128 MiB PHP/RSS |
 | 64-shard lemma manifest | missing/overlapping/out-of-order/unnormalized ranges reject before runtime path resolution; first/middle/last each select exactly 1 indexed shard and decode at most 1 bounded block; gap miss opens 0; normal and no-extension processes each <=2 seconds, <=32 MiB PHP allocation delta, <=128 MiB RSS |
 | exact 128-file configured lemma aggregate | 32 language-scoped fields preserve 4,096 morphologies; 128 opens / 4,096 reads / 1,548,588 compressed bytes / 64 MiB decoded; 256 current-second hashes / 2,056,748 bytes; <=10 seconds / <=128 MiB PHP/RSS |
 | third distinct 64-file physical pack copy | two copies / 128 files accepted; third declares 192 and raises `configured_pack_metadata` before lookup-header or payload I/O; normal PHP and `php -n` |
-| stat-to-read lemma file growth | reported size 1; attestation stops after reading byte 16,777,217 with `runtime_lookup_bytes`; direct 16-MiB+1 builder source rejects before hashing/staging and remains unchanged; current-second same-stat replacement is rehashed next batch; normal PHP and `php -n` |
+| stat-to-read lemma file growth | reported size 1; attestation stops after reading byte 16,777,217 with `runtime_lookup_bytes`; current-second same-stat replacement is rehashed next batch; normal PHP and `php -n` |
 | worker throughput | >=20 documents/second |
 | 1-100-document worker batch | <=20 total `$wpdb` statements including transaction/lease control; <=15 data statements; exactly acquire/release plus `START TRANSACTION`/`COMMIT` for a successful changed-document batch |
 | mixed maximum document/scope collision | exactly 100 changed documents and <=20 complete worker statements on each document turn; each reserved scope turn <=20 complete statements |
 | composed maximum worker and cron state | exactly 15 indexing/data statements and <=20 total statements; exactly 1 scheduling-control write with no event and with a later event |
+| terminal corpus-completion controls | <=2 option-cache reloads; <=20 total worker statements |
 | 50,000-posting writer boundary | 1 flat posting `VALUES` INSERT; 8,192 identities; executes on both supported databases |
 | 50,001-posting / 8,193-identity boundaries | typed 49,152+849 / 8,192+1 splits before SQL |
 | MySQL/MariaDB maximum-width 8,192-identity resolver | 32-byte language + 255-byte raw terms; 1 dictionary UPSERT + 1 resolver, each <=4 MiB; 8,192 rows sent; <=65,536 rows examined; 0 disk temporary tables |
 | SQLite maximum-width writer transport | 8,192 identities reject permanently before SQL; exact `wp_` fixture boundary is 7,098 accepted / 7,099 rejected; every accepted prefix uses 1 dictionary UPSERT + 1 resolver, each <=4 MiB; 100-document/8,192-identity preflight visits each identity once under 128 MiB; maximum accepted execution also passes with 60 MiB retained suite state under 128 MiB |
 | largest worker statement / transaction | <=4 MiB / <=5 seconds |
+| long-lived final drain process | <=160 MiB absolute RSS under the 128 MiB PHP allocator limit; fresh worker boundary processes remain <=128 MiB RSS |
 | FTS data+index bytes | <=12 KiB/eligible post in 50k/100k; <=24 KiB in the 2k diagnostic with the same fixed dense fixtures; <=1.2 GiB total |
 | pending post/scope work / terminal rows | 0 / no terminal state |
 | durable search-epoch metadata rows | exactly 1 singleton |
 | hot-path physical schema statements | 0 |
-| worker schema-inspection / repair statements | 0 / 0 |
+| selective scope-page schema reads / repair statements | exactly 1 named-index metadata read / 0; all other worker schema inspection is 0 |
+
+The relative concurrency ceiling is twice the fixed eight-reader count because
+all eight readers and both writers share one CPU. It does not replace the
+absolute 1,000/1,500-ms p95/p99 limits or permit a request error.
 
 At 50k, warm p95 limits are 300 ms OR, 1,000 ms valid 12-group OR+prefix,
 100 ms AND, and 300 ms prefix; its valid 12-group p99 limit is 1,500 ms. All
@@ -1441,7 +1409,7 @@ The captured plans and metrics must also prove:
   the prefix, scans that range once, and performs only page-independent
   `(post_id,term_id)` probes for the common exact group. Its complete public
   search remains exactly three statements, examines at most 2,048 rows, and
-  must contain no materialized scan of the common exact posting list;
+  must contain no materialized scan of the common exact posting range;
 - common OR examines no more than 1.5× summed document frequencies plus 100k
   visibility/document probes (520k for the defined corpus);
 - prefix examines no more than 350k dictionary, posting, and visibility rows and
@@ -1468,11 +1436,13 @@ must use the declared work indexes without a production-table full scan.
 
 The statement and five-second transaction gates are measured on an intentionally
 changed batch, not whatever queue happens to remain after concurrency. After
-draining prior work, the proof selects the 100 largest public corpus sources,
-mutates their canonical excerpts, records all pre-write hashes, enqueues them in
-one statement, and runs exactly one 100-document worker pass. That pass must
-report 100 attempted, processed, and analyzed documents, zero unchanged
-documents and failures, 100 rewritten hashes, and an empty queue.
+draining prior work, the proof selects the 100 smallest public corpus sources
+to isolate the document-count ceiling from the separately measured aggregate
+posting and term ceilings. It mutates their canonical excerpts, records all
+pre-write hashes, enqueues them in one statement, and runs exactly one
+100-document worker pass. That pass must report 100 attempted, processed, and
+analyzed documents, zero unchanged documents and failures, 100 rewritten
+hashes, and an empty queue.
 
 That isolated batch is not allowed to hide composition cost. The drain then
 builds two real corpus-scope collisions with **100** newly changed direct documents,
@@ -1725,9 +1695,10 @@ preservation of a completed targeted scope, and zero non-epoch metadata rows
 after twenty exact requests. The worker commit must leave the canonical key
 absent and the content searchable. On both engines, captured production SQL
 must contain exactly one marked acknowledgement inside the writer-owned
-transaction: `START TRANSACTION`, bounded writes, the singleton epoch UPSERT,
-one generation/token-CAS `DELETE` covering only the canonical job key, then
-`COMMIT`. The acknowledgement must not join or delete the writer lease; the
+transaction: `START TRANSACTION`, bounded writes, one generation/token-CAS
+`DELETE` covering only the canonical job key, the singleton epoch UPSERT, then
+`COMMIT`. The queue-row-first order matches foreground enqueue and prevents an
+inverse work-row/epoch lock cycle. The acknowledgement must not join or delete the writer lease; the
 same exact lease remains owned through `COMMIT` and is deleted once afterward
 by a CAS on both its option name and serialized payload.
 `relational-fts-mutation-generation-cas-v4` also retains the complete ordered
@@ -1754,18 +1725,15 @@ claims are measured through real `wp_update_post()`, `update_post_meta()`, and
 `wp_update_term()` calls, not direct invocations of plugin callbacks.
 
 Relational document mutation has one source of truth: the bounded batch writer.
-The four public single-document `WP_FTS_Indexer` mutation methods are exercised
-**100 times each (400 calls total)** with deliberately invalid and oversized
-inputs. Every call must throw the exact `LogicException` message `Set-oriented
-storage mutations must use the bounded batch writer.` before post extraction,
-option callbacks, analyzer signatures/content, storage reads, or wpdb. The
-production storage class must not expose the former `replace_doc_postings()`,
-`put_doc()`, `put_doc_metadata()`, or `delete_doc()` methods at all. The proof
-requires zero returned calls, zero wrong exceptions, zero callbacks, and zero
-SQL; `replace_prepared_documents()` remains the sole relational document
-mutation boundary.
+`WP_FTS_Indexer` is preparation-only. It exposes field preparation, post source
+preparation, and source analysis, but no storage mutation method. An analyzed
+document has exactly six fields: `doc_id`, `primary_lang`, `content_hash`,
+`snippet_text`, `term_frequencies`, and `surface_frequencies`.
+`replace_prepared_documents()` is the sole relational document mutation
+boundary. Invalid IDs, non-canonical languages, malformed hashes, extra or
+missing payload fields, and oversized values must fail before storage SQL.
 
-Preparation is separately pure. The real relational storage receives **100
+Preparation is separately pure. The indexer receives **100
 calls for each of eight missing/invalid authority shapes (800 total)** across
 `prepare_post()` and `prepare_post_source()`. Missing or non-array `terms` or
 `custom_fields` must throw the exact authority `LogicException` before an
@@ -1776,18 +1744,13 @@ caller supplies no key option, fingerprint the analyzer exactly 100 times,
 perform content analysis zero times, and perform zero WordPress dependency
 probes or SQL.
 
-Dynamic rendering is not part of that bounded relational preparation path.
-Six `prepare_post*` shapes enable blocks, shortcodes, or a render callback 100
-times each. All **600** must throw
-`WP_FTS_Analysis_Limit_Exceeded(dynamic_rendering_not_set_oriented)` with the
-stable explanatory message before the extractor, `do_blocks()`, shortcode,
-render callback, analyzer, or SQL runs. Static `post_content` and precomputed
-attached fields retain the capability without executing arbitrary application
-code inside the worker. The runtime analyzer likewise installs no default
-document/query provider resolver: explicit language, detection, and the site
-default remain, while hostile metadata and WPML hooks stay at zero across real
-content and query analysis. Explicit caller-owned resolver callbacks remain an
-extension boundary rather than hidden plugin I/O.
+Post preparation reads the authoritative persisted source snapshot only. Saved
+`post_content` and attached taxonomy/custom-field values feed analysis, and the
+snippet source is bounded plain text from saved content. The runtime analyzer
+installs no default document/query provider resolver: explicit language,
+detection, and the site default remain, while hostile metadata and WPML hooks
+stay at zero across real content and query analysis. Explicit caller-owned
+resolver callbacks remain an extension boundary rather than hidden plugin I/O.
 
 A real claimed generation then proves that queue payload options cannot be
 lost between claim and preload. A custom-field key present only in
@@ -1919,13 +1882,16 @@ canonical `CREATE INDEX` statements, persist nonautoloaded ownership before the
 first, keep the schema version unchanged, and verify both definitions.
 Completed Performance Schema events must match both wpdb DDL hashes exactly.
 
-Four separate WordPress processes synchronize at those query boundaries. A
-canonical INSERT and UPDATE against each populated core clone must have a
-server-timer interval that overlaps the corresponding `CREATE INDEX`, affect
-exactly one row, and finish within 5,000 ms on both client and server clocks.
-Their reported Performance Schema lock time is retained rather than inferred
-from total DDL time. This measures whether synchronous repair blocks normal
-core writes; it does not describe a 60-second ceiling without concurrent work.
+One persistent lightweight core-table writer process synchronizes at both query
+boundaries and reuses its database connection for all four writes without
+bootstrapping a second WordPress runtime. A canonical INSERT and UPDATE
+against each populated core clone
+must have a server-timer interval that overlaps the corresponding `CREATE INDEX`,
+affect exactly one row, and finish
+within 5,000 ms on both client and server clocks. Their reported Performance
+Schema lock time is retained rather than inferred from total DDL time. This
+measures whether synchronous repair blocks normal core writes; it does not
+describe a 60-second ceiling without concurrent work.
 
 That populated repair has a 180,000 ms total client ceiling, a 120,000 ms
 per-statement and 180,000 ms aggregate database-server ceiling, at most 64 wpdb
@@ -1963,19 +1929,22 @@ lane before one selected post. The selected post and exhaustion are reached in
 two statements, not 1,002 raw-ID scans. The maximum shape selects eight types
 and four statuses: exactly 32 `wp_fts_type_status_id` branches, each capped at
 100 rows, feed an at-most-3,200-row derived relation and an outer 100-row limit.
-The proof traverses all 3,200 known matches in 32 data pages plus exhaustion;
-each page examines at most 6,600 rows, sorts at most 3,200, sends at most 100,
-uses no disk temporary table or merge pass, stays below 32 KiB, and completes
-within 250 ms per clock. A valid-looking 11-by-3 filter cross-product is rejected
-before SQL because it exceeds the 32-lane contract.
+The proof traverses all 3,200 known matches in 32 data pages plus exhaustion.
+MariaDB counts those bounded lane rows in the source, `UNION`, and grouping
+passes, plus the final output, so each page examines at most 9,700 rows. It
+sorts at most 3,200, sends at most 100, uses no disk temporary table or merge
+pass, stays below 32 KiB, and completes within 250 ms per clock. A valid-looking
+11-by-3 filter cross-product is rejected before SQL because it exceeds the 32-lane contract.
 
 Only corpus reconciliation is intentionally proportional to the complete
 corpus. Its fixture walks the entire 100,000-ineligible-post gap in 1,000 raw
 pages, then the eligible page and exhaustion. Each statement reads at most 100
 posts and 100 retained documents through separate PRIMARY keysets and merges an
-at-most-200-row derived relation. Per page it examines at most 400 rows, sorts
-at most 200, and creates no disk temporary table or merge pass. An in-memory
-temporary table or bounded outer filesort is allowed for this global merge.
+at-most-200-row derived relation. Counting both source keysets, both inner
+derived scans, the grouped relation, and final output, each statement
+examines at most 900 rows. It sorts at most 200 and creates no disk temporary table or merge
+pass. An in-memory temporary table or bounded outer filesort is allowed for
+this global merge.
 
 Every workflow issues exactly one tagged data selector per page. Immediately
 before a targeted or filtered selector it also validates the exact named index:
@@ -2284,14 +2253,17 @@ Each required lane performs the same fail-closed sequence:
    `relational-fts-transaction-crash-v3` accepts rollback and the subsequent
    search only when that exact SIGKILL receipt validates.
    Then run conditioned buffer-pool-cold samples,
-   release all ten ready processes into one shared eight-reader/two-writer
+   release eight lightweight REST clients and two production writer processes
+   into one shared eight-reader/two-writer
    window, and prove a >=60-second all-worker intersection plus independent
    progress and final-state parity for both writers. Then traverse the complete
    100,000-member targeted fixture, maximum 32-lane filtered fixture, and
    100,000-row corpus gap. Before those reads, run the actual current-schema repair
    against populated 100,001-post/300,001-relationship canonical InnoDB clones
-   while four synchronized INSERT/UPDATE processes measure write overlap and
-   blocking. Retain exact DDL timing, attribution, storage, memory, publication,
+   while one persistent lightweight writer process performs four synchronized
+   INSERT/UPDATE operations to measure write overlap and blocking. Retain
+   exact DDL timing,
+   attribution, storage, memory, publication,
    and readiness evidence. Prove visibility against a separate 100,000-row dirty backlog and a
    51,200,000-row relationship table that plan/rank must never reference; exercise
    unchanged work plus the intentionally changed largest-source worker batch.

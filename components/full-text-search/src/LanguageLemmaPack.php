@@ -4,8 +4,8 @@ declare(strict_types=1);
 /**
  * Opt-in dictionary lemmatizer backed by a validated local analyzer pack.
  *
- * The adapter consumes normalized surface-to-lemma runtime rows. The legacy
- * `stem()` API still no-ops unsupported language partitions, ambiguous
+ * The adapter consumes normalized surface-to-lemma runtime rows. `stem()`
+ * no-ops unsupported language partitions, ambiguous
  * surfaces, and missing forms, while `analyze()` exposes all pack-backed lemma
  * candidates for callers that can treat them as alternatives.
  */
@@ -13,8 +13,6 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
 {
     private const MAX_CACHED_LOOKUPS = 512;
 
-    /** @var array<string,string[]> */
-    private array $lemmasBySurface = [];
     /** @var array<string,string[]> */
     private array $lookupCache = [];
     /** @var string[] */
@@ -28,42 +26,24 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         'bytes_loaded' => 0,
         'modes' => [],
     ];
-    private bool $lazy;
     private string $indexSignature;
     private string $packLanguage;
     private int $runtimeFileCount;
     private int $lookupBlockCount;
-    private int $runtimeLookupBytes;
-    private int $eagerRuntimeRows;
-    private int $eagerRuntimeBytes;
 
     /**
-     * @param array<string,mixed> $validation Result from WP_FTS_AnalyzerPackValidator::validate().
+     * @param array<string,mixed> $validation Result from WP_FTS_AnalyzerPackValidator::validate_metadata().
      */
     private function __construct(
         private array $validation,
-        bool $lazy,
         private WP_FTS_AnalyzerPackValidator $validator
     )
     {
-        $this->lazy = $lazy;
         $this->packLanguage = self::base_language((string) $validation['manifest']['language']);
         $this->runtimeFileCount = count($validation['runtime_files']);
-        $this->runtimeLookupBytes = (int) ($validation['runtime_lookup_bytes'] ?? 0);
-        $this->eagerRuntimeRows = $lazy ? 0 : (int) ($validation['runtime_rows'] ?? 0);
-        $this->eagerRuntimeBytes = $lazy ? 0 : (int) ($validation['runtime_decoded_bytes'] ?? 0);
         $this->lookupBlockCount = 0;
         foreach ($validation['runtime_files'] as $file) {
-            $this->lookupBlockCount += isset($file['lookup']['blocks']) && is_array($file['lookup']['blocks'])
-                ? count($file['lookup']['blocks'])
-                : 0;
-        }
-        if ($lazy) {
-            self::assert_indexed_runtime_files($validation);
-        } else {
-            if ($validation['rows'] !== []) {
-                throw new LogicException('Eager validation rows must be transferred before pack construction.');
-            }
+            $this->lookupBlockCount += count($file['lookup']['blocks']);
         }
 
         $this->indexSignature = $this->build_index_signature($validation);
@@ -73,7 +53,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
      * Load a lemmatizer from one manifest file.
      *
      * A configured admission must have preflighted this physical manifest. It
-     * pins the manifest generation and owns aggregate eager-map accounting.
+     * pins the manifest generation and admits the indexed resource envelope.
      */
     public static function from_manifest_file(
         string $manifestPath,
@@ -81,95 +61,38 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         ?string $expectedLanguage = null,
         ?WP_FTS_ConfiguredLemmaPackAdmission $admission = null
     ): self {
-        WP_FTS_Analyzer_Config_Limits::assert_path($manifestPath, 'Lemma-pack manifest path');
-        if ($expectedLanguage !== null && strlen($expectedLanguage) > WP_FTS_Analyzer_Config_Limits::MAX_LANGUAGE_BYTES) {
-            throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-                'language_bytes',
-                'Expected lemma-pack language exceeds the 64-byte limit.'
-            );
+        if ($manifestPath === '' || trim($manifestPath) !== $manifestPath) {
+            throw new InvalidArgumentException('Lemma-pack manifest path must be an unpadded non-empty string.');
         }
+        WP_FTS_Analyzer_Config_Limits::assert_path($manifestPath, 'Lemma-pack manifest path');
+        $expectedLanguage = $expectedLanguage === null
+            ? null
+            : WP_FTS_TermNamespace::parse_language_tag($expectedLanguage);
         $validator ??= new WP_FTS_AnalyzerPackValidator();
         $expectedManifestSha256 = $admission?->expected_manifest_sha256($manifestPath);
         $metadata = $validator->validate_metadata($manifestPath, false, $expectedManifestSha256);
         self::assert_expected_language($metadata, $expectedLanguage);
-        $eager = WP_FTS_AnalyzerPackValidator::manifest_can_use_eager_fixture_storage($metadata['manifest'])
-            && self::runtime_physical_bytes($metadata)
-                <= WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_BYTES
-                    + WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_FRAMING_BYTES;
-        if ($eager) {
-            $eagerRuntimeBytes = $admission !== null
-                ? $admission->reserve_eager_pack($manifestPath, (int) $metadata['runtime_rows'])
-                : WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_BYTES;
-            try {
-                // The caller may intentionally use a smaller collection cap for
-                // full-pack validation. The product's fixture-only eager boundary
-                // is independent of that diagnostic knob and also has a decoded
-                // byte ceiling, so use the contract limits for this one attempt.
-                $validation = (new WP_FTS_AnalyzerPackValidator(
-                    WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_ROWS
-                ))->validate(
-                    $manifestPath,
-                    true,
-                    $eagerRuntimeBytes,
-                    $expectedManifestSha256
-                );
-            } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
-                if ($error->reason_code !== 'eager_fixture_bytes') {
-                    throw $error;
-                }
-                if ($admission !== null) {
-                    WP_FTS_ConfiguredLemmaPackAdmission::throw_eager_runtime_bytes_exceeded();
-                }
-                $validation = null;
-            }
-            if (is_array($validation)) {
-                self::assert_expected_language($validation, $expectedLanguage);
-                $rows = $validation['rows'];
-                $validation['rows'] = [];
-                $pack = new self($validation, false, $validator);
-                $pack->build_eager_lookup($rows);
-                $admission?->consume_eager_pack($manifestPath, $pack);
 
-                return $pack;
-            }
-        }
-
-        return new self($metadata, true, $validator);
+        return new self($metadata, $validator);
     }
 
-    /**
-     * Try to load a lemmatizer from the public analyzer option shape.
-     *
-     * Missing or structurally invalid packs return null so callers can use the
-     * language's existing analyzer path. Runtime bytes are attested lazily;
-     * corruption discovered after construction fails closed instead of silently
-     * changing analyzer output under the pack's healthy index signature. An
-     * optional configured admission applies the same preflight pin and shared
-     * eager allowance as direct manifest construction.
-     */
+    /** Load an explicitly configured pack, or return null when it is disabled. */
     public static function from_pack_option(
         mixed $option,
         ?string $expectedLanguage = null,
-        ?string $defaultManifestPath = null,
         ?WP_FTS_ConfiguredLemmaPackAdmission $admission = null
     ): ?self {
-        $manifestPath = self::manifest_path_from_option($option, $defaultManifestPath);
+        $manifestPath = self::manifest_path_from_option($option);
         if ($manifestPath === null) {
             return null;
         }
 
-        try {
-            return self::from_manifest_file(
-                $manifestPath,
-                null,
-                $expectedLanguage,
-                $admission
-            );
-        } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
-            throw $error;
-        } catch (Throwable) {
-            return null;
-        }
+        return self::from_manifest_file(
+            $manifestPath,
+            null,
+            $expectedLanguage,
+            $admission
+        );
     }
 
     /**
@@ -177,6 +100,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
      */
     public function stem(string $term, string $language): string
     {
+        $language = WP_FTS_TermNamespace::parse_language_tag($language);
         if (self::base_language($language) !== $this->packLanguage) {
             return $term;
         }
@@ -269,6 +193,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         ?callable $acceptCandidate,
         ?callable $rejectAmbiguousSurface
     ): array {
+        $language = WP_FTS_TermNamespace::parse_language_tag($language);
         if (count($terms) > WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES || $maxAnalyses < 0) {
             throw new WP_FTS_Analysis_Limit_Exceeded(
                 'occurrences',
@@ -376,14 +301,6 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     }
 
     /**
-     * Expose the manifest language for tests and diagnostics.
-     */
-    public function language(): string
-    {
-        return (string) $this->validation['manifest']['language'];
-    }
-
-    /**
      * Expose the base manifest language used for runtime routing.
      */
     public function base_language_code(): string
@@ -399,14 +316,6 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         return (string) $this->validation['manifest']['pack_id'];
     }
 
-    /**
-     * Expose fixture-only status for tests and diagnostics.
-     */
-    public function is_fixture_only(): bool
-    {
-        return (bool) $this->validation['manifest']['fixture_only'];
-    }
-
     /** Number of runtime shards retained by this configured pack. */
     public function runtime_file_count(): int
     {
@@ -419,26 +328,8 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         return $this->lookupBlockCount;
     }
 
-    /** Physical runtime and sidecar bytes admitted for this pack. */
-    public function runtime_lookup_bytes(): int
-    {
-        return $this->runtimeLookupBytes;
-    }
-
-    /** Rows retained by this pack's eager map; lazy packs retain zero. */
-    public function eager_runtime_rows(): int
-    {
-        return $this->eagerRuntimeRows;
-    }
-
-    /** Decoded bytes retained by this pack's eager map; lazy packs retain zero. */
-    public function eager_runtime_bytes(): int
-    {
-        return $this->eagerRuntimeBytes;
-    }
-
     /**
-     * Expose the last lazy lookup shape for deterministic performance tests.
+     * Expose the last indexed lookup shape for deterministic performance tests.
      *
      * @return array{term:string,candidate_files:int,files_opened:int,lines_read:int,bytes_loaded:int,modes:string[]}
      */
@@ -456,44 +347,22 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     /**
      * Resolve the supported public option shapes without loading pack content.
      */
-    public static function manifest_path_from_option(mixed $option, ?string $defaultManifestPath = null): ?string
+    public static function manifest_path_from_option(mixed $option): ?string
     {
         WP_FTS_Analyzer_Config_Limits::assert_pack_option($option, 'Lemma-pack option');
-        if ($option === false || $option === null) {
+        if ($option === false) {
             return null;
         }
 
         if (is_string($option)) {
-            $option = trim($option);
-            if ($option === '' || in_array(strtolower($option), ['0', 'false', 'no', 'off'], true)) {
-                return null;
+            if ($option === '' || trim($option) !== $option) {
+                throw new InvalidArgumentException('Lemma-pack manifest path must be an unpadded non-empty string.');
             }
 
-            return is_dir($option) ? $option . DIRECTORY_SEPARATOR . 'manifest.json' : $option;
+            return $option;
         }
 
-        if ($option === true) {
-            if ($defaultManifestPath !== null) {
-                WP_FTS_Analyzer_Config_Limits::assert_path($defaultManifestPath, 'Default lemma-pack manifest path');
-            }
-            return $defaultManifestPath;
-        }
-
-        if (is_array($option)) {
-            foreach (['manifest', 'manifest_path', 'path'] as $key) {
-                if (!isset($option[$key]) || !is_scalar($option[$key])) {
-                    continue;
-                }
-                $path = trim((string) $option[$key]);
-                if ($path === '') {
-                    continue;
-                }
-
-                return is_dir($path) ? $path . DIRECTORY_SEPARATOR . 'manifest.json' : $path;
-            }
-        }
-
-        return null;
+        throw new InvalidArgumentException('Lemma-pack option must be an exact manifest path or false.');
     }
 
     /**
@@ -509,76 +378,6 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         $actual = self::base_language((string) $validation['manifest']['language']);
         if ($expected !== $actual) {
             throw new RuntimeException("Analyzer pack language {$actual} does not match requested language {$expected}.");
-        }
-    }
-
-    /**
-     * Reject obviously oversized fixture payloads before a full digest or gzip
-     * expansion. The small gzip framing allowance covers an incompressible
-     * decoded payload at the exact 8 MiB eager boundary.
-     *
-     * @param array<string,mixed> $validation
-     */
-    private static function runtime_physical_bytes(array $validation): int
-    {
-        $bytes = 0;
-        foreach ($validation['runtime_files'] as $file) {
-            $size = @filesize((string) $file['path']);
-            if (!is_int($size) || $size < 0) {
-                return PHP_INT_MAX;
-            }
-            $bytes += $size;
-            if (
-                $bytes > WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_BYTES
-                    + WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_FRAMING_BYTES
-            ) {
-                return $bytes;
-            }
-        }
-
-        return $bytes;
-    }
-
-    /**
-     * Non-eager packs must make every token lookup one bounded sidecar seek.
-     * Tiny fixture-only packs are the sole unindexed exception because their
-     * complete reviewed row set is loaded once during construction.
-     *
-     * @param array<string,mixed> $validation
-     */
-    private static function assert_indexed_runtime_files(array $validation): void
-    {
-        foreach ($validation['runtime_files'] as $relativePath => $file) {
-            if (isset($file['lookup']) && is_array($file['lookup'])) {
-                continue;
-            }
-
-            throw new RuntimeException(
-                "Non-eager lemma pack runtime shard {$relativePath} requires a validated lookup sidecar. "
-                . 'Only fixture-only packs with at most 50,000 rows and 8 MiB of decoded runtime data may use eager unindexed runtime data.'
-            );
-        }
-    }
-
-    /**
-     * Consume validator rows while constructing their retained eager map.
-     * Unsetting each transferred row prevents the largest accepted fixture
-     * from retaining two complete PHP-array representations at once.
-     *
-     * @param array<int,array{surface:string,lemma:string,file:string,line:int}> $rows
-     */
-    private function build_eager_lookup(array &$rows): void
-    {
-        foreach ($rows as $index => $row) {
-            $this->lemmasBySurface[$row['surface']][$row['lemma']] = true;
-            unset($rows[$index]);
-        }
-
-        foreach ($this->lemmasBySurface as $surface => $lemmas) {
-            $this->lemmasBySurface[$surface] = $this->ordered_lemmas_for_surface(
-                $surface,
-                array_keys($lemmas)
-            );
         }
     }
 
@@ -624,43 +423,12 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         int $maxAcceptedLemmas,
         ?callable $rejectSurface
     ): array {
-        if ($this->lazy) {
-            return $this->lookup_lazy_lemma_details_many(
-                $terms,
-                $acceptCandidate,
-                $maxAcceptedLemmas,
-                $rejectSurface
-            );
-        }
-
-        $details = [];
-        $accepted = 0;
-        foreach ($terms as $term) {
-            $allLemmas = $this->lemmasBySurface[$term] ?? [];
-            $lemmas = $acceptCandidate === null
-                ? $allLemmas
-                : array_values(array_filter(
-                    $allLemmas,
-                    static fn(string $lemma): bool => $acceptCandidate($lemma, $term) === true
-                ));
-            if ($rejectSurface !== null && $rejectSurface($term, count($allLemmas)) === true) {
-                $lemmas = [];
-            }
-            $accepted += count($lemmas);
-            if ($accepted > $maxAcceptedLemmas) {
-                throw new WP_FTS_Analysis_Limit_Exceeded(
-                    'occurrences',
-                    "FTS analysis exceeds its {$maxAcceptedLemmas}-occurrence limit."
-                );
-            }
-            $details[$term] = [
-                'lemmas' => $lemmas,
-                'lemma_count' => count($allLemmas),
-                'has_exact' => in_array($term, $allLemmas, true),
-            ];
-        }
-
-        return $details;
+        return $this->lookup_lemma_details_many(
+            $terms,
+            $acceptCandidate,
+            $maxAcceptedLemmas,
+            $rejectSurface
+        );
     }
 
     /**
@@ -670,7 +438,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
      * @param callable(string,string):bool|null $acceptCandidate
      * @return array<string,array{lemmas:string[],lemma_count:int,has_exact:bool}>
      */
-    private function lookup_lazy_lemma_details_many(
+    private function lookup_lemma_details_many(
         array $terms,
         ?callable $acceptCandidate,
         int $maxAcceptedLemmas,
@@ -842,7 +610,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     }
 
     /**
-     * @return array<int,array{path:string,rows:int,sha256:string,compression?:string,first_surface?:string,last_surface?:string,lookup?:array<string,mixed>}>
+     * @return array<int,array{path:string,rows:int,sha256:string,compression:string,first_surface?:string,last_surface?:string,lookup:array<string,mixed>}>
      */
     private function candidate_runtime_files(string $term): array
     {
@@ -901,10 +669,6 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         array $attestation
     ): array
     {
-        if (!isset($file['lookup']) || !is_array($file['lookup'])) {
-            throw new LogicException('A non-eager lemma pack reached lookup without its required sidecar.');
-        }
-
         $ioBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
         try {
             $result = WP_FTS_LemmaPackLookupIndex::lookup_many(
@@ -957,15 +721,15 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     /**
      * Deduplicate one physical runtime/sidecar pair inside a lookup batch.
      *
-     * @param array{path:string,sha256:string,lookup?:array{path:string,sha256:string}} $file
+     * @param array{path:string,sha256:string,lookup:array{path:string,sha256:string}} $file
      */
     private function runtime_file_identity(array $file): string
     {
         return hash('sha256', implode("\0", [
             $file['path'],
             strtolower($file['sha256']),
-            (string) ($file['lookup']['path'] ?? ''),
-            strtolower((string) ($file['lookup']['sha256'] ?? '')),
+            $file['lookup']['path'],
+            strtolower($file['lookup']['sha256']),
         ]));
     }
 
@@ -1008,9 +772,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
                 'sha256' => $file['sha256'],
                 'rows' => $file['rows'],
             ];
-            if (isset($file['compression'])) {
-                $runtime[$relativePath]['compression'] = $file['compression'];
-            }
+            $runtime[$relativePath]['compression'] = $file['compression'];
         }
         ksort($runtime, SORT_STRING);
 
@@ -1020,7 +782,6 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
             'pack_id' => (string) $validation['manifest']['pack_id'],
             'pack_version' => (string) $validation['manifest']['version'],
             'language' => (string) $validation['manifest']['language'],
-            'fixture_only' => (bool) $validation['manifest']['fixture_only'],
             'manifest_sha256' => (string) $validation['manifest_sha256'],
             'runtime_format' => (string) $validation['manifest']['runtime']['format'],
             'runtime' => $runtime,
@@ -1035,7 +796,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     private function stable_json(mixed $value): string
     {
         if (is_array($value)) {
-            if (array_keys($value) !== range(0, count($value) - 1)) {
+            if (!array_is_list($value)) {
                 ksort($value, SORT_STRING);
             }
             foreach ($value as $key => $child) {
@@ -1043,7 +804,10 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
             }
         }
 
-        return json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return json_encode(
+            $value,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
+        );
     }
 
     private function stable_json_value(mixed $value): mixed
@@ -1052,7 +816,7 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
             return $value;
         }
 
-        if (array_keys($value) !== range(0, count($value) - 1)) {
+        if (!array_is_list($value)) {
             ksort($value, SORT_STRING);
         }
         foreach ($value as $key => $child) {

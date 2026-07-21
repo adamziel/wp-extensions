@@ -3,8 +3,6 @@
     "pack_id": "pt-unimorph-por-fc2778e08e2d",
     "language": "pt",
     "version": "fc2778e08e2d-unimorph-v1",
-    "fixture_only": false,
-    "default_enabled": false,
     "capabilities": [
         "dictionary-lemmatizer",
         "ambiguous-form-noop",
@@ -134,14 +132,12 @@
     "provenance": {
         "importer": "indexer/tools/import-unimorph-lemma-pack.php",
         "importer_commit": "recorded-in-task-result",
-        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=pt --pack-id=pt-unimorph-por-fc2778e08e2d --version=fc2778e08e2d-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/por/blob/fc2778e08e2da476d9d2f27f15f218b1cbb25ad5/por --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=pt --pack-id=pt-unimorph-por-fc2778e08e2d --version=fc2778e08e2d-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/por/blob/fc2778e08e2da476d9d2f27f15f218b1cbb25ad5/por --license=CC-BY-SA-3.0 --attribution=<required-attribution>",
         "no_runtime_network_access": true,
         "no_full_third_party_dictionary_dump": false,
         "full_third_party_dictionary_dump_generated": true,
-        "generated_pack_default_enabled": false,
         "rows_per_file": 100000,
         "chunk_rows": 200000,
-        "runtime_compression": "gzip",
         "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
         "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
     }

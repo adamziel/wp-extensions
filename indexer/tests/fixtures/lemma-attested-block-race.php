@@ -182,7 +182,6 @@ function wp_fts_block_race_case(string $directory): array
     }
     $built = WP_FTS_LemmaPackLookupIndex::build(
         $runtime,
-        WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP,
         $sourceSha256,
         $lookup
     );

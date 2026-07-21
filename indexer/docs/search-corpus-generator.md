@@ -22,7 +22,7 @@ Current defaults:
 | `en` | `--english-docs` | README top routing set, bundled Snowball path, committed UniMorph analyzer pack. |
 | `ar` | `--per-language-docs` | README top routing set, bundled Snowball path, committed UniMorph analyzer pack. |
 | `bn` | `--per-language-docs` | README top routing set, baseline stemmer route, committed UniMorph analyzer pack. |
-| `ca` | `--per-language-docs` | Optional Snowball support through the verified Wamania-backed Catalan path. |
+| `ca` | `--per-language-docs` | Snowball support through the required, verified Wamania-backed Catalan path. |
 | `de` | `--per-language-docs` | README next-language set, committed UniMorph analyzer pack. |
 | `es` | `--per-language-docs` | README top routing set, bundled Snowball path, committed UniMorph analyzer pack. |
 | `fa` | `--per-language-docs` | README next-language set, committed UniMorph analyzer pack. |
@@ -61,7 +61,7 @@ Full requested corpus:
 
 ```sh
 php tools/generate-large-search-corpus.php \
-  --output=/home/claude/indexer/.cao/generated/search-corpus-v1 \
+  --output=/tmp/wp-fts-search-corpus-v1 \
   --seed=wp-fts-large-search-corpus-v1 \
   --english-docs=100000 \
   --per-language-docs=30000
@@ -79,4 +79,4 @@ php tools/generate-large-search-corpus.php \
 
 Use `--languages=...` to override the generated partitions. `--compression=auto`
 uses gzip when zlib is available and plain `.jsonl` when it is not. Use
-`--plain` for an explicit plain JSONL run.
+`--compression=plain` for an explicit plain JSONL run.

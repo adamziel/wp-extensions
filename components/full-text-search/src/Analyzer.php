@@ -17,6 +17,63 @@ final class WP_FTS_Analyzer
     // the complete difference between its 256 rows and the reported depth.
     private const HTML_PROCESSOR_DEPTH_OVERHEAD = 3;
     private const HTML_PROCESSOR_TOKEN_TYPE_BYTES = 64;
+    private const MAX_ANCESTOR_BOOST = 100.0;
+    private const CONSTRUCTOR_OPTION_KEYS = [
+        'skip_ancestors',
+        'boosts',
+        'stopwords',
+        'min_term_len',
+        'max_term_bytes',
+        'fold_diacritics',
+        'default_lang',
+        'document_lang',
+        'query_lang',
+        'enable_stemming',
+        'lemma_packs_by_lang',
+        'language_pipeline',
+        'stemmer',
+        'stemmers_by_lang',
+        'cjk_tokenizer',
+        'segmenter_packs_by_lang',
+        'token_normalizer',
+        'chinese_script_map',
+        'stopwords_by_lang',
+        'document_language_resolver',
+        'query_language_resolver',
+        'query_term_language_resolver',
+        'auto_detect_language',
+        'html_processor_factory',
+    ];
+    private const LANGUAGE_PIPELINE_OPTION_KEYS = [
+        'min_term_len',
+        'max_term_bytes',
+        'fold_diacritics',
+        'enable_stemming',
+        'lemma_packs_by_lang',
+        'stemmer',
+        'stemmers_by_lang',
+        'cjk_tokenizer',
+        'segmenter_packs_by_lang',
+        'token_normalizer',
+        'chinese_script_map',
+    ];
+    private const DOCUMENT_OPTION_KEYS = [
+        'document_lang',
+        'post_id',
+        '_default_document_lang',
+        '_include_document_surface',
+        '_max_document_occurrences',
+    ];
+    private const QUERY_OPTION_KEYS = [
+        'query_lang',
+        '_default_query_lang',
+        '_force_query_lang',
+        '_include_query_surface',
+        '_max_query_occurrences',
+    ];
+    private const DOCUMENT_FIELD_KEYS = ['name', 'text', 'html', 'boost'];
+    private const MAX_DOCUMENT_FIELDS = 32;
+    private const MAX_FIELD_NAME_BYTES = 191;
 
     /** @var array<string,bool> */
     private array $skipAncestors;
@@ -39,7 +96,7 @@ final class WP_FTS_Analyzer
     /** @var callable|null */
     private $queryLanguageResolver;
 
-    /** @var callable|null */
+    /** @var (callable(string,array<string,mixed>,string):?string)|null */
     private $queryTermLanguageResolver;
 
     private WP_FTS_LanguagePipeline $languagePipeline;
@@ -61,16 +118,15 @@ final class WP_FTS_Analyzer
      * - `document_language_resolver` and `query_language_resolver`: callables
      *   receiving the options array and returning a language candidate.
      * - `query_term_language_resolver`: deterministic per-query-token language
-     *   resolver. It may accept `($token)`, `($token, $options)`, or
-     *   `($token, $options, $defaultLang)`.
+     *   resolver receiving `($token, $options, $defaultLang)`.
      * - `auto_detect_language`: fill language gaps with deterministic script
-     *   and compact lexical evidence. Explicit language options, HTML language
+     *   and compact lexical signals. Explicit language options, HTML language
      *   attributes, and multilingual-plugin metadata still win.
      * - `cjk_tokenizer`: optional segmenter for one CJK script run; the
      *   built-in n-gram tokenizer remains the fallback.
-     * - `segmenter_packs_by_lang`: optional source-backed tokenizer packs such
-     *   as the Jieba-backed Chinese adapter. Missing or invalid packs fall back
-     *   to the built-in n-gram tokenizer.
+     * - `segmenter_packs_by_lang`: optional bundled tokenizer packs such as the
+     *   Jieba-backed Chinese adapter. An absent or false entry uses the built-in
+     *   n-gram tokenizer; a configured pack must load successfully.
      * - `html_processor_factory`: hook that returns a processor-like object for
      *   the given HTML.
      *
@@ -84,22 +140,19 @@ final class WP_FTS_Analyzer
      *   default_lang?:string,
      *   document_lang?:string,
      *   query_lang?:string,
-     *   namespace_terms?:bool,
      *   enable_stemming?:bool,
-     *   polish_stemming?:string,
-     *   lemma_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
+     *   lemma_packs_by_lang?:array<string,string|false>,
      *   language_pipeline?:WP_FTS_LanguagePipeline,
      *   stemmer?:WP_FTS_Stemmer|callable|null,
      *   stemmers_by_lang?:array<string,WP_FTS_Stemmer|callable|null>,
      *   cjk_tokenizer?:callable|null,
-     *   segmenter_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
+     *   segmenter_packs_by_lang?:array<string,bool>,
      *   token_normalizer?:callable|null,
-     *   chinese_script_map?:array<string,string>|array<string,array<string,string>>,
+     *   chinese_script_map?:array<string,array<string,string>>,
      *   stopwords_by_lang?:array<string,string[]>,
      *   document_language_resolver?:callable|null,
      *   query_language_resolver?:callable|null,
-     *   query_term_language_resolver?:callable|null,
-     *   language_detector?:WP_FTS_LanguageDetector|null,
+     *   query_term_language_resolver?:(callable(string,array<string,mixed>,string):?string)|null,
      *   auto_detect_language?:bool,
      *   html_processor_factory?:callable|null
      * } $options
@@ -107,6 +160,7 @@ final class WP_FTS_Analyzer
     public function __construct(array $options = [])
     {
         WP_FTS_Analyzer_Config_Limits::assert_analyzer_options($options, 'Analyzer options');
+        self::assertConstructorOptions($options);
         $skip = $options['skip_ancestors'] ?? [
             'SCRIPT',
             'STYLE',
@@ -134,38 +188,44 @@ final class WP_FTS_Analyzer
         ];
         $this->boosts = [];
         foreach ($boosts as $tag => $boost) {
-            $this->boosts[strtoupper((string) $tag)] = (float) $boost;
+            $this->boosts[strtoupper($tag)] = (float) $boost;
         }
 
         $this->htmlProcessorFactory = $options['html_processor_factory'] ?? null;
         $this->documentLanguageResolver = $options['document_language_resolver'] ?? null;
         $this->queryLanguageResolver = $options['query_language_resolver'] ?? null;
-        $termResolver = $options['query_term_language_resolver'] ?? null;
-        $this->queryTermLanguageResolver = is_callable($termResolver) ? $termResolver : null;
-        $this->autoDetectLanguage = (bool) ($options['auto_detect_language'] ?? true);
-        $detector = $options['language_detector'] ?? null;
+        $this->queryTermLanguageResolver = $options['query_term_language_resolver'] ?? null;
+        $this->autoDetectLanguage = $options['auto_detect_language'] ?? true;
         $this->languageDetector = $this->autoDetectLanguage
-            ? ($detector instanceof WP_FTS_LanguageDetector ? $detector : new WP_FTS_LanguageDetector())
+            ? new WP_FTS_LanguageDetector()
             : null;
-        $this->languagePipeline = $options['language_pipeline'] ?? new WP_FTS_LanguagePipeline([
-            'min_term_len' => (int) ($options['min_term_len'] ?? 2),
-            'max_term_bytes' => (int) ($options['max_term_bytes'] ?? 255),
-            'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
-            'namespace_terms' => (bool) ($options['namespace_terms'] ?? false),
-            'enable_stemming' => (bool) ($options['enable_stemming'] ?? true),
-            'polish_stemming' => (string) ($options['polish_stemming'] ?? 'conservative'),
-            'lemma_packs_by_lang' => $options['lemma_packs_by_lang'] ?? [],
-            'stemmer' => $options['stemmer'] ?? null,
-            'stemmers_by_lang' => $options['stemmers_by_lang'] ?? [],
-            'cjk_tokenizer' => $options['cjk_tokenizer'] ?? null,
-            'segmenter_packs_by_lang' => $options['segmenter_packs_by_lang'] ?? [],
-            'token_normalizer' => $options['token_normalizer'] ?? null,
-            'chinese_script_map' => $options['chinese_script_map'] ?? [],
-        ]);
+        if (array_key_exists('language_pipeline', $options)) {
+            $this->languagePipeline = $options['language_pipeline'];
+        } else {
+            $this->languagePipeline = new WP_FTS_LanguagePipeline([
+                'min_term_len' => $options['min_term_len'] ?? 2,
+                'max_term_bytes' => $options['max_term_bytes'] ?? 255,
+                'fold_diacritics' => $options['fold_diacritics'] ?? true,
+                'enable_stemming' => $options['enable_stemming'] ?? true,
+                'lemma_packs_by_lang' => $options['lemma_packs_by_lang'] ?? [],
+                'stemmer' => $options['stemmer'] ?? null,
+                'stemmers_by_lang' => $options['stemmers_by_lang'] ?? [],
+                'cjk_tokenizer' => $options['cjk_tokenizer'] ?? null,
+                'segmenter_packs_by_lang' => $options['segmenter_packs_by_lang'] ?? [],
+                'token_normalizer' => $options['token_normalizer'] ?? null,
+                'chinese_script_map' => $options['chinese_script_map'] ?? [],
+            ]);
+        }
 
-        $this->defaultLanguage = $this->canonicalLanguage($options['default_lang'] ?? null) ?? 'en';
-        $this->documentLanguage = $this->canonicalLanguage($options['document_lang'] ?? null);
-        $this->queryLanguage = $this->canonicalLanguage($options['query_lang'] ?? null);
+        $this->defaultLanguage = array_key_exists('default_lang', $options)
+            ? $this->requiredConstructorLanguage($options['default_lang'])
+            : 'en';
+        $this->documentLanguage = array_key_exists('document_lang', $options)
+            ? $this->requiredConstructorLanguage($options['document_lang'])
+            : null;
+        $this->queryLanguage = array_key_exists('query_lang', $options)
+            ? $this->requiredConstructorLanguage($options['query_lang'])
+            : null;
 
         $this->stopwords = [];
         $this->stopwordsByLang = [];
@@ -173,20 +233,17 @@ final class WP_FTS_Analyzer
         $stopwordTargets = [];
         foreach (($options['stopwords'] ?? []) as $word) {
             $stopwordSegments[] = [
-                'text' => (string) $word,
+                'text' => $word,
                 'language' => $this->defaultLanguage,
             ];
             $stopwordTargets[] = null;
         }
         foreach (($options['stopwords_by_lang'] ?? []) as $lang => $words) {
-            $canonical = $this->canonicalLanguage((string) $lang);
-            if ($canonical === null || !is_array($words)) {
-                continue;
-            }
+            $canonical = $this->requiredConstructorLanguage($lang);
 
             foreach ($words as $word) {
                 $stopwordSegments[] = [
-                    'text' => (string) $word,
+                    'text' => $word,
                     'language' => $canonical,
                 ];
                 $stopwordTargets[] = $canonical;
@@ -215,17 +272,18 @@ final class WP_FTS_Analyzer
      * `lang`/`xml:lang` attributes override the document language for their text
      * scope.
      *
-     * @param array{document_lang?:string,post_id?:int,_default_document_lang?:string,_include_document_surface?:bool} $options
+     * @param array{document_lang?:string,post_id?:int,_default_document_lang?:string,_include_document_surface?:bool,_max_document_occurrences?:int} $options
      * @return array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>
      *         Occurrences in document order. `weight` is the strongest boost
      *         inherited from ancestor tags, and `lang` is the term language.
      */
     public function analyze_content(string $html, array $options = []): array
     {
+        $this->assertDocumentOptions($options);
         WP_FTS_Analysis_Limits::assert_source_bytes($html);
         WP_FTS_Html_Text_Stream::assert_analysis_markup_limits($html);
         $maxOccurrences = $this->documentOccurrenceLimit($options);
-        $includeSurface = $this->truthyOption($options['_include_document_surface'] ?? false);
+        $includeSurface = $options['_include_document_surface'] ?? false;
         $this->assertLexicalWordBudget($html, $maxOccurrences);
         $tokens = [];
         $nextPosition = 0;
@@ -238,7 +296,7 @@ final class WP_FTS_Analyzer
                 $nextPosition
             );
             foreach ($terms as $term) {
-                if ($this->isStopword($term['term'], $term['lang'])) {
+                if ($term['term'] === '' || $this->isStopword($term['term'], $term['lang'])) {
                     continue;
                 }
 
@@ -267,17 +325,19 @@ final class WP_FTS_Analyzer
      * are known to be plain text, such as titles, excerpts, taxonomy labels, and
      * custom-field values.
      *
-     * @param array{document_lang?:string,post_id?:int,_default_document_lang?:string,_include_document_surface?:bool} $options
+     * @param array{document_lang?:string,post_id?:int,_default_document_lang?:string,_include_document_surface?:bool,_max_document_occurrences?:int} $options
      * @return array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>
      */
     public function analyze_plain_content(string $text, array $options = []): array
     {
+        $this->assertDocumentOptions($options);
         WP_FTS_Analysis_Limits::assert_source_bytes($text);
         $maxOccurrences = $this->documentOccurrenceLimit($options);
-        $includeSurface = $this->truthyOption($options['_include_document_surface'] ?? false);
+        $includeSurface = $options['_include_document_surface'] ?? false;
         $this->assertLexicalWordBudget($text, $maxOccurrences);
-        $lang = $this->resolveDocumentLanguage($options);
-        if ($this->shouldAutoDetectDocumentLanguage($options)) {
+        $resolution = $this->resolveDocumentLanguage($options);
+        $lang = $resolution['language'];
+        if ($this->shouldAutoDetectDocumentLanguage($resolution['authoritative'])) {
             $lang = $this->detectSegmentLanguage($text, $lang);
         }
         $nextPosition = 0;
@@ -287,7 +347,7 @@ final class WP_FTS_Analyzer
             $this->analyzeText($text, $lang, $includeSurface, $maxOccurrences),
             $nextPosition
         ) as $term) {
-            if ($this->isStopword($term['term'], $term['lang'])) {
+            if ($term['term'] === '' || $this->isStopword($term['term'], $term['lang'])) {
                 continue;
             }
 
@@ -316,12 +376,16 @@ final class WP_FTS_Analyzer
      * remain local to their original field.
      *
      * @param array<int,array{name:string,text:string,html?:string,boost:float}> $fields
-     * @param array<string,mixed> $options
+     * @param array{document_lang?:string,post_id?:int,_default_document_lang?:string,_include_document_surface?:bool,_max_document_occurrences?:int} $options
      * @return array<int,array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>>
      */
     public function analyze_document_fields(array $fields, array $options = []): array
     {
-        if (count($fields) > 32) {
+        $this->assertDocumentOptions($options);
+        if (!array_is_list($fields)) {
+            throw new InvalidArgumentException('FTS document fields must be a list.');
+        }
+        if (count($fields) > self::MAX_DOCUMENT_FIELDS) {
             throw new WP_FTS_Analysis_Limit_Exceeded(
                 'index_fields',
                 'FTS document analysis accepts at most 32 fields.'
@@ -330,7 +394,7 @@ final class WP_FTS_Analyzer
 
         $baseOptions = $options;
         $maxOccurrences = $this->documentOccurrenceLimit($baseOptions);
-        $includeSurface = $this->truthyOption($baseOptions['_include_document_surface'] ?? false);
+        $includeSurface = $baseOptions['_include_document_surface'] ?? false;
         $segments = [];
         $segmentFields = [];
         $segmentWeights = [];
@@ -338,15 +402,10 @@ final class WP_FTS_Analyzer
         $lexicalWords = 0;
         $fieldSources = [];
         foreach ($fields as $fieldIndex => $field) {
-            if (!is_array($field) || count($field) > 4) {
-                throw new WP_FTS_Analysis_Limit_Exceeded(
-                    'index_field_shape',
-                    'FTS document fields must use the bounded normalized field shape.'
-                );
-            }
-            $source = isset($field['html'])
-                ? (string) $field['html']
-                : (string) ($field['text'] ?? '');
+            $this->assertDocumentField($field);
+            $source = array_key_exists('html', $field)
+                ? $field['html']
+                : $field['text'];
             $fieldSources[$fieldIndex] = $source;
             $sourceBytes += strlen($source);
             WP_FTS_Analysis_Limits::assert_document_source_bytes($sourceBytes);
@@ -359,7 +418,7 @@ final class WP_FTS_Analyzer
                     );
                 }
             }
-            if (isset($field['html'])) {
+            if (array_key_exists('html', $field)) {
                 WP_FTS_Html_Text_Stream::assert_analysis_markup_limits($source);
             }
         }
@@ -369,9 +428,9 @@ final class WP_FTS_Analyzer
         // maximum document resident before rejection.
         foreach ($fields as $fieldIndex => $field) {
             $fieldOptions = $baseOptions;
-            $fieldOptions['field_name'] = (string) ($field['name'] ?? '');
+            $fieldOptions['field_name'] = $field['name'];
             $source = $fieldSources[$fieldIndex];
-            if (isset($field['html'])) {
+            if (array_key_exists('html', $field)) {
                 foreach ($this->extractHtmlSegments($source, $fieldOptions) as $segment) {
                     if (count($segments) >= WP_FTS_Analysis_Limits::MAX_HTML_MARKUP_TOKENS) {
                         throw new WP_FTS_Analysis_Limit_Exceeded(
@@ -386,8 +445,9 @@ final class WP_FTS_Analyzer
                 continue;
             }
 
-            $lang = $this->resolveDocumentLanguage($fieldOptions);
-            if ($this->shouldAutoDetectDocumentLanguage($fieldOptions)) {
+            $resolution = $this->resolveDocumentLanguage($fieldOptions);
+            $lang = $resolution['language'];
+            if ($this->shouldAutoDetectDocumentLanguage($resolution['authoritative'])) {
                 $lang = $this->detectSegmentLanguage($source, $lang);
             }
             if (count($segments) >= WP_FTS_Analysis_Limits::MAX_HTML_MARKUP_TOKENS) {
@@ -408,7 +468,7 @@ final class WP_FTS_Analyzer
             $fieldIndex = $segmentFields[$segmentIndex];
             $terms = $this->renumberAnalyzedPositions($terms, $nextPositions[$fieldIndex]);
             foreach ($terms as $term) {
-                if ($this->isStopword($term['term'], $term['lang'])) {
+                if ($term['term'] === '' || $this->isStopword($term['term'], $term['lang'])) {
                     continue;
                 }
                 if (++$accepted > $maxOccurrences) {
@@ -464,15 +524,19 @@ final class WP_FTS_Analyzer
      */
     public function analyze_query_occurrences(string $query, array $options = []): array
     {
-        $maxOccurrences = isset($options['_max_query_occurrences']) && is_numeric($options['_max_query_occurrences'])
-            ? max(0, min(WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES, (int) $options['_max_query_occurrences']))
-            : null;
-        $lang = $this->resolveQueryLanguage($options);
-        $includeSurface = $this->truthyOption($options['_include_query_surface'] ?? false);
+        $this->assertQueryOptions($options);
+        $maxOccurrences = $options['_max_query_occurrences'] ?? null;
+        $resolution = $this->resolveQueryLanguage($options);
+        $includeSurface = $options['_include_query_surface'] ?? false;
         $terms = [];
         $nextPosition = 0;
 
-        $segments = $this->queryTextSegments($query, $lang, $options);
+        $segments = $this->queryTextSegments(
+            $query,
+            $resolution['language'],
+            $resolution['authoritative'],
+            $options
+        );
         foreach ($this->analyzeTextBatchStream($segments, $includeSurface, $maxOccurrences) as $analyzedSegment) {
             $segmentTerms = $this->renumberAnalyzedPositions(
                 $analyzedSegment,
@@ -544,40 +608,6 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Reduce weighted occurrences to integer term frequencies.
-     *
-     * The index stores integer frequencies, so weights are summed per term and
-     * rounded with a minimum of 1. Pass `namespace_terms => true` when the caller
-     * wants the analyzer-level namespace format `lang . "\\x1e" . term`; the
-     * main indexer does its own language-aware reduction instead.
-     *
-     * @param array<int,array{term:string,weight?:float,lang?:string}> $occurrences
-     * @param array{namespace_terms?:bool} $options
-     * @return array<string,int>
-     */
-    public function weighted_term_frequencies(array $occurrences, array $options = []): array
-    {
-        $namespaceTerms = (bool) ($options['namespace_terms'] ?? false);
-        $weights = [];
-
-        foreach ($occurrences as $occurrence) {
-            $term = (string) $occurrence['term'];
-            if ($namespaceTerms && isset($occurrence['lang'])) {
-                $term = WP_FTS_TermNamespace::namespace_term((string) $occurrence['lang'], $term);
-            }
-            $weights[$term] = ($weights[$term] ?? 0.0) + (float) ($occurrence['weight'] ?? 1.0);
-        }
-
-        $frequencies = [];
-        foreach ($weights as $term => $weight) {
-            $frequencies[$term] = max(1, (int) round($weight));
-        }
-        ksort($frequencies, SORT_STRING);
-
-        return $frequencies;
-    }
-
-    /**
      * Return the analyzer behavior signature used by the indexer content hash.
      *
      * The signature changes when the built-in analyzer defaults or configured
@@ -645,11 +675,8 @@ final class WP_FTS_Analyzer
     /** Resolve the remaining per-document occurrence allowance. */
     private function documentOccurrenceLimit(array $options): int
     {
-        $requested = isset($options['_max_document_occurrences']) && is_numeric($options['_max_document_occurrences'])
-            ? (int) $options['_max_document_occurrences']
-            : WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES;
-
-        return max(0, min(WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES, $requested));
+        return $options['_max_document_occurrences']
+            ?? WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES;
     }
 
     /**
@@ -715,23 +742,38 @@ final class WP_FTS_Analyzer
     /**
      * Split a query into language-scoped text segments.
      *
-     * Untagged queries use the resolved query language exactly as before.
+     * Untagged queries use the resolved query language.
      * Inline tags such as `pl:zamek` or `en-US:"color search"` scope only the
      * tagged term or quoted phrase. A resolver callback can deterministically
      * assign languages to otherwise untagged tokens.
      *
-     * @param array<string,mixed> $options
+     * @param array{query_lang?:string,_default_query_lang?:string,_force_query_lang?:bool,_include_query_surface?:bool,_max_query_occurrences?:int} $options
      * @return array<int,array{text:string,lang:string}>
      */
-    private function queryTextSegments(string $query, string $defaultLang, array $options): array
+    private function queryTextSegments(
+        string $query,
+        string $defaultLang,
+        bool $languageAuthoritative,
+        array $options
+    ): array
     {
+        $query = WP_FTS_Utf8::repair_word_boundaries($query);
         $segments = [];
         $offset = 0;
-        $forceQueryLang = (bool) ($options['_force_query_lang'] ?? false);
+        $forceQueryLang = $options['_force_query_lang'] ?? false;
         $pattern = '/(^|[\s,;]+)([A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,3}):("[^"]+"|\'[^\']+\'|[^\s,;]+)/u';
-        $matched = @preg_match_all($pattern, $query, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
-        if ($matched === false || $matched === 0) {
-            $this->appendUntaggedQuerySegments($segments, $query, $defaultLang, $options);
+        $matched = preg_match_all($pattern, $query, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+        if ($matched === false) {
+            throw new RuntimeException('Unicode query-scope tokenization failed.');
+        }
+        if ($matched === 0) {
+            $this->appendUntaggedQuerySegments(
+                $segments,
+                $query,
+                $defaultLang,
+                $languageAuthoritative,
+                $options
+            );
             return $segments;
         }
 
@@ -746,6 +788,7 @@ final class WP_FTS_Analyzer
                     $segments,
                     substr($query, $offset, $tagStart - $offset),
                     $defaultLang,
+                    $languageAuthoritative,
                     $options
                 );
             }
@@ -759,6 +802,7 @@ final class WP_FTS_Analyzer
                     $segments,
                     substr($query, $tagStart, strlen($fullText) - $prefixLength),
                     $defaultLang,
+                    $languageAuthoritative,
                     $options
                 );
             }
@@ -767,7 +811,13 @@ final class WP_FTS_Analyzer
         }
 
         if ($offset < strlen($query)) {
-            $this->appendUntaggedQuerySegments($segments, substr($query, $offset), $defaultLang, $options);
+            $this->appendUntaggedQuerySegments(
+                $segments,
+                substr($query, $offset),
+                $defaultLang,
+                $languageAuthoritative,
+                $options
+            );
         }
 
         return $segments;
@@ -778,27 +828,32 @@ final class WP_FTS_Analyzer
      *
      * A custom per-token resolver still gets first refusal for each token. When
      * it has no answer, the whole untagged query span supplies the fallback
-     * language so weak single-token evidence does not drift back to the default
+     * language so weak single-token signals do not drift back to the default
      * partition and break AND recall.
      *
      * @param array<int,array{text:string,lang:string}> $segments
-     * @param array<string,mixed> $options
+     * @param array{query_lang?:string,_default_query_lang?:string,_force_query_lang?:bool,_include_query_surface?:bool,_max_query_occurrences?:int} $options
      */
-    private function appendUntaggedQuerySegments(array &$segments, string $text, string $defaultLang, array $options): void
-    {
+    private function appendUntaggedQuerySegments(
+        array &$segments,
+        string $text,
+        string $defaultLang,
+        bool $languageAuthoritative,
+        array $options
+    ): void {
         if (trim($text) === '') {
             return;
         }
 
-        $spanLang = $this->detectQuerySpanLanguage($text, $defaultLang, $options);
-        if ($this->queryTermLanguageResolver === null || (bool) ($options['_force_query_lang'] ?? false)) {
+        $spanLang = $this->detectQuerySpanLanguage($text, $defaultLang, $languageAuthoritative);
+        if ($this->queryTermLanguageResolver === null || ($options['_force_query_lang'] ?? false)) {
             $segments[] = ['text' => $text, 'lang' => $spanLang];
             return;
         }
 
         foreach ($this->queryRawTokens($text) as $token) {
-            $lang = $this->callQueryTermLanguageResolver($token, $options, $defaultLang)
-                ?? $spanLang;
+            $resolved = ($this->queryTermLanguageResolver)($token, $options, $defaultLang);
+            $lang = $this->resolvedCallbackLanguage($resolved, 'query-term language resolver') ?? $spanLang;
             $segments[] = ['text' => $token, 'lang' => $lang];
         }
     }
@@ -827,57 +882,26 @@ final class WP_FTS_Analyzer
      */
     private function queryRawTokens(string $text): array
     {
+        $text = WP_FTS_Utf8::repair_word_boundaries($text);
         $matches = [];
-        if (@preg_match_all('/[\p{L}\p{M}\p{N}_]+/u', $text, $matches) !== false) {
-            return array_values(array_filter(
-                $matches[0] ?? [],
-                static fn(string $token): bool => $token !== ''
-            ));
+        if (preg_match_all('/[\p{L}\p{M}\p{N}_]+/u', $text, $matches) === false) {
+            throw new RuntimeException('Unicode query tokenization failed.');
         }
 
-        $ascii = preg_replace('/[^\x20-\x7E]+/', ' ', $text) ?? '';
-        preg_match_all('/[A-Za-z0-9_]+/', $ascii, $matches);
-
-        return $matches[0] ?? [];
+        return array_values(array_filter(
+            $matches[0] ?? [],
+            static fn(string $token): bool => $token !== ''
+        ));
     }
 
-    /**
-     * Call the optional per-token query language resolver.
-     *
-     * @param array<string,mixed> $options
-     */
-    private function callQueryTermLanguageResolver(string $token, array $options, string $defaultLang): ?string
+    /** Detect language for a whole untagged query span. */
+    private function detectQuerySpanLanguage(
+        string $text,
+        string $defaultLang,
+        bool $languageAuthoritative
+    ): string
     {
-        if ($this->queryTermLanguageResolver === null) {
-            return null;
-        }
-
-        try {
-            $resolver = Closure::fromCallable($this->queryTermLanguageResolver);
-            $reflection = new ReflectionFunction($resolver);
-            $argc = $reflection->isVariadic() ? 3 : $reflection->getNumberOfParameters();
-            if ($argc >= 3) {
-                $resolved = $resolver($token, $options, $defaultLang);
-            } elseif ($argc === 2) {
-                $resolved = $resolver($token, $options);
-            } else {
-                $resolved = $resolver($token);
-            }
-        } catch (Throwable) {
-            return null;
-        }
-
-        return $this->canonicalLanguage($resolved);
-    }
-
-    /**
-     * Detect language for a whole untagged query span.
-     *
-     * @param array<string,mixed> $options
-     */
-    private function detectQuerySpanLanguage(string $text, string $defaultLang, array $options): string
-    {
-        if (!$this->shouldAutoDetectQueryLanguage($options) || $this->languageDetector === null) {
+        if (!$this->shouldAutoDetectQueryLanguage($languageAuthoritative) || $this->languageDetector === null) {
             return $defaultLang;
         }
 
@@ -891,17 +915,17 @@ final class WP_FTS_Analyzer
      * Extract visible text segments and the language/weight for each segment.
      *
      * A caller-provided HTML processor factory may provide browser-like parsing.
-     * When it is unavailable or cannot be created, the fallback parser keeps
-     * enough stack state to make skip, boost, and language-scope decisions
-     * deterministic.
+     * When no factory is configured, the fallback parser keeps enough stack
+     * state to make skip, boost, and language-scope decisions deterministic.
      *
-     * @param array{lang?:string,language?:string,document_lang?:string,locale?:string,post_id?:int} $options
+     * @param array{document_lang?:string,post_id?:int,_default_document_lang?:string,_include_document_surface?:bool,_max_document_occurrences?:int,field_name?:string} $options
      * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}>
      */
     private function extractHtmlSegments(string $html, array $options): array
     {
-        $documentLang = $this->resolveDocumentLanguage($options);
-        $autoDetect = $this->shouldAutoDetectDocumentLanguage($options);
+        $resolution = $this->resolveDocumentLanguage($options);
+        $documentLang = $resolution['language'];
+        $autoDetect = $this->shouldAutoDetectDocumentLanguage($resolution['authoritative']);
         // Inline ancestry is represented as a request-local persistent trie.
         // Segments retain one integer node ID instead of copying the complete
         // ancestor path into every text run. This keeps deeply nested markup
@@ -912,23 +936,13 @@ final class WP_FTS_Analyzer
 
         if ($this->htmlProcessorFactory !== null) {
             $processor = $this->createProcessor($html);
-            if ($processor === null) {
-                $segments = $this->extractWithFallbackParser(
-                    $html,
-                    $documentLang,
-                    $inlinePathParents,
-                    $inlinePathDepths,
-                    $inlinePathChildren
-                );
-            } else {
-                $segments = $this->extractWithProcessor(
-                    $processor,
-                    $documentLang,
-                    $inlinePathParents,
-                    $inlinePathDepths,
-                    $inlinePathChildren
-                );
-            }
+            $segments = $this->extractWithProcessor(
+                $processor,
+                $documentLang,
+                $inlinePathParents,
+                $inlinePathDepths,
+                $inlinePathChildren
+            );
         } else {
             $segments = $this->extractWithFallbackParser(
                 $html,
@@ -997,25 +1011,16 @@ final class WP_FTS_Analyzer
     /**
      * Create a caller-provided HTML processor for a full document or fragment.
      *
-     * Processor creation is wrapped in a catch block because invalid markup or
-     * version differences can throw; callers fall back to parser logic on null.
-     *
      * @param string $html HTML document or fragment.
-     * @return mixed Processor-like object, or null when creation fails.
+     * @return object Processor implementing the complete event-stream contract.
      */
-    private function createProcessor(string $html): mixed
+    private function createProcessor(string $html): object
     {
-        try {
-            $processor = ($this->htmlProcessorFactory)($html);
-        } catch (Throwable) {
-            return null;
-        }
+        $processor = ($this->htmlProcessorFactory)($html);
 
         // get_current_depth() was added to WP_HTML_Processor in WordPress 6.6.
-        // Earlier and partial processor implementations fall back to the local
-        // streaming parser rather than forcing a full breadcrumb snapshot on
-        // every token. The remaining methods form the event-stream contract
-        // used below; accepting less would reintroduce a second parser model.
+        // The remaining methods form the event-stream contract used below;
+        // accepting less would reintroduce a second parser model.
         foreach ([
             'next_token',
             'get_current_depth',
@@ -1024,24 +1029,20 @@ final class WP_FTS_Analyzer
             'is_tag_closer',
             'expects_closer',
             'get_modifiable_text',
+            'get_attribute',
         ] as $method) {
-            if (!is_object($processor) || !method_exists($processor, $method)) {
-                return null;
+            if (
+                !is_object($processor)
+                || !method_exists($processor, $method)
+                || !is_callable([$processor, $method])
+            ) {
+                throw new UnexpectedValueException(
+                    'Analyzer html_processor_factory must return an object implementing the complete processor contract.'
+                );
             }
         }
 
         return $processor;
-    }
-
-    /**
-     * Heuristically decide whether input looks like a full HTML document.
-     *
-     * @param string $html HTML input from the caller.
-     * @return bool True when document-level tags or doctype are present.
-     */
-    private function looksLikeFullDocument(string $html): bool
-    {
-        return (bool) preg_match('/<(?:!doctype|html|head|title)\b/i', $html);
     }
 
     /**
@@ -1057,7 +1058,7 @@ final class WP_FTS_Analyzer
      * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}>
      */
     private function extractWithProcessor(
-        mixed $processor,
+        object $processor,
         string $documentLang,
         array &$inlinePathParents,
         array &$inlinePathDepths,
@@ -1084,7 +1085,17 @@ final class WP_FTS_Analyzer
         $processorOutputBytes = 0;
         $processorControlBytes = 0;
 
-        while ($processor->next_token()) {
+        while (true) {
+            $hasToken = $processor->next_token();
+            if (!is_bool($hasToken)) {
+                throw new UnexpectedValueException(
+                    'Analyzer HTML processor next_token() must return a boolean.'
+                );
+            }
+            if (!$hasToken) {
+                break;
+            }
+
             // One text run may appear before, between, and after the bounded
             // markup tokens. Count provider tokens independently: a custom
             // processor can otherwise return empty/non-text tokens forever
@@ -1096,7 +1107,11 @@ final class WP_FTS_Analyzer
                 );
             }
             $tokenType = $processor->get_token_type();
-            $tokenType = is_scalar($tokenType) ? (string) $tokenType : '';
+            if (!is_string($tokenType) || $tokenType === '' || trim($tokenType) !== $tokenType) {
+                throw new UnexpectedValueException(
+                    'Analyzer HTML processor get_token_type() must return an unpadded nonempty string after next_token().'
+                );
+            }
             $tokenTypeBytes = strlen($tokenType);
             if ($tokenTypeBytes > self::HTML_PROCESSOR_TOKEN_TYPE_BYTES) {
                 throw new WP_FTS_Analysis_Limit_Exceeded(
@@ -1106,9 +1121,13 @@ final class WP_FTS_Analyzer
             }
             $this->chargeProcessorOutputBytes($processorControlBytes, $tokenTypeBytes);
             $providerDepth = $processor->get_current_depth();
+            if (!is_int($providerDepth)) {
+                throw new UnexpectedValueException(
+                    'Analyzer HTML processor get_current_depth() must return an integer.'
+                );
+            }
             if (
-                !is_int($providerDepth)
-                || $providerDepth < 0
+                $providerDepth < 0
                 || $providerDepth > WP_FTS_Analysis_Limits::MAX_HTML_ELEMENT_DEPTH + self::HTML_PROCESSOR_DEPTH_OVERHEAD
             ) {
                 throw new WP_FTS_Analysis_Limit_Exceeded(
@@ -1117,7 +1136,15 @@ final class WP_FTS_Analyzer
                 );
             }
 
-            $isCloser = $tokenType === '#tag' && $processor->is_tag_closer();
+            $isCloser = false;
+            if ($tokenType === '#tag') {
+                $isCloser = $processor->is_tag_closer();
+                if (!is_bool($isCloser)) {
+                    throw new UnexpectedValueException(
+                        'Analyzer HTML processor is_tag_closer() must return a boolean.'
+                    );
+                }
+            }
             if ($providerBaseDepth === null) {
                 // Fragment parsers begin below implicit HTML/BODY roots, while
                 // full-document parsers begin at depth zero. The first event
@@ -1149,7 +1176,7 @@ final class WP_FTS_Analyzer
                 $this->popProcessorStates($states, $activeDepth, $parentDepth);
                 $parent = $states[$parentDepth] ?? $states[0];
 
-                $isBoundary = $tag !== null && $this->isTextGroupBoundaryTag($tag);
+                $isBoundary = $this->isTextGroupBoundaryTag($tag);
                 if ($isBoundary) {
                     $this->retireProcessorTextGroup($states, $parentDepth, $rootTextGroup);
                 }
@@ -1157,20 +1184,24 @@ final class WP_FTS_Analyzer
                 // and self-closing foreign content. WP_HTML_Processor emits no
                 // later pop event for them, so retaining a row here would leak
                 // skip, boost, or language state into the following sibling.
-                if ($processor->expects_closer() !== true) {
+                $expectsCloser = $processor->expects_closer();
+                if (!is_bool($expectsCloser)) {
+                    throw new UnexpectedValueException(
+                        'Analyzer HTML processor expects_closer() must return a boolean for a tag token.'
+                    );
+                }
+                if (!$expectsCloser) {
                     continue;
                 }
 
                 $declaredLang = $this->processorLangAttribute($processor, $processorOutputBytes);
-                $inlinePathId = $tag === null
-                    ? (int) $parent['inline_path_id']
-                    : $this->internInlinePath(
-                        (int) $parent['inline_path_id'],
-                        $tag,
-                        $inlinePathParents,
-                        $inlinePathDepths,
-                        $inlinePathChildren
-                    );
+                $inlinePathId = $this->internInlinePath(
+                    (int) $parent['inline_path_id'],
+                    $tag,
+                    $inlinePathParents,
+                    $inlinePathDepths,
+                    $inlinePathChildren
+                );
                 $detectGroup = null;
                 $nearestTextGroupDepth = $parent['nearest_text_group_depth'];
                 if ($isBoundary) {
@@ -1185,10 +1216,10 @@ final class WP_FTS_Analyzer
                         ? true
                         : (bool) $parent['explicit_lang'],
                     'skipped' => (bool) $parent['skipped']
-                        || ($tag !== null && isset($this->skipAncestors[$tag])),
+                        || isset($this->skipAncestors[$tag]),
                     'weight' => max(
                         (float) $parent['weight'],
-                        (float) ($tag !== null ? ($this->boosts[$tag] ?? 1.0) : 1.0)
+                        (float) ($this->boosts[$tag] ?? 1.0)
                     ),
                     'inline_path_id' => $inlinePathId,
                     'nearest_text_group_depth' => $nearestTextGroupDepth,
@@ -1217,10 +1248,11 @@ final class WP_FTS_Analyzer
             }
 
             $text = $processor->get_modifiable_text();
-            if (!is_scalar($text)) {
-                continue;
+            if (!is_string($text)) {
+                throw new UnexpectedValueException(
+                    'Analyzer HTML processor get_modifiable_text() must return a string.'
+                );
             }
-            $text = (string) $text;
             $this->chargeProcessorOutputBytes($processorOutputBytes, strlen($text));
             if (trim($text) === '') {
                 continue;
@@ -1589,12 +1621,12 @@ final class WP_FTS_Analyzer
             }
         }
 
-        if ($offset >= $length || !$this->isFallbackTagNameStart($tag[$offset])) {
+        if ($offset >= $length || !self::isFallbackTagNameStart($tag[$offset])) {
             return null;
         }
 
         $start = $offset;
-        while ($offset < $length && $this->isFallbackTagNameByte($tag[$offset])) {
+        while ($offset < $length && self::isFallbackTagNameByte($tag[$offset])) {
             $offset++;
         }
 
@@ -1615,18 +1647,18 @@ final class WP_FTS_Analyzer
         return $offset >= 0 && $tag[$offset] === '/';
     }
 
-    private function isFallbackTagNameStart(string $byte): bool
+    private static function isFallbackTagNameStart(string $byte): bool
     {
         $ord = ord($byte);
 
         return ($ord >= 65 && $ord <= 90) || ($ord >= 97 && $ord <= 122);
     }
 
-    private function isFallbackTagNameByte(string $byte): bool
+    private static function isFallbackTagNameByte(string $byte): bool
     {
         $ord = ord($byte);
 
-        return $this->isFallbackTagNameStart($byte)
+        return self::isFallbackTagNameStart($byte)
             || ($ord >= 48 && $ord <= 57)
             || $byte === ':'
             || $byte === '-';
@@ -1722,8 +1754,8 @@ final class WP_FTS_Analyzer
 
     /**
      * Paths are compatible when either tag-name sequence is a prefix of the
-     * other. Aligning persistent trie nodes by depth preserves the previous
-     * sequence semantics without materializing either ancestor array.
+     * other. Aligning persistent trie nodes by depth preserves prefix-sequence
+     * semantics without materializing either ancestor array.
      */
     private function inlinePathsCompatible(
         int $left,
@@ -1863,58 +1895,79 @@ final class WP_FTS_Analyzer
      * Resolve the primary document language for HTML extraction.
      *
      * Precedence is per-call `document_lang`, constructor `document_lang`,
-     * custom resolver, then analyzer default.
+     * custom resolver, per-call fallback language, then analyzer default.
      *
-     * @param array<string,mixed> $options
-     * @return string Canonical document language.
+     * @param array{document_lang?:string,post_id?:int,_default_document_lang?:string,_include_document_surface?:bool,_max_document_occurrences?:int,field_name?:string} $options
+     * @return array{language:string,authoritative:bool}
      */
-    private function resolveDocumentLanguage(array $options): string
+    private function resolveDocumentLanguage(array $options): array
     {
-        return $this->firstLanguage([
-            $options['document_lang'] ?? null,
-            $this->documentLanguage,
-            $this->callLanguageResolver($this->documentLanguageResolver, $options),
-            $options['_default_document_lang'] ?? null,
-            $this->defaultLanguage,
-        ]) ?? 'en';
+        if (array_key_exists('document_lang', $options)) {
+            return [
+                'language' => WP_FTS_TermNamespace::parse_language_tag($options['document_lang']),
+                'authoritative' => true,
+            ];
+        }
+        if ($this->documentLanguage !== null) {
+            return ['language' => $this->documentLanguage, 'authoritative' => true];
+        }
+
+        $resolved = $this->callLanguageResolver(
+            $this->documentLanguageResolver,
+            $options,
+            'document language resolver'
+        );
+        if ($resolved !== null) {
+            return ['language' => $resolved, 'authoritative' => true];
+        }
+        if (array_key_exists('_default_document_lang', $options)) {
+            return [
+                'language' => WP_FTS_TermNamespace::parse_language_tag($options['_default_document_lang']),
+                'authoritative' => false,
+            ];
+        }
+
+        return ['language' => $this->defaultLanguage, 'authoritative' => false];
     }
 
     /**
      * Resolve the language used for query analysis.
      *
      * Precedence is per-call `query_lang`, constructor `query_lang`, custom
-     * resolver, then analyzer default.
+     * resolver, per-call fallback language, then analyzer default.
      *
-     * @param array<string,mixed> $options
-     * @return string Canonical query language.
+     * @param array{query_lang?:string,_default_query_lang?:string,_force_query_lang?:bool,_include_query_surface?:bool,_max_query_occurrences?:int} $options
+     * @return array{language:string,authoritative:bool}
      */
-    private function resolveQueryLanguage(array $options): string
+    private function resolveQueryLanguage(array $options): array
     {
-        return $this->firstLanguage([
-            $options['query_lang'] ?? null,
-            $this->queryLanguage,
-            $this->callLanguageResolver($this->queryLanguageResolver, $options),
-            $options['_default_query_lang'] ?? null,
-            $this->defaultLanguage,
-        ]) ?? 'en';
-    }
-
-    /**
-     * Return the first scalar language candidate that canonicalizes cleanly.
-     *
-     * @param array<int,mixed> $candidates
-     * @return string|null Canonical language, or null when no candidate is valid.
-     */
-    private function firstLanguage(array $candidates): ?string
-    {
-        foreach ($candidates as $candidate) {
-            $canonical = $this->canonicalLanguage($candidate);
-            if ($canonical !== null) {
-                return $canonical;
-            }
+        if (array_key_exists('query_lang', $options)) {
+            return [
+                'language' => WP_FTS_TermNamespace::parse_language_tag($options['query_lang']),
+                'authoritative' => true,
+            ];
+        }
+        if ($this->queryLanguage !== null) {
+            return ['language' => $this->queryLanguage, 'authoritative' => true];
         }
 
-        return null;
+        $resolved = $this->callLanguageResolver(
+            $this->queryLanguageResolver,
+            $options,
+            'query language resolver'
+        );
+        if ($resolved !== null) {
+            return ['language' => $resolved, 'authoritative' => true];
+        }
+        $forced = $options['_force_query_lang'] ?? false;
+        if (array_key_exists('_default_query_lang', $options)) {
+            return [
+                'language' => WP_FTS_TermNamespace::parse_language_tag($options['_default_query_lang']),
+                'authoritative' => $forced,
+            ];
+        }
+
+        return ['language' => $this->defaultLanguage, 'authoritative' => $forced];
     }
 
     /**
@@ -1924,8 +1977,8 @@ final class WP_FTS_Analyzer
      * `POSIX` candidates are ignored so they do not become searchable language
      * partitions.
      *
-     * @param mixed $language Candidate from options, HTML, WordPress, or a
-     *        resolver callback.
+     * @param mixed $language Candidate from trusted HTML, locale, or processor
+     *        input.
      * @return string|null Canonical language accepted by the pipeline, or null.
      */
     private function canonicalLanguage(mixed $language): ?string
@@ -1976,86 +2029,35 @@ final class WP_FTS_Analyzer
         return $this->languagePipeline->canonicalize_language(implode('-', $canonical));
     }
 
-    /**
-     * Canonicalize a language for static namespace helpers.
-     *
-     * Unlike `canonicalLanguage()`, invalid or empty input returns `und` because
-     * static term namespacing has no analyzer instance or default language.
-     *
-     * @param string $language Language tag or locale.
-     * @return string Canonical language or `und`.
-     */
-    private static function canonicalLanguageStatic(string $language): string
-    {
-        $language = trim(str_replace('_', '-', $language));
-        if ($language === '') {
-            return 'und';
-        }
-
-        $parts = array_values(array_filter(explode('-', $language), static fn(string $part): bool => $part !== ''));
-        if ($parts === []) {
-            return 'und';
-        }
-
-        $canonical = [];
-        foreach ($parts as $index => $part) {
-            $part = preg_replace('/[^A-Za-z0-9]/', '', $part) ?? '';
-            if ($part === '') {
-                continue;
-            }
-
-            if ($index === 0) {
-                $canonical[] = strtolower($part);
-            } elseif (strlen($part) === 4 && self::isAsciiAlpha($part)) {
-                $canonical[] = ucfirst(strtolower($part));
-            } elseif ((strlen($part) === 2 && self::isAsciiAlpha($part)) || (strlen($part) === 3 && self::isAsciiDigit($part))) {
-                $canonical[] = strtoupper($part);
-            } else {
-                $canonical[] = strtolower($part);
-            }
-        }
-
-        return $canonical === [] ? 'und' : implode('-', $canonical);
-    }
-
-    /**
-     * Check whether a language subtag contains only ASCII letters.
-     */
-    private static function isAsciiAlpha(string $value): bool
-    {
-        return $value !== '' && preg_match('/^[A-Za-z]+$/', $value) === 1;
-    }
-
-    /**
-     * Check whether a language subtag contains only ASCII digits.
-     */
-    private static function isAsciiDigit(string $value): bool
-    {
-        return $value !== '' && preg_match('/^[0-9]+$/', $value) === 1;
-    }
-
-    /**
-     * Call an optional language resolver without letting resolver failures leak.
-     *
-     * Resolver callbacks are extension points, not required infrastructure. A
-     * thrown exception or non-scalar result is treated as "no language found".
-     *
-     * @param array<string,mixed> $options
-     * @return string|null Raw scalar language candidate from the resolver.
-     */
-    private function callLanguageResolver(?callable $resolver, array $options): ?string
+    /** Call one configured resolver and validate its exact output contract. */
+    private function callLanguageResolver(?callable $resolver, array $options, string $label): ?string
     {
         if ($resolver === null) {
             return null;
         }
 
-        try {
-            $resolved = $resolver($options);
-        } catch (Throwable) {
+        return $this->resolvedCallbackLanguage($resolver($options), $label);
+    }
+
+    /** Require null or one native, unpadded language tag from a resolver. */
+    private function resolvedCallbackLanguage(mixed $resolved, string $label): ?string
+    {
+        if ($resolved === null) {
             return null;
         }
+        if (!is_string($resolved)) {
+            throw new UnexpectedValueException("Analyzer {$label} must return a language string or null.");
+        }
 
-        return is_scalar($resolved) ? (string) $resolved : null;
+        try {
+            return WP_FTS_TermNamespace::parse_language_tag($resolved);
+        } catch (InvalidArgumentException $error) {
+            throw new UnexpectedValueException(
+                "Analyzer {$label} returned an invalid language tag.",
+                0,
+                $error
+            );
+        }
     }
 
     /**
@@ -2063,73 +2065,49 @@ final class WP_FTS_Analyzer
      *
      * Explicit caller language and constructor/resolver languages remain
      * authoritative. Site locale and analyzer default are fallbacks, so detector
-     * evidence is allowed to beat them for untagged content.
-     *
-     * @param array<string,mixed> $options
+     * signals are allowed to beat them for untagged content.
      */
-    private function shouldAutoDetectDocumentLanguage(array $options): bool
+    private function shouldAutoDetectDocumentLanguage(bool $languageAuthoritative): bool
     {
-        if (!$this->autoDetectLanguage || $this->languageDetector === null) {
-            return false;
-        }
-
-        if (isset($options['document_lang']) && $this->canonicalLanguage($options['document_lang']) !== null) {
-            return false;
-        }
-
-        if ($this->documentLanguage !== null) {
-            return false;
-        }
-
-        if ($this->canonicalLanguage($this->callLanguageResolver($this->documentLanguageResolver, $options)) !== null) {
-            return false;
-        }
-
-        return true;
+        return $this->autoDetectLanguage
+            && $this->languageDetector !== null
+            && !$languageAuthoritative;
     }
 
     /**
      * Decide whether untagged query text may be language-detected.
      *
-     * @param array<string,mixed> $options
      */
-    private function shouldAutoDetectQueryLanguage(array $options): bool
+    private function shouldAutoDetectQueryLanguage(bool $languageAuthoritative): bool
     {
-        if (!$this->autoDetectLanguage || $this->languageDetector === null) {
-            return false;
-        }
-
-        if (isset($options['query_lang']) && $this->canonicalLanguage($options['query_lang']) !== null) {
-            return false;
-        }
-
-        if ($this->queryLanguage !== null) {
-            return false;
-        }
-
-        if ($this->canonicalLanguage($this->callLanguageResolver($this->queryLanguageResolver, $options)) !== null) {
-            return false;
-        }
-
-        return true;
+        return $this->autoDetectLanguage
+            && $this->languageDetector !== null
+            && !$languageAuthoritative;
     }
 
     /**
      * Return the current processor tag name when available.
      */
-    private function processorCurrentTag(mixed $processor, int &$processorOutputBytes): ?string
+    private function processorCurrentTag(object $processor, int &$processorOutputBytes): string
     {
         $tag = $processor->get_tag();
-        if (!is_scalar($tag)) {
-            return null;
+        if (
+            !is_string($tag)
+            || $tag === ''
+            || trim($tag) !== $tag
+            || !self::isHtmlElementName($tag)
+            || strtoupper($tag) !== $tag
+        ) {
+            throw new UnexpectedValueException(
+                'Analyzer HTML processor get_tag() must return a canonical uppercase HTML element name for a tag token.'
+            );
         }
 
-        $tag = (string) $tag;
         $tagBytes = strlen($tag);
         WP_FTS_Analysis_Limits::assert_html_tag_bytes($tagBytes);
         $this->chargeProcessorOutputBytes($processorOutputBytes, $tagBytes);
 
-        return trim($tag) === '' ? null : strtoupper($tag);
+        return $tag;
     }
 
     /**
@@ -2190,28 +2168,25 @@ final class WP_FTS_Analyzer
     /**
      * Read and canonicalize `lang` or `xml:lang` from the current processor tag.
      *
-     * @param mixed $processor WordPress HTML processor or compatible test double.
+     * @param object $processor WordPress HTML processor or compatible test double.
      * @return string|null Canonical language when the current tag declares one.
      */
-    private function processorLangAttribute(mixed $processor, int &$processorOutputBytes): ?string
+    private function processorLangAttribute(object $processor, int &$processorOutputBytes): ?string
     {
-        if (!method_exists($processor, 'get_attribute')) {
-            return null;
-        }
-
         foreach (['lang', 'xml:lang'] as $attribute) {
-            try {
-                $value = $processor->get_attribute($attribute);
-            } catch (Throwable) {
+            $value = $processor->get_attribute($attribute);
+            if ($value === null || $value === true) {
                 continue;
             }
-
-            if (is_scalar($value)) {
-                $valueBytes = strlen((string) $value);
-                WP_FTS_Analysis_Limits::assert_html_language_attribute_bytes($valueBytes);
-                $this->chargeProcessorOutputBytes($processorOutputBytes, $valueBytes);
+            if (!is_string($value)) {
+                throw new UnexpectedValueException(
+                    'Analyzer HTML processor get_attribute() must return a string, true, or null.'
+                );
             }
 
+            $valueBytes = strlen($value);
+            WP_FTS_Analysis_Limits::assert_html_language_attribute_bytes($valueBytes);
+            $this->chargeProcessorOutputBytes($processorOutputBytes, $valueBytes);
             $lang = $this->canonicalLanguage($value);
             if ($lang !== null) {
                 return $lang;
@@ -2469,6 +2444,276 @@ final class WP_FTS_Analyzer
         return $rootTextGroup;
     }
 
+    /** Validate the exact option contract shared by document-analysis APIs. */
+    private function assertDocumentOptions(array $options): void
+    {
+        $this->assertOptionKeys($options, self::DOCUMENT_OPTION_KEYS, 'document analysis');
+        foreach (['document_lang', '_default_document_lang'] as $key) {
+            if (array_key_exists($key, $options)) {
+                WP_FTS_TermNamespace::parse_language_tag($options[$key]);
+            }
+        }
+        if (
+            array_key_exists('post_id', $options)
+            && (!is_int($options['post_id']) || $options['post_id'] <= 0)
+        ) {
+            throw new InvalidArgumentException('Analyzer document post_id must be a positive integer.');
+        }
+        if (
+            array_key_exists('_include_document_surface', $options)
+            && !is_bool($options['_include_document_surface'])
+        ) {
+            throw new InvalidArgumentException('Analyzer _include_document_surface must be a boolean.');
+        }
+        $this->assertOccurrenceLimit($options, '_max_document_occurrences');
+    }
+
+    /** Validate the exact option contract shared by query-analysis APIs. */
+    private function assertQueryOptions(array $options): void
+    {
+        $this->assertOptionKeys($options, self::QUERY_OPTION_KEYS, 'query analysis');
+        foreach (['query_lang', '_default_query_lang'] as $key) {
+            if (array_key_exists($key, $options)) {
+                WP_FTS_TermNamespace::parse_language_tag($options[$key]);
+            }
+        }
+        foreach (['_force_query_lang', '_include_query_surface'] as $key) {
+            if (array_key_exists($key, $options) && !is_bool($options[$key])) {
+                throw new InvalidArgumentException("Analyzer {$key} must be a boolean.");
+            }
+        }
+        $this->assertOccurrenceLimit($options, '_max_query_occurrences');
+    }
+
+    /** @param string[] $allowedKeys */
+    private function assertOptionKeys(array $options, array $allowedKeys, string $surface): void
+    {
+        foreach (array_keys($options) as $key) {
+            if (!is_string($key) || !in_array($key, $allowedKeys, true)) {
+                throw new InvalidArgumentException("Analyzer {$surface} options contain an unsupported field.");
+            }
+        }
+    }
+
+    /** Require one optional occurrence ceiling to be a bounded native integer. */
+    private function assertOccurrenceLimit(array $options, string $key): void
+    {
+        if (!array_key_exists($key, $options)) {
+            return;
+        }
+
+        $limit = $options[$key];
+        if (
+            !is_int($limit)
+            || $limit < 0
+            || $limit > WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES
+        ) {
+            throw new InvalidArgumentException(
+                "Analyzer {$key} must be an integer from zero through "
+                . WP_FTS_Analysis_Limits::MAX_DOCUMENT_OCCURRENCES
+                . '.'
+            );
+        }
+    }
+
+    /** Validate one field already normalized by the indexer. */
+    private function assertDocumentField(mixed $field): void
+    {
+        if (!is_array($field)) {
+            throw new InvalidArgumentException('FTS document fields must be arrays.');
+        }
+        foreach (array_keys($field) as $key) {
+            if (!is_string($key) || !in_array($key, self::DOCUMENT_FIELD_KEYS, true)) {
+                throw new InvalidArgumentException('FTS document fields contain an unsupported field.');
+            }
+        }
+        if (!array_key_exists('name', $field) || !array_key_exists('text', $field) || !array_key_exists('boost', $field)) {
+            throw new InvalidArgumentException('FTS document fields require name, text, and boost.');
+        }
+        if (
+            !is_string($field['name'])
+            || $field['name'] === ''
+            || trim($field['name']) !== $field['name']
+            || strlen($field['name']) > self::MAX_FIELD_NAME_BYTES
+        ) {
+            throw new InvalidArgumentException('FTS document field names must be unpadded nonempty strings of at most 191 bytes.');
+        }
+        if (!is_string($field['text'])) {
+            throw new InvalidArgumentException('FTS document field text must be a string.');
+        }
+        if (array_key_exists('html', $field) && !is_string($field['html'])) {
+            throw new InvalidArgumentException('FTS document field html must be a string.');
+        }
+
+        $boost = $field['boost'];
+        if (
+            !is_float($boost)
+            || !is_finite($boost)
+            || floor($boost) !== $boost
+            || $boost < 1.0
+            || $boost > self::MAX_ANCESTOR_BOOST
+        ) {
+            throw new InvalidArgumentException('FTS normalized document field boosts must be whole floats from 1 through 100.');
+        }
+    }
+
+    /** Reject misspelled, coercible, or ignored constructor options. */
+    private static function assertConstructorOptions(array $options): void
+    {
+        foreach (array_keys($options) as $key) {
+            if (!is_string($key) || !in_array($key, self::CONSTRUCTOR_OPTION_KEYS, true)) {
+                throw new InvalidArgumentException('Unknown analyzer constructor option: ' . (string) $key);
+            }
+        }
+
+        if (array_key_exists('skip_ancestors', $options)) {
+            self::assertStringList($options['skip_ancestors'], 'Analyzer option skip_ancestors');
+            $skipAncestors = [];
+            foreach ($options['skip_ancestors'] as $tag) {
+                self::assertConfiguredElementName($tag, 'Analyzer skipped ancestor');
+                $canonical = strtoupper($tag);
+                if (isset($skipAncestors[$canonical])) {
+                    throw new InvalidArgumentException(
+                        "Analyzer option skip_ancestors contains duplicate element {$canonical}."
+                    );
+                }
+                $skipAncestors[$canonical] = true;
+            }
+        }
+        if (array_key_exists('stopwords', $options)) {
+            self::assertStringList($options['stopwords'], 'Analyzer option stopwords');
+        }
+
+        if (array_key_exists('boosts', $options)) {
+            if (!is_array($options['boosts'])) {
+                throw new InvalidArgumentException('Analyzer option boosts must be an element-name map.');
+            }
+            $boostNames = [];
+            foreach ($options['boosts'] as $tag => $boost) {
+                self::assertConfiguredElementName($tag, 'Analyzer boost');
+                $canonical = strtoupper($tag);
+                if (isset($boostNames[$canonical])) {
+                    throw new InvalidArgumentException(
+                        "Analyzer option boosts contains duplicate element {$canonical}."
+                    );
+                }
+                $boostNames[$canonical] = true;
+                if ((!is_int($boost) && !is_float($boost)) || !is_finite((float) $boost)) {
+                    throw new InvalidArgumentException("Analyzer boost {$tag} must be a finite number.");
+                }
+                if ($boost <= 0 || $boost > self::MAX_ANCESTOR_BOOST) {
+                    throw new InvalidArgumentException(
+                        "Analyzer boost {$tag} must be greater than zero and at most " . self::MAX_ANCESTOR_BOOST . '.'
+                    );
+                }
+            }
+        }
+
+        foreach (['default_lang', 'document_lang', 'query_lang'] as $key) {
+            if (!array_key_exists($key, $options)) {
+                continue;
+            }
+            WP_FTS_TermNamespace::parse_language_tag($options[$key]);
+        }
+
+        if (array_key_exists('auto_detect_language', $options) && !is_bool($options['auto_detect_language'])) {
+            throw new InvalidArgumentException('Analyzer option auto_detect_language must be a boolean.');
+        }
+
+        foreach ([
+            'document_language_resolver',
+            'query_language_resolver',
+            'query_term_language_resolver',
+            'html_processor_factory',
+        ] as $key) {
+            if (
+                array_key_exists($key, $options)
+                && $options[$key] !== null
+                && !is_callable($options[$key])
+            ) {
+                throw new InvalidArgumentException("Analyzer option {$key} must be callable or null.");
+            }
+        }
+
+        if (
+            array_key_exists('language_pipeline', $options)
+            && !$options['language_pipeline'] instanceof WP_FTS_LanguagePipeline
+        ) {
+            throw new InvalidArgumentException('Analyzer option language_pipeline must be a language pipeline.');
+        }
+        if (array_key_exists('language_pipeline', $options)) {
+            foreach (self::LANGUAGE_PIPELINE_OPTION_KEYS as $key) {
+                if (array_key_exists($key, $options)) {
+                    throw new InvalidArgumentException(
+                        "Analyzer option {$key} cannot be combined with language_pipeline."
+                    );
+                }
+            }
+        }
+
+        if (array_key_exists('stopwords_by_lang', $options)) {
+            if (!is_array($options['stopwords_by_lang'])) {
+                throw new InvalidArgumentException('Analyzer option stopwords_by_lang must be a language map.');
+            }
+            $canonicalLanguages = [];
+            foreach ($options['stopwords_by_lang'] as $language => $stopwords) {
+                $canonical = WP_FTS_TermNamespace::parse_language_tag($language);
+                if (isset($canonicalLanguages[$canonical])) {
+                    throw new InvalidArgumentException(
+                        "Analyzer option stopwords_by_lang contains duplicate canonical language {$canonical}."
+                    );
+                }
+                $canonicalLanguages[$canonical] = true;
+                self::assertStringList($stopwords, "Analyzer stopwords for {$language}");
+            }
+        }
+    }
+
+    /** Assert a bounded option is a list of non-empty native strings. */
+    private static function assertStringList(mixed $value, string $label): void
+    {
+        if (!is_array($value) || !array_is_list($value)) {
+            throw new InvalidArgumentException("{$label} must be a list of strings.");
+        }
+        foreach ($value as $item) {
+            if (!is_string($item) || $item === '' || trim($item) !== $item) {
+                throw new InvalidArgumentException("{$label} must contain only unpadded non-empty strings.");
+            }
+        }
+    }
+
+    /** Require one element name accepted by the fallback HTML tokenizer. */
+    private static function assertConfiguredElementName(mixed $name, string $label): void
+    {
+        if (!is_string($name) || $name === '' || trim($name) !== $name) {
+            throw new InvalidArgumentException("{$label} names must be unpadded non-empty strings.");
+        }
+        if (!self::isHtmlElementName($name)) {
+            throw new InvalidArgumentException("{$label} names must use the HTML element-name grammar.");
+        }
+    }
+
+    /** Check the ASCII element-name grammar shared with fallback tokenization. */
+    private static function isHtmlElementName(string $name): bool
+    {
+        if ($name === '' || !self::isFallbackTagNameStart($name[0])) {
+            return false;
+        }
+        for ($offset = 1, $length = strlen($name); $offset < $length; $offset++) {
+            if (!self::isFallbackTagNameByte($name[$offset])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /** Canonicalize one already type-checked constructor language or fail. */
+    private function requiredConstructorLanguage(string $language): string
+    {
+        return WP_FTS_TermNamespace::parse_language_tag($language);
+    }
+
     /**
      * Check global and language-specific stopword sets.
      *
@@ -2510,7 +2755,7 @@ final class WP_FTS_Analyzer
             'document_language' => $this->documentLanguage,
             'query_language' => $this->queryLanguage,
             'auto_detect_language' => $this->autoDetectLanguage,
-            'language_detector' => $this->languageDetector === null ? null : $this->objectSignature($this->languageDetector),
+            'detector' => $this->languageDetector === null ? null : $this->objectSignature($this->languageDetector),
             'language_pipeline' => $this->objectSignature($this->languagePipeline),
             'document_language_resolver' => $this->callableSignature($this->documentLanguageResolver),
             'query_language_resolver' => $this->callableSignature($this->queryLanguageResolver),
@@ -2547,40 +2792,34 @@ final class WP_FTS_Analyzer
             return null;
         }
 
-        try {
-            if (is_string($callback)) {
-                return 'function:' . strtolower($callback);
-            }
+        if (is_string($callback)) {
+            return 'function:' . strtolower($callback);
+        }
 
-            if (is_array($callback) && count($callback) === 2) {
-                $target = is_object($callback[0]) ? $this->objectSignature($callback[0]) : (string) $callback[0];
-                return 'method:' . $target . '::' . (string) $callback[1];
-            }
+        if (is_array($callback) && count($callback) === 2) {
+            $target = is_object($callback[0]) ? $this->objectSignature($callback[0]) : (string) $callback[0];
+            return 'method:' . $target . '::' . (string) $callback[1];
+        }
 
-            if ($callback instanceof Closure) {
-                $reflection = new ReflectionFunction($callback);
-                $capturedState = '';
-                if ($includeCapturedState) {
-                    $variables = $reflection->getStaticVariables();
-                    WP_FTS_Analyzer_Config_Limits::assert_option_graph($variables, 'Analyzer callback captured state');
-                    $capturedState = ':' . sha1($this->stableJson($this->signatureValue($variables)));
-                }
-                return sprintf(
-                    'closure:%s:%d-%d%s',
-                    $reflection->getFileName() ?: 'internal',
-                    $reflection->getStartLine(),
-                    $reflection->getEndLine(),
-                    $capturedState
-                );
+        if ($callback instanceof Closure) {
+            $reflection = new ReflectionFunction($callback);
+            $capturedState = '';
+            if ($includeCapturedState) {
+                $variables = $reflection->getStaticVariables();
+                WP_FTS_Analyzer_Config_Limits::assert_option_graph($variables, 'Analyzer callback captured state');
+                $capturedState = ':' . sha1($this->stableJson($this->signatureValue($variables)));
             }
+            return sprintf(
+                'closure:%s:%d-%d%s',
+                $reflection->getFileName() ?: 'internal',
+                $reflection->getStartLine(),
+                $reflection->getEndLine(),
+                $capturedState
+            );
+        }
 
-            if (is_object($callback)) {
-                return 'invokable:' . $this->objectSignature($callback);
-            }
-        } catch (WP_FTS_Analyzer_Config_Limit_Exceeded $error) {
-            throw $error;
-        } catch (Throwable) {
-            return 'callable:' . get_debug_type($callback);
+        if (is_object($callback)) {
+            return 'invokable:' . $this->objectSignature($callback);
         }
 
         return 'callable:' . get_debug_type($callback);
@@ -2622,14 +2861,19 @@ final class WP_FTS_Analyzer
     private function objectSignature(object $object): string
     {
         if (is_callable([$object, 'index_signature'])) {
-            try {
-                $signature = $object->index_signature();
-                if (is_scalar($signature) && trim((string) $signature) !== '') {
-                    return (string) $signature;
-                }
-            } catch (Throwable) {
-                // Fall through to the class-level descriptor.
+            $signature = $object->index_signature();
+            if (
+                !is_string($signature)
+                || $signature === ''
+                || trim($signature) !== $signature
+                || strlen($signature) > WP_FTS_Analyzer_Config_Limits::MAX_OPTION_SCALAR_BYTES
+            ) {
+                throw new UnexpectedValueException(
+                    'Analyzer extension index_signature() must return an unpadded nonempty bounded string.'
+                );
             }
+
+            return $signature;
         }
 
         return get_debug_type($object);
@@ -2640,31 +2884,7 @@ final class WP_FTS_Analyzer
      */
     private function stableJson(mixed $payload): string
     {
-        try {
-            return json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-        } catch (Throwable) {
-            return serialize($payload);
-        }
-    }
-
-    /**
-     * Interpret optional analyzer feature flags without treating "false" as on.
-     */
-    private function truthyOption(mixed $value): bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-
-        if (is_int($value) || is_float($value)) {
-            return $value !== 0;
-        }
-
-        if (is_string($value)) {
-            return !in_array(strtolower(trim($value)), ['', '0', 'false', 'no', 'off'], true);
-        }
-
-        return false;
+        return json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
     }
 
 }

@@ -109,6 +109,7 @@ if (!is_string($dataDir) || !is_dir($dataDir)) {
 $dataDir = rtrim($dataDir, DIRECTORY_SEPARATOR);
 
 $stemmer = new WP_FTS_SnowballStemmer();
+$supportedCodes = array_fill_keys(['ar', 'ca', 'en', 'es', 'fr', 'hi', 'id', 'nl', 'pt'], true);
 $knownDatasets = wp_fts_snowball_datasets();
 $discoveredDirs = wp_fts_discover_snowball_dirs($dataDir);
 $discovered = array_fill_keys($discoveredDirs, true);
@@ -143,15 +144,7 @@ $results = [
 ];
 
 fwrite(STDOUT, "Snowball data: {$dataDir}\n");
-fwrite(STDOUT, 'Wamania available: ' . ($stemmer->is_available() ? 'yes' : 'no') . "\n\n");
-fwrite(
-    STDOUT,
-    'Dependency status: ' . (
-        $stemmer->is_available()
-            ? 'wamania/php-stemmer available; Wamania-backed supported-language comparisons will run'
-            : 'wamania/php-stemmer missing; Wamania-backed supported-language comparisons will be reported as SKIP'
-    ) . "\n"
-);
+fwrite(STDOUT, "Dependency: wamania/php-stemmer (required)\n");
 fwrite(STDOUT, 'English source: ' . $stemmer->source_identity('en') . "\n");
 fwrite(STDOUT, 'Arabic source: ' . $stemmer->source_identity('ar') . "\n");
 fwrite(STDOUT, 'Spanish source: ' . $stemmer->source_identity('es') . "\n");
@@ -174,15 +167,8 @@ foreach ($datasets as $dataset => $metadata) {
         continue;
     }
 
-    if ($code === null || !$stemmer->supports_language($code)) {
-        $reason = $metadata['skip_reason'] ?? 'language is not supported by WP_FTS_SnowballStemmer';
-        $results['skip'][] = $label;
-        fwrite(STDOUT, "[SKIP] {$label}: {$reason}\n");
-        continue;
-    }
-
-    if (!$stemmer->is_language_available($code)) {
-        $reason = 'language runtime is unavailable; Wamania-backed languages require composer install';
+    if ($code === null || !isset($supportedCodes[$code])) {
+        $reason = $metadata['skip_reason'] ?? 'language is not implemented by WP_FTS_SnowballStemmer';
         $results['skip'][] = $label;
         fwrite(STDOUT, "[SKIP] {$label}: {$reason}\n");
         continue;

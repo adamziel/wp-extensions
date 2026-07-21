@@ -107,7 +107,6 @@ function wp_fts_top_language_pack_audit_discover_manifests(string $packRoot): ar
 {
     $skipDirectories = [
         '.aws' => true,
-        '.cao' => true,
         '.git' => true,
         '.hg' => true,
         '.ssh' => true,
@@ -197,7 +196,6 @@ function wp_fts_top_language_pack_audit_loose_manifest_identity(string $path): ?
         'language' => (new WP_FTS_Normalizer())->canonicalize_language((string) $decoded['language']),
         'pack_id' => is_string($decoded['pack_id'] ?? null) ? $decoded['pack_id'] : null,
         'version' => is_string($decoded['version'] ?? null) ? $decoded['version'] : null,
-        'fixture_only' => is_bool($decoded['fixture_only'] ?? null) ? $decoded['fixture_only'] : null,
     ];
 }
 
@@ -239,21 +237,8 @@ function wp_fts_top_language_pack_audit_manifest_candidate(string $path, ?string
     try {
         $result = (new WP_FTS_AnalyzerPackValidator())->validate_metadata($path);
         $manifest = $result['manifest'];
-        $allIndexed = true;
-        $allPlain = true;
-        foreach ($result['runtime_files'] as $runtimeFile) {
-            $allIndexed = $allIndexed && isset($runtimeFile['lookup']);
-            $allPlain = $allPlain && !isset($runtimeFile['compression']);
-        }
-        $eagerFixture = (bool) $manifest['fixture_only']
-            && $allPlain
-            && (int) $result['runtime_rows'] <= WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_ROWS
-            && (int) $result['runtime_lookup_bytes'] <= WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_BYTES;
-        if (!$allIndexed && !$eagerFixture) {
-            throw new RuntimeException('Analyzer pack runtime storage cannot activate within the eager or indexed lookup envelope.');
-        }
         $manifestLanguage = (string) $manifest['language'];
-        $status = ((bool) $manifest['fixture_only']) ? 'fixture_only' : 'pack_backed';
+        $status = 'pack_backed';
         if ($expectedLanguage !== null && $manifestLanguage !== $expectedLanguage) {
             $status = 'language_mismatch';
         }
@@ -292,7 +277,6 @@ function wp_fts_top_language_pack_audit_best_candidate(array $candidates): array
 {
     $priority = [
         'pack_backed' => 4,
-        'fixture_only' => 3,
         'invalid_pack' => 2,
         'language_mismatch' => 1,
     ];

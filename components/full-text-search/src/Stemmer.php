@@ -2,12 +2,11 @@
 declare(strict_types=1);
 
 /**
- * Contract for optional language-aware term stemming.
+ * Contract for language-aware term stemming.
  *
  * Stemmers receive normalized terms from the language pipeline and must return
  * a normalized term string. They should be conservative: returning the original
- * term is preferred when a language is unsupported or an implementation is not
- * available.
+ * term is preferred when a language is unsupported.
  */
 interface WP_FTS_Stemmer
 {
@@ -16,33 +15,14 @@ interface WP_FTS_Stemmer
      *
      * @param string $term Normalized term text, not namespaced.
      * @param string $language Canonical language tag such as `en` or `pl`.
-     * @return string Stemmed term, or the original term when no safe stemming is
-     *         available.
+     * @return string Stemmed term, or the original term for an unsupported
+     *         language.
      */
     public function stem(string $term, string $language): string;
 }
 
 /**
- * Stemmer implementation that deliberately leaves all terms unchanged.
- */
-final class WP_FTS_NoopStemmer implements WP_FTS_Stemmer
-{
-    /**
-     * Return the input term exactly as supplied.
-     *
-     * @param string $term Normalized term text.
-     * @param string $language Canonical language tag; accepted for interface
-     *        compatibility.
-     * @return string The unchanged term.
-     */
-    public function stem(string $term, string $language): string
-    {
-        return $term;
-    }
-}
-
-/**
- * Deterministic baseline stemmer for top spoken languages without full packs.
+ * Deterministic baseline stemmer for top spoken languages without dictionary packs.
  *
  * This is intentionally smaller than a Snowball or dictionary lemmatizer. It
  * applies conservative suffix/affix rules that improve first-pass recall for
@@ -123,25 +103,6 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
     }
 
     /**
-     * @param array<int,array{0:string,1:string,2:int}> $rules
-     */
-    private function strip_prefix_rules(string $term, array $rules): string
-    {
-        foreach ($rules as [$prefix, $replacement, $minStemLength]) {
-            if (!str_starts_with($term, $prefix)) {
-                continue;
-            }
-
-            $candidate = $replacement . substr($term, strlen($prefix));
-            if ($this->char_length($candidate) >= $minStemLength) {
-                return $candidate;
-            }
-        }
-
-        return $term;
-    }
-
-    /**
      * @param array<int,array{0:string,1:string,2:int,3?:string[]}> $rules
      */
     private function strip_suffix_rules(string $term, array $rules): string
@@ -207,7 +168,7 @@ final class WP_FTS_CallbackStemmer implements WP_FTS_Stemmer
 
     /**
      * @param callable $callback Function accepting `($term, $language)` and
-     *        returning a replacement term.
+     *        returning one unpadded non-empty replacement string.
      */
     public function __construct(callable $callback)
     {
@@ -219,20 +180,28 @@ final class WP_FTS_CallbackStemmer implements WP_FTS_Stemmer
      *
      * @param string $term Normalized term text.
      * @param string $language Canonical language tag.
-     * @return string Callback result cast to string.
+     * @return string Exact replacement term returned by the callback.
      */
     public function stem(string $term, string $language): string
     {
-        return (string) ($this->callback)($term, $language);
+        $stemmed = ($this->callback)($term, $language);
+        if (!is_string($stemmed)) {
+            throw new UnexpectedValueException('A stemmer callback must return a string.');
+        }
+        if ($stemmed === '' || trim($stemmed) !== $stemmed) {
+            throw new UnexpectedValueException('A stemmer callback must return an unpadded non-empty string.');
+        }
+
+        return $stemmed;
     }
 }
 
 /**
- * Uses the optional Wamania Snowball package for languages verified by tests.
+ * Uses the required Wamania Snowball package for languages verified by tests.
  *
- * Unsupported languages and missing packages are no-ops. The allowlist is
- * intentionally narrow so enabling stemming does not silently switch to
- * algorithms that diverge from the bundled Snowball compliance data.
+ * Unsupported languages are no-ops. The allowlist is intentionally narrow so
+ * enabling stemming does not silently switch to algorithms that diverge from
+ * the bundled Snowball compliance data.
  */
 final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
 {
@@ -245,6 +214,8 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
     private WP_FTS_PortugueseSnowballStemmer $portugueseStemmer;
     private WP_FTS_IndonesianSnowballStemmer $indonesianStemmer;
     private WP_FTS_HindiSnowballStemmer $hindiStemmer;
+    private \Wamania\Snowball\Stemmer\Stemmer $catalanStemmer;
+    private \Wamania\Snowball\Stemmer\Stemmer $dutchStemmer;
 
     /**
      * Initialize the set of Snowball languages accepted by this adapter.
@@ -259,10 +230,16 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
         ?WP_FTS_ArabicSnowballStemmer $arabicStemmer = null
     )
     {
+        if (!class_exists(\Wamania\Snowball\StemmerFactory::class)) {
+            throw new LogicException(
+                'WP_FTS_SnowballStemmer requires wamania/php-stemmer. Install Composer dependencies before constructing the analyzer.'
+            );
+        }
+
         // Expose only implementations that match the official Snowball
         // fixtures exactly. Arabic, English, Spanish, French, Hindi,
         // Portuguese, and Indonesian are local generated Snowball ports;
-        // Catalan and Dutch Porter remain Wamania-backed optional paths. Other
+        // Catalan and Dutch Porter are Wamania-backed paths. Other
         // Wamania classes currently diverge from the current snowball-data
         // outputs and are treated as no-ops until their algorithms are
         // replaced or patched.
@@ -284,47 +261,8 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
         $this->portugueseStemmer = $portugueseStemmer ?? new WP_FTS_PortugueseSnowballStemmer();
         $this->indonesianStemmer = $indonesianStemmer ?? new WP_FTS_IndonesianSnowballStemmer();
         $this->hindiStemmer = $hindiStemmer ?? new WP_FTS_HindiSnowballStemmer();
-    }
-
-    /**
-     * Report whether the optional Snowball dependency is installed.
-     *
-     * @return bool True when `Wamania\Snowball\StemmerFactory` can be used.
-     */
-    public function is_available(): bool
-    {
-        return class_exists('\\Wamania\\Snowball\\StemmerFactory');
-    }
-
-    /**
-     * Check whether this adapter is allowed to stem the given language.
-     *
-     * @param string $language Canonical or locale-style language tag.
-     * @return bool True for supported base languages only.
-     */
-    public function supports_language(string $language): bool
-    {
-        return isset($this->supportedLanguages[$this->base_language($language)]);
-    }
-
-    /**
-     * Report whether a supported language has an available runtime path.
-     *
-     * Arabic, English, Spanish, French, Hindi, Portuguese, and Indonesian are
-     * bundled as generated PHP; Wamania-backed languages remain optional and
-     * no-op safely when Composer packages are absent.
-     *
-     * @param string $language Canonical or locale-style language tag.
-     * @return bool True when `stem()` can apply a verified implementation.
-     */
-    public function is_language_available(string $language): bool
-    {
-        $language = $this->base_language($language);
-        if (in_array($language, ['ar', 'en', 'es', 'fr', 'hi', 'id', 'pt'], true)) {
-            return true;
-        }
-
-        return isset($this->supportedLanguages[$language]) && $this->is_available();
+        $this->catalanStemmer = \Wamania\Snowball\StemmerFactory::create('ca');
+        $this->dutchStemmer = \Wamania\Snowball\StemmerFactory::create('nl');
     }
 
     /**
@@ -362,11 +300,11 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
         }
 
         if ($language === 'nl') {
-            return 'wamania/php-stemmer Dutch Porter mapped to nl; verified against snowball-data dutch_porter fixtures when Wamania is installed';
+            return 'wamania/php-stemmer Dutch Porter mapped to nl; verified against snowball-data dutch_porter fixtures';
         }
 
         if ($language === 'ca') {
-            return 'wamania/php-stemmer Catalan; verified against snowball-data catalan fixtures when Wamania is installed';
+            return 'wamania/php-stemmer Catalan; verified against snowball-data catalan fixtures';
         }
 
         return 'unsupported Snowball language; no-op';
@@ -391,14 +329,12 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
     }
 
     /**
-     * Stem with Snowball when the package and language support are present.
-     *
-     * Failures are swallowed and return the original term so indexing/searching
-     * does not become dependent on an optional package at runtime.
+     * Stem one supported language with its verified Snowball implementation.
      *
      * @param string $term Normalized term text.
      * @param string $language Canonical or locale-style language tag.
-     * @return string Stemmed term or original term.
+     * @return string Stemmed term, or the original term for an unsupported
+     *         language.
      */
     public function stem(string $term, string $language): string
     {
@@ -435,16 +371,11 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
             return $this->indonesianStemmer->stem_word($term);
         }
 
-        if (!$this->is_available()) {
-            return $term;
-        }
-
-        try {
-            $stemmer = \Wamania\Snowball\StemmerFactory::create($language);
-            return (string) $stemmer->stem($term);
-        } catch (Throwable) {
-            return $term;
-        }
+        return match ($language) {
+            'ca' => $this->catalanStemmer->stem($term),
+            'nl' => $this->dutchStemmer->stem($term),
+            default => throw new LogicException("Missing Snowball implementation for supported language {$language}."),
+        };
     }
 
     /**
@@ -459,29 +390,11 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
     }
 }
 
-/**
- * Polish stemmer with stable conservative and opt-in verified modes.
- *
- * The default conservative mode preserves the historical suffix-only behavior.
- * The `verified` mode first consults a compact fixture slice and then falls
- * back to the same conservative suffix path for unknown, unprotected terms.
- */
+/** Polish stemmer with bounded suffix-only rules. */
 final class WP_FTS_PolishStemmer implements WP_FTS_Stemmer
 {
-    private string $mode;
-
     /**
-     * @param string $mode `conservative` enables the suffix list, `verified`
-     *        enables the fixture-backed slice plus conservative fallback, and
-     *        `none` disables Polish stemming while preserving the adapter.
-     */
-    public function __construct(string $mode = 'conservative')
-    {
-        $this->mode = $this->normalize_mode($mode);
-    }
-
-    /**
-     * Stem Polish terms when enabled and leave every other language unchanged.
+     * Stem Polish terms and leave every other language unchanged.
      *
      * @param string $term Normalized term text.
      * @param string $language Canonical or locale-style language tag.
@@ -489,12 +402,8 @@ final class WP_FTS_PolishStemmer implements WP_FTS_Stemmer
      */
     public function stem(string $term, string $language): string
     {
-        if ($this->base_language($language) !== 'pl' || $this->mode === 'none') {
+        if ($this->base_language($language) !== 'pl') {
             return $term;
-        }
-
-        if ($this->mode === 'verified') {
-            return $this->verified_stem($term);
         }
 
         return $this->conservative_suffix_stem($term);
@@ -505,46 +414,11 @@ final class WP_FTS_PolishStemmer implements WP_FTS_Stemmer
      */
     public function index_signature(): string
     {
-        $version = $this->mode === 'verified'
-            ? ':' . WP_FTS_PolishVerifiedStemmerData::VERSION
-            : '';
-
-        return 'wp-fts-polish-stemmer:' . $this->mode . $version;
-    }
-
-    /**
-     * Normalize unknown mode strings to the historical conservative behavior.
-     */
-    private function normalize_mode(string $mode): string
-    {
-        $mode = strtolower(trim($mode));
-
-        return in_array($mode, ['conservative', 'verified', 'none'], true)
-            ? $mode
-            : 'conservative';
-    }
-
-    /**
-     * Use the verified fixture slice, then fall back conservatively.
-     *
-     * Protected rows are checked before the stem map so ambiguous forms remain
-     * no-ops if future fixture slices add nearby paradigms.
-     */
-    private function verified_stem(string $term): string
-    {
-        if (isset(WP_FTS_PolishVerifiedStemmerData::protected_term_map()[$term])) {
-            return $term;
-        }
-
-        return WP_FTS_PolishVerifiedStemmerData::stem_map()[$term]
-            ?? $this->conservative_suffix_stem($term);
+        return 'wp-fts-polish-stemmer:conservative';
     }
 
     /**
      * Remove one known suffix only when the remaining stem stays meaningful.
-     *
-     * Stopgap only. The verified mode above is still a fixture-backed stemmer
-     * slice, not a replacement for a full Stempel or Morfologik lemmatizer.
      *
      * @param string $term Normalized Polish term.
      * @return string Term with one conservative suffix removed, or original.

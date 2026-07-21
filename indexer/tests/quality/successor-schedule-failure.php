@@ -45,11 +45,12 @@ test_case('manual successor schedule failure reports a future retry without poll
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_posts'][126] = wp_fts_test_backfill_post(126, 'post', 'publish', 'Failed future successor');
     $queue = new WP_FTS_Index_Queue($fake);
-    $queue->enqueue(126);
+    $queue->enqueue_many([126]);
     $claim = $queue->claim_batch(1)[0] ?? null;
     assert_true(is_array($claim), 'future schedule-failure fixture should own one generation');
-    $retry = is_array($claim) ? $queue->fail($claim) : [];
-    $retryAt = (int) ($retry['available_at'] ?? 0);
+    $failed = is_array($claim) ? $queue->fail_many([$claim]) : 0;
+    assert_same(1, $failed, 'future schedule-failure fixture should enter durable retry state');
+    $retryAt = (int) ($fake->queue[126]['available_at'] ?? 0);
     $fake->queries = [];
     $GLOBALS['wp_fts_test_schedule_calls'] = [];
     $GLOBALS['wp_fts_test_scheduled'] = [];

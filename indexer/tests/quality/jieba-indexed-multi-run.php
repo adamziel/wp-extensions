@@ -98,7 +98,6 @@ echo json_encode([
         'complete_pinned_indexed_range_reads' => 5632,
         'elapsed_seconds_complete_pinned_cache' => 5.0,
         'elapsed_seconds_per_pinned_construction' => 1.0,
-        'complete_dictionary_scans_per_analysis' => 0,
         'source_hash_scans_per_pinned_construction' => 0,
         'php_peak_delta_bytes_standard_cases' => 25165824,
         'php_peak_delta_bytes_disjoint_prefix_sets' => 41943040,

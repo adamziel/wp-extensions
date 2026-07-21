@@ -31,9 +31,8 @@ if (!class_exists('WP_FTS_Analyzer', false)) {
 $wp_fts_files = [
     __DIR__ . '/PostContentExtractor.php',
     __DIR__ . '/IndexQueue.php',
-    __DIR__ . '/MysqlStorage.php',
+    __DIR__ . '/RelationalStorage.php',
     __DIR__ . '/Plugin.php',
-    __DIR__ . '/WPCLICommand.php',
 ];
 
 foreach ($wp_fts_files as $wp_fts_file) {

@@ -12,12 +12,125 @@ final class WP_FTS_AnalyzerPackValidator
 {
     private const MANIFEST_SCHEMA_VERSION = 1;
     public const RUNTIME_FORMAT_LEMMA_TSV = 'wp-fts-lemma-tsv-v1';
-    public const RUNTIME_FORMAT_POLISH_LEGACY_TSV = 'wp-fts-polish-lemma-tsv-v1';
     public const MAX_LEMMAS_PER_SURFACE = WP_FTS_LemmaPackLimits::MAX_LEMMAS_PER_SURFACE;
-    private const DEFAULT_MAX_COLLECTED_RUNTIME_ROWS = 50000;
     private const MAX_DIGEST_ATTESTATIONS = 256;
     private const MAX_RUNTIME_BLOCK_ATTESTATIONS = 8192;
     public const RUNTIME_COMPRESSION_GZIP = 'gzip';
+    private const MANIFEST_KEYS = [
+        'schema_version',
+        'pack_id',
+        'language',
+        'version',
+        'capabilities',
+        'runtime',
+        'source',
+        'license',
+        'attribution',
+        'provenance',
+    ];
+    private const RUNTIME_KEYS = [
+        'format',
+        'normalization',
+        'ambiguity_policy',
+        'total_rows',
+        'total_sha256',
+        'files',
+    ];
+    private const RUNTIME_FILE_KEYS = [
+        'path',
+        'sha256',
+        'rows',
+        'first_surface',
+        'last_surface',
+        'compression',
+        'lookup',
+    ];
+    private const LOOKUP_KEYS = ['format', 'path', 'sha256', 'blocks'];
+    private const SOURCE_KEYS = [
+        'name',
+        'version',
+        'file',
+        'url',
+        'repository_url',
+        'commit',
+        'artifact_sha256',
+        'byte_count',
+        'files',
+        'column_model',
+        'parse_stats',
+        'retrieval_note',
+    ];
+    private const SOURCE_FILE_KEYS = ['path', 'sha256', 'byte_count'];
+    private const LICENSE_KEYS = ['spdx_id', 'license_url', 'notice_path', 'notice_required'];
+    private const ATTRIBUTION_KEYS = ['notice_path', 'upstream', 'note'];
+    private const PROVENANCE_KEYS = [
+        'importer',
+        'importer_commit',
+        'importer_command',
+        'no_runtime_network_access',
+        'no_full_third_party_dictionary_dump',
+        'full_third_party_dictionary_dump_generated',
+        'rows_per_file',
+        'chunk_rows',
+        'source_importer',
+        'delegated_runtime_importer',
+        'local_note',
+    ];
+    private const SOURCE_PARSE_STAT_KEYS = [
+        'accepted_rows',
+        'accepted_source_rows',
+        'ambiguity_noop_source_pairs',
+        'ambiguity_noop_surfaces',
+        'ambiguous_surfaces',
+        'blank_lines',
+        'chunk_files',
+        'chunk_lexical_byte_limit',
+        'chunk_merge_fan_in_limit',
+        'chunk_merge_outputs',
+        'chunk_merge_passes',
+        'comment_lines',
+        'deduplicated_rows',
+        'invalid_column_rows',
+        'invalid_runtime_token_rows',
+        'lexical_rows',
+        'lookup_blocks',
+        'lookup_index_bytes',
+        'max_chunk_lexical_bytes',
+        'max_chunk_merge_inputs',
+        'max_live_chunk_files',
+        'metadata_lines',
+        'multiword_token_rows',
+        'empty_node_rows',
+        'notice_metadata_byte_limit',
+        'notice_metadata_bytes',
+        'notice_metadata_line_limit',
+        'placeholder_rows',
+        'rows_with_features',
+        'rows_with_source_notes',
+        'rows_with_tags',
+        'runtime_decoded_bytes',
+        'runtime_encoded_bytes',
+        'runtime_lookup_byte_limit',
+        'runtime_lookup_bytes',
+        'runtime_rows',
+        'skipped_invalid_tokens',
+        'source_decoded_byte_limit',
+        'source_decoded_bytes',
+        'source_entries',
+        'source_files',
+        'source_line_limit',
+        'source_lines',
+        'source_max_depth',
+        'source_path',
+        'source_path_bytes',
+        'source_physical_byte_limit',
+        'source_physical_bytes',
+        'staged_row_limit',
+        'staged_tsv_byte_limit',
+        'staged_tsv_bytes',
+        'unambiguous_surfaces',
+        'unique_source_rows',
+    ];
 
     /** @var array<string,true> */
     private static array $digestAttestations = [];
@@ -33,41 +146,15 @@ final class WP_FTS_AnalyzerPackValidator
     /** @var array<string,array<string,string[]>> */
     private array $requestRuntimeBlockAttestations = [];
 
-    private int $maxCollectedRuntimeRows;
     private int $digestFileHashes = 0;
     private int $digestBytesHashed = 0;
 
-    public function __construct(int $maxCollectedRuntimeRows = self::DEFAULT_MAX_COLLECTED_RUNTIME_ROWS)
-    {
-        if ($maxCollectedRuntimeRows < 1) {
-            throw new InvalidArgumentException('Analyzer pack row collection cap must be positive.');
-        }
-
-        $this->maxCollectedRuntimeRows = $maxCollectedRuntimeRows;
-    }
-
     /**
-     * Return the bundled Polish fixture manifest path.
+     * Return the bundled Polish pack manifest path.
      */
-    public static function default_polish_fixture_manifest(): string
+    public static function default_polish_manifest(): string
     {
-        return self::bundled_analyzer_pack_root() . '/pl-morfologik-polimorf-fixture/manifest.json';
-    }
-
-    /**
-     * Return the bundled compressed full Polish pack used by the Playground sandbox.
-     */
-    public static function default_polish_playground_full_manifest(): string
-    {
-        return self::bundled_analyzer_pack_root() . '/pl-polimorf-20180722-full-playground/manifest.json';
-    }
-
-    /**
-     * Return the bundled synthetic Bengali fixture manifest path.
-     */
-    public static function default_synthetic_bengali_fixture_manifest(): string
-    {
-        return self::bundled_analyzer_pack_root() . '/bn-synthetic-lemma-fixture/manifest.json';
+        return self::bundled_analyzer_pack_root() . '/pl-polimorf-20180722-full/manifest.json';
     }
 
     /**
@@ -84,31 +171,30 @@ final class WP_FTS_AnalyzerPackValidator
             return [];
         }
 
+        return self::validated_manifest_paths_by_language($paths);
+    }
+
+    /**
+     * Validate discovered manifests and key their paths by canonical language.
+     *
+     * @param array<int,mixed> $paths
+     * @return array<string,string>
+     */
+    private static function validated_manifest_paths_by_language(array $paths): array
+    {
+        $validator = new self();
         $manifests = [];
         foreach ($paths as $manifestPath) {
-            if (!is_string($manifestPath) || !is_file($manifestPath)) {
-                continue;
+            if (!is_string($manifestPath)) {
+                throw new RuntimeException('Discovered analyzer pack manifest paths must be strings.');
             }
 
-            $json = file_get_contents(
-                $manifestPath,
-                false,
-                null,
-                0,
-                WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES + 1
-            );
-            if (!is_string($json) || strlen($json) > WP_FTS_Analyzer_Config_Limits::MAX_MANIFEST_BYTES) {
-                continue;
-            }
-
-            $manifest = json_decode($json, true);
-            if (!is_array($manifest) || !is_scalar($manifest['language'] ?? null)) {
-                continue;
-            }
-
-            $language = WP_FTS_TermNamespace::canonicalize_lang((string) $manifest['language']);
-            if ($language === '') {
-                continue;
+            $envelope = $validator->resource_envelope($manifestPath);
+            $language = $envelope['language'];
+            if (isset($manifests[$language])) {
+                throw new RuntimeException(
+                    "Bundled analyzer packs contain duplicate language {$language}."
+                );
             }
 
             $manifests[$language] = $manifestPath;
@@ -144,7 +230,10 @@ final class WP_FTS_AnalyzerPackValidator
      */
     public static function gzip_available(): bool
     {
-        return function_exists('gzopen') && function_exists('gzgets') && function_exists('gzclose');
+        return function_exists('gzopen')
+            && function_exists('gzgets')
+            && function_exists('gzeof')
+            && function_exists('gzclose');
     }
 
     /**
@@ -180,7 +269,7 @@ final class WP_FTS_AnalyzerPackValidator
      * Analyzer configuration uses this pass to reject an aggregate overflow
      * before opening lookup headers or constructing any individual pack.
      *
-     * @return array{manifest_path:string,manifest_sha256:string,language:string,fixture_only:bool,eager_fixture_candidate:bool,eager_fixture_decoded_bytes:int,runtime_rows:int,runtime_bytes:int,runtime_files:int,lookup_blocks:int,runtime_lookup_bytes:int}
+     * @return array{manifest_path:string,manifest_sha256:string,language:string,runtime_rows:int,runtime_bytes:int,runtime_files:int,lookup_blocks:int,runtime_lookup_bytes:int}
      */
     public function resource_envelope(string $manifestPath): array
     {
@@ -188,15 +277,9 @@ final class WP_FTS_AnalyzerPackValidator
         $manifest = $manifestData['manifest'];
         $lookupBlocks = 0;
         $runtimeBytes = 0;
-        $runtimeIsPlain = true;
         $packDir = dirname($manifestData['path']);
         foreach ($manifest['runtime']['files'] as $file) {
-            if (isset($file['lookup']['blocks']) && is_int($file['lookup']['blocks'])) {
-                $lookupBlocks += $file['lookup']['blocks'];
-            }
-            if (isset($file['compression'])) {
-                $runtimeIsPlain = false;
-            }
+            $lookupBlocks += (int) $file['lookup']['blocks'];
             $runtimePath = $this->runtime_file_path($packDir, (string) $file['path']);
             $runtimeSize = @filesize($runtimePath);
             if (!is_int($runtimeSize) || $runtimeSize < 0) {
@@ -205,19 +288,11 @@ final class WP_FTS_AnalyzerPackValidator
             $runtimeBytes += $runtimeSize;
         }
 
-        $eagerFixtureCandidate = self::manifest_can_use_eager_fixture_storage($manifest)
-            && $runtimeBytes
-                <= WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_BYTES
-                    + WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_RUNTIME_FRAMING_BYTES;
-
         return [
             'manifest_path' => $manifestData['path'],
             'manifest_sha256' => $manifestData['sha256'],
             'language' => (string) $manifest['language'],
-            'fixture_only' => (bool) $manifest['fixture_only'],
-            'eager_fixture_candidate' => $eagerFixtureCandidate,
-            'eager_fixture_decoded_bytes' => $eagerFixtureCandidate && $runtimeIsPlain ? $runtimeBytes : 0,
-            'runtime_rows' => $this->declared_runtime_rows($manifest),
+            'runtime_rows' => $manifest['runtime']['total_rows'],
             'runtime_bytes' => $runtimeBytes,
             'runtime_files' => count($manifest['runtime']['files']),
             'lookup_blocks' => $lookupBlocks,
@@ -229,42 +304,20 @@ final class WP_FTS_AnalyzerPackValidator
     }
 
     /**
-     * Return whether manifest metadata permits the bounded eager fixture path.
-     * The caller separately applies the physical and decoded byte ceilings.
+     * Validate manifest shape, pack-local file references, optional runtime
+     * digest verification, lookup-sidecar attestations, and declared runtime
+     * metadata without parsing all runtime rows.
      *
-     * @param array<string,mixed> $manifest
-     */
-    public static function manifest_can_use_eager_fixture_storage(array $manifest): bool
-    {
-        if (($manifest['fixture_only'] ?? false) !== true) {
-            return false;
-        }
-
-        $rows = 0;
-        foreach ($manifest['runtime']['files'] as $file) {
-            $rows += (int) $file['rows'];
-        }
-
-        return $rows <= WP_FTS_LemmaPackLimits::MAX_EAGER_FIXTURE_ROWS;
-    }
-
-    /**
-     * Validate manifest shape, pack-local file references, optional compressed
-     * file digests, lookup-sidecar attestations, and declared runtime metadata
-     * without parsing all runtime rows.
-     *
-     * Use this for runtime construction of full packs; call validate() when a
+     * Use this for runtime construction of packs; call validate() when a
      * full row/digest audit is required.
      *
      * @return array{
      *   manifest_path:string,
      *   manifest_sha256:string,
      *   manifest:array<string,mixed>,
-     *   rows:array<int,array{surface:string,lemma:string,file:string,line:int}>,
      *   runtime_rows:int,
-     *   runtime_decoded_bytes:int,
-     *   rows_collected:bool,
-     *   runtime_files:array<string,array{sha256:string,rows:int,path:string,compression?:string,first_surface?:string,last_surface?:string,lookup?:array<string,mixed>}>
+     *   runtime_lookup_bytes:int,
+     *   runtime_files:array<string,array{sha256:string,rows:int,path:string,compression:string,first_surface?:string,last_surface?:string,lookup:array<string,mixed>}>
      * }
      */
     public function validate_metadata(
@@ -278,13 +331,12 @@ final class WP_FTS_AnalyzerPackValidator
         $manifest = $manifestData['manifest'];
         $packDir = dirname($manifestPath);
         $runtimeLookupBytes = $this->assert_runtime_lookup_pack_bytes($manifest, $packDir);
+        $this->ensure_gzip_available();
 
         $runtimeFiles = [];
         $totalRows = 0;
         foreach ($manifest['runtime']['files'] as $file) {
             $runtimePath = $this->runtime_file_path($packDir, $file['path']);
-            $compression = $this->runtime_file_compression($file);
-            $this->ensure_runtime_compression_available($compression);
             $digest = (string) $file['sha256'];
             if ($verifyRuntimeFileDigests) {
                 $digest = $this->attest_file_digest($runtimePath, $digest, "Runtime digest mismatch for {$file['path']}.");
@@ -294,25 +346,21 @@ final class WP_FTS_AnalyzerPackValidator
                 'sha256' => $digest,
                 'rows' => (int) $file['rows'],
                 'path' => $runtimePath,
+                'compression' => self::RUNTIME_COMPRESSION_GZIP,
             ];
-            if ($compression !== null) {
-                $runtimeFile['compression'] = $compression;
-            }
             if (isset($file['first_surface'])) {
                 $runtimeFile['first_surface'] = (string) $file['first_surface'];
             }
             if (isset($file['last_surface'])) {
                 $runtimeFile['last_surface'] = (string) $file['last_surface'];
             }
-            if (isset($file['lookup'])) {
-                $runtimeFile['lookup'] = $this->lookup_index_metadata(
-                    $packDir,
-                    $file,
-                    $digest,
-                    (int) $file['rows'],
-                    $verifyRuntimeFileDigests
-                );
-            }
+            $runtimeFile['lookup'] = $this->lookup_index_metadata(
+                $packDir,
+                $file,
+                $digest,
+                (int) $file['rows'],
+                $verifyRuntimeFileDigests
+            );
             $runtimeFiles[(string) $file['path']] = $runtimeFile;
             $totalRows += (int) $file['rows'];
         }
@@ -320,7 +368,7 @@ final class WP_FTS_AnalyzerPackValidator
         if ($totalRows < 1) {
             throw new RuntimeException('Analyzer pack runtime must contain at least one row.');
         }
-        if (isset($manifest['runtime']['total_rows']) && $manifest['runtime']['total_rows'] !== $totalRows) {
+        if ($manifest['runtime']['total_rows'] !== $totalRows) {
             throw new RuntimeException('Analyzer pack runtime total_rows mismatch.');
         }
 
@@ -328,10 +376,8 @@ final class WP_FTS_AnalyzerPackValidator
             'manifest_path' => $manifestPath,
             'manifest_sha256' => $manifestData['sha256'],
             'manifest' => $manifest,
-            'rows' => [],
             'runtime_rows' => $totalRows,
             'runtime_lookup_bytes' => $runtimeLookupBytes,
-            'rows_collected' => false,
             'runtime_files' => $runtimeFiles,
         ];
     }
@@ -339,32 +385,24 @@ final class WP_FTS_AnalyzerPackValidator
     /**
      * Validate a pack manifest and all referenced runtime files.
      *
-     * Fixture packs may return their tiny reviewed row set for eager tests and
-     * lookup construction. Non-fixture full packs, and any pack above the bounded
-     * collection cap, are streamed so the validator enforces the same file, count,
-     * digest, sort, and uniqueness invariants without retaining the whole
-     * dictionary in memory.
+     * Runtime rows are streamed so validation enforces file, count, digest,
+     * sort, and uniqueness invariants without retaining the dictionary in
+     * memory.
      *
      * @return array{
      *   manifest_path:string,
      *   manifest_sha256:string,
      *   manifest:array<string,mixed>,
-     *   rows:array<int,array{surface:string,lemma:string,file:string,line:int}>,
      *   runtime_rows:int,
-     *   rows_collected:bool,
-     *   runtime_files:array<string,array{sha256:string,rows:int,path:string,compression?:string,first_surface?:string,last_surface?:string,lookup?:array<string,mixed>}>
+     *   runtime_lookup_bytes:int,
+     *   runtime_files:array<string,array{sha256:string,rows:int,path:string,compression:string,first_surface?:string,last_surface?:string,lookup:array<string,mixed>}>
      * }
      */
     public function validate(
         string $manifestPath,
-        bool $collectRows = true,
-        ?int $maxCollectedRuntimeBytes = null,
         ?string $expectedManifestSha256 = null
     ): array
     {
-        if ($maxCollectedRuntimeBytes !== null && $maxCollectedRuntimeBytes < 1) {
-            throw new InvalidArgumentException('Analyzer pack row collection byte cap must be positive.');
-        }
         $manifestData = $this->load_validated_manifest($manifestPath);
         $this->assert_expected_manifest_sha256($manifestData['sha256'], $expectedManifestSha256);
         $manifestPath = $manifestData['path'];
@@ -372,21 +410,15 @@ final class WP_FTS_AnalyzerPackValidator
 
         $packDir = dirname($manifestPath);
         $runtimeLookupBytes = $this->assert_runtime_lookup_pack_bytes($manifest, $packDir);
-        $rows = [];
-        $collectRuntimeRows = $collectRows
-            && (bool) $manifest['fixture_only']
-            && $this->declared_runtime_rows($manifest) <= $this->maxCollectedRuntimeRows;
+        $this->ensure_gzip_available();
         $runtimeFiles = [];
         $previousKey = null;
         $currentSurface = null;
         $currentSurfaceLemmaCount = 0;
-        $collectedRuntimeBytes = 0;
         $totalRows = 0;
         $runtimeDigest = hash_init('sha256');
         foreach ($manifest['runtime']['files'] as $file) {
             $runtimePath = $this->runtime_file_path($packDir, $file['path']);
-            $compression = $this->runtime_file_compression($file);
-            $this->ensure_runtime_compression_available($compression);
             $digest = $this->attest_file_digest(
                 $runtimePath,
                 (string) $file['sha256'],
@@ -395,17 +427,12 @@ final class WP_FTS_AnalyzerPackValidator
 
             $fileResult = $this->parse_runtime_rows(
                 $runtimePath,
-                $compression,
                 (string) $manifest['language'],
-                $collectRuntimeRows,
                 $previousKey,
                 $currentSurface,
                 $currentSurfaceLemmaCount,
-                $collectedRuntimeBytes,
-                $maxCollectedRuntimeBytes,
                 (int) $file['rows'],
-                $runtimeDigest,
-                $rows
+                $runtimeDigest
             );
             if ($fileResult['rows_count'] !== (int) $file['rows']) {
                 throw new RuntimeException("Runtime row count mismatch for {$file['path']}.");
@@ -416,21 +443,17 @@ final class WP_FTS_AnalyzerPackValidator
                 'sha256' => $digest,
                 'rows' => $fileResult['rows_count'],
                 'path' => $runtimePath,
+                'compression' => self::RUNTIME_COMPRESSION_GZIP,
             ];
-            if ($compression !== null) {
-                $runtimeFile['compression'] = $compression;
-            }
             if ($fileResult['first_surface'] !== null) {
                 $runtimeFile['first_surface'] = $fileResult['first_surface'];
             }
             if ($fileResult['last_surface'] !== null) {
                 $runtimeFile['last_surface'] = $fileResult['last_surface'];
             }
-            if (isset($file['lookup'])) {
-                $lookup = $this->lookup_index_metadata($packDir, $file, $digest, $fileResult['rows_count'], true);
-                WP_FTS_LemmaPackLookupIndex::validate_content($lookup, $fileResult['rows_sha256']);
-                $runtimeFile['lookup'] = $lookup;
-            }
+            $lookup = $this->lookup_index_metadata($packDir, $file, $digest, $fileResult['rows_count'], true);
+            WP_FTS_LemmaPackLookupIndex::validate_content($lookup, $fileResult['rows_sha256']);
+            $runtimeFile['lookup'] = $lookup;
             $runtimeFiles[(string) $file['path']] = $runtimeFile;
             $totalRows += $fileResult['rows_count'];
         }
@@ -438,11 +461,11 @@ final class WP_FTS_AnalyzerPackValidator
         if ($totalRows < 1) {
             throw new RuntimeException('Analyzer pack runtime must contain at least one row.');
         }
-        if (isset($manifest['runtime']['total_rows']) && $manifest['runtime']['total_rows'] !== $totalRows) {
+        if ($manifest['runtime']['total_rows'] !== $totalRows) {
             throw new RuntimeException('Analyzer pack runtime total_rows mismatch.');
         }
         $totalDigest = hash_final($runtimeDigest);
-        if (isset($manifest['runtime']['total_sha256']) && $manifest['runtime']['total_sha256'] !== $totalDigest) {
+        if ($manifest['runtime']['total_sha256'] !== $totalDigest) {
             throw new RuntimeException('Analyzer pack runtime total_sha256 mismatch.');
         }
 
@@ -450,11 +473,8 @@ final class WP_FTS_AnalyzerPackValidator
             'manifest_path' => $manifestPath,
             'manifest_sha256' => $manifestData['sha256'],
             'manifest' => $manifest,
-            'rows' => $rows,
             'runtime_rows' => $totalRows,
-            'runtime_decoded_bytes' => $collectedRuntimeBytes,
             'runtime_lookup_bytes' => $runtimeLookupBytes,
-            'rows_collected' => $collectRuntimeRows,
             'runtime_files' => $runtimeFiles,
         ];
     }
@@ -480,7 +500,7 @@ final class WP_FTS_AnalyzerPackValidator
             || !is_array($runtimeFile['lookup']['blocks'])
             || $runtimeFile['lookup']['blocks'] === []
         ) {
-            throw new LogicException('Lazy runtime attestation requires a lookup sidecar.');
+            throw new LogicException('Indexed runtime attestation requires a lookup sidecar.');
         }
         if (count($runtimeFile['lookup']['blocks']) > WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_FILE) {
             throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
@@ -560,18 +580,17 @@ final class WP_FTS_AnalyzerPackValidator
     }
 
     /**
-     * Validate required manifest fields and fixture-only boundaries.
+     * Validate required manifest fields and indexed-runtime boundaries.
      *
      * @param array<string,mixed> $manifest
      */
     private function validate_manifest_shape(array $manifest): void
     {
+        $this->assert_object_keys($manifest, self::MANIFEST_KEYS, 'manifest');
         $this->require_int($manifest, 'schema_version', self::MANIFEST_SCHEMA_VERSION);
         $this->require_non_empty_string($manifest, 'pack_id');
         $this->require_language_tag($manifest, 'language');
         $this->require_non_empty_string($manifest, 'version');
-        $this->require_bool_field($manifest, 'fixture_only');
-        $this->require_bool($manifest, 'default_enabled', false);
         $this->require_string_array_contains($manifest, 'capabilities', 'dictionary-lemmatizer');
 
         foreach (['source', 'license', 'attribution', 'provenance'] as $field) {
@@ -580,32 +599,45 @@ final class WP_FTS_AnalyzerPackValidator
             }
         }
 
-        if (empty($manifest['provenance']['no_runtime_network_access'])) {
+        if (($manifest['provenance']['no_runtime_network_access'] ?? null) !== true) {
             throw new RuntimeException('Analyzer pack manifest must declare no runtime network access.');
         }
-        if ($manifest['fixture_only'] === true && empty($manifest['provenance']['no_full_third_party_dictionary_dump'])) {
-            throw new RuntimeException('Analyzer pack manifest must declare that no full third-party dictionary dump is vendored.');
-        }
-        if ($manifest['fixture_only'] === false) {
-            $this->validate_full_pack_source_metadata($manifest);
-        }
+        $this->validate_source_metadata($manifest);
 
         if (!isset($manifest['runtime']) || !is_array($manifest['runtime'])) {
             throw new RuntimeException('Analyzer pack manifest missing runtime object.');
         }
-        if (!in_array($manifest['runtime']['format'] ?? null, self::supported_runtime_formats(), true)) {
+        $this->assert_object_keys($manifest['runtime'], self::RUNTIME_KEYS, 'runtime');
+        if (($manifest['runtime']['format'] ?? null) !== self::RUNTIME_FORMAT_LEMMA_TSV) {
             throw new RuntimeException('Analyzer pack runtime format is not supported.');
         }
-        if (isset($manifest['runtime']['total_sha256']) && (!is_string($manifest['runtime']['total_sha256']) || strlen($manifest['runtime']['total_sha256']) !== 64 || !$this->is_hex_digest($manifest['runtime']['total_sha256']))) {
-            throw new RuntimeException('Analyzer pack runtime total_sha256 must be a 64-character hex digest.');
+        $expectedNormalization = "WP_FTS_Normalizer {$manifest['language']} with fold_diacritics=true";
+        if (($manifest['runtime']['normalization'] ?? null) !== $expectedNormalization) {
+            throw new RuntimeException(
+                "Analyzer pack runtime normalization must be {$expectedNormalization}."
+            );
         }
-        if (isset($manifest['runtime']['total_rows']) && (!is_int($manifest['runtime']['total_rows']) || $manifest['runtime']['total_rows'] < 1)) {
+        if (!array_key_exists('total_sha256', $manifest['runtime'])) {
+            throw new RuntimeException('Analyzer pack runtime total_sha256 is required.');
+        }
+        if (!is_string($manifest['runtime']['total_sha256']) || strlen($manifest['runtime']['total_sha256']) !== 64 || !$this->is_lower_hex_digest($manifest['runtime']['total_sha256'])) {
+            throw new RuntimeException('Analyzer pack runtime total_sha256 must be a lowercase 64-character hex digest.');
+        }
+        if (!array_key_exists('total_rows', $manifest['runtime'])) {
+            throw new RuntimeException('Analyzer pack runtime total_rows is required.');
+        }
+        if (!is_int($manifest['runtime']['total_rows']) || $manifest['runtime']['total_rows'] < 1) {
             throw new RuntimeException('Analyzer pack runtime total_rows must be a positive integer.');
         }
-        if (isset($manifest['runtime']['ambiguity_policy']) && $manifest['runtime']['ambiguity_policy'] !== 'ambiguous_surface_noop') {
+        if (($manifest['runtime']['ambiguity_policy'] ?? null) !== 'ambiguous_surface_noop') {
             throw new RuntimeException('Analyzer pack runtime ambiguity_policy is not supported.');
         }
-        if (!isset($manifest['runtime']['files']) || !is_array($manifest['runtime']['files']) || $manifest['runtime']['files'] === []) {
+        if (
+            !isset($manifest['runtime']['files'])
+            || !is_array($manifest['runtime']['files'])
+            || !array_is_list($manifest['runtime']['files'])
+            || $manifest['runtime']['files'] === []
+        ) {
             throw new RuntimeException('Analyzer pack manifest must list runtime files.');
         }
         if (count($manifest['runtime']['files']) > WP_FTS_Analyzer_Config_Limits::MAX_RUNTIME_FILES) {
@@ -621,30 +653,50 @@ final class WP_FTS_AnalyzerPackValidator
         $language = (string) $manifest['language'];
         $previousLastSurface = null;
         $lookupBlocks = 0;
+        $runtimeRows = 0;
         foreach ($manifest['runtime']['files'] as $file) {
             if (!is_array($file)) {
                 throw new RuntimeException('Analyzer pack runtime file entries must be objects.');
             }
+            $this->assert_object_keys($file, self::RUNTIME_FILE_KEYS, 'runtime file');
             if (!isset($file['path'], $file['sha256'], $file['rows'])) {
                 throw new RuntimeException('Analyzer pack runtime file entries require path, sha256, and rows.');
             }
-            if (!is_string($file['path']) || trim($file['path']) === '' || $this->is_absolute_path($file['path'])) {
-                throw new RuntimeException('Analyzer pack runtime file path must be a relative non-empty string.');
+            if (
+                !is_string($file['path'])
+                || $file['path'] === ''
+                || trim($file['path']) !== $file['path']
+                || $this->is_absolute_path($file['path'])
+            ) {
+                throw new RuntimeException('Analyzer pack runtime file path must be a relative unpadded non-empty string.');
             }
             WP_FTS_Analyzer_Config_Limits::assert_path($file['path'], 'Analyzer pack runtime file path');
-            if (!is_string($file['sha256']) || strlen($file['sha256']) !== 64 || !$this->is_hex_digest($file['sha256'])) {
-                throw new RuntimeException('Analyzer pack runtime sha256 must be a 64-character hex digest.');
+            if (!is_string($file['sha256']) || strlen($file['sha256']) !== 64 || !$this->is_lower_hex_digest($file['sha256'])) {
+                throw new RuntimeException('Analyzer pack runtime sha256 must be a lowercase 64-character hex digest.');
             }
             if (!is_int($file['rows']) || $file['rows'] < 1) {
                 throw new RuntimeException('Analyzer pack runtime rows must be a positive integer.');
             }
+            if ($runtimeRows > PHP_INT_MAX - $file['rows']) {
+                throw new RuntimeException('Analyzer pack runtime row count exceeds the platform integer range.');
+            }
+            $runtimeRows += $file['rows'];
             foreach (['first_surface', 'last_surface'] as $field) {
-                if (isset($file[$field]) && (!is_string($file[$field]) || trim($file[$field]) === '')) {
-                    throw new RuntimeException("Analyzer pack runtime {$field} must be a non-empty string when present.");
+                if (
+                    array_key_exists($field, $file)
+                    && (
+                        !is_string($file[$field])
+                        || $file[$field] === ''
+                        || trim($file[$field]) !== $file[$field]
+                    )
+                ) {
+                    throw new RuntimeException(
+                        "Analyzer pack runtime {$field} must be an unpadded non-empty string when present."
+                    );
                 }
             }
-            $hasFirstSurface = isset($file['first_surface']);
-            $hasLastSurface = isset($file['last_surface']);
+            $hasFirstSurface = array_key_exists('first_surface', $file);
+            $hasLastSurface = array_key_exists('last_surface', $file);
             if ($requireSurfaceRanges && (!$hasFirstSurface || !$hasLastSurface)) {
                 throw new RuntimeException('Multi-file analyzer packs require a complete surface range for every runtime file.');
             }
@@ -675,45 +727,60 @@ final class WP_FTS_AnalyzerPackValidator
                 }
                 $previousLastSurface = $lastSurface;
             }
-            if (array_key_exists('compression', $file)) {
-                if ($file['compression'] !== self::RUNTIME_COMPRESSION_GZIP) {
-                    throw new RuntimeException('Analyzer pack runtime compression is not supported.');
-                }
-                if (!str_ends_with((string) $file['path'], '.gz')) {
-                    throw new RuntimeException('Analyzer pack gzip runtime files must use a .gz path.');
-                }
+            if (($file['compression'] ?? null) !== self::RUNTIME_COMPRESSION_GZIP) {
+                throw new RuntimeException('Analyzer pack runtime files must use gzip compression.');
             }
-            if (array_key_exists('lookup', $file)) {
-                $lookup = $file['lookup'];
-                if (!is_array($lookup)) {
-                    throw new RuntimeException('Analyzer pack runtime lookup entry must be an object.');
-                }
-                if (($lookup['format'] ?? null) !== WP_FTS_LemmaPackLookupIndex::FORMAT) {
-                    throw new RuntimeException('Analyzer pack runtime lookup format is not supported.');
-                }
-                if (!is_string($lookup['path'] ?? null) || trim($lookup['path']) === '' || $this->is_absolute_path($lookup['path'])) {
-                    throw new RuntimeException('Analyzer pack runtime lookup path must be a relative non-empty string.');
-                }
-                WP_FTS_Analyzer_Config_Limits::assert_path($lookup['path'], 'Analyzer pack lookup path');
-                if (!is_string($lookup['sha256'] ?? null) || strlen($lookup['sha256']) !== 64 || !$this->is_hex_digest($lookup['sha256'])) {
-                    throw new RuntimeException('Analyzer pack runtime lookup sha256 must be a 64-character hex digest.');
-                }
-                if (!is_int($lookup['blocks'] ?? null) || $lookup['blocks'] < 1) {
-                    throw new RuntimeException('Analyzer pack runtime lookup blocks must be a positive integer.');
-                }
-                if ($lookup['blocks'] > WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_FILE) {
-                    throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-                        'lookup_blocks',
-                        'Analyzer pack lookup exceeds the 256-block per-file limit.'
-                    );
-                }
-                $lookupBlocks += $lookup['blocks'];
-                if ($lookupBlocks > WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_PACK) {
-                    throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-                        'lookup_blocks',
-                        'Analyzer pack exceeds the 8,192-block metadata limit.'
-                    );
-                }
+            if (!str_ends_with((string) $file['path'], '.gz')) {
+                throw new RuntimeException('Analyzer pack gzip runtime files must use a .gz path.');
+            }
+            if (!isset($file['lookup']) || !is_array($file['lookup'])) {
+                throw new RuntimeException('Analyzer pack runtime files require an indexed lookup sidecar.');
+            }
+            $lookup = $file['lookup'];
+            $this->assert_object_keys($lookup, self::LOOKUP_KEYS, 'runtime lookup');
+            if (($lookup['format'] ?? null) !== WP_FTS_LemmaPackLookupIndex::FORMAT) {
+                throw new RuntimeException('Analyzer pack runtime lookup format is not supported.');
+            }
+            if (
+                !is_string($lookup['path'] ?? null)
+                || $lookup['path'] === ''
+                || trim($lookup['path']) !== $lookup['path']
+                || $this->is_absolute_path($lookup['path'])
+            ) {
+                throw new RuntimeException('Analyzer pack runtime lookup path must be a relative unpadded non-empty string.');
+            }
+            WP_FTS_Analyzer_Config_Limits::assert_path($lookup['path'], 'Analyzer pack lookup path');
+            if (!is_string($lookup['sha256'] ?? null) || strlen($lookup['sha256']) !== 64 || !$this->is_lower_hex_digest($lookup['sha256'])) {
+                throw new RuntimeException('Analyzer pack runtime lookup sha256 must be a lowercase 64-character hex digest.');
+            }
+            if (!is_int($lookup['blocks'] ?? null) || $lookup['blocks'] < 1) {
+                throw new RuntimeException('Analyzer pack runtime lookup blocks must be a positive integer.');
+            }
+            if ($lookup['blocks'] > WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_FILE) {
+                throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                    'lookup_blocks',
+                    'Analyzer pack lookup exceeds the 256-block per-file limit.'
+                );
+            }
+            $lookupBlocks += $lookup['blocks'];
+            if ($lookupBlocks > WP_FTS_Analyzer_Config_Limits::MAX_LOOKUP_BLOCKS_PER_PACK) {
+                throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
+                    'lookup_blocks',
+                    'Analyzer pack exceeds the 8,192-block metadata limit.'
+                );
+            }
+        }
+        if ($manifest['runtime']['total_rows'] !== $runtimeRows) {
+            throw new RuntimeException('Analyzer pack runtime total_rows mismatch.');
+        }
+    }
+
+    /** @param string[] $allowedKeys */
+    private function assert_object_keys(array $object, array $allowedKeys, string $label): void
+    {
+        foreach (array_keys($object) as $key) {
+            if (!is_string($key) || !in_array($key, $allowedKeys, true)) {
+                throw new RuntimeException("Analyzer pack {$label} contains an unsupported field.");
             }
         }
     }
@@ -745,10 +812,8 @@ final class WP_FTS_AnalyzerPackValidator
      * @param string|null $previousGlobalKey Previous row key from earlier files.
      * @param string|null $currentGlobalSurface Current surface from earlier rows/files.
      * @param int $currentGlobalSurfaceLemmaCount Distinct lemmas seen for the current surface.
-     * @param int $collectedRuntimeBytes Decoded bytes inspected for eager row collection.
      * @param int $expectedRows Manifest-declared rows for this runtime file.
      * @param HashContext $runtimeDigest Digest context for normalized data rows.
-     * @param array<int,array{surface:string,lemma:string,file:string,line:int}> $rows
      * @return array{
      *   rows_count:int,
      *   first_surface:?string,
@@ -758,20 +823,15 @@ final class WP_FTS_AnalyzerPackValidator
      */
     private function parse_runtime_rows(
         string $path,
-        ?string $compression,
         string $language,
-        bool &$collectRows,
         ?string &$previousGlobalKey,
         ?string &$currentGlobalSurface,
         int &$currentGlobalSurfaceLemmaCount,
-        int &$collectedRuntimeBytes,
-        ?int $maxCollectedRuntimeBytes,
         int $expectedRows,
-        HashContext $runtimeDigest,
-        array &$rows
+        HashContext $runtimeDigest
     ): array
     {
-        $handle = $this->open_runtime_file($path, $compression);
+        $handle = $this->open_runtime_file($path);
 
         $previousKey = null;
         $normalizer = new WP_FTS_Normalizer();
@@ -781,16 +841,7 @@ final class WP_FTS_AnalyzerPackValidator
         $firstSurface = null;
         $lastSurface = null;
         try {
-            while (($line = WP_FTS_LemmaPackLimits::read_runtime_line($handle, $compression)) !== false) {
-                if ($collectRows && $maxCollectedRuntimeBytes !== null) {
-                    $collectedRuntimeBytes += strlen($line);
-                    if ($collectedRuntimeBytes > $maxCollectedRuntimeBytes) {
-                        throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-                            'eager_fixture_bytes',
-                            'Fixture-only eager lemma runtime exceeds the 8 MiB decoded byte limit.'
-                        );
-                    }
-                }
+            while (($line = WP_FTS_LemmaPackLimits::read_runtime_line($handle)) !== false) {
                 $lineNumber++;
                 $line = rtrim((string) $line, "\n");
                 $line = rtrim($line, "\r");
@@ -803,8 +854,8 @@ final class WP_FTS_AnalyzerPackValidator
                     throw new RuntimeException("Runtime row {$path}:{$lineNumber} must have surface and lemma columns.");
                 }
 
-                $surface = trim($columns[0]);
-                $lemma = trim($columns[1]);
+                $surface = $columns[0];
+                $lemma = $columns[1];
                 $this->validate_normalized_runtime_token($surface, $normalizer, $language, $path, $lineNumber, 'surface');
                 $this->validate_normalized_runtime_token($lemma, $normalizer, $language, $path, $lineNumber, 'lemma');
 
@@ -838,23 +889,9 @@ final class WP_FTS_AnalyzerPackValidator
                 hash_update($runtimeDigest, $key . "\n");
                 hash_update($rowsDigest, $key . "\n");
 
-                if ($collectRows) {
-                    if (count($rows) >= $this->maxCollectedRuntimeRows) {
-                        $rows = [];
-                        $collectRows = false;
-                        continue;
-                    }
-
-                    $rows[] = [
-                        'surface' => $surface,
-                        'lemma' => $lemma,
-                        'file' => $path,
-                        'line' => $lineNumber,
-                    ];
-                }
             }
         } finally {
-            $this->close_runtime_file($handle, $compression);
+            $this->close_runtime_file($handle);
         }
 
         return [
@@ -866,7 +903,7 @@ final class WP_FTS_AnalyzerPackValidator
     }
 
     /**
-     * Resolve and attest one optional seekable lookup sidecar.
+     * Resolve and attest one required seekable lookup sidecar.
      *
      * @param array<string,mixed> $runtimeFile
      * @return array<string,mixed>
@@ -897,7 +934,7 @@ final class WP_FTS_AnalyzerPackValidator
             $runtimeDigest,
             $runtimeRows
         );
-        if (!hash_equals(strtolower((string) $lookup['sha256']), $metadata['content_sha256'])) {
+        if (!hash_equals((string) $lookup['sha256'], $metadata['content_sha256'])) {
             throw new RuntimeException("Runtime lookup digest mismatch for {$lookup['path']}.");
         }
         if (count($metadata['blocks']) !== (int) $lookup['blocks']) {
@@ -918,7 +955,7 @@ final class WP_FTS_AnalyzerPackValidator
         }
 
         return $metadata + [
-            'sha256' => strtolower((string) $lookup['sha256']),
+            'sha256' => (string) $lookup['sha256'],
         ];
     }
 
@@ -935,7 +972,7 @@ final class WP_FTS_AnalyzerPackValidator
         $attestation = $this->open_attested_file($path, $expectedDigest, $mismatchMessage);
         fclose($attestation['handle']);
 
-        return strtolower($expectedDigest);
+        return $expectedDigest;
     }
 
     /**
@@ -961,7 +998,6 @@ final class WP_FTS_AnalyzerPackValidator
             throw new RuntimeException("Could not stat analyzer pack file {$path}.");
         }
 
-        $expectedDigest = strtolower($expectedDigest);
         $generation = $this->file_generation($stat, $path);
         $key = hash('sha256', $path . "\0" . implode("\0", $generation) . "\0" . $expectedDigest);
         $now = time();
@@ -1013,7 +1049,7 @@ final class WP_FTS_AnalyzerPackValidator
             $computedDigest = $boundedDigest['sha256'];
             $this->digestFileHashes++;
             $this->digestBytesHashed += $boundedDigest['bytes'];
-            if (!is_string($computedDigest) || !hash_equals($expectedDigest, strtolower($computedDigest))) {
+            if (!is_string($computedDigest) || !hash_equals($expectedDigest, $computedDigest)) {
                 throw new RuntimeException($mismatchMessage);
             }
             $this->requestDigestAttestations[$key] = true;
@@ -1225,19 +1261,6 @@ final class WP_FTS_AnalyzerPackValidator
     }
 
     /**
-     * @param array<string,mixed> $manifest
-     */
-    private function declared_runtime_rows(array $manifest): int
-    {
-        $rows = 0;
-        foreach ($manifest['runtime']['files'] as $file) {
-            $rows += (int) $file['rows'];
-        }
-
-        return $rows;
-    }
-
-    /**
      * Reject oversized runtime+lookup payload sets before any full-file digest
      * or sidecar content read. This is the physical half of the fixed low-end
      * host envelope; decoded work is bounded independently per v2 block.
@@ -1248,10 +1271,7 @@ final class WP_FTS_AnalyzerPackValidator
     {
         $bytes = 0;
         foreach ($manifest['runtime']['files'] as $file) {
-            $paths = [(string) $file['path']];
-            if (isset($file['lookup']['path']) && is_string($file['lookup']['path'])) {
-                $paths[] = $file['lookup']['path'];
-            }
+            $paths = [(string) $file['path'], (string) $file['lookup']['path']];
             foreach ($paths as $relativePath) {
                 $path = $this->runtime_file_path($packDir, $relativePath);
                 $size = @filesize($path);
@@ -1279,10 +1299,10 @@ final class WP_FTS_AnalyzerPackValidator
      */
     private function validate_runtime_file_range(array $file, array $fileResult, string $path): void
     {
-        if (isset($file['first_surface']) && $file['first_surface'] !== $fileResult['first_surface']) {
+        if (array_key_exists('first_surface', $file) && $file['first_surface'] !== $fileResult['first_surface']) {
             throw new RuntimeException("Runtime first_surface mismatch for {$path}.");
         }
-        if (isset($file['last_surface']) && $file['last_surface'] !== $fileResult['last_surface']) {
+        if (array_key_exists('last_surface', $file) && $file['last_surface'] !== $fileResult['last_surface']) {
             throw new RuntimeException("Runtime last_surface mismatch for {$path}.");
         }
     }
@@ -1290,40 +1310,238 @@ final class WP_FTS_AnalyzerPackValidator
     /**
      * @param array<string,mixed> $manifest
      */
-    private function validate_full_pack_source_metadata(array $manifest): void
+    private function validate_source_metadata(array $manifest): void
     {
+        $this->assert_object_keys($manifest['source'], self::SOURCE_KEYS, 'source');
         foreach (['name', 'version', 'url', 'artifact_sha256'] as $field) {
-            if (!isset($manifest['source'][$field]) || !is_string($manifest['source'][$field]) || trim($manifest['source'][$field]) === '') {
-                throw new RuntimeException("Full analyzer pack manifest source.{$field} is required.");
+            if (
+                !isset($manifest['source'][$field])
+                || !is_string($manifest['source'][$field])
+                || $manifest['source'][$field] === ''
+                || trim($manifest['source'][$field]) !== $manifest['source'][$field]
+            ) {
+                throw new RuntimeException("Analyzer pack manifest source.{$field} is required.");
             }
         }
-        if (strlen((string) $manifest['source']['artifact_sha256']) !== 64 || !$this->is_hex_digest((string) $manifest['source']['artifact_sha256'])) {
-            throw new RuntimeException('Full analyzer pack source artifact_sha256 must be a 64-character hex digest.');
+        if (strlen((string) $manifest['source']['artifact_sha256']) !== 64 || !$this->is_lower_hex_digest((string) $manifest['source']['artifact_sha256'])) {
+            throw new RuntimeException('Analyzer pack source artifact_sha256 must be a lowercase 64-character hex digest.');
         }
         if (!isset($manifest['source']['byte_count']) || !is_int($manifest['source']['byte_count']) || $manifest['source']['byte_count'] < 1) {
-            throw new RuntimeException('Full analyzer pack source byte_count must be a positive integer.');
+            throw new RuntimeException('Analyzer pack source byte_count must be a positive integer.');
         }
-        if (!isset($manifest['license']['spdx_id']) || !is_string($manifest['license']['spdx_id']) || trim($manifest['license']['spdx_id']) === '') {
-            throw new RuntimeException('Full analyzer pack license spdx_id is required.');
-        }
-        if (isset($manifest['license']['license_url']) && (!is_string($manifest['license']['license_url']) || trim($manifest['license']['license_url']) === '')) {
-            throw new RuntimeException('Full analyzer pack license license_url must be a non-empty string when present.');
-        }
-        if (!isset($manifest['license']['notice_path']) || !is_string($manifest['license']['notice_path']) || trim($manifest['license']['notice_path']) === '') {
-            throw new RuntimeException('Full analyzer pack must include a license notice_path.');
-        }
-        $hasAttribution = false;
-        foreach (['upstream', 'note', 'notice_path'] as $field) {
-            if (isset($manifest['attribution'][$field]) && is_string($manifest['attribution'][$field]) && trim($manifest['attribution'][$field]) !== '') {
-                $hasAttribution = true;
-                break;
+        foreach (['file', 'repository_url', 'retrieval_note'] as $field) {
+            if (
+                array_key_exists($field, $manifest['source'])
+                && (
+                    !is_string($manifest['source'][$field])
+                    || $manifest['source'][$field] === ''
+                    || trim($manifest['source'][$field]) !== $manifest['source'][$field]
+                )
+            ) {
+                throw new RuntimeException("Analyzer pack source {$field} must be an unpadded nonempty string.");
             }
         }
-        if (!$hasAttribution) {
-            throw new RuntimeException('Full analyzer pack attribution metadata is required.');
+        if (array_key_exists('commit', $manifest['source'])) {
+            $commit = $manifest['source']['commit'];
+            if (!is_string($commit) || strlen($commit) !== 40 || !$this->is_lower_hex_digest($commit)) {
+                throw new RuntimeException('Analyzer pack source commit must be a lowercase 40-character hex digest.');
+            }
         }
-        if (($manifest['runtime']['ambiguity_policy'] ?? null) !== 'ambiguous_surface_noop') {
-            throw new RuntimeException('Full analyzer pack must declare ambiguous_surface_noop ambiguity policy.');
+        if (array_key_exists('files', $manifest['source'])) {
+            $this->validate_source_files($manifest['source']['files']);
+        }
+        if (array_key_exists('column_model', $manifest['source'])) {
+            $this->validate_source_column_model($manifest['source']['column_model']);
+        }
+        if (array_key_exists('parse_stats', $manifest['source'])) {
+            $this->validate_source_parse_stats($manifest['source']['parse_stats']);
+        }
+
+        $this->assert_object_keys($manifest['license'], self::LICENSE_KEYS, 'license');
+        if (
+            !isset($manifest['license']['spdx_id'])
+            || !is_string($manifest['license']['spdx_id'])
+            || $manifest['license']['spdx_id'] === ''
+            || trim($manifest['license']['spdx_id']) !== $manifest['license']['spdx_id']
+        ) {
+            throw new RuntimeException('Analyzer pack license spdx_id is required.');
+        }
+        if (
+            array_key_exists('license_url', $manifest['license'])
+            && (
+                !is_string($manifest['license']['license_url'])
+                || $manifest['license']['license_url'] === ''
+                || trim($manifest['license']['license_url']) !== $manifest['license']['license_url']
+            )
+        ) {
+            throw new RuntimeException('Analyzer pack license license_url must be a non-empty string when present.');
+        }
+        if (
+            !isset($manifest['license']['notice_path'])
+            || !is_string($manifest['license']['notice_path'])
+            || $manifest['license']['notice_path'] === ''
+            || trim($manifest['license']['notice_path']) !== $manifest['license']['notice_path']
+            || $this->is_absolute_path($manifest['license']['notice_path'])
+        ) {
+            throw new RuntimeException('Analyzer pack must include a license notice_path.');
+        }
+        WP_FTS_Analyzer_Config_Limits::assert_path(
+            $manifest['license']['notice_path'],
+            'Analyzer pack license notice path'
+        );
+        if (
+            array_key_exists('notice_required', $manifest['license'])
+            && !is_bool($manifest['license']['notice_required'])
+        ) {
+            throw new RuntimeException('Analyzer pack license notice_required must be a boolean when present.');
+        }
+
+        $this->assert_object_keys($manifest['attribution'], self::ATTRIBUTION_KEYS, 'attribution');
+        $hasAttribution = false;
+        foreach (['upstream', 'note', 'notice_path'] as $field) {
+            if (!array_key_exists($field, $manifest['attribution'])) {
+                continue;
+            }
+            if (
+                !is_string($manifest['attribution'][$field])
+                || $manifest['attribution'][$field] === ''
+                || trim($manifest['attribution'][$field]) !== $manifest['attribution'][$field]
+            ) {
+                throw new RuntimeException("Analyzer pack attribution {$field} must be an unpadded nonempty string.");
+            }
+            if ($field === 'notice_path' && $this->is_absolute_path($manifest['attribution'][$field])) {
+                throw new RuntimeException('Analyzer pack attribution notice_path must be relative.');
+            }
+            if ($field === 'notice_path') {
+                WP_FTS_Analyzer_Config_Limits::assert_path(
+                    $manifest['attribution'][$field],
+                    'Analyzer pack attribution notice path'
+                );
+            }
+            $hasAttribution = true;
+        }
+        if (!$hasAttribution) {
+            throw new RuntimeException('Analyzer pack attribution metadata is required.');
+        }
+
+        $this->assert_object_keys($manifest['provenance'], self::PROVENANCE_KEYS, 'provenance');
+        foreach (['importer', 'importer_commit', 'importer_command', 'source_importer', 'delegated_runtime_importer', 'local_note'] as $field) {
+            if (
+                array_key_exists($field, $manifest['provenance'])
+                && (
+                    !is_string($manifest['provenance'][$field])
+                    || $manifest['provenance'][$field] === ''
+                    || trim($manifest['provenance'][$field]) !== $manifest['provenance'][$field]
+                )
+            ) {
+                throw new RuntimeException("Analyzer pack provenance {$field} must be an unpadded nonempty string.");
+            }
+        }
+        foreach (['no_full_third_party_dictionary_dump', 'full_third_party_dictionary_dump_generated'] as $field) {
+            if (array_key_exists($field, $manifest['provenance']) && !is_bool($manifest['provenance'][$field])) {
+                throw new RuntimeException("Analyzer pack provenance {$field} must be a boolean when present.");
+            }
+        }
+        foreach (['rows_per_file', 'chunk_rows'] as $field) {
+            if (
+                array_key_exists($field, $manifest['provenance'])
+                && (!is_int($manifest['provenance'][$field]) || $manifest['provenance'][$field] < 1)
+            ) {
+                throw new RuntimeException("Analyzer pack provenance {$field} must be a positive integer when present.");
+            }
+        }
+    }
+
+    /** Validate the exact source.files list. */
+    private function validate_source_files(mixed $files): void
+    {
+        if (!is_array($files) || !array_is_list($files) || $files === []) {
+            throw new RuntimeException('Analyzer pack source files must be a nonempty list.');
+        }
+        foreach ($files as $file) {
+            if (!is_array($file)) {
+                throw new RuntimeException('Analyzer pack source file entries must be objects.');
+            }
+            $this->assert_object_keys($file, self::SOURCE_FILE_KEYS, 'source file');
+            if (
+                !isset($file['path'])
+                || !is_string($file['path'])
+                || $file['path'] === ''
+                || trim($file['path']) !== $file['path']
+                || $this->is_absolute_path($file['path'])
+            ) {
+                throw new RuntimeException('Analyzer pack source file path must be a relative unpadded nonempty string.');
+            }
+            WP_FTS_Analyzer_Config_Limits::assert_path($file['path'], 'Analyzer pack source file path');
+            if (
+                !isset($file['sha256'])
+                || !is_string($file['sha256'])
+                || strlen($file['sha256']) !== 64
+                || !$this->is_lower_hex_digest($file['sha256'])
+            ) {
+                throw new RuntimeException('Analyzer pack source file sha256 must be a lowercase 64-character hex digest.');
+            }
+            if (!isset($file['byte_count']) || !is_int($file['byte_count']) || $file['byte_count'] < 1) {
+                throw new RuntimeException('Analyzer pack source file byte_count must be a positive integer.');
+            }
+        }
+    }
+
+    /** Validate one supported source-column model. */
+    private function validate_source_column_model(mixed $columnModel): void
+    {
+        if (!is_array($columnModel)) {
+            throw new RuntimeException('Analyzer pack source column_model must be an object.');
+        }
+        $format = $columnModel['format'] ?? null;
+        $columns = match ($format) {
+            'normalized-lemma-tsv-v1' => [
+                'surface_column',
+                'lemma_column',
+                'tag_column',
+                'source_note_column',
+            ],
+            'unimorph-three-column-tsv-v1' => ['lemma_column', 'surface_column', 'features_column'],
+            'conllu-ten-column-v1' => ['id_column', 'surface_column', 'lemma_column', 'tag_column'],
+            'polimorf-five-column-tab' => [
+                'surface_column',
+                'lemma_column',
+                'tag_column',
+                'qualifier_column',
+                'flags_column',
+            ],
+            default => throw new RuntimeException('Analyzer pack source column_model format is not supported.'),
+        };
+        $this->assert_object_keys($columnModel, array_merge(['format'], $columns), 'source column_model');
+        $indexes = [];
+        foreach ($columns as $column) {
+            if (!isset($columnModel[$column]) || !is_int($columnModel[$column]) || $columnModel[$column] < 0) {
+                throw new RuntimeException("Analyzer pack source column_model {$column} must be a nonnegative integer.");
+            }
+            if (isset($indexes[$columnModel[$column]])) {
+                throw new RuntimeException('Analyzer pack source column_model indexes must be unique.');
+            }
+            $indexes[$columnModel[$column]] = true;
+        }
+    }
+
+    /** Validate bounded importer counters recorded in source metadata. */
+    private function validate_source_parse_stats(mixed $parseStats): void
+    {
+        if (!is_array($parseStats) || $parseStats === []) {
+            throw new RuntimeException('Analyzer pack source parse_stats must be a nonempty object.');
+        }
+        $this->assert_object_keys($parseStats, self::SOURCE_PARSE_STAT_KEYS, 'source parse_stats');
+        foreach ($parseStats as $field => $value) {
+            if ($field === 'source_path') {
+                if (!is_string($value) || $value === '' || trim($value) !== $value) {
+                    throw new RuntimeException('Analyzer pack source parse_stats source_path must be an unpadded nonempty string.');
+                }
+                continue;
+            }
+            if (!is_int($value) || $value < 0) {
+                throw new RuntimeException("Analyzer pack source parse_stats {$field} must be a nonnegative integer.");
+            }
         }
     }
 
@@ -1332,11 +1550,14 @@ final class WP_FTS_AnalyzerPackValidator
      */
     private function validate_manifest_pack_files(array $manifest, string $packDir): void
     {
-        if (($manifest['fixture_only'] ?? true) !== false) {
-            return;
-        }
-
         $this->pack_relative_file_path($packDir, (string) $manifest['license']['notice_path'], 'license notice');
+        if (isset($manifest['attribution']['notice_path'])) {
+            $this->pack_relative_file_path(
+                $packDir,
+                (string) $manifest['attribution']['notice_path'],
+                'attribution notice'
+            );
+        }
     }
 
     /**
@@ -1366,20 +1587,9 @@ final class WP_FTS_AnalyzerPackValidator
         }
     }
 
-    /**
-     * @param array<string,mixed> $file
-     */
-    private function runtime_file_compression(array $file): ?string
+    private function ensure_gzip_available(): void
     {
-        return isset($file['compression']) ? (string) $file['compression'] : null;
-    }
-
-    private function ensure_runtime_compression_available(?string $compression): void
-    {
-        if ($compression === null) {
-            return;
-        }
-        if ($compression === self::RUNTIME_COMPRESSION_GZIP && self::gzip_available()) {
+        if (self::gzip_available()) {
             return;
         }
 
@@ -1389,21 +1599,12 @@ final class WP_FTS_AnalyzerPackValidator
     /**
      * @return resource
      */
-    private function open_runtime_file(string $path, ?string $compression): mixed
+    private function open_runtime_file(string $path): mixed
     {
-        if ($compression === self::RUNTIME_COMPRESSION_GZIP) {
-            $this->ensure_runtime_compression_available($compression);
-            $handle = @gzopen($path, 'rb');
-            if (!is_resource($handle)) {
-                throw new RuntimeException("Could not read analyzer pack gzip runtime file {$path}.");
-            }
-
-            return $handle;
-        }
-
-        $handle = fopen($path, 'rb');
+        $this->ensure_gzip_available();
+        $handle = @gzopen($path, 'rb');
         if (!is_resource($handle)) {
-            throw new RuntimeException("Could not read analyzer pack runtime file {$path}.");
+            throw new RuntimeException("Could not read analyzer pack gzip runtime file {$path}.");
         }
 
         return $handle;
@@ -1412,14 +1613,9 @@ final class WP_FTS_AnalyzerPackValidator
     /**
      * @param resource $handle
      */
-    private function close_runtime_file(mixed $handle, ?string $compression): void
+    private function close_runtime_file(mixed $handle): void
     {
-        if ($compression === self::RUNTIME_COMPRESSION_GZIP) {
-            gzclose($handle);
-            return;
-        }
-
-        fclose($handle);
+        gzclose($handle);
     }
 
     /** Validate one parsed TSV token before it enters ordering or digest state. */
@@ -1481,7 +1677,7 @@ final class WP_FTS_AnalyzerPackValidator
         return $path;
     }
 
-    /** Resolve non-runtime evidence while preserving the same pack-root boundary. */
+    /** Resolve non-runtime metadata while preserving the same pack-root boundary. */
     private function pack_relative_file_path(string $packDir, string $relativePath, string $label): string
     {
         WP_FTS_Analyzer_Config_Limits::assert_path($relativePath, "Analyzer pack {$label} path");
@@ -1520,38 +1716,19 @@ final class WP_FTS_AnalyzerPackValidator
     /**
      * @param array<string,mixed> $manifest
      */
-    private function require_bool(array $manifest, string $field, bool $expected): void
-    {
-        if (($manifest[$field] ?? null) !== $expected) {
-            throw new RuntimeException("Analyzer pack manifest field {$field} must be " . ($expected ? 'true' : 'false') . '.');
-        }
-    }
-
-    /**
-     * @param array<string,mixed> $manifest
-     */
-    private function require_bool_field(array $manifest, string $field): void
-    {
-        if (!isset($manifest[$field]) || !is_bool($manifest[$field])) {
-            throw new RuntimeException("Analyzer pack manifest field {$field} must be a boolean.");
-        }
-    }
-
-    /**
-     * @param array<string,mixed> $manifest
-     */
     private function require_language_tag(array $manifest, string $field): void
     {
-        if (!isset($manifest[$field]) || !is_string($manifest[$field])) {
-            throw new RuntimeException("Analyzer pack manifest field {$field} must be a language tag.");
+        try {
+            $language = WP_FTS_TermNamespace::parse_language_tag($manifest[$field] ?? null);
+        } catch (InvalidArgumentException $error) {
+            throw new RuntimeException(
+                "Analyzer pack manifest field {$field} must be a valid language tag.",
+                0,
+                $error
+            );
         }
-
-        $language = trim($manifest[$field]);
-        if (
-            $language === ''
-            || preg_match('/^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,3}$/', $language) !== 1
-        ) {
-            throw new RuntimeException("Analyzer pack manifest field {$field} must be a valid language tag.");
+        if ($manifest[$field] !== $language) {
+            throw new RuntimeException("Analyzer pack manifest field {$field} must already be canonical.");
         }
     }
 
@@ -1560,8 +1737,13 @@ final class WP_FTS_AnalyzerPackValidator
      */
     private function require_non_empty_string(array $manifest, string $field): void
     {
-        if (!isset($manifest[$field]) || !is_string($manifest[$field]) || trim($manifest[$field]) === '') {
-            throw new RuntimeException("Analyzer pack manifest field {$field} must be a non-empty string.");
+        if (
+            !isset($manifest[$field])
+            || !is_string($manifest[$field])
+            || $manifest[$field] === ''
+            || trim($manifest[$field]) !== $manifest[$field]
+        ) {
+            throw new RuntimeException("Analyzer pack manifest field {$field} must be an unpadded non-empty string.");
         }
     }
 
@@ -1570,28 +1752,30 @@ final class WP_FTS_AnalyzerPackValidator
      */
     private function require_string_array_contains(array $manifest, string $field, string $required): void
     {
-        if (!isset($manifest[$field]) || !is_array($manifest[$field])) {
-            throw new RuntimeException("Analyzer pack manifest field {$field} must be an array.");
+        if (!isset($manifest[$field]) || !is_array($manifest[$field]) || !array_is_list($manifest[$field])) {
+            throw new RuntimeException("Analyzer pack manifest field {$field} must be a string list.");
         }
 
+        $seen = [];
+        $found = false;
         foreach ($manifest[$field] as $value) {
+            if (!is_string($value) || $value === '' || trim($value) !== $value) {
+                throw new RuntimeException(
+                    "Analyzer pack manifest field {$field} must contain only unpadded nonempty strings."
+                );
+            }
+            if (isset($seen[$value])) {
+                throw new RuntimeException("Analyzer pack manifest field {$field} must not contain duplicates.");
+            }
+            $seen[$value] = true;
             if ($value === $required) {
-                return;
+                $found = true;
             }
         }
 
-        throw new RuntimeException("Analyzer pack manifest field {$field} must include {$required}.");
-    }
-
-    /**
-     * @return string[]
-     */
-    private static function supported_runtime_formats(): array
-    {
-        return [
-            self::RUNTIME_FORMAT_LEMMA_TSV,
-            self::RUNTIME_FORMAT_POLISH_LEGACY_TSV,
-        ];
+        if (!$found) {
+            throw new RuntimeException("Analyzer pack manifest field {$field} must include {$required}.");
+        }
     }
 
     private function is_absolute_path(string $path): bool
@@ -1599,14 +1783,13 @@ final class WP_FTS_AnalyzerPackValidator
         return str_starts_with($path, '/') || (strlen($path) > 1 && $path[1] === ':');
     }
 
-    private function is_hex_digest(string $value): bool
+    private function is_lower_hex_digest(string $value): bool
     {
         for ($i = 0, $length = strlen($value); $i < $length; $i++) {
             $char = $value[$i];
             if (
                 ($char >= '0' && $char <= '9')
                 || ($char >= 'a' && $char <= 'f')
-                || ($char >= 'A' && $char <= 'F')
             ) {
                 continue;
             }

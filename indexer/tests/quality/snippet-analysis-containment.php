@@ -22,7 +22,7 @@ test_case('morphology highlighting has a page-sized analyzer-call and memory cei
             return $this->inner->analyze_query_occurrences($query, $options);
         }
     };
-    $searcher = new WP_FTS_Searcher(new WP_FTS_Storage_InMemory(), $analyzer);
+    $searcher = new WP_FTS_Searcher(new WP_FTS_Relational_Storage(new WP_FTS_Test_WPDB()), $analyzer);
 
     $tokens = [];
     for ($index = 0; $index < 2400; $index++) {
