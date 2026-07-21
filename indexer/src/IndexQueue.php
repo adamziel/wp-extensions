@@ -730,12 +730,11 @@ last_error_code = '', last_error_at = 0",
             );
         $epoch_incarnation = $this->new_search_epoch_incarnation();
         $now = $this->timestamp($now);
-        $owned_before_marker = "(state NOT IN ('fenced','guarded') OR claim_token = VALUES(claim_token))";
+        $owned = "(state NOT IN ('fenced','guarded') OR claim_token = VALUES(claim_token))";
         $owns_protected_generation = "(state IN ('fenced','guarded') AND claim_token = VALUES(claim_token) AND generation = claimed_generation)";
-        // MySQL evaluates UPSERT assignments left-to-right, while SQLite uses
-        // the original row. An empty protected token can only be the stale-owned
-        // marker written by the first assignment in this statement.
-        $owned = "(state NOT IN ('fenced','guarded') OR claim_token = VALUES(claim_token) OR claim_token = '')";
+        // MySQL evaluates UPSERT assignments left-to-right. Keep the ownership
+        // columns unchanged until every authority and payload expression has
+        // compared the original row, then clear the matching request token.
         $this->query($this->wpdb->prepare(
             "INSERT INTO {$this->table}
 (job_key, kind, post_id, generation, state, available_at, attempts, claim_token, claimed_generation, claim_expires_at, cursor_post_id, scope_coverage, scope_incarnation, scope_subject_type, scope_subject_id, payload, last_error_code, last_error_at)
@@ -743,12 +742,6 @@ VALUES (%s, 'scope', 0, 1, 'ready', %d, 0, %s, 0, 0, 0, %s, %s, %s, %d, %s, '', 
 , (%s, 'meta', 0, 1, 'meta', 0, 0, '', 0, 0, 0, '', '', '', 0, %s, '', 0)
 /* wp_fts:mutation-promote */
 ON DUPLICATE KEY UPDATE
-claim_token = CASE
-    WHEN kind = 'meta' THEN ''
-    WHEN {$owns_protected_generation} THEN VALUES(claim_token)
-    WHEN {$owned_before_marker} THEN ''
-    ELSE claim_token
-END,
 available_at = CASE WHEN {$owned} THEN VALUES(available_at) ELSE available_at END,
 attempts = CASE WHEN {$owned} THEN 0 ELSE attempts END,
 claim_expires_at = CASE WHEN {$owned} THEN 0 ELSE claim_expires_at END,
@@ -771,7 +764,8 @@ state = CASE
     WHEN state IN ('fenced','guarded') AND {$owned} THEN 'ready'
     WHEN state NOT IN ('fenced','guarded') THEN 'ready'
     ELSE state
-END",
+END,
+claim_token = CASE WHEN {$owned} THEN '' ELSE claim_token END",
             $job_key,
             $now,
             $mutation_token,

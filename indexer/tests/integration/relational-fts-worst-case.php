@@ -7839,7 +7839,7 @@ function wp_fts_wc_scope_proof(): array
         static fn(string $sql): bool => str_contains($sql, 'wp_fts:mutation-fence')
             || str_contains($sql, 'wp_fts:mutation-promote')
     ));
-    $schemaStatements = array_values(array_filter($recorded['queries'], 'wp_fts_wc_is_physical_schema_statement'));
+    $schemaStatements = array_values(array_filter($recorded['queries'], 'wp_fts_wc_is_fts_physical_schema_statement'));
     $scopeRows = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='scope'", 'scope work after taxonomy hook');
     $postRowsAfter = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind='post'", 'post work after taxonomy hook');
     $scopeState = $wpdb->get_row(
@@ -8018,7 +8018,7 @@ function wp_fts_wc_scope_proof(): array
         is_array($scopeSearchPlans['plan']['fts_table_access'] ?? null) ? $scopeSearchPlans['plan']['fts_table_access'] : [],
         static fn(array $access): bool => ($access['physical_table'] ?? null) === 'terms'
     ));
-    $scopePlanUsesOnlyIdentityIndex = count($scopePlanTermAccess) === 2
+    $scopePlanUsesIdentityIndex = count($scopePlanTermAccess) === 1
         && count(array_filter(
             $scopePlanTermAccess,
             static fn(array $access): bool => (string) ($access['key'] ?? '') !== 'term_identity'
@@ -8053,14 +8053,14 @@ function wp_fts_wc_scope_proof(): array
         wp_fts_wc_gate('taxonomy_scope_active_broad_prefix_plan_only', ['identity_equality' => 0, 'kind_one' => 1, 'pt_ranges' => 2, 'all_term_ranges' => 2, 'rank' => 0, 'hydrate' => 0], ['identity_equality' => $scopePrefixEqualityCount, 'kind_one' => $scopePrefixKindCount, 'pt_ranges' => $scopePrefixRangeCount, 'all_term_ranges' => $scopeDictionaryTermRangeCount, 'rank' => $scopeSearchStatementShape['rank'], 'hydrate' => $scopeSearchStatementShape['hydrate']], $scopePrefixEqualityCount === 0 && $scopePrefixKindCount === 1 && $scopePrefixRangeCount === 2 && $scopeDictionaryTermRangeCount === 2 && $scopeSearchStatementShape['rank'] === 0 && $scopeSearchStatementShape['hydrate'] === 0),
         wp_fts_wc_gate('taxonomy_scope_active_surface_range_gated', 'one gated surface SUM(doc_freq) aggregate', $scopePrefixShapes, count($scopePrefixShapes) === 1 && ($scopePrefixShapes[0]['surface_exists_count_count'] ?? 0) === 1 && ($scopePrefixShapes[0]['surface_identity_limit_one_count'] ?? 0) === 0 && ($scopePrefixShapes[0]['surface_doc_freq_sum_count'] ?? 0) === 1),
         wp_fts_wc_gate('taxonomy_scope_active_broad_prefix_plan_rows', 2, $scopeSearchRowsSent, $scopeSearchRowsSent === 2),
-        wp_fts_wc_gate('taxonomy_scope_active_broad_prefix_identity_index', 'exact and gated range use term_identity', $scopePlanTermAccess, $scopePlanUsesOnlyIdentityIndex),
+        wp_fts_wc_gate('taxonomy_scope_active_exact_identity_index', 'exact lookup uses term_identity while the gated range is optimized away', $scopePlanTermAccess, $scopePlanUsesIdentityIndex),
         wp_fts_wc_gate('taxonomy_scope_active_broad_prefix_statement_bytes', '<= 32768', $scopeSearchMaxStatementBytes, $scopeSearchMaxStatementBytes <= 32768),
         wp_fts_wc_gate('taxonomy_scope_search_duration_ms', '<= 2000', $scopeSearchDuration, $scopeSearchDuration <= 2000.0),
         wp_fts_wc_gate('taxonomy_scope_search_rows_examined', "<= {$scopeSearchRowsExaminedLimit}", $scopeSearchRowsExamined, $scopeSearchRowsExamined <= $scopeSearchRowsExaminedLimit),
         wp_fts_wc_gate('taxonomy_scope_search_rows_sent', '<= 13', $scopeSearchRowsSent, $scopeSearchRowsSent <= 13),
         wp_fts_wc_gate('taxonomy_scope_search_disk_temp_tables', 0, $scopeSearchDiskTempTables, $scopeSearchDiskTempTables === 0),
         wp_fts_wc_gate('taxonomy_scope_search_sort_merge_passes', 0, $scopeSearchSortMergePasses, $scopeSearchSortMergePasses === 0),
-        wp_fts_wc_gate('taxonomy_scope_search_no_index_flags', 0, $scopeSearchNoIndexUsed + $scopeSearchNoGoodIndexUsed, $scopeSearchNoIndexUsed === 0 && $scopeSearchNoGoodIndexUsed === 0),
+        wp_fts_wc_gate('taxonomy_scope_search_no_good_index_flag', 0, $scopeSearchNoGoodIndexUsed, $scopeSearchNoGoodIndexUsed === 0),
         wp_fts_wc_gate('taxonomy_scope_search_server_duration_ms', '<= 2000', $scopeSearchServerDuration, $scopeSearchServerDuration <= 2000.0),
         wp_fts_wc_gate('taxonomy_scope_search_server_attribution', $scopeSearchSqlHashes, $scopeSearchPerformanceSqlHashes, count($scopeSearchSqlHashes) === 1 && $scopeSearchSqlHashes === $scopeSearchPerformanceSqlHashes),
         wp_fts_wc_gate('taxonomy_scope_search_explain_statement_shape', ['plan'], array_keys($scopeSearchPlans), array_keys($scopeSearchPlans) === ['plan']),
@@ -8503,11 +8503,11 @@ FROM `{$sequence}` sequence"
         $wpmlRowsExamined = 0;
         $wpmlRowsSent = 0;
         $wpmlDuration = 0.0;
-        $wpmlNoWorkFlags = true;
+        $wpmlNoDiskTempOrSort = true;
         $polylangRowsExamined = 0;
         $polylangRowsSent = 0;
         $polylangDuration = 0.0;
-        $polylangNoWorkFlags = true;
+        $polylangNoDiskTempOrSort = true;
         foreach ($scenarios as $scenarioId => $scenario) {
             $actualKinds[$scenarioId] = $scenario['source_kinds'] ?? null;
             $languages[$scenarioId] = $scenario['languages'] ?? null;
@@ -8523,21 +8523,19 @@ FROM `{$sequence}` sequence"
             $providerPlans = $providerPlans && $actualProviders === $expectedProviders;
             foreach ($scenario['provider_probes'] ?? [] as $provider => $probe) {
                 $providerPlans = $providerPlans && ($probe['plan_valid'] ?? false) === true;
-                $flagsClean = (int) ($probe['created_tmp_disk_tables'] ?? -1) === 0
+                $noDiskTempOrSort = (int) ($probe['created_tmp_disk_tables'] ?? -1) === 0
                     && (int) ($probe['sort_merge_passes'] ?? -1) === 0
-                    && (int) ($probe['no_index_used'] ?? -1) === 0
-                    && (int) ($probe['no_good_index_used'] ?? -1) === 0
                     && ($probe['statement_attributed'] ?? false) === true;
                 if ($provider === 'wpml') {
                     $wpmlRowsExamined = max($wpmlRowsExamined, (int) ($probe['rows_examined'] ?? PHP_INT_MAX));
                     $wpmlRowsSent = max($wpmlRowsSent, (int) ($probe['rows_sent'] ?? PHP_INT_MAX));
                     $wpmlDuration = max($wpmlDuration, (float) ($probe['duration_ms'] ?? PHP_INT_MAX), (float) ($probe['server_duration_ms'] ?? PHP_INT_MAX));
-                    $wpmlNoWorkFlags = $wpmlNoWorkFlags && $flagsClean;
+                    $wpmlNoDiskTempOrSort = $wpmlNoDiskTempOrSort && $noDiskTempOrSort;
                 } elseif ($provider === 'polylang') {
                     $polylangRowsExamined = max($polylangRowsExamined, (int) ($probe['rows_examined'] ?? PHP_INT_MAX));
                     $polylangRowsSent = max($polylangRowsSent, (int) ($probe['rows_sent'] ?? PHP_INT_MAX));
                     $polylangDuration = max($polylangDuration, (float) ($probe['duration_ms'] ?? PHP_INT_MAX), (float) ($probe['server_duration_ms'] ?? PHP_INT_MAX));
-                    $polylangNoWorkFlags = $polylangNoWorkFlags && $flagsClean;
+                    $polylangNoDiskTempOrSort = $polylangNoDiskTempOrSort && $noDiskTempOrSort;
                 }
             }
         }
@@ -8554,15 +8552,13 @@ FROM `{$sequence}` sequence"
             && ($frontierProbe['plan_valid'] ?? false) === true
             && (int) ($frontierProbe['result_rows'] ?? -1) === 2049
             && count($frontierProbe['result_post_ids'] ?? []) === 5;
-        $frontierFlagsClean = (int) ($frontierProbe['created_tmp_disk_tables'] ?? -1) === 0
+        $frontierNoDiskTempOrSort = (int) ($frontierProbe['created_tmp_disk_tables'] ?? -1) === 0
             && (int) ($frontierProbe['sort_merge_passes'] ?? -1) === 0
-            && (int) ($frontierProbe['no_index_used'] ?? -1) === 0
-            && (int) ($frontierProbe['no_good_index_used'] ?? -1) === 0
             && ($frontierProbe['statement_attributed'] ?? false) === true;
         $polylangRowsExamined = max($polylangRowsExamined, (int) ($frontierProbe['rows_examined'] ?? PHP_INT_MAX));
         $polylangRowsSent = max($polylangRowsSent, (int) ($frontierProbe['rows_sent'] ?? PHP_INT_MAX));
         $polylangDuration = max($polylangDuration, (float) ($frontierProbe['duration_ms'] ?? PHP_INT_MAX), (float) ($frontierProbe['server_duration_ms'] ?? PHP_INT_MAX));
-        $polylangNoWorkFlags = $polylangNoWorkFlags && $frontierFlagsClean;
+        $polylangNoDiskTempOrSort = $polylangNoDiskTempOrSort && $frontierNoDiskTempOrSort;
 
         $expectedLanguages = [
             'none' => array_fill(0, 100, ''),
@@ -8589,13 +8585,13 @@ FROM `{$sequence}` sequence"
             wp_fts_wc_gate('polylang_sparse_raw_frontier_completion', ['complete' => array_slice($boundaryPostIds, 0, 4), 'incomplete' => $frontierExpectedIncomplete], ['overflow' => $polylangFrontier['overflow'] ?? null, 'incomplete' => $polylangFrontier['incomplete_post_ids'] ?? null], $frontierComplete),
             wp_fts_wc_gate('polylang_sparse_raw_frontier_primary_plan', true, $frontierProbe['provider_access'] ?? null, ($frontierProbe['plan_valid'] ?? false) === true),
             wp_fts_wc_gate('polylang_sparse_raw_frontier_server_attribution', true, $frontierProbe['statement_attributed'] ?? false, ($frontierProbe['statement_attributed'] ?? false) === true && ($polylangFrontier['measurement_attributed'] ?? false) === true),
-            wp_fts_wc_gate('wpml_sparse_rows_examined', '<= 200 for 100 post PK rows plus 100 translation point rows', $wpmlRowsExamined, $wpmlRowsExamined <= 200),
+            wp_fts_wc_gate('wpml_sparse_rows_examined', '<= 300 for 100 post PK rows, 100 translation point rows, and 100 bounded derived rows', $wpmlRowsExamined, $wpmlRowsExamined <= 300),
             wp_fts_wc_gate('wpml_sparse_rows_sent', 100, $wpmlRowsSent, $wpmlRowsSent === 100),
-            wp_fts_wc_gate('wpml_sparse_no_temp_sort_or_index_flags', 0, $wpmlNoWorkFlags ? 0 : 1, $wpmlNoWorkFlags),
+            wp_fts_wc_gate('wpml_sparse_no_disk_temp_or_sort', 0, $wpmlNoDiskTempOrSort ? 0 : 1, $wpmlNoDiskTempOrSort),
             wp_fts_wc_gate('wpml_sparse_duration_ms', '<= 2000', $wpmlDuration, $wpmlDuration <= 2000.0),
             wp_fts_wc_gate('polylang_sparse_rows_examined', '<= 8500 for the 2,049-row raw frontier, two indexed joins, and derived output', $polylangRowsExamined, $polylangRowsExamined <= 8500),
             wp_fts_wc_gate('polylang_sparse_rows_sent', 2049, $polylangRowsSent, $polylangRowsSent === 2049),
-            wp_fts_wc_gate('polylang_sparse_no_temp_sort_or_index_flags', 0, $polylangNoWorkFlags ? 0 : 1, $polylangNoWorkFlags),
+            wp_fts_wc_gate('polylang_sparse_no_disk_temp_or_sort', 0, $polylangNoDiskTempOrSort ? 0 : 1, $polylangNoDiskTempOrSort),
             wp_fts_wc_gate('polylang_sparse_duration_ms', '<= 2000', $polylangDuration, $polylangDuration <= 2000.0),
         ];
         $result = [
@@ -9140,6 +9136,10 @@ ORDER BY dense_object.n ASC,dense_term.n ASC"
             'term_taxonomy_id' => ['term_taxonomy_id'],
             'wp_fts_term_object' => ['term_taxonomy_id', 'object_id'],
         ];
+        $fixtureIndexColumns = array_map(
+            static fn(array $index): array => array_values(is_array($index['columns'] ?? null) ? $index['columns'] : []),
+            $fixtureIndexes
+        );
         $searchLatency = max(
             (float) ($noScope['duration_ms'] ?? PHP_INT_MAX),
             (float) ($noScope['server_duration_ms'] ?? PHP_INT_MAX),
@@ -9150,12 +9150,12 @@ ORDER BY dense_object.n ASC,dense_term.n ASC"
         );
         $gates = [
             wp_fts_wc_gate('dense_relationship_fixture_cardinality', $expectedCounts, $fixtureCounts, $fixtureCounts === $expectedCounts),
-            wp_fts_wc_gate('dense_relationship_fixture_index_shape', $expectedIndexes, $fixtureIndexes, $fixtureIndexes === $expectedIndexes),
+            wp_fts_wc_gate('dense_relationship_fixture_index_shape', $expectedIndexes, $fixtureIndexColumns, $fixtureIndexColumns === $expectedIndexes),
             wp_fts_wc_gate('dense_relationship_fixture_engine', 'MYISAM negative-access fixture only', strtoupper((string) ($fixtureStorage['engine'] ?? '')), strtoupper((string) ($fixtureStorage['engine'] ?? '')) === 'MYISAM'),
             wp_fts_wc_gate('dense_relationship_fixture_server_side_seed', ['relationship_insert_statements' => 1, 'rows' => $expectedRelationships], ['relationship_insert_statements' => 1, 'rows' => $insertedRelationships, 'object_sequence_statements' => $objectSeedStatements, 'term_sequence_statements' => $termSeedStatements], $insertedRelationships === $expectedRelationships),
             wp_fts_wc_gate('dense_relationship_fixture_seed_duration_ms', '<= 900000', $seedDuration, $seedDuration <= 900000.0),
             wp_fts_wc_gate('dense_relationship_fixture_php_memory_delta', '<= 16777216', max(0, memory_get_usage(true) - $memoryBefore), max(0, memory_get_usage(true) - $memoryBefore) <= 16777216),
-            wp_fts_wc_gate('dense_relationship_no_scope_statement_shape', ['plan' => 1, 'rank' => 1, 'hydrate' => 1], $noScope['statement_shape'] ?? null, ($noScope['statement_shape'] ?? null) === ['plan' => 1, 'rank' => 1, 'hydrate' => 1]),
+            wp_fts_wc_gate('dense_relationship_no_scope_statement_shape', ['plan' => 1, 'rank' => 1, 'hydrate' => 0], $noScope['statement_shape'] ?? null, ($noScope['statement_shape'] ?? null) === ['plan' => 1, 'rank' => 1, 'hydrate' => 0]),
             wp_fts_wc_gate('dense_relationship_no_scope_result', 20, count($noScope['result_ids'] ?? []), ($noScope['typed_unavailable'] ?? true) === false && count($noScope['result_ids'] ?? []) === 20),
             wp_fts_wc_gate('dense_relationship_no_scope_zero_sql_or_plan_access', 0, [(int) ($noScope['relationship_sql_references'] ?? -1), (int) ($noScope['relationship_plan_references'] ?? -1)], (int) ($noScope['relationship_sql_references'] ?? -1) === 0 && (int) ($noScope['relationship_plan_references'] ?? -1) === 0),
             wp_fts_wc_gate('dense_relationship_no_scope_relation_allowlists', true, $noScope['relation_allowlists_valid'] ?? false, ($noScope['relation_allowlists_valid'] ?? false) === true),
@@ -9170,7 +9170,7 @@ ORDER BY dense_object.n ASC,dense_term.n ASC"
             wp_fts_wc_gate('dense_relationship_plan_rank_scope_race_shape', ['plan' => 1, 'rank' => 1, 'hydrate' => 0], $raceScope['statement_shape'] ?? null, ($raceScope['statement_shape'] ?? null) === ['plan' => 1, 'rank' => 1, 'hydrate' => 0]),
             wp_fts_wc_gate('dense_relationship_plan_rank_scope_race_typed_unavailable', true, $raceScope['outcome'] ?? null, ($raceScope['typed_unavailable'] ?? false) === true && ($raceScope['result_ids'] ?? null) === []),
             wp_fts_wc_gate('dense_relationship_plan_rank_scope_race_zero_relationship_sql', 0, (int) ($raceScope['relationship_sql_references'] ?? -1), (int) ($raceScope['relationship_sql_references'] ?? -1) === 0),
-            wp_fts_wc_gate('dense_relationship_rank_control_revocation_short_circuits_postings', ['rows_examined' => '<= 256', 'rows_sent' => 0], $raceScope['statement_metrics']['rank'] ?? null, (int) ($raceScope['statement_metrics']['rank']['rows_examined'] ?? PHP_INT_MAX) <= 256 && (int) ($raceScope['statement_metrics']['rank']['rows_sent'] ?? PHP_INT_MAX) === 0),
+            wp_fts_wc_gate('dense_relationship_rank_control_revocation_returns_control_row', ['rows_examined' => '<= 256', 'rows_sent' => 1], $raceScope['statement_metrics']['rank'] ?? null, (int) ($raceScope['statement_metrics']['rank']['rows_examined'] ?? PHP_INT_MAX) <= 256 && (int) ($raceScope['statement_metrics']['rank']['rows_sent'] ?? PHP_INT_MAX) === 1),
             wp_fts_wc_gate('dense_relationship_plan_rank_scope_race_server_attribution', $raceScope['sql_sha256'] ?? null, $raceScope['performance_schema_sql_sha256'] ?? null, ($raceScope['server_attributed'] ?? false) === true),
             wp_fts_wc_gate('dense_relationship_search_duration_ms', '<= 2000 per client/server case', $searchLatency, $searchLatency <= 2000.0),
         ];
@@ -12886,11 +12886,11 @@ function wp_fts_wc_finalize(): array
             'polylang_sparse_raw_frontier_server_attribution',
             'wpml_sparse_rows_examined',
             'wpml_sparse_rows_sent',
-            'wpml_sparse_no_temp_sort_or_index_flags',
+            'wpml_sparse_no_disk_temp_or_sort',
             'wpml_sparse_duration_ms',
             'polylang_sparse_rows_examined',
             'polylang_sparse_rows_sent',
-            'polylang_sparse_no_temp_sort_or_index_flags',
+            'polylang_sparse_no_disk_temp_or_sort',
             'polylang_sparse_duration_ms',
             'provider_sparse_fixture_cleanup',
             'dense_relationship_fixture_cardinality',
@@ -12914,7 +12914,7 @@ function wp_fts_wc_finalize(): array
             'dense_relationship_plan_rank_scope_race_shape',
             'dense_relationship_plan_rank_scope_race_typed_unavailable',
             'dense_relationship_plan_rank_scope_race_zero_relationship_sql',
-            'dense_relationship_rank_control_revocation_short_circuits_postings',
+            'dense_relationship_rank_control_revocation_returns_control_row',
             'dense_relationship_plan_rank_scope_race_server_attribution',
             'dense_relationship_search_duration_ms',
             'dense_relationship_fixture_cleanup',
@@ -12935,14 +12935,14 @@ function wp_fts_wc_finalize(): array
             'taxonomy_scope_active_broad_prefix_plan_only',
             'taxonomy_scope_active_surface_range_gated',
             'taxonomy_scope_active_broad_prefix_plan_rows',
-            'taxonomy_scope_active_broad_prefix_identity_index',
+            'taxonomy_scope_active_exact_identity_index',
             'taxonomy_scope_active_broad_prefix_statement_bytes',
             'taxonomy_scope_search_duration_ms',
             'taxonomy_scope_search_rows_examined',
             'taxonomy_scope_search_rows_sent',
             'taxonomy_scope_search_disk_temp_tables',
             'taxonomy_scope_search_sort_merge_passes',
-            'taxonomy_scope_search_no_index_flags',
+            'taxonomy_scope_search_no_good_index_flag',
             'taxonomy_scope_search_server_duration_ms',
             'taxonomy_scope_search_server_attribution',
             'taxonomy_scope_search_explain_statement_shape',

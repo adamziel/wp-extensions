@@ -2874,7 +2874,7 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
         'surface_dense_candidate_prefix_and_unrelated_posting_envelope',
         'schema_no_term_hash_column_or_index',
         'dense_relationship_active_targeted_broad_prefix_rows_examined',
-        'dense_relationship_rank_control_revocation_short_circuits_postings',
+        'dense_relationship_rank_control_revocation_returns_control_row',
         'broad_outer_visibility_shape',
         'broad_visibility_order',
         'generation_fence_stale_completions_noop',

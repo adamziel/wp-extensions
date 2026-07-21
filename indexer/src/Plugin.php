@@ -20991,7 +20991,7 @@ WHERE pm.meta_id IN ({$id_sql})";
             $wpml_item_value_sql = self::dependency_text_projection(
                 "CASE WHEN OCTET_LENGTH(wpml_translation.language_code) <= 64 THEN wpml_translation.language_code ELSE '' END",
                 $is_sqlite,
-                4096
+                64
             );
             $branches[] = "SELECT * FROM (
     SELECT wpml_post.ID AS post_order, 0 AS row_order, 'wpml' AS source_kind,
@@ -21028,7 +21028,7 @@ WHERE p.ID IN ({$post_placeholders})";
         return [implode("\nUNION ALL\n", $branches), $args, $source_kinds];
     }
 
-    /** Give bounded UNION text one collation without promoting VARCHAR fields to BLOBs. */
+    /** Give bounded UNION text one collation while retaining narrow VARCHAR metadata. */
     private static function dependency_text_projection(string $expression, bool $is_sqlite, int $max_chars): string
     {
         return $is_sqlite

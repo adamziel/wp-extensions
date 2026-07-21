@@ -1205,10 +1205,11 @@ test_case_with_pdo_sqlite_fixture('relational v4 SQLite foreground handoff relea
         1800,
         '0123456789abcdef0123456789abcdef'
     );
-    $scopeRows = $wpdb->dbh->query("SELECT state,scope_subject_type,scope_subject_id FROM wp_fts_work WHERE kind = 'scope' ORDER BY scope_subject_type DESC")->fetchAll(PDO::FETCH_ASSOC);
+    $scopeRows = $wpdb->dbh->query("SELECT state,claim_token,scope_subject_type,scope_subject_id FROM wp_fts_work WHERE kind = 'scope' ORDER BY scope_subject_type DESC")->fetchAll(PDO::FETCH_ASSOC);
     assert_same(2, count($scopeRows), 'global handoff must retain the completed targeted generation beside one corpus generation');
     assert_same('term_taxonomy', $scopeRows[0]['scope_subject_type'] ?? null, 'a ready targeted scope must never be erased into a second global scope');
     assert_same(77, (int) ($scopeRows[0]['scope_subject_id'] ?? 0), 'the targeted scope identifier must survive global handoff');
+    assert_same('', $scopeRows[0]['claim_token'] ?? null, 'a matching SQLite scope promotion must clear its request token');
     assert_same('', $scopeRows[1]['scope_subject_type'] ?? null, 'the canonical corpus row should replace the request sentinel');
     assert_same('ready', $scopeRows[1]['state'] ?? null, 'the promoted global corpus generation must be claimable');
     assert_same(2, count($wpdb->queries), 'SQLite corpus handoff must use one canonical scope UPSERT and one exact sentinel DELETE when no active targeted fences remain');

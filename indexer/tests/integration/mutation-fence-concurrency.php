@@ -610,6 +610,11 @@ try {
     $globalScopeToken = str_repeat('3', 32);
     $qb->fence_scope($targetScopeKey, $targetScopeToken, [], $recoveryAt, WP_FTS_Index_Queue::SCOPE_COVERAGE_TARGETED, 'term_taxonomy', 77);
     $qb->promote_scope($targetScopeKey, $targetScopeToken, [], null, WP_FTS_Index_Queue::SCOPE_COVERAGE_TARGETED, 'term_taxonomy', 77);
+    $targetScopeJob = 'scope:' . hash('sha256', $targetScopeKey);
+    wp_fts_mutation_proof_assert(
+        (string) $b->get_var("SELECT claim_token FROM `{$table}` WHERE job_key='{$targetScopeJob}'") === '',
+        'A matching MySQL scope promotion must clear its request token.'
+    );
     // Advance the completed row outside the foreground request. The original
     // token can no longer prove ownership, so corpus handoff must retain it.
     $qc->enqueue_scope(
@@ -665,7 +670,6 @@ try {
             && (int) ($staleOwnedDeleteStatements[0]['affected_rows'] ?? -1) === 0,
         'The old token must execute one indexed CAS delete that affects zero newer rows.'
     );
-    $targetScopeJob = 'scope:' . hash('sha256', $targetScopeKey);
     $staleTargetResult = $b->dbh->query(
         "SELECT generation,state,claim_token,scope_subject_type,scope_subject_id,payload
          FROM `{$table}` WHERE job_key='{$targetScopeJob}'"
