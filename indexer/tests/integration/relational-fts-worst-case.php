@@ -21348,10 +21348,50 @@ function wp_fts_wc_manifest(): array
     return $manifest;
 }
 
-/** Hash evidence after deterministic associative-key ordering. */
+/**
+ * Hash evidence after deterministic associative-key ordering.
+ *
+ * Feed JSON tokens directly into the hash context: finalization already owns
+ * the complete report, so a sorted copy plus one complete JSON string can
+ * exceed the same 128-MiB PHP limit that the report is meant to validate.
+ */
 function wp_fts_wc_canonical_hash(mixed $value): string
 {
-    return hash('sha256', json_encode(wp_fts_wc_canonicalize($value), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR));
+    $context = hash_init('sha256');
+    $flags = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR;
+    $append = static function (mixed $node) use (&$append, $context, $flags): void {
+        if (!is_array($node)) {
+            hash_update($context, json_encode($node, $flags));
+            return;
+        }
+
+        if (array_is_list($node)) {
+            hash_update($context, '[');
+            foreach ($node as $index => $child) {
+                if ($index > 0) {
+                    hash_update($context, ',');
+                }
+                $append($child);
+            }
+            hash_update($context, ']');
+            return;
+        }
+
+        $keys = array_keys($node);
+        sort($keys, SORT_STRING);
+        hash_update($context, '{');
+        foreach ($keys as $index => $key) {
+            if ($index > 0) {
+                hash_update($context, ',');
+            }
+            hash_update($context, json_encode((string) $key, $flags) . ':');
+            $append($node[$key]);
+        }
+        hash_update($context, '}');
+    };
+    $append($value);
+
+    return hash_final($context);
 }
 
 /** Fail before a diagnostic vector can make the compact evidence unbounded. */

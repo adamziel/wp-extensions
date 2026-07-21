@@ -518,6 +518,35 @@ test_case('relational worst-case gate fingerprints reject ordered inventory drif
     }
 });
 
+test_case('relational worst-case canonical hashes stream ordered JSON', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    foreach (['wp_fts_wc_canonicalize', 'wp_fts_wc_canonical_hash'] as $functionName) {
+        if (!function_exists($functionName)) {
+            eval(wp_fts_wc_contract_function_source($integration, $functionName));
+        }
+    }
+
+    $values = [
+        null,
+        true,
+        7,
+        1.0,
+        'slash/unicode-Łódź',
+        ['list', 2, ['z' => 1, 'a' => 2]],
+        ['10' => 'ten', '2' => 'two', 'nested' => ['b' => false, 'a' => null]],
+        (object) ['second' => 2, 'first' => 1],
+    ];
+    $flags = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR;
+    foreach ($values as $value) {
+        $expected = hash('sha256', json_encode(wp_fts_wc_canonicalize($value), $flags));
+        assert_same($expected, wp_fts_wc_canonical_hash($value), 'streamed canonical JSON must retain the established digest');
+    }
+
+    $hashSource = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_canonical_hash');
+    assert_contains("hash_init('sha256')", $hashSource, 'canonical hashing should stream into one hash context');
+    assert_true(!str_contains($hashSource, 'json_encode(wp_fts_wc_canonicalize($value)'), 'canonical hashing must not materialize a sorted copy of the complete report');
+});
+
 test_case('relational worst-case authoritative search memory is fresh, source-bound, and shrink-proof', function (): void {
     if (!function_exists('proc_open')) {
         mark_pending('proc_open() is required to execute the isolated search-memory inventory verifier.');
