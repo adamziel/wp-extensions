@@ -704,7 +704,6 @@ try {
         'newer_payload_preserved' => true,
     ];
     $qb->fence_scope($ownedTargetScopeKey, $ownedTargetScopeToken, [], $recoveryAt, WP_FTS_Index_Queue::SCOPE_COVERAGE_TARGETED, 'term_taxonomy', 78);
-    $qb->promote_scope($ownedTargetScopeKey, $ownedTargetScopeToken, [], null, WP_FTS_Index_Queue::SCOPE_COVERAGE_TARGETED, 'term_taxonomy', 78);
     $qb->fence_scope($globalScopeKey, $globalScopeToken, ['reason' => 'global'], $recoveryAt, WP_FTS_Index_Queue::SCOPE_COVERAGE_GLOBAL);
     $globalMarker = $b->statement_marker();
     $qb->handoff_foreground_mutation_scope(

@@ -1038,9 +1038,9 @@ LIMIT 1",
     /**
      * Drop only still-owned targeted generations after corpus work is ready.
      *
-     * Promotion retains the request token only on its exact ready generation.
-     * A worker claim or concurrent enqueue replaces it, so both states are safe
-     * compare-and-swap deletion targets after canonical corpus publication.
+     * Only an unpromoted fence retains the request token. Promotion clears it,
+     * while a worker claim or concurrent enqueue replaces it, so the protected
+     * state and token identify only this request's active generation.
      *
      * @param array<string,string> $scopeTokens
      */
@@ -1054,7 +1054,7 @@ LIMIT 1",
         $this->query($this->wpdb->prepare(
             "DELETE FROM {$this->table}
 WHERE job_key = %s AND claim_token = %s
-  AND kind = 'scope' AND state IN ('fenced','guarded','ready')
+  AND kind = 'scope' AND state IN ('fenced','guarded')
 /* wp_fts:foreground-owned-scope-delete */",
             $this->scope_job_key($scopeKey),
             $token

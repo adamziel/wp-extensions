@@ -759,15 +759,6 @@ test_case('foreground bulk mutation rejects multi-scope ownership and deletes th
         'term_taxonomy',
         91
     );
-    $queue->promote_scope(
-        $targetedKey,
-        $targetedToken,
-        [],
-        $now,
-        WP_FTS_Index_Queue::SCOPE_COVERAGE_TARGETED,
-        'term_taxonomy',
-        91
-    );
     $queue->fence_scope(
         $globalKey,
         $globalToken,
