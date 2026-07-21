@@ -6995,7 +6995,7 @@ function wp_fts_wc_missing_table_and_lock_proof(array $manifest): array
         // a second maintenance pass republishes the search capability.
         WP_FTS_Plugin::flush_foreground_bulk_mutations();
         WP_FTS_Plugin::reset_request_caches();
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         WP_FTS_Plugin::reset_request_caches();
         $recovery = WP_FTS_Plugin::process_manual_index_batch([
             'source' => 'worst-case-missing-table-recovery',
@@ -7003,7 +7003,7 @@ function wp_fts_wc_missing_table_and_lock_proof(array $manifest): array
             'time_budget' => 300.0,
         ]);
         WP_FTS_Plugin::reset_request_caches();
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         WP_FTS_Plugin::reset_request_caches();
         $remainingRecoveryWork = wp_fts_wc_checked_count(
             "SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')",

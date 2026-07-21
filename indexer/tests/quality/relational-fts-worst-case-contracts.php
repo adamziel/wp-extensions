@@ -2975,9 +2975,9 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     );
     $availabilityFault = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_missing_table_and_lock_proof');
     $tableRestored = strpos($availabilityFault, 'RENAME TABLE `{$backupTable}` TO `{$termTable}`');
-    $maintenanceVerified = strpos($availabilityFault, 'WP_FTS_Plugin::run_scheduled_schema_upgrade()');
+    $maintenanceVerified = strpos($availabilityFault, 'WP_FTS_Plugin::run_scheduled_schema_repair()');
     $recoveryWorker = strpos($availabilityFault, 'WP_FTS_Plugin::process_manual_index_batch([', $maintenanceVerified === false ? 0 : $maintenanceVerified);
-    $maintenanceRepublished = strpos($availabilityFault, 'WP_FTS_Plugin::run_scheduled_schema_upgrade()', $recoveryWorker === false ? 0 : $recoveryWorker + 1);
+    $maintenanceRepublished = strpos($availabilityFault, 'WP_FTS_Plugin::run_scheduled_schema_repair()', $recoveryWorker === false ? 0 : $recoveryWorker + 1);
     $postRepairSearch = strpos($availabilityFault, "WP_FTS_Plugin::search('rareanchor'", $maintenanceRepublished === false ? 0 : $maintenanceRepublished);
     assert_true(
         $tableRestored !== false
@@ -3619,7 +3619,7 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         'relational-fts-max-valid-setup-v2',
         'max_valid_setup_worker_progress',
         "'passes' => '1..100'",
-        'is_int($processed) && $processed >= 0',
+        'is_int($indexed) && $indexed >= 0',
         'max_valid_setup_worker_statement_bound',
         'max_valid_setup_worker_sql_bound',
         'max_valid_setup_worker_duration_bound',

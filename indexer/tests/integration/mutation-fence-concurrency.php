@@ -41,6 +41,8 @@ $password = (string) getenv('WP_FTS_MYSQL_PASSWORD');
 $database = (string) (getenv('WP_FTS_MYSQL_DATABASE') ?: 'test');
 $prefix = 'wpftsf_' . substr(hash('sha256', getmypid() . ':' . microtime(true)), 0, 10) . '_';
 $table = $prefix . 'fts_work';
+$postsTable = $prefix . 'posts';
+$documentsTable = $prefix . 'fts_documents';
 $aClosedForCrash = false;
 $foregroundHolderProcess = null;
 $foregroundHolderPipes = [];
@@ -56,6 +58,37 @@ try {
         $connections[] = new WP_FTS_Mutation_Proof_WPDB($mysqli, $prefix);
     }
     [$a, $b, $c] = $connections;
+    $a->query("CREATE TABLE `{$postsTable}` (
+        ID bigint unsigned NOT NULL,
+        post_author bigint unsigned NULL,
+        post_date datetime NULL,
+        post_date_gmt datetime NULL,
+        post_content longtext NULL,
+        post_title text NULL,
+        post_excerpt text NULL,
+        post_status varchar(20) NULL,
+        comment_status varchar(20) NULL,
+        ping_status varchar(20) NULL,
+        post_password varchar(255) NULL,
+        post_name varchar(200) NULL,
+        to_ping text NULL,
+        pinged text NULL,
+        post_modified datetime NULL,
+        post_modified_gmt datetime NULL,
+        post_content_filtered longtext NULL,
+        post_parent bigint unsigned NULL,
+        guid varchar(255) NULL,
+        menu_order int NULL,
+        post_type varchar(20) NULL,
+        post_mime_type varchar(100) NULL,
+        comment_count bigint NULL,
+        PRIMARY KEY (ID)
+    ) ENGINE=InnoDB");
+    $a->query("CREATE TABLE `{$documentsTable}` (
+        post_id bigint unsigned NOT NULL,
+        content_hash varbinary(64) NULL,
+        PRIMARY KEY (post_id)
+    ) ENGINE=InnoDB");
     $a->query("CREATE TABLE `{$table}` (
         job_key varbinary(191) NOT NULL,
         kind varchar(16) NOT NULL,
@@ -906,7 +939,7 @@ try {
     if (isset($connections) && is_array($connections)) {
         foreach ($connections as $connection) {
             if ($connection instanceof WP_FTS_Mutation_Proof_WPDB && (!$aClosedForCrash || $connection !== ($connections[0] ?? null))) {
-                $connection->query("DROP TABLE IF EXISTS `{$table}`");
+                $connection->query("DROP TABLE IF EXISTS `{$table}`, `{$documentsTable}`, `{$postsTable}`");
                 break;
             }
         }
