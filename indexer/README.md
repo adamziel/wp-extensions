@@ -154,6 +154,140 @@ the fixed query shape and deployment guidance.
 
 ## Architecture
 
+A useful way to think about Language FTS is as a rebuildable search view beside
+WordPress. WordPress posts remain the source of truth. The FTS tables contain
+only the dictionary, postings, bounded result sidecars, and durable work needed
+to find one ranked page. If the index is lost, it can be rebuilt from WordPress
+content.
+
+There is deliberately one production search architecture. The component no
+longer contains a file-backed engine or a PHP posting-list ranker, and the
+plugin does not carry a migration ladder for unreleased schema prototypes. An
+incompatible derived table is replaced, not translated indefinitely; content
+is recovered by reindexing from WordPress.
+
+### Responsibilities
+
+The design has three layers with fairly strict boundaries:
+
+| Layer | Responsibility |
+| --- | --- |
+| Reusable component | Normalizes and analyzes bounded text, prepares storage-ready documents, turns a query into bounded logical groups, and validates the returned page. |
+| WordPress adapter | Decides which WordPress queries are safe to replace, extracts canonical post data, records content changes, runs the background worker, and provides admin, REST, and WP-CLI surfaces. |
+| Relational storage | Owns the four tables, transactional index publication, dictionary planning, candidate discovery, visibility, ranking, cursor checks, and page hydration. |
+
+The analyzer does not know about SQL, and the searcher never asks storage to
+return a complete posting list. Storage receives a bounded query plan and
+returns a bounded page.
+
+### The four tables
+
+| Table | What it stores |
+| --- | --- |
+| `fts_terms` | One binary-stable dictionary row per language, identity kind, and normalized term, plus document frequency. |
+| `fts_postings` | One compact `(term_id, post_id)` row with precomputed field impact and indexes for both term-first and post-first work. |
+| `fts_documents` | One bounded derived row per indexed post: primary language, content hash, snippet source, and indexing time. Canonical visibility and post metadata stay in WordPress. |
+| `fts_work` | Post generations, reconciliation scopes, claims, leases, retries, failure codes, and the search epoch used to invalidate stale cursors. |
+
+Lexical analyzer identities use `kind=0`. Word-beginning search uses one
+normalized identity per distinct source surface as `kind=1`; it does not store
+every possible prefix. Prefix lookup is therefore one indexed dictionary range
+rather than a PHP loop over completions.
+
+### From a post change to searchable data
+
+1. A WordPress content change advances a durable generation in `fts_work`.
+   Search immediately excludes that post's old derived row, so stale content is
+   not presented as current.
+2. The foreground request finishes without analyzing the post. WP-Cron, or one
+   explicit bounded worker pass, later claims at most 100 posts and reads a
+   bounded canonical snapshot.
+3. The extractor builds weighted fields. The analyzer normalizes visible text,
+   applies the selected language pipeline, and emits bounded lexical and surface
+   frequencies plus a content hash and snippet source.
+4. The relational writer measures the complete old-plus-new posting frontier
+   before opening its transaction. Oversized valid work is split; one document
+   that violates a hard limit is rejected without making the rest of the batch
+   opaque.
+5. On MySQL and MariaDB, posting replacement, dictionary-frequency changes,
+   exact-generation acknowledgement, and cursor-epoch advancement are
+   published through the same transaction boundary.
+
+If another save advances the generation while a worker is analyzing, that
+worker cannot erase the newer work item or make its older snapshot visible.
+The newer generation stays dirty until a later worker publishes it.
+
+### From a query to one page
+
+1. The analyzer runs once and groups exact and morphological alternatives by
+   source word. Optional prefix matching applies only to the final source word.
+2. One planning statement resolves exact dictionary identities, reads their
+   document frequencies, measures the one prefix range when present, and reads
+   the current cursor epoch.
+3. One ranking statement chooses the bounded relational shape, applies `OR` or
+   `AND` membership, filters current WordPress visibility and dirty generations,
+   scores the candidates, orders them, and asks for one lookahead row.
+4. When metadata or snippets are requested, one final statement hydrates only
+   the returned page. Snippet highlighting also stays page-sized.
+
+A successful relational page therefore uses planning, ranking, and optional
+hydration rather than one query per term or completion. Pages contain at most
+50 results and use signed search-after cursors. They deliberately do not run an
+exhaustive count.
+
+### Upsides and strengths
+
+- **Bounded PHP work.** Complete posting lists, complete result sets, and prefix
+  completion lists never cross into PHP. Query analysis, result hydration, and
+  worker batches all have explicit size limits.
+- **Current WordPress truth.** Search visibility and returned post metadata come
+  from canonical WordPress rows instead of a second copy that can drift.
+- **Safe publication under concurrent saves.** Dirty-row exclusion and exact
+  generations prefer temporarily omitting a changed post over showing stale
+  content or letting an obsolete worker clear newer work.
+- **One production path.** The component, plugin, tests, and operational tools
+  describe the same set-oriented engine instead of maintaining a second
+  posting-list implementation for compatibility.
+- **Rebuildable state.** The index can be reset or replaced without treating it
+  as the only copy of user content.
+- **Predictable request shape.** The number of search statements and the amount
+  of application memory are bounded even when the matching set is large.
+
+### Downsides and limitations
+
+- **Indexing is asynchronous.** A newly changed post may be absent from FTS
+  results until the worker catches up. Reliable WP-Cron, or an external runner,
+  is part of operating the plugin.
+- **Bounded PHP does not mean constant database work.** A common `OR` term or a
+  broad final prefix still makes the database examine work proportional to the
+  matching postings. This is aimed at small and medium WordPress sites, not at
+  replacing a dedicated search cluster for very large or high-traffic corpora.
+- **The query model is intentionally narrow.** There are no phrases, positions,
+  facets, typo tolerance, cross-language result merging, or query-time synonyms.
+  Unsupported WordPress query shapes stay with core search.
+- **Pagination favors bounded work.** Callers get adjacent cursors and
+  `has_more`, not exact totals, deep offsets, or arbitrary numbered pages.
+- **The index has a write and storage cost.** Every indexed term creates derived
+  dictionary/posting work, and content changes require background database
+  writes even though foreground hooks stay small.
+- **Concurrency has a deployment contract.** Every PHP process sharing the
+  database must also see the same stable lock-file inode with working POSIX
+  `flock()` behavior. Node-local lock directories are not supported.
+- **SQLite is a preview path.** The same relational design supports a
+  single-request Playground smoke, but production concurrency is validated on
+  MySQL and MariaDB.
+- **Current-schema-only means reindexing after incompatible changes.** This
+  keeps unreleased compatibility code out of the runtime, but it trades an
+  in-place migration for a deliberate rebuild of derived data.
+
+This architecture is a good fit when keeping search local to the WordPress
+database, bounding PHP memory, and preserving WordPress visibility are more
+important than exact totals or advanced search features. A dedicated search
+service is the better fit when broad-query latency, horizontal scale, facets,
+typo correction, or richer ranking controls are primary requirements.
+
+The main classes line up with that model:
+
 - `wp-php-toolkit/full-text-search` provides the analyzer, term generation,
   relational storage contract, `WP_FTS_Indexer`, and `WP_FTS_Searcher`.
 - WordPress activation, post-save/status/delete hooks, cron, optional REST, and WP-CLI
