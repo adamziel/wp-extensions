@@ -441,19 +441,19 @@ test_case('surface bounds and cursors are bytewise and v6-specific', function ()
     assert_true(!hash_equals($firstFingerprint, $secondFingerprint), 'cursor authentication must bind the exact normalized typed surface');
 });
 
-test_case('legacy collection APIs are absent while bounded document diagnostics stay post-first', function (): void {
+test_case('point collection APIs are absent while bounded page diagnostics stay post-first', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
     $storage = new WP_FTS_Storage_Mysql($wpdb);
-    foreach (['put_term', 'delete_term', 'get_meta', 'all_terms', 'all_doc_ids'] as $method) {
-        assert_true(!method_exists($storage, $method), "production storage should not expose legacy {$method}");
+    foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'put_term', 'delete_term', 'get_meta', 'all_terms', 'all_doc_ids'] as $method) {
+        assert_true(!method_exists($storage, $method), "production storage should not expose {$method}");
     }
-    assert_same([], $wpdb->queries, 'legacy capability inspection must not execute SQL');
-    assert_same([], $wpdb->prepared, 'legacy capability inspection must not prepare SQL');
+    assert_same([], $wpdb->queries, 'capability inspection must not execute SQL');
+    assert_same([], $wpdb->prepared, 'capability inspection must not prepare SQL');
 
-    $storage->terms_for_doc(1);
+    $storage->terms_for_docs([1], 10);
     $diagnosticSql = (string) ($wpdb->prepared[0]['sql'] ?? '');
-    assert_contains('wp_fts_postings p FORCE INDEX (post_term_impact)', $diagnosticSql, 'bounded one-document terms must drive the post-first covering index');
-    assert_contains('STRAIGHT_JOIN wp_fts_terms t FORCE INDEX (PRIMARY)', $diagnosticSql, 'bounded one-document terms must resolve dictionary rows by primary id');
+    assert_contains('wp_fts_postings p FORCE INDEX (post_term_impact)', $diagnosticSql, 'bounded page terms must drive the post-first covering index');
+    assert_contains('STRAIGHT_JOIN wp_fts_terms t FORCE INDEX (PRIMARY)', $diagnosticSql, 'bounded page terms must resolve dictionary rows by primary id');
 
     $contract = wp_fts_surface_storage_method($storage, 'schema_contract', []);
     $termIndexes = array_column($contract['wp_fts_terms']['indexes'] ?? [], 'name');

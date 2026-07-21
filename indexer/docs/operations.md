@@ -4,7 +4,7 @@ Pure PHP FTS Indexer stores derived search data in custom MySQL tables. Treat
 the index as rebuildable from WordPress content, but back it up when fast
 restore matters.
 
-## Schema Creation And Upgrade
+## Schema Creation And Repair
 
 Activation and explicit repair create or repair the index tables, store the
 schema contract version, and schedule the bounded runtime queue processor.
@@ -209,8 +209,8 @@ During multisite site deletion, the plugin contributes the target site's four
 `fts_*` table names to WordPress table discovery so core can clean them up with
 the deleted site. Deactivation is reversible: it clears scheduled work and
 retains the index. Uninstall is deliberately destructive: for each site it uses
-one idempotent `DROP TABLE IF EXISTS` statement covering the four current and
-twelve distinct legacy/recoverable table names, then removes operational
+one idempotent `DROP TABLE IF EXISTS` statement covering the four current tables
+and eight deterministic reset-generation names, then removes operational
 options. The DROP uses the same per-site writer lease as indexing and repair.
 If that lease is active, uninstall leaves that site's tables and options
 untouched and fails so the operator can retry after the writer finishes; an
@@ -227,49 +227,25 @@ site pages, so an event preloaded before a later uninstall cannot clear the new
 fence. A multisite uninstall still cleans uncontended siblings
 and reports the number and first ID of blogs that need a retry. Multisite
 discovery holds at most 100 site IDs at a time. Uninstall does not create or
-delete WordPress posts, demo content, terms, users, attachments, uploads,
-analyzer packs, generated packs, or release artifacts.
+delete WordPress posts, terms, users, attachments, uploads, analyzer packs,
+generated packs, or release artifacts.
 
-Disposable lifecycle evidence is available through
+The disposable lifecycle report is available through
 `tools/run-disposable-lifecycle-smoke.sh` for direct-install/operator reviews.
 That smoke creates an isolated Docker WordPress/MariaDB site, installs a source
 copy of the plugin, and proves that activation/repair create or repair schema
-without indexing pre-existing content or creating demo posts. It also proves
+without indexing or changing pre-existing content. It also proves
 deactivation clears scheduled queue processing while retaining `fts_*` data,
-and uninstall removes plugin-owned current/legacy tables and operational
+and uninstall removes plugin-owned current/reset-generation tables and operational
 options while retaining only the exact non-autoloaded one-byte uninstall fence.
-The smoke network-activates the plugin, creates a real subsite, seeds all
-recoverable legacy table names on both sites, and requires the current and
-legacy tables to be absent from both site prefixes after uninstall. It then
+The smoke network-activates the plugin, creates a real subsite, seeds all eight
+deterministic reset-generation table names on both sites, and requires all
+twelve owned tables to be absent from both site prefixes after uninstall. It then
 installs the same source-bound ZIP inactive, proves the two fences still block
 schema recreation, network-reactivates it, runs the one-site provisioning event,
-and requires both fences absent plus exactly four current and zero legacy tables
+and requires both fences absent plus exactly four current and zero reset-generation tables
 per site. Its command and release evidence collector reject missing multisite,
 table-removal, fence-shape, or reactivation proof.
-
-Upgrade release evidence is available through
-`tools/run-disposable-upgrade-multisite-smoke.sh` for direct-install/operator
-reviews when a previous direct-install package is supplied. That smoke creates
-an isolated Docker WordPress/MariaDB multisite network, network-activates the previous direct-install package, indexes generated fixture content, upgrades to
-the current package, checks schema version/status, proves repair idempotence after upgrade, checks search continuity and queue health after upgrade, creates
-an additional disposable site, proves that site's four current `fts_*` tables use its
-own table prefix, proves subsite indexing/search/queue/repair behavior, proves
-the WordPress site-deletion table filter contributes the target site's FTS
-tables, and deletes generated fixture content before the disposable stack is
-removed. The release evidence collector only passes this lane when the decoded
-report records `multisite_evidence.status` as `passed`.
-
-The release evidence collector can also build the previous direct-install
-package from a local Git ref/SHA with `--previous-direct-package-ref=REF`. That
-path resolves only local history, rejects the current target commit, requires
-the release builder and Composer lockfile at the previous ref, archives package
-source paths into temporary storage, and runs the previous ZIP build with
-isolated Composer home/auth, an existing local Composer package cache when
-available, network access disabled, and credential-capable environment variables
-scrubbed before the historical builder or nested Composer process can inherit
-them. Previous refs containing Composer auth files such as `indexer/auth.json`
-or `indexer/.composer/auth.json` are rejected before checkout/archive, so the
-Docker upgrade wrapper is not invoked for those refs.
 
 ## Reindex Strategy
 
@@ -384,12 +360,12 @@ wp fts reset-index --yes --format=json
 The command requires `--yes`. Without confirmation it reports
 `confirmation_required` and does not mutate FTS storage or plugin options. With
 confirmation it replaces the four current FTS document, posting, dictionary,
-and durable-work relations with an empty generation, then clears legacy queue
+and durable-work relations with an empty generation, then clears pending queue
 state, failed-item recovery metadata, and failure/latest-batch state. It
 preserves WordPress posts, post meta, terms, unrelated options, plugin settings,
 analyzer-pack options, schema version, and the existing `fts_*` table contract.
-It does not change uninstall behavior; uninstall still removes every
-plugin-owned current and legacy FTS table.
+It does not change uninstall behavior; uninstall still removes every current
+and deterministic reset-generation FTS table owned by the plugin.
 
 This is also the recovery authority for an `owner guard unavailable` Health
 latch. First repair the shared lock path, then stop or drain PHP web, cron, and

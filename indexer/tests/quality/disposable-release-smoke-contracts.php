@@ -327,7 +327,7 @@ test_case('quality disposable release smoke builds bounded WP-CLI command sequen
                     return ['exit' => 0, 'stdout' => "123\n", 'stderr' => ''];
                 }
                 if (str_contains($joined, 'fts process-batch')) {
-                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['processed' => 1, 'queue_processed' => 1]), 'stderr' => ''];
+                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['indexed' => 1, 'queue_processed' => 1]), 'stderr' => ''];
                 }
                 if (str_contains($joined, 'fts search')) {
                     return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json([
@@ -434,7 +434,7 @@ test_case('quality disposable release smoke sanitizes successful JSON evidence',
                 }
                 if (str_contains($joined, 'fts process-batch')) {
                     return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json([
-                        'processed' => 1,
+                        'indexed' => 1,
                         'debug' => $rawPasswordAssignment . ' ' . $rawLocalPath,
                     ]), 'stderr' => ''];
                 }
@@ -470,7 +470,7 @@ test_case('quality disposable release smoke sanitizes successful JSON evidence',
         wp_fts_disposable_smoke_contract_true(!str_contains($encodedReport, $rawLocalPath), 'successful JSON evidence should redact local paths');
         wp_fts_disposable_smoke_contract_true(!str_contains($encodedReport, 'BEGIN ' . 'PRIVATE ' . 'KEY'), 'successful JSON evidence should redact private key markers');
         wp_fts_disposable_smoke_contract_contains('schema_status', $encodedReport, 'successful JSON evidence should retain useful status fields');
-        wp_fts_disposable_smoke_contract_contains('processed', $encodedReport, 'successful JSON evidence should retain useful indexing fields');
+        wp_fts_disposable_smoke_contract_contains('indexed', $encodedReport, 'successful JSON output should retain useful indexing fields');
         wp_fts_disposable_smoke_contract_contains('[redacted]', $encodedReport, 'successful JSON evidence should show redaction markers');
         wp_fts_disposable_smoke_contract_contains('[path]', $encodedReport, 'successful JSON evidence should show path redaction markers');
     } finally {

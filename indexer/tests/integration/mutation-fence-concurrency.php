@@ -41,6 +41,8 @@ $password = (string) getenv('WP_FTS_MYSQL_PASSWORD');
 $database = (string) (getenv('WP_FTS_MYSQL_DATABASE') ?: 'test');
 $prefix = 'wpftsf_' . substr(hash('sha256', getmypid() . ':' . microtime(true)), 0, 10) . '_';
 $table = $prefix . 'fts_work';
+$postsTable = $prefix . 'posts';
+$documentsTable = $prefix . 'fts_documents';
 $aClosedForCrash = false;
 $foregroundHolderProcess = null;
 $foregroundHolderPipes = [];
@@ -56,6 +58,37 @@ try {
         $connections[] = new WP_FTS_Mutation_Proof_WPDB($mysqli, $prefix);
     }
     [$a, $b, $c] = $connections;
+    $a->query("CREATE TABLE `{$postsTable}` (
+        ID bigint unsigned NOT NULL,
+        post_author bigint unsigned NULL,
+        post_date datetime NULL,
+        post_date_gmt datetime NULL,
+        post_content longtext NULL,
+        post_title text NULL,
+        post_excerpt text NULL,
+        post_status varchar(20) NULL,
+        comment_status varchar(20) NULL,
+        ping_status varchar(20) NULL,
+        post_password varchar(255) NULL,
+        post_name varchar(200) NULL,
+        to_ping text NULL,
+        pinged text NULL,
+        post_modified datetime NULL,
+        post_modified_gmt datetime NULL,
+        post_content_filtered longtext NULL,
+        post_parent bigint unsigned NULL,
+        guid varchar(255) NULL,
+        menu_order int NULL,
+        post_type varchar(20) NULL,
+        post_mime_type varchar(100) NULL,
+        comment_count bigint NULL,
+        PRIMARY KEY (ID)
+    ) ENGINE=InnoDB");
+    $a->query("CREATE TABLE `{$documentsTable}` (
+        post_id bigint unsigned NOT NULL,
+        content_hash varbinary(64) NULL,
+        PRIMARY KEY (post_id)
+    ) ENGINE=InnoDB");
     $a->query("CREATE TABLE `{$table}` (
         job_key varbinary(191) NOT NULL,
         kind varchar(16) NOT NULL,
@@ -172,7 +205,7 @@ try {
         'The newer generic payload must survive an older foreground promotion.'
     );
 
-    $readyClaims = $qc->claim(100, time() + 1, 30);
+    $readyClaims = $qc->claim_batch(100, time() + 1, 30);
     wp_fts_mutation_proof_assert(count($readyClaims) === 2, 'The two ready canonical generations should be claimable once each.');
     $readyAck = $qc->acknowledge_many($readyClaims, time() + 2);
     wp_fts_mutation_proof_assert(($readyAck['acknowledged'] ?? -1) === 2, 'The two ready canonical generations should acknowledge once each.');
@@ -251,7 +284,7 @@ try {
     );
 
     $guardedClaimMarker = $c->statement_marker();
-    $claimsBehindGuard = $qc->claim(100, $guardNow, 30);
+    $claimsBehindGuard = $qc->claim_batch(100, $guardNow, 30);
     $guardedClaimStatements = $c->statements_since($guardedClaimMarker);
     wp_fts_mutation_proof_assert(
         count($guardedClaimStatements) === 2,
@@ -329,7 +362,7 @@ try {
     $foregroundHolderProcess = null;
     $foregroundHolderPipes = [];
     $recoveredGuardedMarker = $c->statement_marker();
-    $recoveredGuardedClaims = $qc->claim(100, $guardNow + 2, 30);
+    $recoveredGuardedClaims = $qc->claim_batch(100, $guardNow + 2, 30);
     $recoveredGuardedStatements = $c->statements_since($recoveredGuardedMarker);
     $freeProbeState = $qc->foreground_owner_guard_probe_state();
     wp_fts_mutation_proof_assert(
@@ -376,7 +409,7 @@ try {
     );
     $qa->promote_post($fencedPostId, $fencedToken, $guardNow + 3);
     $promotedFallbackMarker = $c->statement_marker();
-    $promotedFallbackClaims = $qc->claim(100, $guardNow + 3, 30);
+    $promotedFallbackClaims = $qc->claim_batch(100, $guardNow + 3, 30);
     $promotedFallbackStatements = $c->statements_since($promotedFallbackMarker);
     wp_fts_mutation_proof_assert(
         count($promotedFallbackStatements) === 2
@@ -462,8 +495,8 @@ try {
     );
     $a->dbh->close();
     $aClosedForCrash = true;
-    wp_fts_mutation_proof_assert($qc->claim(1, $recoveryAt - 1, 30) === [], 'A fenced generation must wait until its durable recovery time.');
-    $recoveredClaims = $qc->claim(1, $recoveryAt, 30);
+    wp_fts_mutation_proof_assert($qc->claim_batch(1, $recoveryAt - 1, 30) === [], 'A fenced generation must wait until its durable recovery time.');
+    $recoveredClaims = $qc->claim_batch(1, $recoveryAt, 30);
     wp_fts_mutation_proof_assert(count($recoveredClaims) === 1, 'The elapsed fenced generation should be claimed through the ordinary CAS path.');
     $recovered = $recoveredClaims[0];
     wp_fts_mutation_proof_assert(
@@ -486,7 +519,7 @@ try {
     $postdeadlinePostPayload = ['index_options' => ['language' => 'pl']];
     $qb->fence_post($postdeadlinePostId, $postdeadlinePostToken, $postdeadlineAt, ['source' => 'foreground']);
     $qc->enqueue_many([$postdeadlinePostId], $postdeadlineAt - 1, $postdeadlinePostPayload);
-    $postdeadlineRecovered = $qc->claim(1, $postdeadlineAt, 30)[0] ?? null;
+    $postdeadlineRecovered = $qc->claim_batch(1, $postdeadlineAt, 30)[0] ?? null;
     wp_fts_mutation_proof_assert(is_array($postdeadlineRecovered), 'MySQL should recover the coalesced direct generation at its watchdog deadline.');
     $qb->promote_post($postdeadlinePostId, $postdeadlinePostToken, $postdeadlineAt + 1);
     $postdeadlinePostResult = $b->dbh->query(
@@ -508,7 +541,7 @@ try {
         !$qc->acknowledge($postdeadlineRecovered, $postdeadlineAt + 2),
         'The recovered MySQL post worker must not acknowledge the post-hook successor.'
     );
-    $postdeadlinePostSuccessor = $qc->claim(1, $postdeadlineAt + 2, 30)[0] ?? null;
+    $postdeadlinePostSuccessor = $qc->claim_batch(1, $postdeadlineAt + 2, 30)[0] ?? null;
     wp_fts_mutation_proof_assert(is_array($postdeadlinePostSuccessor), 'The MySQL post-hook successor should remain claimable.');
     wp_fts_mutation_proof_assert($qc->acknowledge($postdeadlinePostSuccessor, $postdeadlineAt + 3), 'Only the MySQL post-hook successor should acknowledge.');
 
@@ -532,7 +565,7 @@ try {
         'term_taxonomy',
         99
     );
-    $postdeadlineScopeRecovered = $qc->claim_scope($postdeadlineAt, 30);
+    $postdeadlineScopeRecovered = $qc->claim_batch(0, $postdeadlineAt, 30)[0] ?? null;
     wp_fts_mutation_proof_assert(is_array($postdeadlineScopeRecovered), 'MySQL should recover the coalesced scope generation at its watchdog deadline.');
     $qb->promote_scope(
         $postdeadlineScopeKey,
@@ -564,7 +597,7 @@ try {
         !$qc->acknowledge_scope($postdeadlineScopeRecovered, $postdeadlineAt + 2),
         'The recovered MySQL scope worker must not acknowledge the scope-hook successor.'
     );
-    $postdeadlineScopeSuccessor = $qc->claim_scope($postdeadlineAt + 2, 30);
+    $postdeadlineScopeSuccessor = $qc->claim_batch(0, $postdeadlineAt + 2, 30)[0] ?? null;
     wp_fts_mutation_proof_assert(
         is_array($postdeadlineScopeSuccessor)
             && (int) ($postdeadlineScopeSuccessor['scope_subject_id'] ?? 0) === 99
@@ -906,7 +939,7 @@ try {
     if (isset($connections) && is_array($connections)) {
         foreach ($connections as $connection) {
             if ($connection instanceof WP_FTS_Mutation_Proof_WPDB && (!$aClosedForCrash || $connection !== ($connections[0] ?? null))) {
-                $connection->query("DROP TABLE IF EXISTS `{$table}`");
+                $connection->query("DROP TABLE IF EXISTS `{$table}`, `{$documentsTable}`, `{$postsTable}`");
                 break;
             }
         }
@@ -1638,7 +1671,7 @@ function wp_fts_mutation_proof_production_worker_cas(): array
     wp_fts_mutation_proof_assert(class_exists('WP_FTS_Plugin'), 'The installed FTS plugin is not active in the production-worker proof.');
     wp_fts_mutation_proof_assert(method_exists('WP_FTS_Index_Queue', 'is_post_job_key'), 'The installed queue lacks canonical post identity validation.');
 
-    WP_FTS_Plugin::upgrade_schema();
+    WP_FTS_Plugin::create_or_repair_schema();
     $schema = WP_FTS_Plugin::storage(false)->verify_schema();
     wp_fts_mutation_proof_assert(($schema['valid'] ?? null) === true, 'The production-worker proof requires the exact current relational schema.');
 
@@ -1744,7 +1777,6 @@ function wp_fts_mutation_proof_production_worker_cas(): array
         $sqlEvidence = wp_fts_mutation_proof_worker_sql_evidence($queries);
         wp_fts_mutation_proof_assert((int) ($summary['analyzed'] ?? -1) === 1, 'The canonical claim must produce one production analysis.');
         wp_fts_mutation_proof_assert((int) ($summary['indexed'] ?? -1) === 1, 'The canonical claim must produce one production replacement.');
-        wp_fts_mutation_proof_assert((int) ($summary['processed'] ?? -1) === 1, 'The production batch must report one distinct processed post.');
         wp_fts_mutation_proof_assert((int) ($summary['committed'] ?? -1) === 1, 'The production batch must commit one canonical generation.');
         wp_fts_mutation_proof_assert((int) ($summary['queue_processed'] ?? -1) === 1, 'The production batch must drain one canonical generation.');
 
@@ -1844,7 +1876,6 @@ function wp_fts_mutation_proof_production_worker_cas(): array
             'stale_promotion_rejected' => true,
             'analyzed' => (int) ($summary['analyzed'] ?? -1),
             'indexed' => (int) ($summary['indexed'] ?? -1),
-            'processed' => (int) ($summary['processed'] ?? -1),
             'committed' => (int) ($summary['committed'] ?? -1),
             'queue_processed' => (int) ($summary['queue_processed'] ?? -1),
             'remaining_job_keys' => $remainingKeys,
@@ -1869,7 +1900,7 @@ function wp_fts_mutation_proof_production_worker_cas(): array
                 // factory. This explicitly unguarded instance is scoped to the
                 // disposable proof and followed by physical row checks.
                 $storage = new WP_FTS_Storage_Mysql($wpdb);
-                if ($storage->get_doc($postId) !== null) {
+                if ($storage->document_hashes([$postId]) !== []) {
                     $storage->replace_prepared_documents([], [$postId]);
                 }
             } catch (Throwable $error) {

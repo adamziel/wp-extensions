@@ -30,9 +30,9 @@ caveats operators need to account for.
   one-site provisioning event is retried from the same keyset cursor. This is not a
   complete enterprise multisite certification.
 - Deactivation retains the index and stops scheduled work. Uninstall is the
-  explicit destructive boundary: it drops all current and recoverable legacy
-  FTS tables before deleting operational options. It does not create or delete
-  WordPress posts, demo content, or analyzer/upload/release artifacts.
+  explicit destructive boundary: it drops all current and deterministic
+  reset-generation FTS tables before deleting operational options. It does not
+  create or delete WordPress posts or analyzer/upload/release artifacts.
 
 ## Search Provider Compatibility
 

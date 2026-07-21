@@ -22,7 +22,7 @@ test_case('batch source preload has hard aggregate and dependency envelopes', fu
     $source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/Plugin.php');
     assert_true(!str_contains($source, 'SELECT p.*, d.content_hash AS fts_existing_hash'), 'the worker must not buffer every wp_posts column');
     foreach ([
-        'measure FTS source posts',
+        'An FTS queue claim is missing its bounded source measurement.',
         'CASE WHEN {$source_bytes_sql} <= requested.source_budget THEN p.post_content ELSE',
         'load bounded FTS taxonomy and metadata rows',
         'load bounded FTS taxonomy and metadata values',
@@ -49,6 +49,9 @@ test_case('batch source preload has hard aggregate and dependency envelopes', fu
     ] as $required) {
         assert_contains($required, $source, "bounded preload should retain {$required}");
     }
+    assert_true(!str_contains($source, 'measure FTS source posts'), 'source preload must use the measurements returned by claim_batch()');
+    $loadPosts = $plugin->getMethod('load_posts_for_indexing');
+    assert_same(2, $loadPosts->getNumberOfRequiredParameters(), 'source measurements must be required at the preload boundary');
     $measurementStart = strpos($source, 'private static function load_bounded_index_dependencies(');
     $valueStart = strpos($source, 'private static function load_bounded_index_dependency_values(');
     assert_true($measurementStart !== false && $valueStart !== false && $valueStart > $measurementStart, 'measurement and value loaders should remain separate ordered phases');
@@ -56,7 +59,7 @@ test_case('batch source preload has hard aggregate and dependency envelopes', fu
     assert_contains('OCTET_LENGTH(tt.description) <= 4096', $source, 'the folded Polylang assignment must have a fixed value cap');
     assert_contains('OCTET_LENGTH(wpml_translation.language_code) <= 64', $source, 'the folded WPML assignment must have a fixed value cap');
     assert_true(!str_contains($measurementSource, 'LEFT(CAST(t.name') && !str_contains($measurementSource, 'LEFT(CAST(pm.meta_value'), 'the measurement phase should not materialize taxonomy or metadata LOB prefixes');
-    record_check('batch preload containment source contract', 30);
+    record_check('batch preload containment source contract', 32);
 });
 
 test_case('100 authoritative post preparations reopen no WordPress dependency source', function (): void {

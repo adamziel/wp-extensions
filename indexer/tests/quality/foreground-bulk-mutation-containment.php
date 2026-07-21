@@ -1319,74 +1319,6 @@ test_case('foreground bulk mutation second worker probe refences every interrupt
     assert_same([47501], array_column($recoveredBatch, 'post_id'), 'claim_batch refence must recover immediately after owner release');
     $queue->acknowledge_many($recoveredBatch, $now + 32);
 
-    $fake = new WP_FTS_Test_WPDB();
-    $fake->recordReadQueries = true;
-    $queue = new WP_FTS_Index_Queue($fake);
-    $queue->enqueue_many([47502], $now, ['reason' => 'post-original']);
-    $originalPost = $fake->queue[47502];
-    $guard = null;
-    $fake->queries = [];
-    $fake->afterQueueClaimWriteObserver = static function () use ($queue, &$guard): void {
-        $guard = $queue->acquire_foreground_owner_guard();
-    };
-    try {
-        $claims = $queue->claim(10, $now, 30);
-        $refencedPost = $fake->queue[47502] ?? [];
-        assert_same([], $claims, 'claim must expose no work when a foreground owner starts after its update');
-        assert_same(2, count($fake->queries), 'claim interruption must use only its claim update and one set-oriented refence');
-        assert_same('guarded', $refencedPost['state'] ?? null, 'claim must restore guarded fence state');
-        assert_true(str_starts_with((string) ($refencedPost['claim_token'] ?? ''), 'guard:'), 'claim refence must publish a guarded token');
-        assert_same(0, $refencedPost['claim_expires_at'] ?? null, 'claim refence must clear its old lease expiry');
-        assert_same($originalPost['generation'] ?? null, $refencedPost['generation'] ?? null, 'claim refence must preserve generation');
-        assert_same($originalPost['payload'] ?? null, $refencedPost['payload'] ?? null, 'claim refence must preserve payload');
-
-        $fake->queries = [];
-        assert_same([], $queue->claim(10, $now + 31, 30), 'the live shared owner must protect the refenced post beyond the old lease');
-        assert_same(2, count($fake->queries), 'the protected refenced post must retain constant worker SQL');
-    } finally {
-        if (is_array($guard)) {
-            $queue->release_foreground_owner_guard($guard);
-        }
-    }
-    $recoveredPosts = $queue->claim(10, $now + 31, 30);
-    assert_same([47502], array_column($recoveredPosts, 'post_id'), 'claim refence must recover immediately after owner release');
-    $queue->acknowledge_many($recoveredPosts, $now + 32);
-
-    $fake = new WP_FTS_Test_WPDB();
-    $fake->recordReadQueries = true;
-    $queue = new WP_FTS_Index_Queue($fake);
-    $queue->enqueue_scope('late-owner-scope', ['reason' => 'scope-original'], $now);
-    $scopeKey = 'scope:' . hash('sha256', 'late-owner-scope');
-    $originalScope = $fake->queue[$scopeKey];
-    $guard = null;
-    $fake->queries = [];
-    $fake->afterQueueClaimWriteObserver = static function () use ($queue, &$guard): void {
-        $guard = $queue->acquire_foreground_owner_guard();
-    };
-    try {
-        $scope = $queue->claim_scope($now, 30);
-        $refencedScope = $fake->queue[$scopeKey] ?? [];
-        assert_same(null, $scope, 'claim_scope must expose no work when a foreground owner starts after its update');
-        assert_same(3, count($fake->queries), 'claim_scope interruption must remain selection, lease CAS, and one refence statement');
-        assert_contains('wp_fts:refence-interrupted-claim', wp_fts_foreground_bulk_sql($fake->queries[2] ?? ''), 'claim_scope must execute the shared interrupted-claim refence');
-        assert_same('guarded', $refencedScope['state'] ?? null, 'claim_scope must restore guarded fence state');
-        assert_true(str_starts_with((string) ($refencedScope['claim_token'] ?? ''), 'guard:'), 'claim_scope refence must publish a guarded token');
-        assert_same(0, $refencedScope['claim_expires_at'] ?? null, 'claim_scope refence must clear its old lease expiry');
-        assert_same($originalScope['generation'] ?? null, $refencedScope['generation'] ?? null, 'claim_scope refence must preserve generation');
-        assert_same($originalScope['payload'] ?? null, $refencedScope['payload'] ?? null, 'claim_scope refence must preserve payload');
-
-        $fake->queries = [];
-        assert_same(null, $queue->claim_scope($now + 31, 30), 'the live shared owner must protect the refenced scope beyond the old lease');
-        assert_same(1, count($fake->queries), 'a busy scope worker must stop after its one bounded candidate read');
-    } finally {
-        if (is_array($guard)) {
-            $queue->release_foreground_owner_guard($guard);
-        }
-    }
-    $recoveredScope = $queue->claim_scope($now + 31, 30);
-    assert_same($scopeKey, $recoveredScope['job_key'] ?? null, 'claim_scope refence must recover immediately after owner release');
-    assert_true($queue->acknowledge_scope($recoveredScope, $now + 32), 'the recovered scope generation should acknowledge normally');
-
     // A canonical fence that wins after the interrupted lease but before the
     // synthetic refence must remain authoritative. The refence CAS is bound to
     // both the old worker token and its exact generation.
@@ -1947,19 +1879,19 @@ test_case('foreground bulk mutation guarded state cannot be starved by more than
 
     $fake->queries = [];
     $fake->prepared = [];
-    $recovered = $queue->claim(WP_FTS_Index_Queue::MAX_CLAIM_POSTS, $now, 30);
+    $recovered = $queue->claim_batch(WP_FTS_Index_Queue::MAX_CLAIM_POSTS, $now, 30);
     assert_same(2, count($fake->queries), 'mixed protected debt must remain one bounded update plus one confirmation read');
     assert_same($guardedIds, array_column($recovered, 'post_id'), '201 older fenced rows must not starve one complete guarded claim window');
     $claimStatements = array_values(array_filter(
         $fake->prepared,
-        static fn(array $prepared): bool => str_contains((string) ($prepared['sql'] ?? ''), 'wp_fts:claim-posts')
+        static fn(array $prepared): bool => str_contains((string) ($prepared['sql'] ?? ''), 'wp_fts:claim-batch')
     ));
     $claimSql = (string) ($claimStatements[0]['sql'] ?? '');
     assert_contains("WHERE kind = 'post' AND state = 'guarded'", $claimSql, 'free recovery must use the indexed guarded state directly');
     assert_contains(') post_guarded_candidates', $claimSql, 'guarded candidates must have their own bounded index arm');
     assert_true(!str_contains($claimSql, "state = 'fenced'"), 'free automatic claims must omit operator-only fenced rows from every candidate and CAS arm');
     assert_true(!str_contains($claimSql, 'claim_token LIKE'), 'automatic eligibility must never scan or classify claim-token text');
-    assert_true(substr_count($claimSql, 'LIMIT 100') === 6, 'five state arms plus the outer choice must each retain the hard 100-row limit');
+    assert_true(substr_count($claimSql, 'LIMIT 100') === 5, 'the post relation must retain four state-arm limits and one outer hard limit');
 
     assert_same(
         ['acknowledged' => WP_FTS_Index_Queue::MAX_CLAIM_POSTS, 'superseded' => 0],
@@ -1980,7 +1912,7 @@ test_case('foreground bulk mutation guarded state cannot be starved by more than
 
     $promotedId = $fencedIds[0];
     $queue->promote_post($promotedId, str_repeat('0', 32), $now + 2);
-    $promoted = $queue->claim(WP_FTS_Index_Queue::MAX_CLAIM_POSTS, $now + 2, 30);
+    $promoted = $queue->claim_batch(WP_FTS_Index_Queue::MAX_CLAIM_POSTS, $now + 2, 30);
     assert_same([$promotedId], array_column($promoted, 'post_id'), 'an authoritative post-SQL promotion must make exactly that fenced generation ready');
     assert_true(isset($promoted[0]) && $queue->acknowledge($promoted[0]), 'the safely promoted generation should acknowledge normally');
 });

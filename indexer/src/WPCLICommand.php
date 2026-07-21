@@ -547,7 +547,7 @@ final class WP_FTS_WPCLI_Command
             static fn(): array => WP_FTS_Plugin::reset_index(),
             [
                 'batch_size' => 0,
-                'processed' => 0,
+                'indexed' => 0,
                 'record_skip' => false,
             ]
         );
@@ -629,7 +629,6 @@ final class WP_FTS_WPCLI_Command
         $this->output_assoc([
             'mode' => is_scalar($summary['mode'] ?? null) ? (string) $summary['mode'] : 'manual',
             'batch_size' => max(0, (int) ($summary['batch_size'] ?? 0)),
-            'processed' => max(0, (int) ($summary['processed'] ?? 0)),
             'committed' => max(0, (int) ($summary['committed'] ?? 0)),
             'superseded' => max(0, (int) ($summary['superseded'] ?? 0)),
             'indexed' => max(0, (int) ($summary['indexed'] ?? 0)),

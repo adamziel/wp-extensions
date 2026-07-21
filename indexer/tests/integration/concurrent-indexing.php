@@ -153,7 +153,7 @@ if (!is_string($prefix) || preg_match('/^[A-Za-z0-9_]+$/', $prefix) !== 1) {
     exit(1);
 }
 $wpdb->prefix = $prefix;
-WP_FTS_Plugin::upgrade_schema();
+WP_FTS_Plugin::create_or_repair_schema();
 $token = getenv('WP_FTS_CONCURRENT_TOKEN');
 $workers = max(2, (int) getenv('WP_FTS_CONCURRENT_WORKERS'));
 $postsPerWorker = max(1, (int) getenv('WP_FTS_CONCURRENT_POSTS_PER_WORKER'));

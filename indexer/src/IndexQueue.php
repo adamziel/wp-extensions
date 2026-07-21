@@ -57,8 +57,6 @@ final class WP_FTS_Index_Queue
     ];
     public const BASE_BACKOFF_SECONDS = 300;
     public const MAX_BACKOFF_SECONDS = 3600;
-    /** Legacy compatibility only; failures are no longer terminal. */
-    public const DEAD_AFTER_ATTEMPTS = 3;
     public const MAX_ENQUEUE_POSTS = 1000;
     public const MAX_CLAIM_POSTS = 100;
     /** Persisted fair-turn marker for a scope co-claimed with direct posts. */
@@ -1133,21 +1131,10 @@ ON DUPLICATE KEY UPDATE
     }
 
     /**
-     * Import normalized post ids from the legacy option queue.
-     *
-     * @param int[] $post_ids
-     */
-    public function import(array $post_ids, ?int $now = null): void
-    {
-        $this->enqueue_many($post_ids, $now);
-    }
-
-    /**
      * Claim at most one scope generation and one bounded direct-post batch.
      *
-     * A single token lets production workers discover both work kinds with one
-     * atomic UPDATE and one indexed confirmation read. Compatibility callers
-     * may continue using the kind-specific claim methods below.
+     * A single token lets workers discover both work kinds with one atomic
+     * UPDATE and one indexed confirmation read.
      *
      * When `$source_snapshot_limit` is positive, the confirmation read also
      * returns canonical source fields only if the complete claimed post set
@@ -1204,7 +1191,7 @@ WHERE (job_key, generation) IN (
   AND (
       (state = 'leased' AND claim_expires_at <= %d AND available_at <= %d)
       {$guardedClaimSql}
-      OR (state IN ('ready','retry','dead') AND available_at <= %d)
+      OR (state IN ('ready','retry') AND available_at <= %d)
   )";
             $claimArgs = [$token, $lease_expires_at, ...$choiceArgs, $now, $now];
             if ($recoverGuardedFences) {
@@ -1237,7 +1224,7 @@ SET claim_target.state = 'leased',
 WHERE (
       (claim_target.state = 'leased' AND claim_target.claim_expires_at <= %d AND claim_target.available_at <= %d)
       {$guardedClaimSql}
-      OR (claim_target.state IN ('ready','retry','dead') AND claim_target.available_at <= %d)
+      OR (claim_target.state IN ('ready','retry') AND claim_target.available_at <= %d)
   )";
             $claimArgs = [$token, $lease_expires_at, ...$choiceArgs, $now, $now];
             if ($recoverGuardedFences) {
@@ -1382,229 +1369,12 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
     }
 
     /**
-     * Claim currently available generations with one set-oriented compare-and-swap.
-     *
-     * Expired leases satisfy the same predicate as unclaimed rows. A stale
-     * worker's later acknowledgement fails because its token no longer owns the
-     * row.
-     *
-     * @return array<int,array{post_id:int,generation:int,attempts:int,token:string,claim_expires_at:int}>
-     */
-    public function claim(int $limit, ?int $now = null, int $lease_seconds = self::DEFAULT_LEASE_SECONDS): array
-    {
-        if ($limit > self::MAX_CLAIM_POSTS) {
-            throw new InvalidArgumentException('FTS work claims may contain at most 100 posts.');
-        }
-        $limit = max(0, $limit);
-        [$now, $lease_expires_at] = $this->lease_window($now, $lease_seconds);
-        if ($limit === 0) {
-            return [];
-        }
-
-        $claimGuard = $this->begin_foreground_fence_claim();
-        $recoverGuardedFences = $claimGuard['state'] === 'free';
-        $this->end_foreground_fence_claim($claimGuard);
-        $token = bin2hex(random_bytes(16));
-        $choice = $this->bounded_claim_choice('post', $limit, $now, $recoverGuardedFences);
-        // Every state arm reaches the ready/recoverable index and contributes
-        // at most N candidates before the fixed outer priority sort.
-        if ($this->is_sqlite_runtime()) {
-            $guardedClaimSql = $recoverGuardedFences
-                ? "\n      OR (state = 'guarded' AND available_at <= %d) /* wp_fts:only-guarded-fence-recovery */"
-                : "\n      /* wp_fts:fences-require-free-guard */";
-            $claimSql = "UPDATE /* wp_fts:claim-posts */ {$this->table}
-SET state = 'leased',
-    claim_token = %s,
-    claimed_generation = generation,
-    claim_expires_at = %d
-WHERE kind = 'post'
-  AND (job_key, generation) IN (
-      SELECT job_key, generation FROM (
-          {$choice['sql']}
-      ) claimable_fts_work
-  )
-      AND (
-          (state = 'leased' AND claim_expires_at <= %d AND available_at <= %d)
-          {$guardedClaimSql}
-          OR (state IN ('ready','retry','dead') AND available_at <= %d)
-      )";
-        } else {
-            $guardedClaimSql = $recoverGuardedFences
-                ? "\n      OR (claim_target.state = 'guarded' AND claim_target.available_at <= %d) /* wp_fts:only-guarded-fence-recovery */"
-                : "\n      /* wp_fts:fences-require-free-guard */";
-            $claimSql = "UPDATE /* wp_fts:claim-posts */ (
-    SELECT claimable_fts_work.job_key, claimable_fts_work.generation,
-           %s AS new_claim_token, %d AS new_claim_expires_at
-    FROM (
-        {$choice['sql']}
-    ) claimable_fts_work
-) claim_driver
-STRAIGHT_JOIN {$this->table} claim_target
-        ON claim_target.job_key = claim_driver.job_key
-       AND claim_target.generation = claim_driver.generation
-SET claim_target.state = 'leased',
-    claim_target.claim_token = claim_driver.new_claim_token,
-    claim_target.claimed_generation = claim_target.generation,
-    claim_target.claim_expires_at = claim_driver.new_claim_expires_at
-    WHERE claim_target.kind = 'post'
-      AND (
-          (claim_target.state = 'leased' AND claim_target.claim_expires_at <= %d AND claim_target.available_at <= %d)
-          {$guardedClaimSql}
-          OR (claim_target.state IN ('ready','retry','dead') AND claim_target.available_at <= %d)
-      )";
-        }
-        $claimArgs = [$token, $lease_expires_at, ...$choice['args'], $now, $now];
-        if ($recoverGuardedFences) {
-            $claimArgs[] = $now;
-        }
-        $claimArgs[] = $now;
-        $this->query($this->wpdb->prepare($claimSql, ...$claimArgs), 'claim FTS indexing work');
-        if (!$this->foreground_fence_claim_remains_free($recoverGuardedFences)) {
-            $this->refence_interrupted_claim($token);
-            return [];
-        }
-
-        $claimedRows = $this->get_results($this->wpdb->prepare(
-            "SELECT job_key, post_id, generation, attempts FROM {$this->table}
-WHERE claim_token = %s AND claimed_generation = generation
-ORDER BY post_id ASC",
-            $token
-        ), 'confirm claimed FTS indexing work');
-        $claims = [];
-        foreach ($claimedRows as $row) {
-            $job_key = isset($row->job_key) && is_scalar($row->job_key) ? (string) $row->job_key : '';
-            $post_id = max(0, (int) ($row->post_id ?? 0));
-            $generation = max(0, (int) ($row->generation ?? 0));
-            if (!self::is_post_job_key($job_key, $post_id) || $generation <= 0) {
-                continue;
-            }
-            $claims[] = [
-                'job_key' => $job_key,
-                'post_id' => $post_id,
-                'generation' => $generation,
-                'attempts' => max(0, (int) ($row->attempts ?? 0)),
-                'token' => $token,
-                'claim_expires_at' => $lease_expires_at,
-            ];
-        }
-
-        return $claims;
-    }
-
-    /**
-     * Claim one global/scope reconciliation generation.
-     *
-     * Scope work is deliberately serialized by the plugin's existing writer
-     * lease. It keyset-expands into direct post work without loading the whole
-     * affected corpus into either the foreground request or PHP memory.
-     *
-     * @return array{job_key:string,kind:string,generation:int,attempts:int,token:string,claim_expires_at:int,cursor_post_id:int,payload:array<string,mixed>}|null
-     */
-    public function claim_scope(?int $now = null, int $lease_seconds = self::DEFAULT_LEASE_SECONDS): ?array
-    {
-        [$now, $lease_expires_at] = $this->lease_window($now, $lease_seconds);
-        $claimGuard = $this->begin_foreground_fence_claim();
-        $recoverGuardedFences = $claimGuard['state'] === 'free';
-        $this->end_foreground_fence_claim($claimGuard);
-        $token = bin2hex(random_bytes(16));
-        $choice = $this->bounded_claim_choice('scope', 1, $now, $recoverGuardedFences);
-        $rows = $this->get_results($this->wpdb->prepare(
-            "SELECT job_key, kind, generation, attempts, cursor_post_id,
-                    scope_coverage, scope_incarnation, scope_subject_type, scope_subject_id, payload,
-                    state, available_at, claim_token
-FROM {$this->table}
-WHERE kind = 'scope' AND (job_key, generation) IN (
-    SELECT job_key, generation FROM (
-        {$choice['sql']}
-    ) claimable_fts_scope
-)
-LIMIT 1",
-            ...$choice['args']
-        ), 'read claimable FTS scope work');
-        $row = $rows[0] ?? null;
-        if (!is_object($row)) {
-            return null;
-        }
-
-        $job_key = isset($row->job_key) && is_scalar($row->job_key) ? (string) $row->job_key : '';
-        $generation = max(0, (int) ($row->generation ?? 0));
-        if ($job_key === '' || $generation <= 0) {
-            return null;
-        }
-        $guardedClaimSql = $recoverGuardedFences
-            ? "\n      OR (state = 'guarded' AND available_at <= %d) /* wp_fts:only-guarded-fence-recovery */"
-            : "\n      /* wp_fts:fences-require-free-guard */";
-        $claimArgs = [
-            $token,
-            $lease_expires_at,
-            $job_key,
-            $generation,
-            $now,
-            $now,
-        ];
-        if ($recoverGuardedFences) {
-            $claimArgs[] = $now;
-        }
-        $claimArgs[] = $now;
-        $affected = $this->query($this->wpdb->prepare(
-            "UPDATE {$this->table}
-SET state = 'leased', claim_token = %s,
-    claimed_generation = generation, claim_expires_at = %d
-WHERE job_key = %s AND generation = %d
-  AND (
-      (state = 'leased' AND claim_expires_at <= %d AND available_at <= %d)
-      {$guardedClaimSql}
-      OR (state IN ('ready','retry','dead') AND available_at <= %d)
-  )",
-            ...$claimArgs
-        ), 'claim FTS scope work');
-        if ($affected !== 1) {
-            return null;
-        }
-        if (!$this->foreground_fence_claim_remains_free($recoverGuardedFences)) {
-            $this->refence_interrupted_claim($token);
-            return null;
-        }
-
-        $payload = [];
-        if (isset($row->payload) && is_string($row->payload) && $row->payload !== '') {
-            try {
-                $decoded = json_decode($row->payload, true, flags: JSON_THROW_ON_ERROR);
-                $payload = is_array($decoded) ? $decoded : [];
-            } catch (JsonException) {
-                $payload = [];
-            }
-        }
-        $scopeAuthority = $this->validated_scope_authority(
-            (string) ($row->scope_coverage ?? ''),
-            (string) ($row->scope_subject_type ?? ''),
-            max(0, (int) ($row->scope_subject_id ?? 0)),
-            (string) ($row->scope_incarnation ?? '')
-        );
-
-        return [
-            'job_key' => $job_key,
-            'kind' => 'scope',
-            'generation' => $generation,
-            'attempts' => max(0, (int) ($row->attempts ?? 0)),
-            'token' => $token,
-            'claim_expires_at' => $lease_expires_at,
-            'cursor_post_id' => max(0, (int) ($row->cursor_post_id ?? 0)),
-            'scope_coverage' => $scopeAuthority[0],
-            'scope_subject_type' => $scopeAuthority[1],
-            'scope_subject_id' => $scopeAuthority[2],
-            'scope_incarnation' => $scopeAuthority[3],
-            'payload' => $payload,
-        ];
-    }
-
-    /**
-     * Build an at-most-five-arm candidate relation over the ready index.
+     * Build an at-most-four-arm candidate relation over the ready index.
      *
      * Each state arm materializes at most the requested batch size before the
      * outer priority sort. Consequently an eligible guarded abandonment wins
      * without a CASE filesort over the complete ready backlog, and the derived
-     * relation never exceeds 500 post rows (five scope rows for a scope claim).
+     * relation never exceeds 400 post rows (four scope rows for a scope claim).
      *
      * @return array{sql:string,args:array<int,int>}
      */
@@ -1619,8 +1389,8 @@ WHERE job_key = %s AND generation = %d
         $limit = max(1, min(self::MAX_CLAIM_POSTS, $limit));
         $order = 'available_at ASC, post_id ASC, job_key ASC';
         $states = $recover_guarded_fences
-            ? ['guarded', 'ready', 'retry', 'leased', 'dead']
-            : ['ready', 'retry', 'leased', 'dead'];
+            ? ['guarded', 'ready', 'retry', 'leased']
+            : ['ready', 'retry', 'leased'];
         $arms = [];
         $args = [];
         foreach ($states as $state) {
@@ -2382,12 +2152,11 @@ FROM (
      * Return the earliest instant at which any durable generation can run.
      *
      * A future retry uses `available_at`; an active lease cannot be stolen
-     * before `claim_expires_at`. Legacy dead rows remain automatically
-     * recoverable instead of requiring an operator to know they exist. A
-     * non-free owner probe projects one bounded watchdog arm for each protected
-     * state. A free probe includes only indexed `guarded` work and omits
-     * operator-only `fenced` debt, so that debt cannot create a recurring cron
-     * wake or hide guarded recovery behind an outer token filter.
+     * before `claim_expires_at`. A non-free owner probe projects one bounded
+     * watchdog arm for each protected state. A free probe includes only indexed
+     * `guarded` work and omits operator-only `fenced` debt, so that debt cannot
+     * create a recurring cron wake or hide guarded recovery behind an outer
+     * token filter.
      */
     public function next_available_at(): ?int
     {
@@ -2397,8 +2166,8 @@ FROM (
         $recoverGuardedFences = $claimGuard['state'] === 'free';
         $this->end_foreground_fence_claim($claimGuard);
         $states = $recoverGuardedFences
-            ? ['guarded', 'ready', 'retry', 'leased', 'dead']
-            : ['guarded', 'fenced', 'ready', 'retry', 'leased', 'dead'];
+            ? ['guarded', 'ready', 'retry', 'leased']
+            : ['guarded', 'fenced', 'ready', 'retry', 'leased'];
         foreach (['post', 'scope'] as $kind) {
             foreach ($states as $state) {
                 $due = $state === 'leased' ? 'claim_expires_at' : 'available_at';

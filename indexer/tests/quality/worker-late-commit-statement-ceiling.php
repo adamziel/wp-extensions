@@ -163,7 +163,7 @@ test_case('late worker commit failure stays recoverable inside the complete stat
                 $takeover['stop_reason'] ?? null,
                 'the first successor must classify stale option takeover as its own control phase'
             );
-            assert_same(0, $takeover['processed'] ?? null, 'stale option takeover must not compose with document work');
+            assert_same(0, $takeover['indexed'] ?? null, 'stale option takeover must not compose with document work');
             assert_true(
                 count($takeoverQueries) <= 5,
                 'stale option takeover must use only one bounded option read plus acquire, exact replacement, and release SQL'
@@ -220,7 +220,7 @@ test_case('late worker commit failure stays recoverable inside the complete stat
                     : (string) $statement,
                 $fake->queries
             );
-            assert_same(1, $ordinary['processed'] ?? null, 'the invocation after standalone takeover must resume document work');
+            assert_same(1, $ordinary['indexed'] ?? null, 'the invocation after standalone takeover must resume document work');
             assert_true(
                 isset($ordinaryQueries[0], $ordinaryQueries[1])
                     && str_starts_with($ordinaryQueries[0], 'INSERT IGNORE INTO wp_options')

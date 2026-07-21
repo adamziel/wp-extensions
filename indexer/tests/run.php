@@ -2437,20 +2437,20 @@ final class WP_FTS_Test_WPDB
             }
             return null;
         }
-        if ($sql === "SELECT COUNT(*) FROM wp_fts_work WHERE state IN ('ready','retry','leased','dead','guarded')") {
+        if ($sql === "SELECT COUNT(*) FROM wp_fts_work WHERE state IN ('ready','retry','leased','guarded')") {
             return count(array_filter(
                 $this->queue,
                 static fn(array $row): bool => in_array((string) ($row['kind'] ?? ''), ['post', 'scope'], true)
-                    && in_array((string) ($row['state'] ?? ''), ['ready', 'retry', 'leased', 'dead', 'guarded'], true)
+                    && in_array((string) ($row['state'] ?? ''), ['ready', 'retry', 'leased', 'guarded'], true)
             ));
         }
         if (
-            $sql === "SELECT COUNT(*) FROM wp_fts_work\nWHERE kind IN ('post','scope') AND state IN ('ready','retry','leased','dead','guarded')"
+            $sql === "SELECT COUNT(*) FROM wp_fts_work\nWHERE kind IN ('post','scope') AND state IN ('ready','retry','leased','guarded')"
         ) {
             return count(array_filter(
                 $this->queue,
                 static fn(array $row): bool => in_array((string) ($row['kind'] ?? ''), ['post', 'scope'], true)
-                    && in_array((string) ($row['state'] ?? ''), ['ready', 'retry', 'leased', 'dead', 'guarded'], true)
+                    && in_array((string) ($row['state'] ?? ''), ['ready', 'retry', 'leased', 'guarded'], true)
             ));
         }
         if (
@@ -2463,8 +2463,8 @@ final class WP_FTS_Test_WPDB
             $onlyGuardedFencesAreRunnable = str_contains($sql, 'wp_fts:only-guarded-fence-recovery');
             $preserveLaterFenceDue = str_contains($sql, '.due_at < ');
             $states = $onlyGuardedFencesAreRunnable
-                ? ['guarded', 'ready', 'retry', 'leased', 'dead']
-                : ['guarded', 'fenced', 'ready', 'retry', 'leased', 'dead'];
+                ? ['guarded', 'ready', 'retry', 'leased']
+                : ['guarded', 'fenced', 'ready', 'retry', 'leased'];
             foreach (['post', 'scope'] as $kind) {
                 foreach ($states as $state) {
                     $rows = array_values(array_filter(
@@ -4755,7 +4755,7 @@ final class WP_FTS_Test_WPDB
                 $rowDue = $rowKey !== null
                     && (int) ($this->queue[$rowKey]['available_at'] ?? 0) <= $now
                     && (
-                        in_array($rowState, ['ready', 'retry', 'dead'], true)
+                        in_array($rowState, ['ready', 'retry'], true)
                         || ($rowState === 'leased' && (int) ($this->queue[$rowKey]['claim_expires_at'] ?? 0) <= $now)
                         || ($rowState === 'guarded' && str_contains($sql, "state = 'guarded'"))
                     );
@@ -5391,8 +5391,8 @@ final class WP_FTS_Test_WPDB
         }
         $keys = [];
         $states = $recoverGuardedFences
-            ? ['guarded', 'ready', 'retry', 'leased', 'dead']
-            : ['ready', 'retry', 'leased', 'dead'];
+            ? ['guarded', 'ready', 'retry', 'leased']
+            : ['ready', 'retry', 'leased'];
         foreach ($states as $state) {
             $stateKeys = [];
             foreach ($this->queue as $key => $row) {
@@ -7110,7 +7110,7 @@ final class WP_FTS_Test_WPDB
             return $keys === [] ? [] : [(object) $this->queue[$keys[0]]];
         }
 
-        if (str_contains($sql, "WHERE kind = 'scope'") && str_contains($sql, "state IN ('guarded','fenced','ready','retry','leased','dead')")) {
+        if (str_contains($sql, "WHERE kind = 'scope'") && str_contains($sql, "state IN ('guarded','fenced','ready','retry','leased')")) {
             $now = max(0, (int) ($args[0] ?? 0));
             $keys = $this->claimable_v4_queue_keys('scope', 1, $now);
             return $keys === [] ? [] : [(object) $this->queue[$keys[0]]];
@@ -8241,8 +8241,7 @@ function wp_fts_test_seed_queue(WP_FTS_Test_WPDB $wpdb, array $post_ids, ?int $n
 {
     $queue = new WP_FTS_Index_Queue($wpdb);
     $queue->clear();
-    $queue->import($post_ids, $now);
-    unset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION]);
+    $queue->enqueue_many($post_ids, $now);
     $wpdb->queries = [];
     $wpdb->prepared = [];
     $wpdb->last_error = '';
@@ -8890,9 +8889,9 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_activation_hooks'] = [];
     $GLOBALS['wp_fts_test_deactivation_hooks'] = [];
     $GLOBALS['wp_fts_test_uninstall_hooks'] = [];
-    // Most integration fixtures model an already activated plugin. Migration
-    // and fail-closed tests explicitly replace or remove this option when they
-    // need an unprovisioned state.
+    // Most integration fixtures model an already activated plugin. Schema
+    // repair and fail-closed tests explicitly replace or remove this option
+    // when they need an unprovisioned state.
     $GLOBALS['wp_fts_test_options'] = [
         WP_FTS_Plugin::SCHEMA_VERSION_OPTION => WP_FTS_Plugin::SCHEMA_VERSION,
         WP_FTS_Plugin::READINESS_INCARNATION_OPTION => $readinessIncarnation,
@@ -10313,7 +10312,7 @@ function wp_fts_test_capture_admin_sandbox(): string
 {
     ob_start();
     try {
-        WP_FTS_Plugin::render_admin_sandbox();
+        WP_FTS_Plugin::render_admin_settings_page('sandbox');
         $html = ob_get_clean();
 
         return is_string($html) ? $html : '';
@@ -10511,26 +10510,6 @@ function wp_fts_test_capture_registered_admin_route(string $url, callable $callb
     }
 }
 
-/**
- * @return array<int,array{title:string,slug:string}>
- */
-function wp_fts_test_legacy_sandbox_demo_signatures(): array
-{
-    return [
-        ['title' => 'FTS Sandbox: English Mice', 'slug' => 'wp-fts-sandbox-english-mice'],
-        ['title' => 'FTS Sandbox: Polish Lemmatizer Demo', 'slug' => 'wp-fts-sandbox-polish-lemmatizer-demo'],
-        ['title' => 'FTS Sandbox: Chinese Search N-grams', 'slug' => 'wp-fts-sandbox-chinese-search-ngrams'],
-        ['title' => 'FTS Sandbox: Hindi Lemmatizer', 'slug' => 'wp-fts-sandbox-hindi-lemmatizer'],
-        ['title' => 'FTS Sandbox: Spanish Buscar', 'slug' => 'wp-fts-sandbox-spanish-buscar'],
-        ['title' => 'FTS Sandbox: Arabic Search', 'slug' => 'wp-fts-sandbox-arabic-search'],
-        ['title' => 'FTS Sandbox: French Chercher', 'slug' => 'wp-fts-sandbox-french-chercher'],
-        ['title' => 'FTS Sandbox: Bengali Lemmatizer', 'slug' => 'wp-fts-sandbox-bengali-lemmatizer'],
-        ['title' => 'FTS Sandbox: Portuguese Pesquisar', 'slug' => 'wp-fts-sandbox-portuguese-pesquisar'],
-        ['title' => 'FTS Sandbox: Indonesian Abadi', 'slug' => 'wp-fts-sandbox-indonesian-abadi'],
-        ['title' => 'FTS Sandbox: Urdu Suffix Baseline', 'slug' => 'wp-fts-sandbox-urdu-suffix-baseline'],
-    ];
-}
-
 function wp_fts_test_backfill_post(int $post_id, string $post_type = 'post', string $post_status = 'publish', ?string $title = null): object
 {
     return (object) [
@@ -10594,7 +10573,7 @@ function wp_fts_test_seed_reset_index_state(WP_FTS_Test_WPDB $wpdb): array
     ];
     wp_fts_test_seed_queue($wpdb, [911, 913]);
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
-        'last_batch_processed' => 5,
+        'last_batch_indexed' => 5,
         'last_batch_queue_processed' => 2,
         'last_batch_backfill_processed' => 1,
         'has_more' => true,
@@ -10815,7 +10794,7 @@ PHP;
     sort($hooks, SORT_STRING);
     $expectedHooks = [
         WP_FTS_Plugin::CRON_HOOK,
-        WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK,
+        WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK,
         WP_FTS_Plugin::SCHEMA_SITE_CRON_HOOK,
         'add_meta_boxes',
         'add_post_meta',
@@ -10951,8 +10930,8 @@ PHP;
             break;
         }
     }
-    assert_same([WP_FTS_Plugin::class, 'maybe_schedule_initial_index_readiness'], $readinessAction['callback'] ?? null, 'bootstrap should schedule the legacy readiness migration on init');
-    assert_same(0, $readinessAction['accepted_args'] ?? null, 'readiness migration should not accept request data');
+    assert_same([WP_FTS_Plugin::class, 'maybe_schedule_initial_index_readiness'], $readinessAction['callback'] ?? null, 'bootstrap should register the readiness watchdog on init');
+    assert_same(0, $readinessAction['accepted_args'] ?? null, 'the readiness watchdog should not accept request data');
 
     $siteDeletionFilter = null;
     foreach ($GLOBALS['wp_fts_test_filter_registrations'] as $filter) {
@@ -11126,24 +11105,16 @@ test_case('settings sanitization maps replacement checkboxes and legacy scope to
     assert_same(true, $legacy['replace_admin_post_search'], 'legacy admin replacement boolean should still sanitize');
 });
 
-test_case('settings sanitization accepts and clamps prefix threshold controls', function (): void {
-    assert_same(128, WP_FTS_Plugin::sanitize_prefix_max_terms('128'), 'the former public sanitizer should preserve valid named API calls');
-    assert_same(256, WP_FTS_Plugin::sanitize_prefix_max_terms('9999'), 'the compatibility sanitizer should preserve its former upper bound');
-    assert_same(64, WP_FTS_Plugin::sanitize_prefix_max_terms('not-a-number'), 'the compatibility sanitizer should preserve its former default');
-
+test_case('settings sanitization accepts and clamps the prefix threshold control', function (): void {
     $valid = WP_FTS_Plugin::sanitize_settings([
         'prefix_min_length' => '3',
-        'prefix_max_terms' => '128',
     ]);
     assert_same(3, $valid['prefix_min_length'], 'valid prefix minimum length should persist');
-    assert_true(!array_key_exists('prefix_max_terms', $valid), 'removed expansion caps should not survive settings sanitization');
 
     $clamped = WP_FTS_Plugin::sanitize_settings([
         'prefix_min_length' => '1',
-        'prefix_max_terms' => '9999',
     ]);
     assert_same(2, $clamped['prefix_min_length'], 'too-short prefix minimum length should clamp to the product lower bound');
-    assert_true(!array_key_exists('prefix_max_terms', $clamped), 'obsolete expansion cap inputs should be ignored');
 
     $invalid = WP_FTS_Plugin::sanitize_settings([
         'prefix_min_length' => [],
@@ -11445,9 +11416,7 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_true(!str_contains($html, '<div class="notice notice-info"><p>Current site language'), 'site-language status should not render as a large notice');
     assert_true(!str_contains($html, 'Demo posts and the full-text index are ready'), 'authorized first render should not report demo corpus auto-seeding');
     assert_same([], $GLOBALS['wp_fts_test_posts'], 'authorized first sandbox render should not create posts');
-    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION]), 'authorized first sandbox render should not write the legacy demo post option');
     assert_same([], $fake->ftsTerms, 'authorized first sandbox render should not build FTS terms for generated content');
-    assert_true(!str_contains($html, 'Legacy sandbox demo posts detected'), 'clean sandbox render should not show the cleanup affordance');
     foreach (['What gets indexed', 'When the index updates', 'Where full-text search replaces WordPress search', 'Customer-facing search behavior', 'Public REST search', 'Ranking weights'] as $groupLabel) {
         assert_contains($groupLabel, $settingsHtml, "settings tab should group controls by {$groupLabel}");
     }
@@ -11563,14 +11532,8 @@ test_case('authorized admin sandbox render includes search form and creates no p
     $oldPresetHeading = 'Suggested ' . 'queries';
     assert_true(!str_contains($html, $oldPresetHeading), 'sandbox page should not render the removed query-preset heading');
     assert_true(!str_contains($html, '<th scope="col">Query</th>'), 'sandbox page should not render a query-preset table column');
-    foreach (wp_fts_test_legacy_sandbox_demo_signatures() as $signature) {
-        assert_true(!str_contains($html, $signature['title']), "sandbox page should not render the legacy {$signature['title']} title");
-    }
     assert_contains('No indexed posts are available yet.', $indexedHtml, 'indexed-content tab should render an empty state instead of creating sample posts');
     assert_true(!str_contains($indexedHtml, '<th scope="col">Language</th>'), 'empty indexed-content tab should not render a demo table');
-    foreach (wp_fts_test_legacy_sandbox_demo_signatures() as $signature) {
-        assert_true(!str_contains($indexedHtml, $signature['title']), "indexed-content tab should not list the legacy {$signature['title']} title");
-    }
 });
 
 test_case('known search provider advisory renders neutral Health and Settings output', function (): void {
@@ -11895,14 +11858,13 @@ test_case('health dashboard displays bounded search state without adding success
         static fn(mixed $entry): string => is_array($entry) ? (string) ($entry[0] ?? '') : (string) $entry,
         $fake->queries
     ));
-    assert_same(1, count($fake->queries), 'stale-schema Health rendering should issue only the indexed legacy-queue existence probe');
-    assert_contains('SELECT 1 FROM wp_options WHERE option_name = %s LIMIT 1', $healthQueries, 'stale-schema Health rendering must not deserialize the retired unbounded queue option');
+    assert_same(0, count($fake->queries), 'stale-schema Health rendering should issue no physical queue query');
     assert_true(!str_contains($healthQueries, 'fts_work'), 'stale-schema Health rendering must not query an unavailable physical work table');
     assert_true(!str_contains($healthQueries, 'SHOW TABLES'), 'normal Health rendering must trust stored readiness instead of probing physical schema');
     assert_true(!str_contains($healthQueries, 'COUNT(DISTINCT'), 'normal Health rendering must not scan WordPress content for exact totals');
     assert_contains('<th scope="row">Last indexed content</th><td>No indexed content recorded yet.</td>', $html, 'successful batches should not add an option write only to populate health history');
     assert_contains('<th scope="row">Last batch</th><td>No batch has run yet.</td>', $html, 'successful batches should leave the write-free health history empty');
-    assert_contains('<th scope="row">Last batch processed</th><td>0 total (0 waiting updates, 0 remaining content, 0 failed)</td>', $html, 'empty health history should report zero processed work');
+    assert_contains('<th scope="row">Last batch indexed</th><td>0 indexed (0 waiting updates, 0 remaining content, 0 failed)</td>', $html, 'empty health history should report zero processed work');
     assert_contains('<th scope="row">Last indexing failure</th><td>No indexing failures recorded.</td>', $html, 'health dashboard should show the latest failure state');
     assert_true(!str_contains($html, '<h3>Latest batch diagnostics</h3>'), 'successful batches should not persist diagnostic rows on the request path');
     assert_contains('Repair FTS tables and the stored schema version without indexing content.', $html, 'health dashboard should explain schema repair scope');
@@ -11911,11 +11873,7 @@ test_case('health dashboard displays bounded search state without adding success
     assert_contains('Index the next batch now', $html, 'health dashboard should expose one primary manual indexing action');
     assert_contains('wp_fts_health_nonce', $html, 'health manual action should use a dedicated nonce field');
     assert_true(!str_contains($html, 'bounded ' . 'batch'), 'health dashboard should not expose implementation-oriented batch wording');
-    assert_true(!str_contains($html, 'demo ' . 'posts'), 'health dashboard manual batch copy should not mention sandbox sample content');
     assert_true(!str_contains($html, 'whole site in ' . 'one request'), 'health dashboard should not expose internal request-size constraints');
-    assert_true(!str_contains($html, 'wp_fts_sandbox_action'), 'health dashboard should not render sandbox demo action controls');
-    assert_true(!str_contains($html, 'Create or refresh demo posts'), 'health dashboard should not reintroduce demo post creation controls');
-    assert_true(!str_contains($html, 'Build demo index'), 'health dashboard should not reintroduce demo indexing controls');
 });
 
 test_case('health dashboard renders expired lock diagnostics without exposing token data', function (): void {
@@ -12096,7 +12054,7 @@ test_case('schema repair performs zero probes or DDL while another writer owns t
     assert_same($activeLock, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] ?? null, 'contended schema repair should leave the foreign lease untouched');
 });
 
-test_case('health schema repair POST repairs schema without indexing or creating demo posts', function (): void {
+test_case('health schema repair POST creates schema without indexing or changing content', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -12109,8 +12067,11 @@ test_case('health schema repair POST repairs schema without indexing or creating
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION],
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]
     );
+    foreach (['wp_fts_terms', 'wp_fts_postings', 'wp_fts_documents', 'wp_fts_work'] as $table) {
+        unset($fake->schemaColumns[$table], $fake->schemaIndexes[$table], $fake->schemaUniqueIndexes[$table]);
+    }
+    $fake->queueTableExists = false;
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [751];
     $fake->postRows = [
         wp_fts_test_backfill_post(751, 'post', 'publish', 'Repair Only Post'),
     ];
@@ -12134,13 +12095,13 @@ test_case('health schema repair POST repairs schema without indexing or creating
     assert_same(4, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'valid repair should create the four relational tables');
     assert_same([], $fake->docs, 'valid repair should not index existing content');
     assert_same([], $fake->ftsTerms, 'valid repair should not write FTS terms');
-    assert_same([], $GLOBALS['wp_fts_test_posts'], 'valid repair should not create demo posts');
-    assert_same([], wp_fts_test_queue_ids($fake), 'valid repair should not rematerialize a legacy option queue as direct post work');
+    assert_same([], $GLOBALS['wp_fts_test_posts'], 'valid repair should not create WordPress posts');
+    assert_same([], wp_fts_test_queue_ids($fake), 'valid repair should not enqueue direct post work');
     $scopeRows = array_values(array_filter(
         $fake->queue,
         static fn(array $row): bool => ($row['kind'] ?? null) === 'scope'
     ));
-    assert_same(1, count($scopeRows), 'valid repair should replace the unbounded legacy option queue with one corpus scope');
+    assert_same(1, count($scopeRows), 'valid repair should enqueue one corpus scope');
     $health = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
     assert_same('pending', $health['initial_index_status'] ?? null, 'valid repair should require corpus verification without running it inline');
     assert_same('', $health['last_run_at'] ?? null, 'valid repair should not record a manual indexing batch');
@@ -12160,6 +12121,10 @@ test_case('health schema repair failure reports bounded escaped error without in
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION],
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]
     );
+    foreach (['wp_fts_terms', 'wp_fts_postings', 'wp_fts_documents', 'wp_fts_work'] as $table) {
+        unset($fake->schemaColumns[$table], $fake->schemaIndexes[$table], $fake->schemaUniqueIndexes[$table]);
+    }
+    $fake->queueTableExists = false;
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
     $fake->postRows = [
         wp_fts_test_backfill_post(761, 'post', 'publish', 'Repair Failure Post'),
@@ -12272,7 +12237,7 @@ test_case('health manual batch lock skip displays no-overlap notice', function (
     $diagnostics = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['latest_batch_diagnostics'] ?? [];
     assert_same('skipped_locked', $diagnostics['status'] ?? null, 'manual health lock skip should record skipped diagnostics status');
     assert_same(true, $diagnostics['lock_prevented_work'] ?? null, 'manual health lock skip should record that the lock prevented work');
-    assert_same(0, $diagnostics['processed'] ?? null, 'manual health lock skip diagnostics should record no processed items');
+    assert_same(0, $diagnostics['indexed'] ?? null, 'manual health lock skip diagnostics should record no indexed items');
     assert_same('active', $diagnostics['lock_at_start']['state'] ?? null, 'manual health lock skip diagnostics should record active start lock');
     assert_same('cron', $diagnostics['lock_at_start']['mode'] ?? null, 'manual health lock skip diagnostics should record safe holder mode');
     assert_same('lock_active', $diagnostics['stop_reason'] ?? null, 'manual health lock skip diagnostics should record lock stop reason');
@@ -12340,7 +12305,7 @@ test_case('health manual batch records failures without exposing raw details', f
     ))), 'the isolated rejection phase should acknowledge only the poison generation');
     assert_same('ready', $queueAfterRejection[732]['state'] ?? null, 'the valid suffix should remain immediately and durably claimable');
     assert_same('failed', $diagnostics['status'] ?? null, 'manual health diagnostics should report the isolated zero-publication rejection phase as failed');
-    assert_same(0, $diagnostics['processed'] ?? null, 'manual health diagnostics must not count the deferred suffix as indexed in the rejection phase');
+    assert_same(0, $diagnostics['indexed'] ?? null, 'manual health diagnostics must not count the deferred suffix as indexed in the rejection phase');
     assert_same(1, $diagnostics['failures'] ?? null, 'manual health failure diagnostics should record bounded failure count');
     assert_same(731, $diagnostics['last_failed_post_id'] ?? null, 'manual health failure diagnostics should record failed post id');
     assert_same('', $diagnostics['last_failed_post_title'] ?? null, 'manual health failure diagnostics should not reload oversized rejected source content');
@@ -12412,7 +12377,7 @@ test_case('request diagnostics stay disabled for normal visitors and render esca
                 'finished_at' => '2026-06-19 10:00:01',
                 'elapsed_ms' => 1.25,
                 'batch_limit' => 1,
-                'processed' => 0,
+                'indexed' => 0,
                 'queue_before' => 1,
                 'queue_after' => 1,
                 'error_class' => 'RuntimeException',
@@ -13643,207 +13608,6 @@ test_case('unauthorized admin sandbox render is blocked safely', function (): vo
     assert_same([], $fake->ftsTerms, 'unauthorized sandbox render should not build FTS terms');
 });
 
-test_case('authorized legacy sandbox POST actions fail closed without creating posts', function (): void {
-    global $wpdb;
-
-    $oldWpdb = $wpdb ?? null;
-    $oldGet = $_GET;
-    $oldPost = $_POST;
-    $fake = new WP_FTS_Test_WPDB();
-    $wpdb = $fake;
-    wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
-    $optionsBefore = $GLOBALS['wp_fts_test_options'];
-
-    try {
-        $_GET = [];
-        $_POST = [
-            'wp_fts_sandbox_action' => 'refresh_demo',
-            'wp_fts_sandbox_nonce' => 'bad-nonce',
-        ];
-        $badNonceHtml = wp_fts_test_capture_admin_sandbox();
-        assert_contains('The sandbox action could not be verified.', $badNonceHtml, 'bad nonce POST should report verification failure');
-        assert_same([], $GLOBALS['wp_fts_test_posts'], 'bad nonce POST should not create demo posts');
-        assert_same($optionsBefore, $GLOBALS['wp_fts_test_options'], 'bad nonce POST should not write demo options');
-        assert_same([], $fake->ftsTerms, 'bad nonce POST should not build FTS terms');
-
-        foreach (['refresh_demo', 'index_demo'] as $legacyAction) {
-            $_POST = [
-                'wp_fts_sandbox_action' => $legacyAction,
-                'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
-            ];
-            $legacyHtml = wp_fts_test_capture_admin_sandbox();
-            assert_contains('Sandbox demo post creation is disabled.', $legacyHtml, "{$legacyAction} should report that demo post creation is disabled");
-            assert_same([], $GLOBALS['wp_fts_test_posts'], "{$legacyAction} should not create demo posts");
-            assert_same($optionsBefore, $GLOBALS['wp_fts_test_options'], "{$legacyAction} should not write demo options");
-            assert_same([], $fake->ftsTerms, "{$legacyAction} should not build FTS terms");
-        }
-
-        $_POST = [
-            'wp_fts_sandbox_action' => 'unsupported_demo_action',
-            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
-        ];
-        $unsupportedHtml = wp_fts_test_capture_admin_sandbox();
-        assert_contains('Unsupported sandbox action. No changes were made.', $unsupportedHtml, 'unsupported POST action should report a fail-closed message');
-        assert_same([], $GLOBALS['wp_fts_test_posts'], 'unsupported POST action should not fall through to auto-seed');
-        assert_same($optionsBefore, $GLOBALS['wp_fts_test_options'], 'unsupported POST action should not write demo options');
-        assert_same([], $fake->ftsTerms, 'unsupported POST action should not build FTS terms');
-    } finally {
-        $_GET = $oldGet;
-        $_POST = $oldPost;
-        $wpdb = $oldWpdb;
-    }
-});
-
-test_case('legacy sandbox cleanup trashes only exact demo posts and clears option', function (): void {
-    global $wpdb;
-
-    $oldWpdb = $wpdb ?? null;
-    $oldGet = $_GET;
-    $oldPost = $_POST;
-    $fake = new WP_FTS_Test_WPDB();
-    $wpdb = $fake;
-    wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
-
-    $makePost = static function (int $id, string $title, string $slug, string $status = 'publish'): object {
-        return (object) [
-            'ID' => $id,
-            'post_title' => $title,
-            'post_name' => $slug,
-            'post_content' => '<p>legacy cleanup fixture</p>',
-            'post_excerpt' => '',
-            'post_status' => $status,
-            'post_type' => 'post',
-            'post_date_gmt' => '2026-06-12 00:00:00',
-        ];
-    };
-
-    try {
-        $signatures = wp_fts_test_legacy_sandbox_demo_signatures();
-        $GLOBALS['wp_fts_test_posts'][1001] = $makePost(1001, $signatures[0]['title'], $signatures[0]['slug']);
-        $GLOBALS['wp_fts_test_posts'][1002] = $makePost(1002, $signatures[1]['title'], $signatures[1]['slug']);
-        $GLOBALS['wp_fts_test_posts'][1003] = $makePost(1003, 'Customer Content Stored In Old Option', 'customer-content-stored-in-old-option');
-        $GLOBALS['wp_fts_test_posts'][1004] = $makePost(1004, 'FTS Sandbox: Customer Notes', 'customer-notes');
-        $GLOBALS['wp_fts_test_posts'][1005] = $makePost(1005, $signatures[2]['title'], $signatures[2]['slug'], 'trash');
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] = [1001, 1003, 1005];
-
-        $_POST = [];
-        $_GET = [];
-        $detectedHtml = wp_fts_test_capture_admin_settings_tab('settings');
-        assert_contains('Legacy sandbox demo posts detected.', $detectedHtml, 'settings page should detect exact legacy sandbox demo posts');
-        assert_contains('Move legacy sandbox demo posts to Trash', $detectedHtml, 'settings page should offer the cleanup action');
-        assert_contains('2 exact legacy post(s) found.', $detectedHtml, 'cleanup affordance should count only live exact legacy demo posts');
-        assert_contains('name="wp_fts_sandbox_action" value="cleanup_legacy_demo_posts"', $detectedHtml, 'cleanup action should use the sandbox POST action field');
-        assert_contains('name="wp_fts_sandbox_nonce"', $detectedHtml, 'cleanup action should include a nonce');
-
-        $GLOBALS['wp_fts_test_get_posts_calls'] = [];
-        $_POST = [
-            'wp_fts_sandbox_action' => 'cleanup_legacy_demo_posts',
-            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
-        ];
-        $cleanupHtml = wp_fts_test_capture_admin_settings_tab('settings');
-        WP_FTS_Plugin::flush_foreground_bulk_mutations();
-
-        assert_contains('Moved 2 legacy sandbox demo post(s) to Trash.', $cleanupHtml, 'cleanup should report moved exact legacy posts');
-        assert_same([1001, 1002], $GLOBALS['wp_fts_test_trashed_posts'], 'cleanup should trash only exact live legacy demo posts');
-        assert_same('trash', $GLOBALS['wp_fts_test_posts'][1001]->post_status, 'first exact legacy demo post should move to Trash');
-        assert_same('trash', $GLOBALS['wp_fts_test_posts'][1002]->post_status, 'second exact legacy demo post should move to Trash');
-        assert_same('publish', $GLOBALS['wp_fts_test_posts'][1003]->post_status, 'unrelated post in the stored option should remain untouched');
-        assert_same('publish', $GLOBALS['wp_fts_test_posts'][1004]->post_status, 'same-prefix unrelated post should remain untouched');
-        assert_same('trash', $GLOBALS['wp_fts_test_posts'][1005]->post_status, 'already-trashed legacy post should remain trash without being processed');
-        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION]), 'cleanup should clear the legacy sandbox demo post option');
-        assert_true(!str_contains($cleanupHtml, 'Move legacy sandbox demo posts to Trash'), 'cleanup affordance should disappear after cleanup clears live candidates');
-        assert_same([1001, 1002], wp_fts_test_queue_ids($fake), 'normal trash lifecycle hooks should publish one durable generation per moved post');
-        $cleanupSql = implode("\n", array_map(
-            static fn(mixed $query): string => is_array($query) ? (string) ($query[0] ?? '') : (string) $query,
-            $fake->queries
-        ));
-        assert_true(!str_contains($cleanupSql, 'DELETE FROM wp_fts_postings'), 'admin cleanup must not directly mutate derived postings');
-        assert_true(!str_contains($cleanupSql, 'UPDATE wp_fts_terms'), 'admin cleanup must not run the legacy per-term delete path');
-        assert_true(!str_contains((string) file_get_contents(dirname(__DIR__) . '/src/Plugin.php'), 'function tombstone_post'), 'the duplicate direct tombstone entry point should remain absent');
-        assert_same(2, count($GLOBALS['wp_fts_test_get_posts_calls']), 'cleanup POST should use one bounded discovery query for the action and one for the resulting admin render');
-        foreach ($GLOBALS['wp_fts_test_get_posts_calls'] as $call) {
-            assert_same(count($signatures), $call['numberposts'] ?? null, 'every cleanup POST discovery query should remain capped at the exact signature count');
-            assert_true(($call['numberposts'] ?? null) !== -1, 'cleanup POST should never request an unbounded post scan');
-        }
-    } finally {
-        $_GET = $oldGet;
-        $_POST = $oldPost;
-        $wpdb = $oldWpdb;
-    }
-});
-
-test_case('legacy sandbox cleanup discovery is one bounded exact-signature query per admin render', function (): void {
-    global $wpdb;
-
-    $oldWpdb = $wpdb ?? null;
-    $oldGet = $_GET;
-    $oldPost = $_POST;
-    $wpdb = new WP_FTS_Test_WPDB();
-    wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
-
-    $makePost = static function (int $id, string $title, string $slug): object {
-        return (object) [
-            'ID' => $id,
-            'post_title' => $title,
-            'post_name' => $slug,
-            'post_content' => '<p>bounded legacy cleanup fixture</p>',
-            'post_excerpt' => '',
-            'post_status' => 'publish',
-            'post_type' => 'post',
-            'post_date_gmt' => '2026-06-12 00:00:00',
-        ];
-    };
-
-    try {
-        $signatures = wp_fts_test_legacy_sandbox_demo_signatures();
-        $storedIds = range(1_000_000, 1_099_999);
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] = $storedIds;
-        $GLOBALS['wp_fts_test_posts'][9201] = $makePost(9201, $signatures[0]['title'], 'customer-owned-slug');
-        $GLOBALS['wp_fts_test_posts'][9202] = $makePost(9202, 'Customer-owned title', $signatures[0]['slug']);
-        $GLOBALS['wp_fts_test_posts'][9203] = $makePost(9203, $signatures[0]['title'], $signatures[1]['slug']);
-        $GLOBALS['wp_fts_test_posts'][9204] = $makePost(9204, ' ' . $signatures[0]['title'], $signatures[0]['slug']);
-        $GLOBALS['wp_fts_test_posts'][9101] = $makePost(9101, $signatures[0]['title'], $signatures[0]['slug']);
-        $GLOBALS['wp_fts_test_posts'][9102] = $makePost(9102, $signatures[1]['title'], $signatures[1]['slug']);
-
-        $storedReads = [];
-        foreach ([$storedIds[0], $storedIds[50000], $storedIds[99999]] as $postId) {
-            $GLOBALS['wp_fts_test_get_post_callbacks'][$postId] = static function (int $readPostId) use (&$storedReads): void {
-                $storedReads[] = $readPostId;
-            };
-        }
-
-        foreach (['health', 'settings', 'sandbox', 'indexed-content', 'analyzer-packs'] as $tab) {
-            $_GET = [];
-            $_POST = [];
-            $storedReads = [];
-            $GLOBALS['wp_fts_test_get_posts_calls'] = [];
-            $html = wp_fts_test_capture_admin_settings_tab($tab);
-
-            $calls = $GLOBALS['wp_fts_test_get_posts_calls'];
-            assert_same(1, count($calls), "{$tab} admin render should issue one legacy cleanup discovery query");
-            $args = $calls[0] ?? [];
-            assert_same(count($signatures), $args['numberposts'] ?? null, "{$tab} cleanup discovery should cap returned posts at the signature count");
-            assert_same(array_column($signatures, 'slug'), $args['post_name__in'] ?? null, "{$tab} cleanup discovery should use one exact bounded slug set");
-            assert_same(true, $args['no_found_rows'] ?? null, "{$tab} cleanup discovery should suppress a count query");
-            assert_same(false, $args['update_post_meta_cache'] ?? null, "{$tab} cleanup discovery should not issue a metadata cache-prime query");
-            assert_same(false, $args['update_post_term_cache'] ?? null, "{$tab} cleanup discovery should not issue a taxonomy cache-prime query");
-            assert_true(!array_key_exists('title', $args), "{$tab} cleanup discovery should not fan out title queries");
-            assert_true(!array_key_exists('name', $args), "{$tab} cleanup discovery should not fan out single-slug queries");
-            assert_true(!array_key_exists('fields', $args), "{$tab} cleanup discovery should return objects for verification without per-result hydration");
-
-            assert_same([], $storedReads, "{$tab} cleanup discovery should not hydrate a 100,000-entry untrusted legacy option ID list");
-            assert_contains('2 exact legacy post(s) found.', $html, "{$tab} cleanup affordance should require an exact title-and-slug signature pair");
-        }
-    } finally {
-        $_GET = $oldGet;
-        $_POST = $oldPost;
-        $wpdb = $oldWpdb;
-    }
-});
-
 test_case('sandbox demo analyzer loads bundled UniMorph packs without changing runtime defaults', function (): void {
     assert_or_pending(
         WP_FTS_AnalyzerPackValidator::gzip_available(),
@@ -13979,10 +13743,6 @@ test_case('sandbox searches existing indexed content without creating demo posts
         $sandboxTimings = is_array($sandboxTrace['timings_ms'] ?? null) ? $sandboxTrace['timings_ms'] : [];
         assert_true(array_key_exists('storage/search', $sandboxTimings), 'sandbox diagnostics should record storage/search timing');
         assert_same([904], array_keys($GLOBALS['wp_fts_test_posts']), 'sandbox search should not add demo posts alongside existing content');
-        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION]), 'sandbox search should not write the legacy demo post option');
-        foreach (wp_fts_test_legacy_sandbox_demo_signatures() as $signature) {
-            assert_true(!str_contains($html, $signature['title']), "sandbox search should not render the legacy {$signature['title']} title");
-        }
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
@@ -14293,83 +14053,6 @@ test_case('admin sandbox detail ajax stays page bounded without per-result expla
     }
 });
 
-test_case('legacy sandbox demo cleanup moves exact posts to trash and leaves unrelated content', function (): void {
-    global $wpdb;
-
-    $oldWpdb = $wpdb ?? null;
-    $oldGet = $_GET;
-    $oldPost = $_POST;
-    $fake = new WP_FTS_Test_WPDB();
-    $wpdb = $fake;
-    wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
-
-    try {
-        foreach ([
-            100 => ['FTS Sandbox: English Mice', 'wp-fts-sandbox-english-mice', 'publish'],
-            101 => ['FTS Sandbox: Polish Lemmatizer Demo', 'wp-fts-sandbox-polish-lemmatizer-demo', 'draft'],
-            102 => ['FTS Sandbox: Personal Research', 'wp-fts-sandbox-english-mice', 'publish'],
-            103 => ['Unrelated Stored Option Post', 'unrelated-stored-option-post', 'publish'],
-            104 => ['FTS Sandbox: French Chercher', 'wp-fts-sandbox-french-chercher', 'publish'],
-        ] as $post_id => $post_data) {
-            [$title, $slug, $status] = $post_data;
-            $post = (object) [
-                'ID' => $post_id,
-                'post_title' => $title,
-                'post_name' => $slug,
-                'post_content' => '<p>legacy cleanup safety fixture ' . $post_id . '</p>',
-                'post_excerpt' => '',
-                'post_status' => $status,
-                'post_type' => 'post',
-                'post_date_gmt' => '2026-06-12 00:00:00',
-            ];
-            $GLOBALS['wp_fts_test_posts'][$post_id] = $post;
-            $fake->postRows[] = $post;
-            wp_fts_test_index_saved_post($post_id, $post, true);
-        }
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] = [100, 101, 102, 103];
-
-        $_POST = [];
-        $_GET = [];
-        $promptHtml = wp_fts_test_capture_admin_settings_tab('settings');
-        assert_contains('Legacy sandbox demo posts detected.', $promptHtml, 'settings page should show cleanup affordance when exact legacy demo posts are detectable');
-        assert_contains('3 exact legacy post(s) found.', $promptHtml, 'cleanup affordance should count exact title-and-slug legacy posts');
-        assert_contains('Move legacy sandbox demo posts to Trash', $promptHtml, 'cleanup affordance should expose the trash action');
-
-        $_POST = [
-            'wp_fts_sandbox_action' => 'cleanup_legacy_demo_posts',
-            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
-        ];
-        $_GET = [];
-        $cleanupQueryOffset = count($fake->queries);
-        $cleanupHtml = wp_fts_test_capture_admin_settings_tab('settings');
-        WP_FTS_Plugin::flush_foreground_bulk_mutations();
-        assert_contains('Moved 3 legacy sandbox demo post(s) to Trash.', $cleanupHtml, 'cleanup action should report moved exact legacy posts');
-        assert_true(!str_contains($cleanupHtml, 'Legacy sandbox demo posts detected.'), 'cleanup affordance should disappear after cleanup');
-        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION]), 'cleanup action should clear the legacy demo post option');
-
-        sort($GLOBALS['wp_fts_test_trashed_posts'], SORT_NUMERIC);
-        assert_same([100, 101, 104], $GLOBALS['wp_fts_test_trashed_posts'], 'cleanup should trash every exact legacy title-and-slug match');
-        assert_same('trash', $GLOBALS['wp_fts_test_posts'][100]->post_status ?? null, 'exact English legacy post should be moved to trash');
-        assert_same('trash', $GLOBALS['wp_fts_test_posts'][101]->post_status ?? null, 'exact Polish legacy post should be moved to trash');
-        assert_same('trash', $GLOBALS['wp_fts_test_posts'][104]->post_status ?? null, 'exact French legacy post should be found independently of the stored option');
-        assert_same('publish', $GLOBALS['wp_fts_test_posts'][102]->post_status ?? null, 'same-prefix custom post should be left untouched');
-        assert_same('publish', $GLOBALS['wp_fts_test_posts'][103]->post_status ?? null, 'unrelated option-listed post should be left untouched');
-        assert_same([100, 101, 104], wp_fts_test_queue_ids($fake), 'trash hooks should retain exactly the moved posts as durable work');
-        assert_true(isset($fake->docs[100], $fake->docs[101], $fake->docs[104]), 'admin cleanup should leave derived rows for the bounded queue worker rather than deleting them inline');
-        $cleanupSql = implode("\n", array_map(
-            static fn(mixed $query): string => is_array($query) ? (string) ($query[0] ?? '') : (string) $query,
-            array_slice($fake->queries, $cleanupQueryOffset)
-        ));
-        assert_true(!str_contains($cleanupSql, 'DELETE FROM wp_fts_postings'), 'cleanup request should perform no direct posting deletion');
-        assert_true(!str_contains($cleanupSql, 'DELETE FROM wp_fts_documents'), 'cleanup request should perform no direct derived-document deletion');
-    } finally {
-        $_GET = $oldGet;
-        $_POST = $oldPost;
-        $wpdb = $oldWpdb;
-    }
-});
-
 test_case('admin sandbox indexed post list uses bounded storage cursor pages', function (): void {
     global $wpdb;
 
@@ -14431,16 +14114,11 @@ test_case('admin sandbox indexed post list uses bounded storage cursor pages', f
         assert_true(!str_contains($pageTwoHtml, '<td>Custom Indexed 1</td>'), 'second indexed-post page should not leak first-page rows');
         assert_true(!str_contains($pageTwoHtml, 'Create or refresh demo posts'), 'paginated sandbox page should still hide manual demo refresh controls');
         assert_true(!str_contains($pageTwoHtml, 'Build demo index'), 'paginated sandbox page should still hide manual demo index controls');
-        assert_true(!str_contains($pageTwoHtml, 'Move legacy sandbox demo posts to Trash'), 'paginated sandbox page should not show cleanup when no legacy demo posts exist');
-
         $fake->prepared = [];
         $pageOneDebugHtml = $renderIndexed(['wp_fts_sandbox_posts_page' => '1', 'wp_fts_sandbox_show_indexed_terms' => '1']);
         assert_same(1, wp_fts_test_prepared_sql_count($fake, 'SELECT bounded.post_id, bounded.lang, bounded.term'), 'explicit indexed-term debug mode should hydrate the visible page in one set-oriented statement');
         assert_same(0, wp_fts_test_prepared_sql_count($fake, 'SELECT term FROM wp_fts_postings WHERE doc_id = %d'), 'explicit indexed-term debug mode should not issue one query per visible result');
         assert_contains('Hide indexed terms', $pageOneDebugHtml, 'explicit indexed-term debug mode should render the hide control');
-        foreach (wp_fts_test_legacy_sandbox_demo_signatures() as $signature) {
-            assert_true(!str_contains($pageOneHtml, $signature['title']), "first indexed-post page should not include the legacy {$signature['title']} title");
-        }
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
@@ -14472,10 +14150,10 @@ test_case('activation repairs schema stores version and surfaces database failur
         assert_same([], $fake->docs, 'activation should not immediately backfill existing content');
         assert_same([], $fake->ftsTerms, 'activation should not write FTS terms for existing content');
 
-        WP_FTS_Plugin::maybe_upgrade_schema();
+        WP_FTS_Plugin::maybe_schedule_schema_repair();
         assert_same(4, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'current schema version should avoid redundant runtime repair');
 
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
         assert_same(4, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'explicit repair should avoid redundant DDL when the physical schema is already valid');
     } finally {
         $wpdb = $oldWpdb;
@@ -14516,7 +14194,7 @@ test_case('physical schema verification repairs current-version table column and
         assert_same(false, $damaged['valid'] ?? null, 'the explicit maintenance verifier should detect a missing relational table');
         assert_same(['wp_fts_documents'], $damaged['missing_tables'] ?? null, 'physical status should identify the missing table');
 
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
         assert_true(isset($fake->schemaColumns['wp_fts_documents']), 'dedicated schema maintenance should restore the missing table contract');
 
         $fake->schemaColumns['wp_fts_documents'] = array_values(array_diff($fake->schemaColumns['wp_fts_documents'], ['content_hash']));
@@ -14525,22 +14203,22 @@ test_case('physical schema verification repairs current-version table column and
         assert_same(['wp_fts_documents.content_hash'], $physical['missing_columns'] ?? null, 'verification should identify a missing required column');
         assert_same(['wp_fts_documents.PRIMARY(post_id)'], $physical['missing_indexes'] ?? null, 'verification should identify a missing required primary key');
 
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
         assert_same(true, WP_FTS_Plugin::storage(false)->verify_schema()['valid'] ?? null, 'dedicated maintenance should restore missing columns and indexes');
 
         $fake->schemaColumns['wp_fts_documents'][] = 'doc_len';
         $physical = WP_FTS_Plugin::storage(false)->verify_schema();
         assert_same(['wp_fts_documents.doc_len'], $physical['unexpected_columns'] ?? null, 'verification should reject the removed production document-length column');
 
-        WP_FTS_Plugin::upgrade_schema();
-        assert_true(!in_array('doc_len', $fake->schemaColumns['wp_fts_documents'] ?? [], true), 'dedicated maintenance should replace an intermediate v4 document-length projection');
+        WP_FTS_Plugin::create_or_repair_schema();
+        assert_true(!in_array('doc_len', $fake->schemaColumns['wp_fts_documents'] ?? [], true), 'dedicated maintenance should replace an incompatible document-length projection');
         assert_same(true, WP_FTS_Plugin::storage(false)->verify_schema()['valid'] ?? null, 'schema should be valid after removing the forbidden document-length column');
 
         $fake->schemaColumnDefinitions['wp_fts_terms']['term'] = ['Type' => 'varchar(255)'];
         $physical = WP_FTS_Plugin::storage(false)->verify_schema();
         assert_same(['wp_fts_terms.term'], $physical['invalid_columns'] ?? null, 'verification should reject a collation-sensitive text term identity in place of VARBINARY');
 
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
         assert_same(true, WP_FTS_Plugin::storage(false)->verify_schema()['valid'] ?? null, 'dedicated maintenance should rebuild a type-incompatible dictionary');
     } finally {
         $wpdb = $oldWpdb;
@@ -14582,7 +14260,7 @@ test_case('physical schema verification rejects nonunique primary-key substitute
     );
 });
 
-test_case('v9 schema migration replaces the v8 hashed dictionary behind a durable corpus fence', function (): void {
+test_case('schema repair replaces an incompatible dictionary behind a durable corpus fence', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -14590,18 +14268,18 @@ test_case('v9 schema migration replaces the v8 hashed dictionary behind a durabl
     $fake->schemaColumns['wp_fts_terms'] = ['term_id', 'term_hash', 'lang', 'kind', 'term', 'doc_freq'];
     $fake->schemaColumnDefinitions['wp_fts_terms']['term_hash'] = ['Type' => 'binary(16)'];
     $fake->schemaIndexes['wp_fts_terms']['term_hash'] = ['term_hash'];
-    $key = WP_FTS_TermNamespace::namespace_term('en', 'legacy');
+    $key = WP_FTS_TermNamespace::namespace_term('en', 'stale');
     $fake->ftsTerms[$key] = ['doc_freq' => 1];
     $fake->postings[$key] = [71 => 1000];
     $fake->docs[71] = [
         'primary_lang' => 'en',
-        'content_hash' => 'v8-content-hash',
-        'snippet_text' => 'legacy',
+        'content_hash' => 'stale-content-hash',
+        'snippet_text' => 'stale',
         'indexed_at' => 1,
     ];
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 8;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $queue = new WP_FTS_Index_Queue($fake);
     $queue->enqueue(72, 1700000000, ['reason' => 'preserve-post-generation']);
     $queue->enqueue_scope(
@@ -14630,28 +14308,28 @@ test_case('v9 schema migration replaces the v8 hashed dictionary behind a durabl
     };
 
     try {
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
 
-        assert_same(8, $scopeBoundary['schema_version'] ?? null, 'the corpus fence must be written before schema version 9 is published');
-        assert_same('pending', $scopeBoundary['initial_index_status'] ?? null, 'readiness must already be pending when the v9 corpus fence is written');
-        assert_same('', $scopeBoundary['search_ready'] ?? null, 'the old search capability must be revoked before the v9 corpus fence is written');
-        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'v9 publication should happen only after physical replacement and fencing succeed');
+        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $scopeBoundary['schema_version'] ?? null, 'the current schema marker should remain stable while the repair corpus fence is written');
+        assert_same('pending', $scopeBoundary['initial_index_status'] ?? null, 'readiness must already be pending when the repair corpus fence is written');
+        assert_same('', $scopeBoundary['search_ready'] ?? null, 'the search capability must be revoked before the repair corpus fence is written');
+        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'repair should preserve the current schema marker after physical replacement and fencing succeed');
         assert_same('pending', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['initial_index_status'] ?? null, 'the rebuilt empty generation must remain unavailable until corpus reconciliation completes');
         assert_same('', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION] ?? null, 'schema publication must not republish the empty generation');
-        assert_same(1, count(array_filter($fake->queue, static fn(array $row): bool => ($row['kind'] ?? '') === 'scope' && ($row['scope_coverage'] ?? '') === 'corpus')), 'v9 migration should leave one durable corpus reconciliation generation');
-        assert_same([], $fake->ftsTerms, 'v9 migration must discard incompatible v8 proper-prefix dictionary rows');
-        assert_same([], $fake->postings, 'v9 migration must discard postings tied to replaced dictionary ids');
-        assert_same([], $fake->docs, 'v9 migration must discard document publication tied to the old postings generation');
+        assert_same(1, count(array_filter($fake->queue, static fn(array $row): bool => ($row['kind'] ?? '') === 'scope' && ($row['scope_coverage'] ?? '') === 'corpus')), 'schema repair should leave one durable corpus reconciliation generation');
+        assert_same([], $fake->ftsTerms, 'schema repair must discard incompatible dictionary rows');
+        assert_same([], $fake->postings, 'schema repair must discard postings tied to replaced dictionary ids');
+        assert_same([], $fake->docs, 'schema repair must discard document publication tied to the replaced postings generation');
         foreach ($workBefore as $jobKey => $row) {
-            assert_same($row, $fake->queue[$jobKey] ?? null, 'v9 search-generation replacement must preserve every preexisting durable work row');
+            assert_same($row, $fake->queue[$jobKey] ?? null, 'search-generation replacement must preserve every preexisting durable work row');
         }
         assert_same(10, $fake->searchEpoch, 'the corpus-fence mutation should advance the preserved cursor epoch exactly once rather than reseeding it');
-        assert_same(str_repeat('e', 32), $fake->searchEpochIncarnation, 'v9 search-generation replacement must preserve the cursor epoch incarnation');
-        assert_true(!in_array('term_hash', $fake->schemaColumns['wp_fts_terms'] ?? [], true), 'the rebuilt v9 dictionary should not retain the hash payload');
-        assert_true(!isset($fake->schemaIndexes['wp_fts_terms']['term_hash']), 'the rebuilt v9 dictionary should not retain the hash write-amplification index');
-        assert_true(in_array('DROP TABLE `wp_fts_terms`', $fake->queries, true), 'v9 migration must explicitly retire the incompatible v8 dictionary table');
-        assert_same(3, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'DROP TABLE `wp_fts_'))), 'v9 migration should replace the three coherent search-generation tables while preserving durable work');
-        assert_same(4, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE wp_fts_'))), 'v9 migration should recreate the complete four-table relational contract');
+        assert_same(str_repeat('e', 32), $fake->searchEpochIncarnation, 'search-generation replacement must preserve the cursor epoch incarnation');
+        assert_true(!in_array('term_hash', $fake->schemaColumns['wp_fts_terms'] ?? [], true), 'the rebuilt dictionary should not retain the incompatible hash payload');
+        assert_true(!isset($fake->schemaIndexes['wp_fts_terms']['term_hash']), 'the rebuilt dictionary should not retain the incompatible hash index');
+        assert_true(in_array('DROP TABLE `wp_fts_terms`', $fake->queries, true), 'schema repair must explicitly retire the incompatible dictionary table');
+        assert_same(3, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'DROP TABLE `wp_fts_'))), 'schema repair should replace the three coherent search-generation tables while preserving durable work');
+        assert_same(4, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE wp_fts_'))), 'schema repair should recreate the complete four-table relational contract');
     } finally {
         $fake->queryObserver = null;
         $wpdb = $oldWpdb;
@@ -14669,12 +14347,12 @@ test_case('runtime schema checks trust the saved version without visitor-time in
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
 
     try {
-        WP_FTS_Plugin::maybe_upgrade_schema();
+        WP_FTS_Plugin::maybe_schedule_schema_repair();
         $firstInspectionCount = count(array_filter(
             $fake->queries,
             static fn(mixed $query): bool => is_array($query) && str_starts_with((string) ($query[0] ?? ''), 'SHOW ')
         ));
-        WP_FTS_Plugin::maybe_upgrade_schema();
+        WP_FTS_Plugin::maybe_schedule_schema_repair();
         $secondInspectionCount = count(array_filter(
             $fake->queries,
             static fn(mixed $query): bool => is_array($query) && str_starts_with((string) ($query[0] ?? ''), 'SHOW ')
@@ -14684,25 +14362,25 @@ test_case('runtime schema checks trust the saved version without visitor-time in
         assert_same(0, $secondInspectionCount, 'repeated runtime guards should remain database-read free');
 
         $fake->prefix = 'wp_2_';
-        WP_FTS_Plugin::maybe_upgrade_schema();
+        WP_FTS_Plugin::maybe_schedule_schema_repair();
         assert_same(0, count($fake->queries), 'switching prefixes should still defer physical inspection to dedicated maintenance');
     } finally {
         $wpdb = $oldWpdb;
     }
 });
 
-test_case('schema migration verifies physical success before advancing the current version', function (): void {
+test_case('schema creation verifies physical success before publishing the current marker', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 1;
+    unset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]);
 
     try {
-        WP_FTS_Plugin::upgrade_schema();
-        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'ordered migrations should advance a valid version-one install to the current version');
+        WP_FTS_Plugin::create_or_repair_schema();
+        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'clean schema creation should publish the current marker after verification');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -14712,21 +14390,21 @@ test_case('schema migration verifies physical success before advancing the curre
     $failing->failQueryPrefix = 'CREATE TABLE wp_fts_documents';
     $wpdb = $failing;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 1;
+    unset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]);
     $thrown = false;
     try {
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
     } catch (RuntimeException) {
         $thrown = true;
     } finally {
         $wpdb = $oldWpdb;
     }
 
-    assert_true($thrown, 'a failed physical migration should surface an error');
-    assert_same(1, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'a failed physical migration must not persist the current version');
+    assert_true($thrown, 'failed physical schema creation should surface an error');
+    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'failed physical schema creation must not publish the current marker');
 });
 
-test_case('schema migration refuses to overwrite a newer installed version', function (): void {
+test_case('schema repair refuses to overwrite a newer installed version', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -14737,7 +14415,7 @@ test_case('schema migration refuses to overwrite a newer installed version', fun
     $thrown = false;
 
     try {
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
     } catch (RuntimeException $error) {
         $thrown = str_contains($error->getMessage(), 'newer than this plugin supports');
     } finally {
@@ -14745,7 +14423,7 @@ test_case('schema migration refuses to overwrite a newer installed version', fun
     }
 
     assert_true($thrown, 'an older plugin build should fail closed on a newer schema version');
-    assert_same(WP_FTS_Plugin::SCHEMA_VERSION + 1, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'failed downgrade protection must preserve the newer migration cursor');
+    assert_same(WP_FTS_Plugin::SCHEMA_VERSION + 1, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'failed downgrade protection must preserve the newer schema marker');
     assert_same([], $fake->queries, 'downgrade protection should reject the schema before running DDL');
 });
 
@@ -14796,38 +14474,38 @@ test_case('search takeover waits for a complete initial corpus and usable physic
         unset($GLOBALS['pagenow']);
 
         $scope = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
-        assert_same(0, $scope['processed'] ?? null, 'the first bounded readiness pass should expand only one scope page');
+        assert_same(0, $scope['indexed'] ?? null, 'the first bounded readiness pass should expand only one scope page');
         assert_same(2, $scope['backfill_scanned'] ?? null, 'one scope pass should inspect no more than its requested bound');
         assert_same(2, $scope['backfill_queued'] ?? null, 'one scope pass should queue exactly its bounded source page');
 
         $firstPostDrain = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
-        assert_same(1, $firstPostDrain['processed'] ?? null, 'the first post-only successor should process one bounded direct generation');
+        assert_same(1, $firstPostDrain['indexed'] ?? null, 'the first post-only successor should process one bounded direct generation');
         assert_same(false, $firstPostDrain['scope_completed'] ?? null, 'the first direct generation should leave the exhausted scope ready');
         assert_same(true, $firstPostDrain['has_more'] ?? null, 'the first post drain should report both the deferred scope and remaining post generation');
         $partial = WP_FTS_Plugin::search_takeover_status();
         assert_same(false, $partial['ready'] ?? null, 'a partially indexed corpus must remain ineligible for takeover');
 
         $scopeCompletion = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
-        assert_same(0, $scopeCompletion['processed'] ?? null, 'the reserved scope turn should not consume the remaining post generation');
+        assert_same(0, $scopeCompletion['indexed'] ?? null, 'the reserved scope turn should not consume the remaining post generation');
         assert_same(true, $scopeCompletion['scope_completed'] ?? null, 'the reserved scope turn should durably acknowledge the exhausted corpus scope');
         assert_same(true, $scopeCompletion['has_more'] ?? null, 'scope completion should report the direct generation returned for its next turn');
         assert_same(false, WP_FTS_Plugin::search_takeover_status()['ready'] ?? null, 'scope completion alone must not make a partially indexed corpus eligible for takeover');
 
         $finalPostDrain = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
         $afterFinalWrite = WP_FTS_Plugin::search_takeover_status();
-        assert_same(1, $finalPostDrain['processed'] ?? null, 'the next bounded readiness batch should index the final post');
+        assert_same(1, $finalPostDrain['indexed'] ?? null, 'the next bounded readiness batch should index the final post');
         assert_same(false, $finalPostDrain['scope_completed'] ?? null, 'document work should not repeat the already acknowledged corpus scope');
         assert_same(true, $finalPostDrain['has_more'] ?? null, 'a full direct claim should conservatively report possible remaining work without an extra count query');
         assert_same(false, $afterFinalWrite['ready'] ?? null, 'ordinary document workers must not publish readiness without the dedicated maintenance verifier');
 
         $empty = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
-        assert_same(0, $empty['processed'] ?? null, 'the completing empty pass should prove no corpus work remains without rewriting a document');
+        assert_same(0, $empty['indexed'] ?? null, 'the completing empty pass should prove no corpus work remains without rewriting a document');
         assert_same(false, $empty['has_more'] ?? null, 'the completing empty pass should prove no corpus work remains');
         assert_same(false, $empty['scope_completed'] ?? null, 'the empty follow-up pass should not invent another scope acknowledgement');
         assert_same(0, count($fake->queue), 'the completing readiness pass should leave no unresolved work generations');
         assert_same(false, WP_FTS_Plugin::search_takeover_status()['ready'] ?? null, 'an empty ordinary batch still must not bypass physical maintenance verification');
 
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         $ready = WP_FTS_Plugin::search_takeover_status();
         assert_same('ready', $ready['reason'] ?? null, 'the completing readiness pass should publish the ready reason');
         assert_same(true, $ready['ready'] ?? null, 'maintenance should permit takeover only after proving a complete corpus and usable physical tables');
@@ -14860,10 +14538,10 @@ test_case('search takeover waits for a complete initial corpus and usable physic
             $GLOBALS['wp_fts_test_schedule_calls'],
             static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::CRON_HOOK
         )), 'a transient read failure must not schedule the corpus worker');
-        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK]), 'a transient read failure should schedule only bounded maintenance verification');
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK]), 'a transient read failure should schedule only bounded maintenance verification');
 
         $fake->failReadQueryPrefix = null;
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         $afterVerification = WP_FTS_Plugin::search_takeover_status();
         assert_same(true, $afterVerification['ready'] ?? null, 'successful bounded schema/profile/work verification should clear only the transient search latch');
         assert_same('ready', $afterVerification['initial_index_status'] ?? null, 'maintenance should preserve the already verified corpus readiness');
@@ -14891,7 +14569,7 @@ test_case('actual search recovers a missing capability after the finalizer crash
     // capability write. The consumed one-shot event is deliberately absent.
     unset(
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION],
-        $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK]
+        $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK]
     );
     WP_FTS_Plugin::reset_request_caches();
 
@@ -14900,7 +14578,7 @@ test_case('actual search recovers a missing capability after the finalizer crash
         $scheduledAfterReadOnly = $GLOBALS['wp_fts_test_scheduled'];
         $actual = WP_FTS_Plugin::search_takeover_status(true);
         $scheduledAfterSearch = $GLOBALS['wp_fts_test_scheduled'];
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         WP_FTS_Plugin::reset_request_caches();
         $recovered = WP_FTS_Plugin::search_takeover_status(false);
         $capability = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION] ?? null;
@@ -14910,9 +14588,9 @@ test_case('actual search recovers a missing capability after the finalizer crash
 
     assert_same(false, $readOnly['ready'] ?? null, 'missing publication must fail closed even when diagnostic health says ready');
     assert_same('search_ready_capability_missing', $readOnly['reason'] ?? null, 'read-only status should identify the missing final capability');
-    assert_true(!isset($scheduledAfterReadOnly[WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK]), 'read-only status must not create maintenance work');
+    assert_true(!isset($scheduledAfterReadOnly[WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK]), 'read-only status must not create maintenance work');
     assert_same(false, $actual['ready'] ?? null, 'the recovering search must remain unavailable until maintenance republishes readiness');
-    assert_true(isset($scheduledAfterSearch[WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK]), 'an actual search should restore the consumed one-shot finalizer event');
+    assert_true(isset($scheduledAfterSearch[WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK]), 'an actual search should restore the consumed one-shot finalizer event');
     assert_same(true, $recovered['ready'] ?? null, 'the bounded maintenance verifier should recover takeover without another corpus sweep');
     assert_same([], wp_fts_test_queue_ids($fake), 'capability recovery must not manufacture document reconciliation work');
     assert_same([
@@ -14955,7 +14633,7 @@ function wp_fts_test_drain_manual_index_phases(
     throw new WP_FTS_TestFailure("Manual indexing did not reach its durable terminal condition within {$maxPhases} bounded phases.");
 }
 
-test_case('rejected initial content and legacy readiness migration stay gated until maintenance', function (): void {
+test_case('rejected initial content stays gated until maintenance', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -14995,7 +14673,7 @@ test_case('rejected initial content and legacy readiness migration stay gated un
         ));
         $scopeCompletion = $scopeCompletionRuns[0] ?? [];
         assert_same(true, $scopeCompletion['scope_completed'] ?? null, 'initial reconciliation should require a following scope-only empty keyset proof');
-        assert_same(0, $scopeCompletion['processed'] ?? null, 'the initial scope proof should not repeat either analyzed source');
+        assert_same(0, $scopeCompletion['indexed'] ?? null, 'the initial scope proof should not repeat either analyzed source');
         assert_same([], array_values(array_filter(
             $summaries,
             static fn(array $summary): bool => ($summary['stop_reason'] ?? '') === 'stale_writer_lease_recovered'
@@ -15007,19 +14685,6 @@ test_case('rejected initial content and legacy readiness migration stay gated un
         assert_same(false, $status['ready'] ?? null, 'ordinary workers must not publish readiness after a partial corpus batch');
         assert_same('pending', $status['initial_index_status'] ?? null, 'the dedicated maintenance verifier should remain the only readiness publisher');
 
-        wp_fts_test_reset_wordpress_fakes();
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = ['last_run_at' => '2026-07-16 00:00:00'];
-        WP_FTS_Plugin::maybe_schedule_initial_index_readiness();
-        $migrated = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
-        assert_same('pending', $migrated['initial_index_status'] ?? null, 'legacy health state should migrate to an explicit pending readiness check');
-        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'legacy readiness migration should schedule one corpus verification run');
-        $scheduleCalls = count($GLOBALS['wp_fts_test_schedule_calls']);
-        WP_FTS_Plugin::maybe_schedule_initial_index_readiness();
-        assert_same($scheduleCalls, count($GLOBALS['wp_fts_test_schedule_calls']), 'pending readiness should not duplicate scheduled work');
-        unset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]);
-        WP_FTS_Plugin::maybe_schedule_initial_index_readiness();
-        assert_same($scheduleCalls + 1, count($GLOBALS['wp_fts_test_schedule_calls']), 'pending readiness should replace a lost one-shot cron event');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -15534,18 +15199,6 @@ function wp_fts_test_owned_site_table_names(string $prefix): array
         'fts_postings',
         'fts_documents',
         'fts_work',
-        'fts_docs',
-        'fts_doc_lengths',
-        'fts_docmeta',
-        'fts_meta',
-        'fts_queue',
-        'fts_legacy_terms',
-        'fts_legacy_postings',
-        'fts_legacy_docs',
-        'fts_legacy_doc_lengths',
-        'fts_legacy_docmeta',
-        'fts_legacy_meta',
-        'fts_legacy_queue',
     ];
     $tables = array_map(static fn(string $suffix): string => $prefix . $suffix, $suffixes);
     $nameSource = new WP_FTS_Storage_Mysql((object) ['prefix' => $prefix], $prefix);
@@ -15582,9 +15235,8 @@ test_case('multisite site deletion table discovery appends the exact owned inven
     ], wp_fts_test_owned_site_table_names('wp_7_')))), $tables, 'site deletion table filter should preserve existing tables, append every exactly owned target-prefix table, and de-dupe');
     assert_same(array_merge([
         'wp_8_posts',
-    ], wp_fts_test_owned_site_table_names('wp_8_')), $objectTables, 'site deletion table filter should accept WP_Site-like objects and append the exact 24-table lifecycle inventory');
-    assert_same(24, count(wp_fts_test_owned_site_table_names('wp_8_')), 'the exact deletion inventory should remain four current, twelve legacy, and eight reset-generation tables');
-    assert_true(!in_array('wp_8_fts_legacy_surprise', $objectTables, true), 'site deletion must not claim an arbitrary legacy-looking suffix');
+    ], wp_fts_test_owned_site_table_names('wp_8_')), $objectTables, 'site deletion table filter should accept WP_Site-like objects and append the exact 12-table lifecycle inventory');
+    assert_same(12, count(wp_fts_test_owned_site_table_names('wp_8_')), 'the exact deletion inventory should remain four current and eight reset-generation tables');
     assert_true(!in_array('wp_8_fts_terms_rn_arbitrary', $objectTables, true), 'site deletion must not claim an arbitrary reset-looking suffix');
     assert_same(['wp_posts'], WP_FTS_Plugin::filter_site_deletion_tables(['wp_posts', 'wp_posts'], 0), 'site deletion table filter should de-dupe and fail safe when site id is invalid');
     assert_true(!str_contains(implode("\n", $fake->queries), 'DROP TABLE'), 'site deletion table discovery should not execute destructive SQL');
@@ -15879,7 +15531,7 @@ test_case('configured custom-field selection is part of the accepted index profi
         for ($pass = 0; $pass < 6 && $fake->queue !== []; $pass++) {
             WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
         }
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         $accepted = WP_FTS_Plugin::search_health();
         $results = WP_FTS_Plugin::search('ProfileSelectedMetadataSignal', ['limit' => 10]);
     } finally {
@@ -15993,7 +15645,7 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
         'expires_at' => $now + 290,
     ];
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
-        'last_batch_processed' => 4,
+        'last_batch_indexed' => 4,
         'last_batch_queue_processed' => 1,
         'last_batch_backfill_processed' => 3,
         'has_more' => false,
@@ -16019,7 +15671,7 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
             'finished_at' => '2026-06-19 10:01:00',
             'elapsed_ms' => 12.5,
             'batch_limit' => 5,
-            'processed' => 4,
+            'indexed' => 4,
             'queue_processed' => 1,
             'backfill_processed' => 3,
             'queue_before' => 2,
@@ -16141,7 +15793,7 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_same(true, $payload['has_more'] ?? null, 'status JSON should include has-more state from queued work');
     assert_same('manual', $payload['last_mode'] ?? null, 'status JSON should report last run mode');
     assert_same('2026-06-19 10:01:00', $payload['last_run_at'] ?? null, 'status JSON should report last run time');
-    assert_same(4, $payload['last_batch_processed'] ?? null, 'status JSON should report last batch total');
+    assert_same(4, $payload['last_batch_indexed'] ?? null, 'status JSON should report the last indexed batch count');
     assert_same(1, $payload['last_batch_queue_processed'] ?? null, 'status JSON should report last batch queue count');
     assert_same(3, $payload['last_batch_backfill_processed'] ?? null, 'status JSON should report last batch backfill count');
     assert_same(2, $payload['last_batch_failures'] ?? null, 'status JSON should report bounded failure count');
@@ -16172,7 +15824,7 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_same('wp-cli', $diagnostics['source'] ?? null, 'status diagnostics should include latest batch source');
     assert_same('partial_failure', $diagnostics['status'] ?? null, 'status diagnostics should include latest batch status');
     assert_same(5, $diagnostics['batch_limit'] ?? null, 'status diagnostics should include batch limit');
-    assert_same(4, $diagnostics['processed'] ?? null, 'status diagnostics should include processed count');
+    assert_same(4, $diagnostics['indexed'] ?? null, 'status diagnostics should include indexed count');
     assert_same(2, $diagnostics['queue_before'] ?? null, 'status diagnostics should include queue before count');
     assert_same(1, $diagnostics['queue_after'] ?? null, 'status diagnostics should include queue after count');
     assert_same(4, $diagnostics['backfill_scanned'] ?? null, 'status diagnostics should include backfill scanned count');
@@ -16778,16 +16430,15 @@ PHP;
     assert_contains('unavailable', (string) ($schedule['advice'] ?? ''), 'unavailable cron helper path should include concise advice');
     assert_same('unknown', $runner['status'] ?? null, 'unavailable cron helper path should report unknown cron runner mode');
     assert_same(false, $runner['wp_cron_disabled'] ?? null, 'unavailable cron helper path should still expose disabled-cron as false');
-    assert_same(true, $runner['pending_work'] ?? null, 'unavailable database context should conservatively report possible retired queue work');
+    assert_same(false, $runner['pending_work'] ?? null, 'unavailable database context should report no known current queue work');
     assert_contains('cannot be confirmed', (string) ($runner['advice'] ?? ''), 'unavailable cron runner advice should stay conservative');
 });
 
-test_case('disabled wp cron runner reports external requirement even when queue event is scheduled', function (): void {
+test_case('disabled wp cron runner reports external requirement when an idle queue event is scheduled', function (): void {
     $code = <<<'PHP'
 define('DISABLE_WP_CRON', true);
 $GLOBALS['wp_fts_test_options'] = [
     'wp_fts_schema_version' => 1,
-    'wp_fts_pending_index_post_ids' => [702],
     'wp_fts_indexing_lock' => [
         'token' => 'disabled-cron-token-must-not-render',
         'mode' => 'cron',
@@ -16831,23 +16482,22 @@ PHP;
 
     assert_same('scheduled', $schedule['status'] ?? null, 'disabled-cron diagnostic should work when the queue event is already scheduled');
     assert_same(true, $schedule['scheduled'] ?? null, 'scheduled-event context should remain visible');
-    assert_same(true, $schedule['pending_work'] ?? null, 'scheduled-event context should keep pending-work state');
-    assert_same('external_required', $runner['status'] ?? null, 'disabled cron with pending work should require an external runner');
+    assert_same(false, $schedule['pending_work'] ?? null, 'scheduled-event context should not invent queue work');
+    assert_same('external_required', $runner['status'] ?? null, 'disabled cron should require an external runner');
     assert_same(true, $runner['wp_cron_disabled'] ?? null, 'cron runner JSON should expose DISABLE_WP_CRON=true');
     assert_same(false, $runner['alternate_wp_cron'] ?? null, 'cron runner JSON should expose ALTERNATE_WP_CRON=false by default');
-    assert_same(true, $runner['pending_work'] ?? null, 'cron runner JSON should report pending indexing work');
-    assert_contains('scheduled queue event alone is not enough', (string) ($runner['advice'] ?? ''), 'disabled-cron advice should not imply scheduling alone is sufficient');
+    assert_same(false, $runner['pending_work'] ?? null, 'cron runner JSON should report no pending indexing work');
+    assert_contains('No pending indexing work is detected', (string) ($runner['advice'] ?? ''), 'disabled-cron advice should describe the idle queue');
     assert_contains('wp-cron.php', (string) ($runner['advice'] ?? ''), 'disabled-cron advice should mention a host/system cron trigger');
-    assert_contains('wp fts process-batch --batch_size=100 --time_budget=20', (string) ($runner['advice'] ?? ''), 'disabled-cron advice should include the bounded manual fallback');
     assert_contains('<th scope="row">WP-Cron runner</th><td>External cron required</td>', $html, 'Health should render external-cron-required status');
-    assert_contains('A scheduled queue event alone is not enough', $html, 'Health advice should clarify that scheduling alone is insufficient');
+    assert_contains('No pending indexing work is detected', $html, 'Health advice should describe the idle queue');
     assert_true(!str_contains($encodedRunner, 'disabled-cron-token-must-not-render'), 'cron runner diagnostics should not expose lock tokens');
     assert_true(!str_contains($encodedRunner, 'SELECT * FROM'), 'cron runner diagnostics should not expose raw SQL');
     assert_true(!str_contains($encodedRunner, '#0'), 'cron runner diagnostics should not expose stack traces');
     assert_true(!str_contains($encodedRunner, 'wp_fts_test_options'), 'cron runner diagnostics should not expose arbitrary environment data');
 });
 
-test_case('wp-cli repair runs schema upgrade without indexing content', function (): void {
+test_case('wp-cli repair creates the current schema without indexing content', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -16870,8 +16520,8 @@ test_case('wp-cli repair runs schema upgrade without indexing content', function
         $wpdb = $oldWpdb;
     }
 
-    assert_same('current', $payload['schema_status'] ?? null, 'repair should report current schema status after upgrade');
-    assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $payload['schema_version'] ?? null, 'repair should report stored schema version after upgrade');
+    assert_same('current', $payload['schema_status'] ?? null, 'repair should report current schema status after creation');
+    assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $payload['schema_version'] ?? null, 'repair should report the current stored schema version');
     assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'repair should persist schema version');
     assert_same(4, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'repair should create the four relational tables');
     assert_same([], $fake->docs, 'repair should not index existing content');
@@ -16967,7 +16617,7 @@ test_case_with_pdo_sqlite_fixture('wp-cli asynchronous reindex queues while dire
     assert_same(1, count($GLOBALS['wp_fts_test_schedule_calls']), 'scope enqueue should schedule one later worker despite current lease contention');
     assert_same('active-writer-token', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'locked writers should leave the active lease untouched');
     assert_same(true, $health['last_skipped_locked'] ?? null, 'locked writer health should record a lease skip');
-    assert_same(0, $health['last_batch_processed'] ?? null, 'locked writer health should record no processed writes');
+    assert_same(0, $health['last_batch_indexed'] ?? null, 'locked writer health should record no indexed writes');
     $diagnostics = $health['latest_batch_diagnostics'] ?? [];
     assert_same('wp-cli-optimize', $diagnostics['source'] ?? null, 'latest diagnostics should identify the skipped optimize command');
     assert_same('skipped_locked', $diagnostics['status'] ?? null, 'locked writer diagnostics should report skipped status');
@@ -17483,9 +17133,9 @@ test_case('automatic reset reconciliation completes the only path back to search
         });
         $payload = wp_fts_test_decode_cli_json_object($raw);
         $summary = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 100]);
-        $finalizerScheduled = isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK]);
+        $finalizerScheduled = isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK]);
         $afterScope = WP_FTS_Plugin::search_health();
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         $ready = WP_FTS_Plugin::search_health();
 
         assert_same(true, $payload['reconciliation_queued'] ?? null, 'reset should publish exactly one durable readiness path');
@@ -17529,7 +17179,7 @@ test_case('wp-cli process-batch runs one bounded direct-work batch without impli
 
     assert_same('manual', $payload['mode'] ?? null, 'process-batch should use the manual batch path');
     assert_same(2, $payload['batch_size'] ?? null, 'process-batch should report the requested bounded batch size');
-    assert_same(2, $payload['processed'] ?? null, 'process-batch should process only one bounded batch');
+    assert_same(2, $payload['indexed'] ?? null, 'process-batch should process only one bounded batch');
     assert_same(2, $payload['queue_processed'] ?? null, 'process-batch should report only directly claimed work');
     assert_same(0, $payload['backfill_processed'] ?? null, 'process-batch should not perform an implicit corpus scan');
     assert_same(false, $payload['skipped_locked'] ?? null, 'process-batch should report no lock skip when it runs');
@@ -17576,7 +17226,7 @@ test_case('wp-cli process-batch respects active indexing lock', function (): voi
         $wpdb = $oldWpdb;
     }
 
-    assert_same(0, $payload['processed'] ?? null, 'locked process-batch should not process content');
+    assert_same(0, $payload['indexed'] ?? null, 'locked process-batch should not process content');
     assert_same(true, $payload['skipped_locked'] ?? null, 'locked process-batch should report lock skip');
     assert_same(true, $payload['has_more'] ?? null, 'locked process-batch should preserve has-more state');
     assert_same([], $fake->docs, 'locked process-batch should not index content');
@@ -17608,7 +17258,7 @@ test_case('wp-cli process-batch reports budget stop without draining content', f
         $wpdb = $oldWpdb;
     }
 
-    assert_same(0, $payload['processed'] ?? null, 'budget-stopped process-batch should not process content after an exhausted budget');
+    assert_same(0, $payload['indexed'] ?? null, 'budget-stopped process-batch should not process content after an exhausted budget');
     assert_same(true, $payload['stopped_by_budget'] ?? null, 'budget-stopped process-batch should report budget stop');
     assert_same(true, $payload['has_more'] ?? null, 'budget-stopped process-batch should report remaining work');
     assert_same([], $fake->docs, 'budget-stopped process-batch should not drain content');
@@ -17654,7 +17304,7 @@ test_case('manual queue batch records one failed post and continues without retr
         $wpdb = $oldWpdb;
     }
 
-    assert_same(0, $result['processed'], 'the retryable failure phase must not publish successful replacements');
+    assert_same(0, $result['indexed'], 'the retryable failure phase must not publish successful replacements');
     assert_same(0, $result['queue_processed'], 'the retryable failure phase must not acknowledge deferred valid generations');
     assert_same(1, $result['retryable_failures'] ?? null, 'the retryable failure phase should settle exactly its failed generation');
     assert_same(2, $result['deferred'] ?? null, 'both valid generations should be released for a bounded successor');
@@ -17743,7 +17393,7 @@ test_case('manual direct-work failure records backoff and explicit retry later r
         );
         $cleanRuns = array_values(array_filter(
             array_column($recoveryRuns, 'summary'),
-            static fn(array $summary): bool => (int) ($summary['processed'] ?? 0) === 1
+            static fn(array $summary): bool => (int) ($summary['indexed'] ?? 0) === 1
         ));
         $clean = $cleanRuns[0] ?? [];
         $cleanHealth = WP_FTS_Plugin::search_health();
@@ -17752,7 +17402,7 @@ test_case('manual direct-work failure records backoff and explicit retry later r
         $wpdb = $oldWpdb;
     }
 
-    assert_same(0, $failed['processed'], 'the retryable direct-work failure phase must not publish successful replacements');
+    assert_same(0, $failed['indexed'], 'the retryable direct-work failure phase must not publish successful replacements');
     assert_same(0, $failed['queue_processed'], 'the retryable direct-work failure phase must not acknowledge deferred valid generations');
     assert_same(0, $failed['backfill_processed'], 'direct-work processing should not scan an implicit corpus');
     assert_same(1, $failed['retryable_failures'] ?? null, 'the retryable direct-work phase should settle exactly its failed generation');
@@ -17777,7 +17427,7 @@ test_case('manual direct-work failure records backoff and explicit retry later r
     assert_same(1, $failedHealth['last_batch_failures'], 'direct-work failure should persist bounded health failure state');
     assert_true(isset($fake->docs[102], $fake->docs[103]), 'bounded successor work should index both valid direct generations');
 
-    assert_same(1, $clean['processed'], 'explicitly retried clean batch should index the previously failed row');
+    assert_same(1, $clean['indexed'], 'explicitly retried clean batch should index the previously failed row');
     assert_true(isset($fake->docs[101]), 'explicit retry should recover the previously failed row');
     assert_same([], wp_fts_test_queue_ids($fake), 'the explicit recovery should leave no unresolved direct generation');
     $allRuns = [
@@ -17953,9 +17603,9 @@ test_case('repeated transient failures stay in capped backoff and do not starve 
     assert_same('backoff', $backoff['recent_items'][0]['status'] ?? null, 'repeated transient item should be visible in backoff state');
     assert_same(3, $backoff['recent_items'][0]['failure_count'] ?? null, 'repeated transient item should keep its full failure count');
     assert_true((int) ($backoff['recent_items'][0]['retry_after_seconds'] ?? 0) > 0, 'repeated transient item should publish a future retry time');
-    assert_same(2, $afterBackoff['processed'] ?? null, 'automatic processing should use the whole batch for unrelated ready work');
+    assert_same(2, $afterBackoff['indexed'] ?? null, 'automatic processing should use the whole batch for unrelated ready work');
     assert_same(2, $afterBackoff['queue_processed'] ?? null, 'unrelated durable generations should use the available batch capacity');
-    assert_same(0, $idleBackoff['processed'] ?? null, 'an immediate follow-up should not claim a future retry');
+    assert_same(0, $idleBackoff['indexed'] ?? null, 'an immediate follow-up should not claim a future retry');
     assert_same(3, $badAttempts, 'future retry should not form a hot loop across immediate worker calls');
     assert_same('retry', $fake->queue[2101]['state'] ?? null, 'transient item should remain durably queued');
     assert_true((int) ($fake->queue[2101]['available_at'] ?? 0) > time(), 'transient item should retain a future queue availability');
@@ -18054,7 +17704,6 @@ test_case('worker removes permanently rejected stale rows but preserves transien
 
     assert_true(is_array($permanentBefore), 'permanent rejection setup should create a derived document row');
     assert_true(is_array($transientBefore), 'transient failure setup should create a derived document row');
-    assert_same(0, $result['processed'] ?? null, 'the retryable failure phase must publish no replacement documents');
     assert_same(0, $result['indexed'] ?? null, 'the retryable failure phase must report no indexed documents');
     assert_same(0, $result['committed'] ?? null, 'the retryable failure phase must not acknowledge the deferred permanent rejection');
     assert_same(0, $result['queue_processed'] ?? null, 'the retryable failure phase must not consume the deferred permanent generation');
@@ -18074,7 +17723,6 @@ test_case('worker removes permanently rejected stale rows but preserves transien
     assert_same($transientBefore, $docsAfterFailure[$transientId] ?? null, 'the retryable phase must preserve the transient stale row exactly');
     assert_true(isset($postingsAfterFailure[$transientTerm][$transientId]), 'the retryable phase must preserve the transient stale posting');
 
-    assert_same(0, $rejection['processed'] ?? null, 'permanent rejection must never be reported as an indexed document');
     assert_same(0, $rejection['indexed'] ?? null, 'the delete-only rejection phase should index no replacement document');
     assert_same(1, $rejection['committed'] ?? null, 'the rejection phase should commit its stale-row deletion and queue acknowledgement');
     assert_same(1, $rejection['queue_processed'] ?? null, 'the rejection phase should consume its exact owned queue generation');
@@ -18093,7 +17741,7 @@ test_case('worker removes permanently rejected stale rows but preserves transien
     assert_same(true, $permanentRecovery['permanent_rejections_require_content_change'] ?? null, 'recovery status should require canonical change before permanent retry');
     assert_same(1, $transientRecovery['backoff_count'] ?? null, 'transient exception should be visible in automatic backoff');
     assert_same('backoff', $transientRecovery['recent_items'][0]['status'] ?? null, 'transient exception should not be mislabeled as permanent rejection');
-    assert_same(0, $immediateRetry['processed'] ?? null, 'immediate worker pass should not reclaim the backed-off generation');
+    assert_same(0, $immediateRetry['indexed'] ?? null, 'immediate worker pass should not reclaim the backed-off generation');
     assert_same(1, $transientAttempts, 'transient exception should not form a hot retry loop');
     $allRuns = [
         ['summary' => $result, 'statement_count' => $failureStatementCount],
@@ -18203,7 +17851,6 @@ test_case('worker disables serialized objects and rejects deep or wide metadata 
     assert_same(0, WP_FTS_Test_Malicious_Serialized_Meta::$destructs, 'class-disabled metadata decoding must not construct an application object whose destructor can run');
     assert_same(0, WP_FTS_Test_Malicious_Serialized_Meta::$magicReads, 'bounded flattening must not invoke object magic access');
     assert_same(0, $result['indexed'] ?? null, 'the delete-only rejection phase must not publish valid replacement documents');
-    assert_same(0, $result['processed'] ?? null, 'processed should truthfully exclude the valid generations deferred by rejection settlement');
     assert_same(2, $result['committed'] ?? null, 'the rejection phase should acknowledge exactly the two deterministic poison generations');
     assert_same(2, $result['permanently_rejected'] ?? null, 'deep and wide graphs should be terminal bounded-analysis rejections');
     assert_same(0, $result['retryable_failures'] ?? null, 'deterministic graph limits should not enter retry backoff');
@@ -18414,9 +18061,9 @@ test_case('schema mismatch keeps queue processing on the 300-second systemic pat
     }
 
     $queueScheduledAt = (int) ($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]['timestamp'] ?? 0);
-    $schemaScheduledAt = (int) ($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK]['timestamp'] ?? 0);
+    $schemaScheduledAt = (int) ($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK]['timestamp'] ?? 0);
     $queueSchedules = array_values(array_filter($GLOBALS['wp_fts_test_schedule_calls'], static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::CRON_HOOK));
-    $schemaSchedules = array_values(array_filter($GLOBALS['wp_fts_test_schedule_calls'], static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK));
+    $schemaSchedules = array_values(array_filter($GLOBALS['wp_fts_test_schedule_calls'], static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK));
     $diagnostics = is_array($health['latest_batch_diagnostics'] ?? null) ? $health['latest_batch_diagnostics'] : [];
     assert_same(2, count($errors), 'directly repeated stale-schema callbacks should both fail closed before queue SQL');
     assert_same(0, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'UPDATE wp_fts_work'))), 'stale schema should execute no queue claim writes');
@@ -18462,9 +18109,9 @@ test_case('work and term table failures schedule repair without a one-second loo
             }
             $finishedAt = time();
             $queueScheduledAt = (int) ($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]['timestamp'] ?? 0);
-            $schemaScheduledAt = (int) ($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK]['timestamp'] ?? 0);
+            $schemaScheduledAt = (int) ($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK]['timestamp'] ?? 0);
             $queueSchedules = array_values(array_filter($GLOBALS['wp_fts_test_schedule_calls'], static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::CRON_HOOK));
-            $schemaSchedules = array_values(array_filter($GLOBALS['wp_fts_test_schedule_calls'], static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK));
+            $schemaSchedules = array_values(array_filter($GLOBALS['wp_fts_test_schedule_calls'], static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK));
             $health = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
             $diagnostics = is_array($health['latest_batch_diagnostics'] ?? null) ? $health['latest_batch_diagnostics'] : [];
 
@@ -18639,7 +18286,7 @@ test_case('failure recovery status and health rendering are read only and redact
             [
                 'post_id' => 4101,
                 'title' => 'Health <b>Failure</b>',
-                'status' => 'quarantined',
+                'status' => 'retryable',
                 'failure_count' => 3,
                 'attempt_count' => 3,
                 'first_failed_at' => '2026-06-20 10:00:00',
@@ -18665,12 +18312,12 @@ test_case('failure recovery status and health rendering are read only and redact
     $recovery = is_array($status['failure_recovery'] ?? null) ? $status['failure_recovery'] : [];
     assert_same('wp-fts-failure-recovery-v1', $recovery['schema'] ?? null, 'operator status should expose failure recovery schema');
     assert_same(1, $recovery['total_count'] ?? null, 'operator status should expose failure recovery count');
-    assert_same(1, $recovery['retryable_count'] ?? null, 'operator status should normalize a legacy quarantined record to retryable');
-    assert_same(0, $recovery['rejected_count'] ?? null, 'legacy transient failures should not be mislabeled as permanent rejection');
+    assert_same(1, $recovery['retryable_count'] ?? null, 'operator status should count retryable records');
+    assert_same(0, $recovery['rejected_count'] ?? null, 'transient failures should not be mislabeled as permanent rejection');
     assert_same(true, $recovery['automatic_retry'] ?? null, 'operator status should report that transient work retries automatically');
     assert_same(WP_FTS_Index_Queue::MAX_BACKOFF_SECONDS, $recovery['max_backoff_seconds'] ?? null, 'operator status should expose the durable queue backoff ceiling');
     assert_same('Health Failure (ID 4101)', $recovery['recent_items'][0]['label'] ?? null, 'operator status should expose bounded sanitized item labels');
-    assert_same('retryable', $recovery['recent_items'][0]['status'] ?? null, 'legacy terminal labels should be presented with truthful automatic-retry semantics');
+    assert_same('retryable', $recovery['recent_items'][0]['status'] ?? null, 'retryable records should retain their automatic-retry status');
     assert_contains('Failed items are retryable', (string) ($recovery['advice'] ?? ''), 'operator status should expose automatic recovery advice');
     assert_contains('<h3>Failure recovery</h3>', $html, 'Health tab should render failure recovery visibility');
     assert_contains('<th scope="row">Failed item history</th><td>1 tracked (1 retryable, 0 waiting, 0 rejected)</td>', $html, 'Health tab should render failure recovery counts');
@@ -18701,7 +18348,7 @@ test_case('scheduled indexing cron expands only one bounded scope page and resch
         unset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]);
 
         $result = WP_FTS_Plugin::process_scheduled_indexing();
-        assert_same(0, $result['processed'], 'a scope pass should not mix corpus discovery with document indexing');
+        assert_same(0, $result['indexed'], 'a scope pass should not mix corpus discovery with document indexing');
         assert_same(0, $result['backfill_processed'], 'scope expansion should only enqueue durable direct work');
         assert_same(20, $result['backfill_scanned'], 'cron should keyset-scan at most the default 20-item scope page');
         assert_same(20, $result['backfill_queued'], 'cron should enqueue exactly the bounded source page');
@@ -18730,7 +18377,7 @@ test_case('scheduled indexing cron reschedules when direct work exceeds the boun
 
     try {
         $result = WP_FTS_Plugin::process_scheduled_indexing();
-        assert_same(20, $result['processed'], 'cron should spend the default batch on queued work first');
+        assert_same(20, $result['indexed'], 'cron should spend the default batch on queued work first');
         assert_same(20, $result['queue_processed'], 'cron should drain the queued work that filled the batch');
         assert_same(0, $result['backfill_processed'], 'direct work should not trigger an implicit corpus scan');
         assert_same(range(21, 25), wp_fts_test_queue_ids($fake), 'one bounded batch should leave later direct generations queued');
@@ -18755,14 +18402,14 @@ test_case('future retry watchdog sleeps without polling and new ready work bring
     }
     $queue = new WP_FTS_Index_Queue($fake);
     $queue->enqueue(31);
-    $claim = $queue->claim(1)[0] ?? null;
+    $claim = $queue->claim_batch(1)[0] ?? null;
     assert_true(is_array($claim), 'watchdog fixture should own the retry generation');
     $retry = $queue->fail($claim);
     $retryAt = (int) ($retry['available_at'] ?? 0);
 
     try {
         $waiting = WP_FTS_Plugin::process_scheduled_indexing();
-        assert_same(0, $waiting['processed'] ?? null, 'cron should not reclaim a future retry early');
+        assert_same(0, $waiting['indexed'] ?? null, 'cron should not reclaim a future retry early');
         assert_same(true, $waiting['has_more'] ?? null, 'the future retry should remain visible as pending work');
         assert_same('scheduled_at_availability', $waiting['reschedule_decision'] ?? null, 'future-only work should schedule once rather than enter a prompt polling loop');
         assert_same($retryAt, $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]['timestamp'] ?? null, 'the watchdog should sleep until the exact retry boundary');
@@ -18819,7 +18466,7 @@ test_case('manual indexing API processes at most the default 100 direct generati
 
     try {
         $result = WP_FTS_Plugin::process_manual_index_batch();
-        assert_same(100, $result['processed'], 'manual indexing should process the default 100-item direct batch');
+        assert_same(100, $result['indexed'], 'manual indexing should process the default 100-item direct batch');
         assert_same(100, $result['queue_processed'], 'manual indexing should acknowledge exactly the claimed direct generations');
         assert_same(0, $result['backfill_processed'], 'manual indexing should not perform an implicit corpus scan');
         assert_same(100, count($fake->docs), 'manual indexing should leave later direct work for another batch');
@@ -18841,7 +18488,7 @@ test_case('manual indexing schedules the exact future successor instead of polli
     $GLOBALS['wp_fts_test_posts'][126] = wp_fts_test_backfill_post(126, 'post', 'publish', 'Manual future successor');
     $queue = new WP_FTS_Index_Queue($fake);
     $queue->enqueue(126);
-    $claim = $queue->claim(1)[0] ?? null;
+    $claim = $queue->claim_batch(1)[0] ?? null;
     assert_true(is_array($claim), 'manual successor fixture should own one retry generation');
     $retry = $queue->fail($claim);
     $retryAt = (int) ($retry['available_at'] ?? 0);
@@ -18850,7 +18497,7 @@ test_case('manual indexing schedules the exact future successor instead of polli
 
     try {
         $result = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
-        assert_same(0, $result['processed'] ?? null, 'manual indexing must not claim a future retry early');
+        assert_same(0, $result['indexed'] ?? null, 'manual indexing must not claim a future retry early');
         assert_same(true, $result['wait_for_next_available'] ?? null, 'manual indexing should classify future-only work without polling');
         assert_same($retryAt, $result['next_available_at'] ?? null, 'manual indexing should expose the exact next claimable timestamp');
         assert_same($retryAt, $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]['timestamp'] ?? null, 'manual indexing should schedule its one successor at the exact retry boundary');
@@ -18877,7 +18524,7 @@ test_case('shared indexing lock prevents overlapping manual and cron batches', f
 
     try {
         $result = WP_FTS_Plugin::process_manual_index_batch();
-        assert_same(0, $result['processed'], 'manual batch should skip while another batch lock is active');
+        assert_same(0, $result['indexed'], 'manual batch should skip while another batch lock is active');
         assert_same(true, $result['skipped_locked'], 'manual batch should report a lock skip');
         assert_same([], $fake->docs, 'lock skip should not index content');
         assert_same(true, WP_FTS_Plugin::search_health()['last_skipped_locked'], 'health state should record the lock skip');
@@ -19909,7 +19556,7 @@ test_case('scheduled indexing cron reschedules after skipping a manual-held lock
 
     try {
         $result = WP_FTS_Plugin::process_scheduled_indexing();
-        assert_same(0, $result['processed'], 'cron batch should skip while a manual batch lock is active');
+        assert_same(0, $result['indexed'], 'cron batch should skip while a manual batch lock is active');
         assert_same(true, $result['skipped_locked'], 'cron batch should report a lock skip');
         assert_same(true, $result['has_more'], 'cron lock skip should retain a has-more signal for deferred work');
         assert_same([], $fake->docs, 'cron lock skip should not index content');
@@ -19935,7 +19582,7 @@ test_case('manual indexing time budget stops before a set-oriented mutation', fu
         $result = WP_FTS_Plugin::process_manual_index_batch([
             'time_budget' => 0.000001,
         ]);
-        assert_same(0, $result['processed'], 'an expired budget should publish no partial set-oriented batch');
+        assert_same(0, $result['indexed'], 'an expired budget should publish no partial set-oriented batch');
         assert_same(true, $result['stopped_by_budget'], 'manual batch should report the time-budget stop');
         assert_same(true, $result['has_more'], 'budget stop should leave a has-more signal');
         assert_same([], $fake->docs, 'budget stop should leave all derived rows untouched');
@@ -19978,7 +19625,7 @@ test_case('latest indexing diagnostics remain bounded after repeated batches', f
                 $firstJson = $json;
             }
 
-            assert_same(0, $result['processed'], 'bounded diagnostics failure fixture should not mark failed queued posts indexed');
+            assert_same(0, $result['indexed'], 'bounded diagnostics failure fixture should not mark failed queued posts indexed');
             assert_same('failed', $diagnostics['status'] ?? null, 'all-failed batch diagnostics should record failed status');
             assert_same(1, $diagnostics['failures'] ?? null, 'bounded diagnostics should record one failure for each latest batch');
             assert_true(count($diagnostics) <= 48, 'latest diagnostics should stay fixed-size after repeated batches');
@@ -20016,18 +19663,18 @@ test_case('durable corpus scope includes public pages from default settings', fu
 
     try {
         $scope = WP_FTS_Plugin::process_manual_index_batch();
-        assert_same(0, $scope['processed'], 'scope discovery should not mix source scanning with document writes');
+        assert_same(0, $scope['indexed'], 'scope discovery should not mix source scanning with document writes');
         assert_same(3, $scope['backfill_scanned'], 'default scope should select supported public and operator-visible statuses for every configured post type');
         assert_same(3, $scope['backfill_queued'], 'scope discovery should durably enqueue every eligible configured post-type row');
         $postDrain = WP_FTS_Plugin::process_manual_index_batch();
         assert_same(false, $postDrain['scope_completed'], 'the direct-post pass should leave the co-claimed scope ready for its own bounded successor');
-        assert_same(3, $postDrain['processed'], 'the second pass should drain the claimed direct batch without adding scope SQL');
+        assert_same(3, $postDrain['indexed'], 'the second pass should drain the claimed direct batch without adding scope SQL');
         assert_same(true, $postDrain['has_more'], 'the deferred scope should request its immediate scope-only successor');
         $scopeCompletion = WP_FTS_Plugin::process_manual_index_batch();
         assert_same(true, $scopeCompletion['scope_completed'], 'a scope-only empty keyset page should acknowledge the durable scope');
-        assert_same(0, $scopeCompletion['processed'], 'the scope-only completion pass should not repeat document work');
+        assert_same(0, $scopeCompletion['indexed'], 'the scope-only completion pass should not repeat document work');
         $result = WP_FTS_Plugin::process_manual_index_batch();
-        assert_same(0, $result['processed'], 'no redundant fourth pass should remain after alternating direct and scope work');
+        assert_same(0, $result['indexed'], 'no redundant fourth pass should remain after alternating direct and scope work');
         assert_same([201, 202, 203], array_keys($fake->docs), 'default backfill should retain operator-searchable page statuses as well as posts');
 
         wp_fts_test_mark_search_takeover_ready();
@@ -20079,7 +19726,7 @@ test_case('profile reconciliation keyset-expands and rewrites only bounded durab
         $thirdScope = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
         $finalPostDrain = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
         $scopeCompletion = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         $completeHealth = WP_FTS_Plugin::search_health();
     } finally {
         $wpdb = $oldWpdb;
@@ -20093,20 +19740,20 @@ test_case('profile reconciliation keyset-expands and rewrites only bounded durab
         $secondScope['backfill_queued'] ?? null,
         $thirdScope['backfill_queued'] ?? null,
     ], 'profile reconciliation should expand retained rows in bounded keyset pages');
-    assert_same(0, $firstScope['processed'] ?? null, 'scope expansion should not write derived documents');
+    assert_same(0, $firstScope['indexed'] ?? null, 'scope expansion should not write derived documents');
     assert_same(true, $scopeCompletion['scope_completed'] ?? null, 'a scope-only empty keyset proof should acknowledge the reconciliation scope');
-    assert_same(2, $firstPostDrain['processed'], 'the first post pass should rewrite only the prior bounded claim');
+    assert_same(2, $firstPostDrain['indexed'], 'the first post pass should rewrite only the prior bounded claim');
     assert_same(2, $firstPostDrain['queue_processed'], 'the first post pass should acknowledge exactly two durable generations');
     assert_same(true, $firstPostDrain['has_more'] ?? null, 'the first post pass should retain an immediate scope successor');
     assert_true(($fake->docs[401]['content_hash'] ?? '') !== 'old-profile-401', 'first stale row should be rewritten under the active profile');
     assert_true(($fake->docs[402]['content_hash'] ?? '') !== 'old-profile-402', 'second stale row should be rewritten under the active profile');
     assert_same('old-profile-403', $docsAfterFirstWrite[403]['content_hash'] ?? null, 'later rows should remain untouched after the first bounded write slice');
 
-    assert_same(0, $secondScope['processed'], 'the second scope page should not mix expansion with document replacement');
-    assert_same(2, $secondPostDrain['processed'], 'the second post pass should consume the next bounded post slice');
-    assert_same(0, $thirdScope['processed'], 'the final scope page should only enqueue its one remaining generation');
-    assert_same(1, $finalPostDrain['processed'], 'the final post pass should consume the last durable generation');
-    assert_same(0, $scopeCompletion['processed'], 'the empty-keyset proof should not repeat the final document write');
+    assert_same(0, $secondScope['indexed'], 'the second scope page should not mix expansion with document replacement');
+    assert_same(2, $secondPostDrain['indexed'], 'the second post pass should consume the next bounded post slice');
+    assert_same(0, $thirdScope['indexed'], 'the final scope page should only enqueue its one remaining generation');
+    assert_same(1, $finalPostDrain['indexed'], 'the final post pass should consume the last durable generation');
+    assert_same(0, $scopeCompletion['indexed'], 'the empty-keyset proof should not repeat the final document write');
     assert_same(false, $completeHealth['reconciliation_active'], 'maintenance should publish inactive reconciliation after durable work is empty');
     assert_same($completeHealth['index_profile_hash'], $completeHealth['accepted_index_profile_hash'], 'maintenance should accept the current profile only after physical verification');
     assert_same(0, count($fake->queue), 'clean reconciliation should leave no hidden cursor or work generation');
@@ -20148,7 +19795,7 @@ test_case('scope shrink physically removes retained rows outside configured post
         $scope = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
         $postDrain = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
         $scopeCompletion = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         $complete = WP_FTS_Plugin::search_health();
     } finally {
         $_POST = $oldPost;
@@ -20158,12 +19805,12 @@ test_case('scope shrink physically removes retained rows outside configured post
     assert_same(true, $marked['reconciliation_active'] ?? null, 'removing a configured post type should enqueue retained rows for reconciliation');
     assert_same(1, $marked['pending_scope_work_count'] ?? null, 'scope removal should use one durable reconciliation scope');
     assert_same(2, $scope['backfill_queued'] ?? null, 'scope reconciliation should enumerate both old-scope and retained current-scope rows');
-    assert_same(1, $postDrain['processed'] ?? null, 'the bounded post pass should report only the retained document as indexed');
+    assert_same(1, $postDrain['indexed'] ?? null, 'the bounded post pass should report only the retained document as indexed');
     assert_same(1, $postDrain['deleted'] ?? null, 'the removed post type should be reported as a physical derived-row deletion');
     assert_same(2, $postDrain['committed'] ?? null, 'both retained generations should be durably resolved in the same bounded post batch');
     assert_same(true, $postDrain['has_more'] ?? null, 'the post drain should retain the deferred scope as immediate work');
     assert_same(true, $scopeCompletion['scope_completed'] ?? null, 'a following scope-only pass should acknowledge the empty keyset proof');
-    assert_same(0, $scopeCompletion['processed'] ?? null, 'scope acknowledgement should not repeat either resolved document generation');
+    assert_same(0, $scopeCompletion['indexed'] ?? null, 'scope acknowledgement should not repeat either resolved document generation');
     assert_true(!isset($fake->docs[1101]), 'a retained row from the removed post type should be physically deleted');
     assert_true(isset($fake->docs[1102]), 'a retained row still in scope should be reindexed');
     assert_same(false, $complete['reconciliation_active'] ?? null, 'maintenance should publish inactive reconciliation only after the durable table drains');
@@ -20194,7 +19841,7 @@ test_case('activation scope reconciles retained rows after inactive edits and st
         $scope = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
         $postDrain = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
         $scopeCompletion = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         $complete = WP_FTS_Plugin::search_health();
     } finally {
         $wpdb = $oldWpdb;
@@ -20202,12 +19849,12 @@ test_case('activation scope reconciles retained rows after inactive edits and st
 
     assert_same('pending', $marked['initial_index_status'] ?? null, 'activation should distrust retained rows until maintenance verifies reconciliation');
     assert_same(1, $scope['backfill_queued'] ?? null, 'activation scope should enumerate the one live source after uninstall removed every derived row');
-    assert_same(1, $postDrain['processed'] ?? null, 'activation reconciliation should report only the changed live post as indexed');
+    assert_same(1, $postDrain['indexed'] ?? null, 'activation reconciliation should report only the changed live post as indexed');
     assert_same(0, $postDrain['deleted'] ?? null, 'activation reconciliation should not rediscover a derived row already removed by uninstall');
     assert_same(1, $postDrain['committed'] ?? null, 'activation reconciliation should resolve the one live source generation');
     assert_same(true, $postDrain['has_more'] ?? null, 'activation document work should retain the deferred scope successor');
     assert_same(true, $scopeCompletion['scope_completed'] ?? null, 'activation scope should require a following scope-only empty keyset proof');
-    assert_same(0, $scopeCompletion['processed'] ?? null, 'activation scope completion should not repeat the indexed live post');
+    assert_same(0, $scopeCompletion['indexed'] ?? null, 'activation scope completion should not repeat the indexed live post');
     assert_true(($fake->docs[1201]['content_hash'] ?? '') !== $oldHash, 'content changed while hooks were inactive should be reindexed on activation');
     assert_same([1201], array_keys($fake->postings[WP_FTS_TermNamespace::namespace_term('en', 'orchard')] ?? []), 'activation reconciliation should replace postings for inactive content edits');
     assert_true(!isset($fake->docs[1202]), 'a missing source should remain absent after uninstall and reactivation');
@@ -20247,14 +19894,14 @@ test_case('scope work and direct generations alternate across bounded set-orient
         $wpdb = $oldWpdb;
     }
 
-    assert_same(2, $postDrain['processed'], 'the first batch should publish only the bounded direct claims acquired alongside scope work');
+    assert_same(2, $postDrain['indexed'], 'the first batch should publish only the bounded direct claims acquired alongside scope work');
     assert_same(0, $postDrain['backfill_queued'], 'the direct-post batch must not add scope expansion SQL');
     assert_same(true, $postDrain['has_more'], 'the released scope should request its immediate bounded successor');
     assert_same([], $postIdsAfterDrain, 'the direct-post batch should acknowledge its exact claims before scope expansion');
     assert_same('ready', $scopeAfterPostDrain['state'] ?? null, 'the deferred scope should become immediately claimable again');
     assert_same(0, $scopeAfterPostDrain['cursor_post_id'] ?? null, 'deferring a co-claimed scope must preserve its unadvanced cursor');
     assert_same(WP_FTS_Index_Queue::SCOPE_EXPANSION_TURN_CODE, $scopeAfterPostDrain['last_error_code'] ?? null, 'the deferred scope should reserve the next mixed collision for expansion');
-    assert_same(0, $scopeAdvance['processed'], 'the scope-only successor must not repeat direct document writes');
+    assert_same(0, $scopeAdvance['indexed'], 'the scope-only successor must not repeat direct document writes');
     assert_same(3, $scopeAdvance['backfill_queued'], 'the scope-only successor should remain bounded by the requested size');
     assert_same('', $scopeAfterAdvance['last_error_code'] ?? null, 'advancing the reserved scope turn should clear its scheduling marker');
     assert_same([501, 502, 503], wp_fts_test_queue_ids($fake), 'scope discovery should persist only the newly discovered post generations after direct claims commit');
@@ -20269,10 +19916,10 @@ test_case('releasing an old scope claim preserves its superseding generation', f
     $scopeKey = 'release-superseded-scope';
 
     $queue->enqueue_scope($scopeKey, ['reason' => 'initial-generation']);
-    $initial = $queue->claim_scope();
+    $initial = $queue->claim_batch(0)[0] ?? null;
     assert_true(is_array($initial), 'the release-race fixture should claim its initial scope generation');
     assert_true($queue->commit_scope_page($initial, [], 77), 'the fixture should publish a nonzero cursor before the release race');
-    $oldClaim = $queue->claim_scope();
+    $oldClaim = $queue->claim_batch(0)[0] ?? null;
     assert_true(is_array($oldClaim), 'the release-race fixture should reclaim the continued scope generation');
 
     $queue->enqueue_scope($scopeKey, ['reason' => 'superseding-generation']);
@@ -20360,8 +20007,8 @@ test_case('failed reconciliation generation backs off without rewinding its comp
     assert_same(true, $result['has_more'] ?? null, 'the direct-post result should request its scope-only completion successor');
     assert_same('failure_phase', $result['stop_reason'] ?? null, 'the mixed reconciliation batch should stop after its isolated retryable settlement');
     assert_same(true, $scopeCompletion['scope_completed'] ?? null, 'the following scope-only pass should publish the empty-keyset proof');
-    assert_same(0, $scopeCompletion['processed'] ?? null, 'scope completion should not repeat successful or failed direct generations');
-    assert_same(0, $result['processed'], 'the retryable failure phase must not publish unrelated prepared generations');
+    assert_same(0, $scopeCompletion['indexed'] ?? null, 'scope completion should not repeat successful or failed direct generations');
+    assert_same(0, $result['indexed'], 'the retryable failure phase must not publish unrelated prepared generations');
     assert_same(0, $result['queue_processed'] ?? null, 'the retryable failure phase must not acknowledge unrelated prepared generations');
     assert_same(1, $result['retryable_failures'] ?? null, 'the retryable failure phase should settle exactly the poison generation');
     assert_same(2, $result['deferred'] ?? null, 'the two valid reconciliation generations should be released for bounded successors');
@@ -20383,7 +20030,7 @@ test_case('failed reconciliation generation backs off without rewinding its comp
     assert_same(1, count($scopeRowsAfterFailure), 'the retryable document phase should preserve the exhausted scope proof');
     assert_same(703, $scopeRowsAfterFailure[0]['cursor_post_id'] ?? null, 'the retryable document phase must not rewind the completed scope frontier');
     assert_same(2, array_sum(array_map(
-        static fn(array $run): int => (int) ($run['summary']['processed'] ?? 0),
+        static fn(array $run): int => (int) ($run['summary']['indexed'] ?? 0),
         $successorRuns
     )), 'bounded successors should publish both valid reconciliation generations exactly once');
     assert_same([701], wp_fts_test_queue_ids($fake), 'only the transient generation should remain queued');
@@ -20393,7 +20040,7 @@ test_case('failed reconciliation generation backs off without rewinding its comp
     assert_true(($fake->docs[702]['content_hash'] ?? '') !== 'old-profile-702', 'the first valid successor should publish its new profile');
     assert_true(($fake->docs[703]['content_hash'] ?? '') !== 'old-profile-703', 'the second valid successor should publish its new profile');
     assert_contains('SELECT statement', (string) ($health['last_error'] ?? ''), 'failure health should redact SQL details');
-    assert_same(0, $blocked['processed'] ?? null, 'an immediate cron pass should not reclaim a future retry');
+    assert_same(0, $blocked['indexed'] ?? null, 'an immediate cron pass should not reclaim a future retry');
     assert_same(true, $blocked['has_more'] ?? null, 'future retry work should keep the worker scheduled');
     assert_same('scheduled_at_availability', $blocked['reschedule_decision'] ?? null, 'a deferred retry should not request a prompt polling loop');
     assert_same($retryAt, $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]['timestamp'] ?? null, 'cron should sleep until the exact retry availability instead of polling every second');
@@ -20434,7 +20081,7 @@ test_case('profile change during reconciliation fences and restarts the durable 
         $wpdb = $oldWpdb;
     }
 
-    assert_same(0, $partial['processed'], 'scope expansion should not publish a partial derived rewrite');
+    assert_same(0, $partial['indexed'], 'scope expansion should not publish a partial derived rewrite');
     assert_same(1, $partial['backfill_queued'], 'setup should keyset-expand one retained row');
     assert_same(801, $scopeBefore['cursor_post_id'] ?? null, 'setup should persist progress in the durable scope row');
     assert_same(true, $changedHealth['reconciliation_active'], 'profile change should keep reconciliation active');
@@ -20563,13 +20210,15 @@ function wp_fts_test_uninstall_operational_option_names(): array
 {
     return [
         WP_FTS_Plugin::SCHEMA_VERSION_OPTION,
-        WP_FTS_Plugin::QUEUE_OPTION,
-        WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION,
         WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION,
         WP_FTS_Plugin::SETTINGS_OPTION,
+        WP_FTS_PostContentExtractor::CUSTOM_FIELDS_OPTION,
         WP_FTS_Plugin::INDEX_LOCK_OPTION,
         WP_FTS_Plugin::INDEX_HEALTH_OPTION,
+        WP_FTS_Plugin::READINESS_INCARNATION_OPTION,
+        WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION,
         WP_FTS_Plugin::ACTIVATION_REDIRECT_OPTION,
+        WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION,
     ];
 }
 
@@ -20630,7 +20279,7 @@ function wp_fts_test_assert_uninstall_drop(array $queries, string $prefix, strin
         static fn(string $table): string => "`{$table}`",
         wp_fts_test_owned_site_table_names($prefix)
     );
-    assert_same($expectedTables, $actualTables, "{$label} should remove only the exact 24-table lifecycle inventory");
+    assert_same($expectedTables, $actualTables, "{$label} should remove only the exact 12-table lifecycle inventory");
 }
 
 test_case('ready no-op request performs zero uninstall fence probes or plugin SQL', function (): void {
@@ -20650,7 +20299,7 @@ test_case('ready no-op request performs zero uninstall fence probes or plugin SQ
     $fake->prepared = [];
 
     try {
-        WP_FTS_Plugin::maybe_upgrade_schema();
+        WP_FTS_Plugin::maybe_schedule_schema_repair();
         WP_FTS_Plugin::maybe_schedule_initial_index_readiness();
         WP_FTS_Plugin::storage(true);
         $status = WP_FTS_Plugin::search_takeover_status();
@@ -20702,7 +20351,7 @@ test_case('readiness watchdog never crosses an uninstall fence to repair site or
     }
 });
 
-test_case('single-site deactivation retains derived data while uninstall removes all current and legacy FTS tables', function (): void {
+test_case('single-site deactivation retains derived data while uninstall removes all current FTS tables', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -21136,10 +20785,10 @@ test_case('preloaded schema repair and foreground hooks remain inert behind the 
         $GLOBALS['wp_fts_test_options'] = wp_fts_test_uninstall_seeded_options($operationalOptions, 1);
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 0;
         $preloadedRepair = static function (): void {
-            WP_FTS_Plugin::run_scheduled_schema_upgrade();
+            WP_FTS_Plugin::run_scheduled_schema_repair();
         };
-        WP_FTS_Plugin::maybe_upgrade_schema();
-        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK]), 'preloaded repair fixture should begin with a scheduled schema event');
+        WP_FTS_Plugin::maybe_schedule_schema_repair();
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK]), 'preloaded repair fixture should begin with a scheduled schema event');
 
         WP_FTS_Plugin::uninstall();
         wp_fts_test_assert_uninstall_fence($GLOBALS['wp_fts_test_options'], 'preloaded repair fixture uninstall');
@@ -21153,7 +20802,7 @@ test_case('preloaded schema repair and foreground hooks remain inert behind the 
         $GLOBALS['wp_fts_test_scheduled'] = [];
 
         $preloadedRepair();
-        WP_FTS_Plugin::maybe_upgrade_schema();
+        WP_FTS_Plugin::maybe_schedule_schema_repair();
         WP_FTS_Plugin::storage(true);
         WP_FTS_Plugin::handle_post_save(991, (object) ['ID' => 991]);
         $writerRan = false;
@@ -21167,7 +20816,7 @@ test_case('preloaded schema repair and foreground hooks remain inert behind the 
         );
         $upgradeError = '';
         try {
-            WP_FTS_Plugin::upgrade_schema();
+            WP_FTS_Plugin::create_or_repair_schema();
         } catch (RuntimeException $error) {
             $upgradeError = $error->getMessage();
         }
@@ -21320,7 +20969,7 @@ test_case('multisite uninstall discovers 205 sites in bounded pages and remains 
         $dropQueries = array_values(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'DROP TABLE IF EXISTS ')));
         assert_same(410, count($dropQueries), 'two 205-site uninstall runs should issue exactly one DROP statement per site and no per-table statements');
         foreach ($dropQueries as $sql) {
-            assert_same(24, substr_count($sql, ', ') + 1, 'each site DROP should cover four current, twelve legacy, and eight failed-reset table names');
+            assert_same(12, substr_count($sql, ', ') + 1, 'each site DROP should cover four current and eight reset-generation table names');
         }
         assert_same([], $GLOBALS['wp_fts_test_posts'], 'multisite uninstall should not create content posts');
         assert_same([], $GLOBALS['wp_fts_test_trashed_posts'], 'multisite uninstall should not delete or trash canonical content posts');
@@ -21633,7 +21282,7 @@ test_case('taxonomy and selected metadata mutations coalesce dependent post rein
         }
         assert_true($processed >= 2, 'subsequent bounded processor passes should reindex every current taxonomy member');
         assert_same([], $pendingWorkRows(), 'bounded scope expansion should eventually drain direct work, including a vanished relationship target');
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         assert_same([], WP_FTS_Plugin::search('FormerTaxonomySignal', ['limit' => 10]), 'term rename processing should remove the former taxonomy label');
         assert_same([202, 201], array_column(WP_FTS_Plugin::search('CurrentTaxonomySignal', ['limit' => 10]), 'doc_id'), 'term rename processing should index the current taxonomy label with stable descending-id ties');
         assert_same([], WP_FTS_Plugin::search('FormerMetadataSignal', ['limit' => 10]), 'selected metadata processing should remove the former value');
@@ -21679,8 +21328,8 @@ test_case('taxonomy and selected metadata mutations coalesce dependent post rein
             WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
         }
         assert_same([], $pendingWorkRows(), 'bounded global reconciliation should drain taxonomy deletion work without foreground fan-out');
-        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_UPGRADE_CRON_HOOK]), 'global-scope completion should automatically schedule the separate readiness verifier');
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK]), 'global-scope completion should automatically schedule the separate readiness verifier');
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         assert_same([], WP_FTS_Plugin::search('CurrentTaxonomySignal', ['limit' => 10]), 'taxonomy deletion reconciliation should remove the deleted label from every retained host');
 
         WP_FTS_Plugin::handle_post_meta_change(503, 201, 'unselected_key', 'IgnoredMetadataSignal');
@@ -21842,7 +21491,7 @@ test_case('expired mutation fences outrank a continuously full ready backlog', f
     // empty normal claim. Also leave one expired lease among the ordinary work
     // to prove the recoverable index orders it by lease expiry.
     $queue->enqueue(50999, $now - 200);
-    $leased = $queue->claim(1, $now - 100, 30);
+    $leased = $queue->claim_batch(1, $now - 100, 30);
     assert_same(1, count($leased), 'the lease-expiry adversary needs one leased generation');
     $readyB = range(51000, 51199);
     $queue->enqueue_many($readyB, $now - 5);
@@ -22850,7 +22499,7 @@ test_case('runtime post hooks queue eligible saves and status changes then proce
         unset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]);
 
         $processed = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 100, 'source' => 'test-save-queue']);
-        assert_same(1, $processed['processed'], 'a short 100-slot batch should index one queued save and retain its lease through cleanup');
+        assert_same(1, $processed['indexed'], 'a short 100-slot batch should index one queued save and retain its lease through cleanup');
         assert_same(1, $processed['queue_processed'], 'manual processor should report queued save work separately');
         assert_same(0, $processed['backfill_processed'], 'manual processor should not spend capacity on backfill while queued save work fills the batch');
         assert_same([], wp_fts_test_queue_ids($fake), 'processed queued saves should leave the queue empty');
@@ -22904,19 +22553,6 @@ test_case('runtime post hooks queue eligible saves and status changes then proce
         $cron = WP_FTS_Plugin::process_scheduled_indexing();
         assert_same(1, $cron['queue_processed'], 'cron processor should consume queued post-save work before backfill');
         assert_true(($fake->docs[103]['is_deleted'] ?? 1) === 0, 'cron processor should index the queued status change');
-
-        $statusPost->post_status = 'trash';
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
-            WP_FTS_Plugin::default_settings(),
-            ['auto_index' => false]
-        );
-        WP_FTS_Plugin::handle_status_transition('trash', 'publish', $statusPost);
-        assert_same([103], wp_fts_test_queue_ids($fake), 'the unregistered compatibility callback should retain its bounded status cleanup when automatic indexing is disabled');
-        assert_same([], WP_FTS_Plugin::search('statusqueueneedle', ['limit' => 10]), 'canonical visibility should hide the transitioned post before physical cleanup');
-        WP_FTS_Plugin::flush_foreground_bulk_mutations();
-        WP_FTS_Plugin::process_scheduled_indexing();
-        assert_true(!isset($fake->docs[103]), 'the compatibility transition should converge through the ordinary bounded worker');
-        unset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION]);
 
         $post->post_status = 'trash';
         WP_FTS_Plugin::handle_post_save(101, $post);
@@ -23042,7 +22678,7 @@ test_case('saved field boost settings change runtime ranking after reindex', fun
             WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
         }
         assert_same([], $fake->queue, 'bounded workers should drain profile reconciliation and its direct post work');
-        WP_FTS_Plugin::run_scheduled_schema_upgrade();
+        WP_FTS_Plugin::run_scheduled_schema_repair();
         assert_same(true, WP_FTS_Plugin::search_takeover_status()['ready'] ?? false, 'dedicated maintenance should verify the drained index before takeover');
     };
 
@@ -35838,16 +35474,19 @@ test_case('storage prefix lookups are capped', function (): void {
     ], WP_FTS_StorageCompat::terms_with_prefix($storage, $prefix, 2), 'prefix term lookup should return a deterministic capped term list');
 });
 
-test_case('mysql set-oriented storage has no legacy posting-list API', function (): void {
+test_case('mysql set-oriented storage exposes no point or posting-list API', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
     $wpdb->recordReadQueries = true;
     $storage = new WP_FTS_Storage_Mysql($wpdb);
 
     assert_true($storage instanceof WP_FTS_Set_Oriented_Search_Storage, 'mysql should expose the relational search contract');
     assert_true($storage instanceof WP_FTS_Resettable_Storage, 'mysql should expose the relational reset contract');
-    assert_true(!$storage instanceof WP_FTS_Storage, 'mysql should not implement the legacy blob storage contract');
-    assert_true(!$storage instanceof WP_FTS_DocumentMetadataStorage, 'mysql should not claim the legacy point-metadata writer contract');
+    assert_true(!$storage instanceof WP_FTS_Storage, 'mysql should not implement the component blob storage contract');
+    assert_true(!$storage instanceof WP_FTS_DocumentMetadataStorage, 'mysql should not claim the component point-metadata writer contract');
     foreach ([
+        'get_doc',
+        'get_doc_metadata',
+        'terms_for_doc',
         'get_terms',
         'put_term',
         'delete_term',
@@ -35867,7 +35506,7 @@ test_case('mysql set-oriented storage has no legacy posting-list API', function 
         'terms_with_prefix',
         'flush',
     ] as $method) {
-        assert_true(!method_exists($storage, $method), "mysql should not expose legacy {$method}");
+        assert_true(!method_exists($storage, $method), "mysql should not expose {$method}");
     }
     assert_same([], $wpdb->prepared, 'capability inspection should not prepare SQL');
     assert_same([], $wpdb->queries, 'capability inspection should not execute SQL');
@@ -35882,13 +35521,11 @@ test_case('mysql bounded diagnostic list APIs reject oversized id sets before SQ
 
     $storage->terms_for_docs(range(1, $pageCap), 1);
     $storage->document_hashes(range(1, WP_FTS_Storage_Mysql::MAX_BATCH_DOCUMENTS));
-    $storage->get_doc_metadata(range(1, WP_FTS_Storage_Mysql::MAX_BATCH_DOCUMENTS));
-    assert_same(3, count($wpdb->prepared), 'each exact-bound diagnostic list should execute one set-oriented statement');
+    assert_same(2, count($wpdb->prepared), 'each exact-bound diagnostic list should execute one set-oriented statement');
 
     $operations = [
         'terms_for_docs' => static fn(): array => $storage->terms_for_docs(range(1, $pageCap + 1), 1),
         'document_hashes' => static fn(): array => $storage->document_hashes(range(1, WP_FTS_Storage_Mysql::MAX_BATCH_DOCUMENTS + 1)),
-        'get_doc_metadata' => static fn(): array => $storage->get_doc_metadata(range(1, WP_FTS_Storage_Mysql::MAX_BATCH_DOCUMENTS + 1)),
     ];
     foreach ($operations as $method => $operation) {
         $preparedBefore = count($wpdb->prepared);
@@ -35996,17 +35633,12 @@ test_case('mysql storage emits language-aware binary schema and stores per-langu
         'post_excerpt' => '',
         'post_password' => '',
     ];
-    $doc = $storage->get_doc(7);
-    assert_same('pl-PL', $doc['primary_lang'], 'document primary language should be canonicalized');
-    assert_same([], $doc['lang_lengths'], 'v4 should not retain a legacy aggregate document length');
-    $metadata = $storage->get_doc_metadata([7]);
-    assert_same('post', $metadata[7]['post_type'], 'document metadata should round trip post type');
-    assert_same('publish', $metadata[7]['post_status'], 'document metadata should round trip post status');
-    assert_same([], $metadata[7]['terms'] ?? [], 'derived taxonomy metadata should remain canonical in WordPress rather than duplicated in the index');
-    assert_same('en', $storage->get_doc(8)['primary_lang'], 'the bounded writer should retain the independent English document partition');
+    assert_same('pl-PL', $wpdb->docs[7]['primary_lang'] ?? null, 'document primary language should be canonicalized');
+    assert_same([7 => 'abc123', 8 => 'english-zamek'], $storage->document_hashes([7, 8]), 'the set-oriented hash reader should return both stored source fingerprints');
+    assert_same('en', $wpdb->docs[8]['primary_lang'] ?? null, 'the bounded writer should retain the independent English document partition');
 });
 
-test_case('mysql unified document-row failures abort indexing and metadata reads', function (): void {
+test_case('mysql unified document-row failures abort indexing', function (): void {
     $writeFailingWpdb = new WP_FTS_Test_WPDB();
     $writeFailingWpdb->failQueryPrefix = 'INSERT INTO wp_fts_documents';
     $storage = new WP_FTS_Storage_Mysql($writeFailingWpdb);
@@ -36031,25 +35663,6 @@ test_case('mysql unified document-row failures abort indexing and metadata reads
     assert_true($writeFailed, 'unified document-row write failures should escape the storage boundary');
     assert_true(in_array('ROLLBACK', $writeFailingWpdb->queries, true), 'unified document-row failures should roll back the index transaction');
 
-    $readFailingWpdb = new WP_FTS_Test_WPDB();
-    $readStorage = new WP_FTS_Storage_Mysql($readFailingWpdb);
-    $readStorage->replace_prepared_documents([[
-        'doc_id' => 82,
-        'primary_lang' => 'en',
-        'content_hash' => 'metadata-read',
-        'term_frequencies' => [],
-        'surface_frequencies' => [],
-        'metadata' => ['content_search_text' => 'metadata read'],
-    ]]);
-    $readFailingWpdb->failReadQueryPrefix = 'SELECT d.post_id, d.primary_lang';
-
-    $readFailed = false;
-    try {
-        $readStorage->get_doc_metadata([82]);
-    } catch (RuntimeException $e) {
-        $readFailed = str_contains($e->getMessage(), 'read FTS document metadata');
-    }
-    assert_true($readFailed, 'metadata read failures should not look like empty metadata');
 });
 
 test_case('mysql row-posting indexing skips oversized namespaced terms before storage validation', function (): void {
@@ -36281,7 +35894,7 @@ function wp_fts_test_prepare_cli_diagnose_operator_context(WP_FTS_Test_WPDB $fak
         'initial_index_status' => 'ready',
         'initial_index_started_at' => '2026-06-20 09:00:00',
         'initial_index_completed_at' => '2026-06-20 09:01:00',
-        'last_batch_processed' => 2,
+        'last_batch_indexed' => 2,
         'last_batch_queue_processed' => 1,
         'last_batch_backfill_processed' => 1,
         'has_more' => true,
@@ -36300,7 +35913,7 @@ function wp_fts_test_prepare_cli_diagnose_operator_context(WP_FTS_Test_WPDB $fak
             'status' => 'success',
             'started_at' => '2026-06-20 10:00:00',
             'finished_at' => '2026-06-20 10:01:00',
-            'processed' => 2,
+            'indexed' => 2,
             'queue_processed' => 1,
             'backfill_processed' => 1,
             'schema_status' => 'current',

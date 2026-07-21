@@ -266,52 +266,6 @@ KEY dirty (post_id,kind)
         }
     }
 
-    /** Add the lease-expiry index without replacing existing queued work. */
-    public function ensure_recoverable_work_index(): void
-    {
-        $this->guard_mutation();
-        $expected = [
-            'name' => $this->is_sqlite_runtime() ? $this->workTable . '_recoverable' : 'recoverable',
-            'columns' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key'],
-            'unique' => false,
-        ];
-        $physical = $this->is_sqlite_runtime()
-            ? $this->inspect_sqlite_schema($this->workTable, [$expected])
-            : $this->inspect_mysql_schema($this->workTable);
-        if (!empty($physical['exists']) && $this->schema_has_index($physical['indexes'] ?? [], $expected)) {
-            return;
-        }
-        // This additive migration owns only the exact missing-index case.
-        // Missing columns, a missing table, or a conflicting named index are
-        // incompatible schema damage; leave those states to create_tables(),
-        // which can replace the work table and enqueue corpus reconciliation.
-        if (empty($physical['exists'])) {
-            return;
-        }
-        foreach ($expected['columns'] as $column) {
-            if (!in_array($column, $physical['columns'] ?? [], true)) {
-                return;
-            }
-        }
-        if ($this->named_schema_index($physical['indexes'] ?? [], $expected['name']) !== null) {
-            return;
-        }
-        $work = $this->required_schema_identifier($this->workTable);
-        if ($this->is_sqlite_runtime()) {
-            $name = $this->required_schema_identifier($this->workTable . '_recoverable');
-            $this->query(
-                "CREATE INDEX {$name} ON {$work}(kind,state,claim_expires_at,available_at,post_id,job_key)",
-                'add recoverable FTS work index'
-            );
-            return;
-        }
-
-        $this->query(
-            "CREATE INDEX recoverable ON {$work}(kind,state,claim_expires_at,available_at,post_id,job_key)",
-            'add recoverable FTS work index'
-        );
-    }
-
     /**
      * Return the supporting core-table indexes this site still needs to create.
      *
@@ -611,12 +565,12 @@ KEY dirty (post_id,kind)
     }
 
     /**
-     * Replace incompatible pre-v4 derived tables instead of asking dbDelta to
-     * mutate primary-key identity in place. Terms, postings, and documents are
-     * one reproducible search generation: retaining any member after a peer is
-     * lost or replaced can attach old postings to reused term ids and leaves
-     * deleted document ids outside reconciliation. Work is independent so a
-     * damaged queue can be rebuilt without discarding a coherent search index.
+     * Replace incompatible derived tables instead of asking dbDelta to mutate
+     * primary-key identity in place. Terms, postings, and documents are one
+     * reproducible search generation: retaining any member after a peer is lost
+     * or replaced can attach postings to reused term ids and leave deleted
+     * document ids outside reconciliation. Work is independent so a damaged
+     * queue can be rebuilt without discarding a coherent search index.
      */
     private function drop_incompatible_derived_tables(): void
     {
@@ -666,7 +620,7 @@ KEY dirty (post_id,kind)
             }
             $identifier = $this->schema_identifier($table);
             if ($identifier === null) {
-                throw new RuntimeException('Invalid FTS table identifier during v4 migration.');
+                throw new RuntimeException('Invalid FTS table identifier during schema repair.');
             }
             $this->query("DROP TABLE {$identifier}", $context);
         }
@@ -695,9 +649,9 @@ KEY dirty (post_id,kind)
     /**
      * Inspect the exact physical table, column, index, and engine contract.
      *
-     * The schema version option is only a migration cursor; callers must use
-     * this result before treating the index as physically usable or persisting
-     * a completed version.
+     * The schema version option is only a logical marker; callers must use this
+     * result before treating the index as physically usable or persisting a
+     * completed repair.
      *
      * @return array{valid:bool,available:bool,missing_tables:string[],missing_columns:string[],unexpected_columns:string[],invalid_columns:string[],missing_indexes:string[],unexpected_indexes:string[],invalid_engines:string[]}
      */
@@ -3394,27 +3348,6 @@ WHERE {$range['sql']}",
         return gmdate('Y-m-d H:i:s', $timestamp === false ? time() : max(0, $timestamp));
     }
 
-    /** Return the minimal compatibility shape without reviving length scoring. */
-    public function get_doc(int $doc_id): ?array
-    {
-        $row = $this->get_row($this->wpdb->prepare(
-            "SELECT post_id, primary_lang, content_hash FROM {$this->documentsTable} WHERE post_id = %d",
-            $doc_id
-        ), 'read FTS document');
-        if ($row === null) {
-            return null;
-        }
-        $lang = WP_FTS_TermNamespace::canonicalize_lang((string) ($row->primary_lang ?? 'und'), 'und');
-        return [
-            'doc_len' => 0,
-            'lang' => $lang,
-            'primary_lang' => $lang,
-            'lang_lengths' => [],
-            'content_hash' => $row->content_hash !== null ? (string) $row->content_hash : null,
-            'deleted' => false,
-        ];
-    }
-
     /**
      * Read existing source fingerprints for a worker batch in one statement.
      *
@@ -3445,67 +3378,6 @@ WHERE {$range['sql']}",
         }
 
         return $hashes;
-    }
-
-    /** @return array<int,array<string,mixed>> */
-    public function get_doc_metadata(array $doc_ids): array
-    {
-        $ids = $this->normalize_bounded_doc_ids(
-            $doc_ids,
-            self::MAX_BATCH_DOCUMENTS,
-            'FTS compatibility metadata reads'
-        );
-        if ($ids === []) {
-            return [];
-        }
-        $placeholders = implode(',', array_fill(0, count($ids), '%d'));
-        $rows = $this->get_results($this->wpdb->prepare(
-            "SELECT d.post_id, d.primary_lang,
-                    SUBSTR(d.snippet_text, 1, " . self::MAX_METADATA_TEXT_CHARACTERS . ") AS snippet_text,
-                    SUBSTR(p.post_title, 1, " . self::MAX_METADATA_TEXT_CHARACTERS . ") AS post_title,
-                    SUBSTR(p.post_excerpt, 1, " . self::MAX_METADATA_TEXT_CHARACTERS . ") AS post_excerpt,
-                    p.post_type, p.post_status, p.post_date_gmt
-             FROM {$this->documentsTable} d
-             LEFT JOIN {$this->postsTable} p ON p.ID = d.post_id
-             WHERE d.post_id IN ({$placeholders})",
-            ...$ids
-        ), 'read FTS document metadata');
-        $result = [];
-        foreach ($rows as $row) {
-            $result[(int) $row->post_id] = WP_FTS_StorageCompat::normalize_doc_metadata([
-                'title' => (string) ($row->post_title ?? ''),
-                'excerpt' => (string) ($row->post_excerpt ?? ''),
-                'post_type' => (string) ($row->post_type ?? ''),
-                'post_status' => (string) ($row->post_status ?? ''),
-                'post_date_gmt' => (string) ($row->post_date_gmt ?? ''),
-                'primary_lang' => (string) ($row->primary_lang ?? 'und'),
-                'search_text' => (string) ($row->snippet_text ?? ''),
-            ]);
-        }
-        ksort($result, SORT_NUMERIC);
-        return $result;
-    }
-
-    /** @return string[] */
-    public function terms_for_doc(int $doc_id): array
-    {
-        $rows = $this->get_results($this->wpdb->prepare(
-            "SELECT t.lang, t.term
-FROM {$this->postingsTable} p" . ($this->is_sqlite_runtime() ? '' : ' FORCE INDEX (post_term_impact)') . "
-" . ($this->is_sqlite_runtime() ? 'JOIN' : 'STRAIGHT_JOIN') . " {$this->termsTable} t" . ($this->is_sqlite_runtime() ? '' : ' FORCE INDEX (PRIMARY)') . " ON t.term_id = p.term_id
-WHERE p.post_id = %d AND t.kind = " . self::LEXICAL_KIND . "
-ORDER BY t.lang, t.term
-LIMIT " . (WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS + 1),
-            $doc_id
-        ), 'read FTS document terms');
-        if (count($rows) > WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS) {
-            throw new RuntimeException('An indexed document exceeds the bounded term-preview contract.');
-        }
-        $terms = [];
-        foreach ($rows as $row) {
-            $terms[] = WP_FTS_TermNamespace::namespace_term((string) $row->lang, (string) $row->term);
-        }
-        return $terms;
     }
 
     /**

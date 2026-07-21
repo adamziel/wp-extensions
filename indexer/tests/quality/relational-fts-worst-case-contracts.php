@@ -1420,7 +1420,7 @@ test_case('surface-prefix architecture stays bounded and documents its irreducib
         'one document admits 4096 lexical and 4096 bounded surface rows',
         'surface SQL cost-selects one bounded AND-prefix driver',
         'surface planning gates and costs every final-prefix range once',
-        'legacy collection APIs are absent while bounded document diagnostics stay post-first',
+        'point collection APIs are absent while bounded page diagnostics stay post-first',
         "!in_array('term_hash', \$termIndexes, true)",
     ] as $required) {
         assert_contains($required, $surface, "surface containment should retain hard invariant: {$required}");
@@ -2687,6 +2687,15 @@ test_case('relational worst-case runs exact isolated accepted and rejected bound
 test_case('relational worst-case evidence gates query shape, memory, rows, latency, and failures', function (): void {
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     $acceptance = (string) file_get_contents(dirname(__DIR__, 2) . '/docs/relational-search-acceptance.md');
+    assert_contains(
+        'WP_FTS_Plugin::run_scheduled_schema_repair();',
+        $integration,
+        'initial readiness should run through the current schema-repair callback'
+    );
+    assert_true(
+        !str_contains($integration, 'run_scheduled_schema_upgrade'),
+        'the real-database workload must not call the removed schema-upgrade alias'
+    );
     foreach ([
         'relational-fts-evidence-v5',
         "'acceptance_lane' => wp_fts_wc_required_env('WP_FTS_WC_ALLOW_DIRTY') !== '1'",
@@ -2966,9 +2975,9 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     );
     $availabilityFault = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_missing_table_and_lock_proof');
     $tableRestored = strpos($availabilityFault, 'RENAME TABLE `{$backupTable}` TO `{$termTable}`');
-    $maintenanceVerified = strpos($availabilityFault, 'WP_FTS_Plugin::run_scheduled_schema_upgrade()');
+    $maintenanceVerified = strpos($availabilityFault, 'WP_FTS_Plugin::run_scheduled_schema_repair()');
     $recoveryWorker = strpos($availabilityFault, 'WP_FTS_Plugin::process_manual_index_batch([', $maintenanceVerified === false ? 0 : $maintenanceVerified);
-    $maintenanceRepublished = strpos($availabilityFault, 'WP_FTS_Plugin::run_scheduled_schema_upgrade()', $recoveryWorker === false ? 0 : $recoveryWorker + 1);
+    $maintenanceRepublished = strpos($availabilityFault, 'WP_FTS_Plugin::run_scheduled_schema_repair()', $recoveryWorker === false ? 0 : $recoveryWorker + 1);
     $postRepairSearch = strpos($availabilityFault, "WP_FTS_Plugin::search('rareanchor'", $maintenanceRepublished === false ? 0 : $maintenanceRepublished);
     assert_true(
         $tableRestored !== false
@@ -3425,6 +3434,14 @@ test_case('relational worst-case composes maximum document work with fair scope 
     }
 });
 
+test_case('relational worst-case generation fence uses the current queue claim API', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $generationFence = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_generation_fence_proof');
+
+    assert_same(2, substr_count($generationFence, '->claim_batch('), 'both generation-fence claims should use the current bounded API');
+    assert_true(!str_contains($generationFence, '->claim('), 'the real database proof must not call the removed queue API');
+});
+
 test_case('worker ceiling quality contracts retain hard composed and ambiguous outcome assertions', function (): void {
     $root = dirname(__DIR__, 2);
     $quality = dirname(__DIR__);
@@ -3462,9 +3479,9 @@ test_case('worker ceiling quality contracts retain hard composed and ambiguous o
         "strtoupper(trim(\$sql)) === 'COMMIT'",
         "strtoupper(trim(\$sql)) === 'ROLLBACK'",
         "'stale_writer_lease_recovered'",
-        "assert_same(0, \$takeover['processed']",
+        "assert_same(0, \$takeover['indexed']",
         'count($takeoverQueries) <= 5',
-        "assert_same(1, \$ordinary['processed']",
+        "assert_same(1, \$ordinary['indexed']",
     ] as $required) {
         assert_contains($required, $lateCommit, "ambiguous COMMIT/stale takeover contract should retain: {$required}");
     }
@@ -3610,7 +3627,7 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         'relational-fts-max-valid-setup-v2',
         'max_valid_setup_worker_progress',
         "'passes' => '1..100'",
-        'is_int($processed) && $processed >= 0',
+        'is_int($indexed) && $indexed >= 0',
         'max_valid_setup_worker_statement_bound',
         'max_valid_setup_worker_sql_bound',
         'max_valid_setup_worker_duration_bound',

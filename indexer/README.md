@@ -204,8 +204,9 @@ retained live index row, not only rows in the new scope, so removed post types
 and deleted source posts are physically removed. Activation also starts this retained-row
 reconciliation whenever index data already exists. This covers content changed
 while the plugin was inactive. Deactivation retains the derived index;
-uninstall is the explicit destructive boundary and removes current and legacy
-FTS tables. Before the DROP, uninstall stores one non-autoloaded, one-byte fence
+uninstall is the explicit destructive boundary and removes current and
+reset-generation FTS tables. Before the DROP, uninstall stores one
+non-autoloaded, one-byte fence
 under the shared writer lease and retains it after success or partial failure.
 Preloaded cron, schema-repair, save-hook, and scheduling callbacks remain inert
 behind that fence. Installing the ZIP again while inactive does not remove it;
@@ -244,7 +245,7 @@ allow overlapping index writes.
 
 The Health tab reports stored schema/readiness state without inspecting physical
 tables. Explicit support snapshots and `wp fts diagnose` add bounded read-only
-physical verification; the repair button runs the same idempotent migration and
+physical verification; the repair button runs the same idempotent repair and
 verification path as `wp fts repair`, and the new version is stored only after
 the physical contract passes. Repair touches schema and table definitions only
 and does not index content or create sample posts. Network activation provisions

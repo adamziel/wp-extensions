@@ -185,14 +185,6 @@ php indexer/tools/collect-release-evidence.php \
 php indexer/tools/collect-release-evidence.php \
   --release-target=direct-install \
   --run-docker-lifecycle-smokes
-php indexer/tools/collect-release-evidence.php \
-  --release-target=direct-install \
-  --run-docker-upgrade-multisite-smoke \
-  --previous-direct-package=/path/to/previous-wp-fts-indexer.zip
-php indexer/tools/collect-release-evidence.php \
-  --release-target=direct-install \
-  --run-docker-upgrade-multisite-smoke \
-  --previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA
 ```
 
 Direct-install readiness fully streams every shipped analyzer pack, verifies
@@ -225,42 +217,16 @@ with direct-install release/provider smoke evidence when Docker is available.
 The lifecycle Docker lane is direct-install/operator lifecycle evidence: it
 installs a source copy in a disposable WordPress/MariaDB multisite stack and
 proves activation/repair, reversible network deactivation, and destructive
-network uninstall. It seeds all recoverable legacy table names on the main site
-and a real subsite, then requires every current/legacy FTS table and operational
+network uninstall. It seeds all deterministic reset-generation table names on the main site
+and a real subsite, then requires every current/reset-generation FTS table and operational
 option to be absent on both, with only the exact non-autoloaded one-byte
 uninstall fence retained per site. It installs a temporary source-bound ZIP
 inactive to prove that copying code cannot cross the fence, then network-
 reactivates it and requires the bounded provisioning chain to clear both fences
-and restore exactly four current tables per site without restoring legacy
+and restore exactly four current tables per site without restoring reset-generation
 tables. The collector requires passed multisite, table-removal, fence, and
 reactivation flags. This lane does not build a public-submission artifact.
 
-The upgrade/multisite Docker lane is direct-install/operator upgrade evidence:
-it requires either `--previous-direct-package=/path/to/previous-wp-fts-indexer.zip`
-or `--previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA`. The ref form is
-for release reviews that need repo-owned evidence without a manually supplied
-ZIP: the collector resolves the local ref/SHA without fetching, rejects the
-current target commit, verifies release-build tooling and the committed
-Composer lockfile at that ref, archives only the package source paths into
-temporary storage, and builds the previous ZIP with isolated Composer
-home/auth, an existing local Composer package cache when available, network
-access disabled, and credential-capable environment variables scrubbed before
-the historical builder or nested Composer process can inherit them. Historical
-refs containing Composer auth files such as `indexer/auth.json` or
-`indexer/.composer/auth.json` are rejected before checkout/archive. Every
-symbolic link in the extracted historical source is also rejected before the
-archived PHP builder or Composer can execute, so a benign-looking path cannot
-escape to host credentials or code. The lane then
-builds the current ZIP in temporary storage, installs WordPress as a disposable
-multisite network, network-activates the previous package, upgrades to the
-current package, checks schema version/status after upgrade, repair idempotence
-after upgrade, search continuity for generated fixture content, queue health
-after upgrade, creates an additional disposable site, proves that site's
-per-prefix `fts_*` tables, proves subsite indexing/search/queue/repair behavior,
-proves the WordPress site-deletion table filter contributes the target site's
-FTS tables, and cleans up generated fixtures and temporary resources.
-Missing or invalid previous packages/refs are `unavailable`, not passes. The lane only
-passes when the decoded wrapper proof records `multisite_evidence_status` as `passed`.
 These lanes do not modify WordPress.org/SVN state, tags, public assets, package
 readme/license files, or authority evidence, and a direct-install `pass` does
 not approve public-submission readiness.

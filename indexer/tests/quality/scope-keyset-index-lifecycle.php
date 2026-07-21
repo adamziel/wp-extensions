@@ -10,9 +10,10 @@ function wp_fts_scope_index_lifecycle_fixture(bool $removeIndexes = false): arra
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     wp_fts_test_mark_search_takeover_ready();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 7;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     unset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION]);
     if ($removeIndexes) {
+        unset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]);
         unset(
             $fake->schemaIndexes['wp_term_relationships'][WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME],
             $fake->schemaIndexes['wp_posts'][WP_FTS_Storage_Mysql::FILTERED_SCOPE_INDEX_NAME]
@@ -33,20 +34,16 @@ function wp_fts_scope_index_create_queries(WP_FTS_Test_WPDB $fake): array
     ));
 }
 
-test_case('quality schema migration reuses exact preexisting scope indexes without claiming them', function (): void {
+test_case('quality schema repair reuses exact preexisting scope indexes without claiming them', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
     [$fake] = wp_fts_scope_index_lifecycle_fixture();
     $fake->queries = [];
     try {
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
         assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'an exact preexisting capability should allow current schema publication');
         assert_same([], wp_fts_scope_index_create_queries($fake), 'exact namespaced indexes should be reused without duplicate DDL');
-        assert_same(0, count(array_filter(
-            $fake->prepared,
-            static fn(array $entry): bool => str_starts_with((string) ($entry['sql'] ?? ''), 'SHOW TABLES LIKE %s')
-        )), 'a physically valid v7 generation must not run the pre-v4 table-by-table discovery pass');
         assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION]), 'a preexisting exact index must not become plugin-owned merely because it was reused');
 
         $fake->queries = [];
@@ -59,14 +56,14 @@ test_case('quality schema migration reuses exact preexisting scope indexes witho
     }
 });
 
-test_case('quality schema migration records ownership before DDL and exact uninstall removes both created indexes', function (): void {
+test_case('quality schema creation records ownership before DDL and exact uninstall removes both created indexes', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
     [$fake] = wp_fts_scope_index_lifecycle_fixture(true);
     $fake->queries = [];
     try {
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
         assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'successful supporting DDL should publish the current version last');
         assert_same(['filtered', 'targeted'], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION] ?? null, 'ownership intent must cover the exact two missing indexes');
         assert_same(2, count(wp_fts_scope_index_create_queries($fake)), 'a fresh scope capability should use exactly two core-table CREATE INDEX statements');
@@ -84,7 +81,7 @@ test_case('quality schema migration records ownership before DDL and exact unins
     }
 });
 
-test_case('quality schema migration rejects a same-name index collision before ownership or DDL', function (): void {
+test_case('quality schema repair rejects a same-name index collision before ownership or DDL', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -94,12 +91,12 @@ test_case('quality schema migration rejects a same-name index collision before o
     try {
         $failure = null;
         try {
-            WP_FTS_Plugin::upgrade_schema();
+            WP_FTS_Plugin::create_or_repair_schema();
         } catch (RuntimeException $error) {
             $failure = $error;
         }
         assert_true($failure instanceof RuntimeException && str_contains($failure->getMessage(), 'conflicts'), 'a same-name/different-order index must fail closed with a bounded conflict');
-        assert_same(7, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'a collision must not advance the stored schema version');
+        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'a collision must preserve the current schema marker');
         assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION]), 'a preexisting collision must never be claimed as plugin-owned');
         assert_same([], wp_fts_scope_index_create_queries($fake), 'collision detection must happen before either supporting CREATE INDEX');
 
@@ -122,7 +119,7 @@ test_case('quality schema migration rejects a same-name index collision before o
     }
 });
 
-test_case('quality schema migration resumes an interrupted two-index install without duplicate DDL', function (): void {
+test_case('quality schema creation resumes an interrupted two-index install without duplicate DDL', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -132,12 +129,12 @@ test_case('quality schema migration resumes an interrupted two-index install wit
     try {
         $failure = null;
         try {
-            WP_FTS_Plugin::upgrade_schema();
+            WP_FTS_Plugin::create_or_repair_schema();
         } catch (RuntimeException $error) {
             $failure = $error;
         }
         assert_true($failure instanceof RuntimeException, 'the fixture must interrupt the second supporting CREATE INDEX');
-        assert_same(7, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'partial supporting DDL must leave the old logical version');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'partial supporting DDL must not publish the current marker');
         assert_same(['filtered', 'targeted'], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION] ?? null, 'both ownership intents must be durable before the first DDL');
         assert_true(isset($fake->schemaIndexes['wp_term_relationships'][WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME]), 'the completed first index should remain available for idempotent resume');
         assert_true(!isset($fake->schemaIndexes['wp_posts'][WP_FTS_Storage_Mysql::FILTERED_SCOPE_INDEX_NAME]), 'the failed second index must remain absent');
@@ -146,7 +143,7 @@ test_case('quality schema migration resumes an interrupted two-index install wit
         $fake->failQueryNeedleOccurrence = 0;
         $fake->failQueryNeedleMatches = 0;
         $fake->queries = [];
-        WP_FTS_Plugin::upgrade_schema();
+        WP_FTS_Plugin::create_or_repair_schema();
         assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'a resumed install should publish the current schema after both definitions verify');
         assert_same(1, count(wp_fts_scope_index_create_queries($fake)), 'resume must create only the still-missing posts index');
     } finally {
@@ -154,7 +151,7 @@ test_case('quality schema migration resumes an interrupted two-index install wit
     }
 });
 
-test_case('quality schema migration stops after first DDL when its writer lease is stolen', function (): void {
+test_case('quality schema creation stops after first DDL when its writer lease is stolen', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -176,13 +173,13 @@ test_case('quality schema migration stops after first DDL when its writer lease 
     try {
         $failure = null;
         try {
-            WP_FTS_Plugin::upgrade_schema();
+            WP_FTS_Plugin::create_or_repair_schema();
         } catch (WP_FTS_Index_Writer_Ownership_Lost $error) {
             $failure = $error;
         }
-        assert_true($failure instanceof WP_FTS_Index_Writer_Ownership_Lost, 'a stale upgrader must observe the stolen lease immediately after long DDL');
+        assert_true($failure instanceof WP_FTS_Index_Writer_Ownership_Lost, 'a stale repair writer must observe the stolen lease immediately after long DDL');
         assert_same(1, $creates, 'lease loss after first CREATE must prevent the second core-table DDL');
-        assert_same(7, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'a stale upgrader must not advance the stored schema version');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'a stale repair writer must not publish the current schema marker');
         assert_true(isset($fake->schemaIndexes['wp_term_relationships'][WP_FTS_Storage_Mysql::TARGETED_SCOPE_INDEX_NAME]), 'the first completed DDL remains owned and recoverable');
         assert_true(!isset($fake->schemaIndexes['wp_posts'][WP_FTS_Storage_Mysql::FILTERED_SCOPE_INDEX_NAME]), 'no second DDL may cross the stolen lease');
     } finally {
