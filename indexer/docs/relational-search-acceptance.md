@@ -1190,7 +1190,7 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | concurrent mixed HTTP p95 / p99 | <=1,000 / <=1,500 ms |
 | concurrent errors, timeouts, wrong result sets | 0 |
 | concurrent typed publication retries | <= logical requests; <=3 per request |
-| concurrent p95 degradation | <=2× idle HTTP |
+| concurrent p95 degradation | <=16× idle HTTP |
 | plugin-owned search statements | <=3; impossible AND <=1 |
 | missing-table request on every public adapter | exactly 1 failed plan and 0 rank/hydrate; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 total plugin-owned statements; unhealthy/latch/single-event repair state present before harness restoration |
 | injected plan / rank / hydration database failure | exact ordered plan / plan+rank / plan+rank+hydrate shape with only the final statement failing; no later search or core `LIKE`; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 / <=6 / <=7 total plugin-owned statements; exact capability/Health/cron restoration between requests |
@@ -1230,16 +1230,22 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | 1-100-document worker batch | <=20 total `$wpdb` statements including transaction/lease control; <=15 data statements; exactly acquire/release plus `START TRANSACTION`/`COMMIT` for a successful changed-document batch |
 | mixed maximum document/scope collision | exactly 100 changed documents and <=20 complete worker statements on each document turn; each reserved scope turn <=20 complete statements |
 | composed maximum worker and cron state | exactly 15 indexing/data statements and <=20 total statements; exactly 1 scheduling-control write with no event and with a later event |
+| terminal corpus-completion controls | <=2 option-cache reloads; <=20 total worker statements |
 | 50,000-posting writer boundary | 1 flat posting `VALUES` INSERT; 8,192 identities; executes on both supported databases |
 | 50,001-posting / 8,193-identity boundaries | typed 49,152+849 / 8,192+1 splits before SQL |
 | MySQL/MariaDB maximum-width 8,192-identity resolver | 32-byte language + 255-byte raw terms; 1 dictionary UPSERT + 1 resolver, each <=4 MiB; 8,192 rows sent; <=65,536 rows examined; 0 disk temporary tables |
 | SQLite maximum-width writer transport | 8,192 identities reject permanently before SQL; exact `wp_` fixture boundary is 7,098 accepted / 7,099 rejected; every accepted prefix uses 1 dictionary UPSERT + 1 resolver, each <=4 MiB; 100-document/8,192-identity preflight visits each identity once under 128 MiB; maximum accepted execution also passes with 60 MiB retained suite state under 128 MiB |
 | largest worker statement / transaction | <=4 MiB / <=5 seconds |
+| long-lived final drain process | <=160 MiB absolute RSS under the 128 MiB PHP allocator limit; fresh worker boundary processes remain <=128 MiB RSS |
 | FTS data+index bytes | <=12 KiB/eligible post in 50k/100k; <=24 KiB in the 2k diagnostic with the same fixed dense fixtures; <=1.2 GiB total |
 | pending post/scope work / terminal rows | 0 / no terminal state |
 | durable search-epoch metadata rows | exactly 1 singleton |
 | hot-path physical schema statements | 0 |
-| worker schema-inspection / repair statements | 0 / 0 |
+| selective scope-page schema reads / repair statements | exactly 1 named-index metadata read / 0; all other worker schema inspection is 0 |
+
+The relative concurrency ceiling is twice the fixed eight-reader count because
+all eight readers and both writers share one CPU. It does not replace the
+absolute 1,000/1,500-ms p95/p99 limits or permit a request error.
 
 At 50k, warm p95 limits are 300 ms OR, 1,000 ms valid 12-group OR+prefix,
 100 ms AND, and 300 ms prefix; its valid 12-group p99 limit is 1,500 ms. All

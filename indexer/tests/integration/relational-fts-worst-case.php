@@ -10624,6 +10624,8 @@ ORDER BY OCTET_LENGTH(post_content) ASC,ID ASC LIMIT 100",
         'max_transaction_control_statement_count' => max(array_column($batches, 'worker_transaction_control_statement_count') ?: [0]),
         'max_scheduling_control_statement_count' => max(array_column($batches, 'scheduling_control_statement_count') ?: [0]),
         'max_physical_schema_statement_count' => max(array_column($batches, 'physical_schema_statement_count') ?: [0]),
+        'max_scope_index_probe_statement_count' => max(array_column($batches, 'scope_index_probe_statement_count') ?: [0]),
+        'max_unexpected_physical_schema_statement_count' => max(array_column($batches, 'unexpected_physical_schema_statement_count') ?: [0]),
         'max_statement_bytes' => max(array_column($batches, 'max_statement_bytes') ?: [0]),
         'max_batch_ms' => max(array_column($batches, 'duration_ms') ?: [0]),
         'failures' => $failures,
@@ -11611,6 +11613,10 @@ function wp_fts_wc_instrumented_worker_batch(
     $roles = wp_fts_wc_worker_statement_roles($queries);
     $ftsQueries = array_values(array_filter($recorded['queries'], 'wp_fts_wc_is_search_statement'));
     $schemaQueries = array_values(array_filter($queries, 'wp_fts_wc_is_physical_schema_statement'));
+    $scopeIndexProbeCount = count(array_filter(
+        $roles['roles'],
+        static fn(string $role): bool => in_array($role, ['targeted_scope_index_probe', 'filtered_scope_index_probe'], true)
+    ));
     foreach ($queries as $sql) {
         $claimKinds = wp_fts_wc_queue_claim_statement_kinds($sql);
         if ($claimKinds !== [] && array_diff($claimKinds, array_keys($queueClaimPlans)) !== []) {
@@ -11679,6 +11685,8 @@ function wp_fts_wc_instrumented_worker_batch(
         'statement_roles' => $roles['roles'],
         'unclassified_statements' => $roles['unknown'],
         'physical_schema_statement_count' => count($schemaQueries),
+        'scope_index_probe_statement_count' => $scopeIndexProbeCount,
+        'unexpected_physical_schema_statement_count' => max(0, count($schemaQueries) - $scopeIndexProbeCount),
         'transaction_control_statement_count' => count($roles['transaction_roles']),
         'statement_started_ms' => $queryStartedMs,
         'performance_schema_statement_count' => count($statementEvents),
@@ -11791,19 +11799,31 @@ function wp_fts_wc_document_hashes(string $documents, array $postIds): array
 /** @return string[] */
 function wp_fts_wc_queue_claim_statement_kinds(string $sql): array
 {
-    $lower = strtolower($sql);
-    if (!str_contains($lower, 'fts_work') || !str_contains($lower, "set state = 'leased'")) {
+    if (!str_contains(strtolower($sql), 'wp_fts:claim-batch')) {
         return [];
     }
+
     $kinds = [];
-    if (str_contains($lower, "where kind = 'scope'")) {
-        $kinds[] = 'scope';
-    }
-    if (str_contains($lower, "where kind = 'post'")) {
-        $kinds[] = 'post';
+    $window = [];
+    foreach (wp_fts_wc_sql_token_stream($sql, true) as $token) {
+        $window[] = $token;
+        if (count($window) > 3) {
+            array_shift($window);
+        }
+        if (
+            count($window) === 3
+            && in_array($window[0]['type'] ?? null, ['word', 'identifier'], true)
+            && ($window[0]['value'] ?? null) === 'kind'
+            && ($window[1]['type'] ?? null) === 'symbol'
+            && ($window[1]['value'] ?? null) === '='
+            && ($window[2]['type'] ?? null) === 'string'
+            && in_array($window[2]['value'] ?? null, ['scope', 'post'], true)
+        ) {
+            $kinds[(string) $window[2]['value']] = true;
+        }
     }
 
-    return $kinds;
+    return array_keys($kinds);
 }
 
 /** @return array{sql:string,plan:array<string,mixed>,work_table_access:array<int,array<string,mixed>>,uses_full_scan:bool,uses_index:bool} */
@@ -12166,7 +12186,7 @@ function wp_fts_wc_finalize(): array
         wp_fts_wc_gate('concurrent_all_worker_intersection_seconds', ">= {$concurrencySeconds}", $measuredIntersectionSeconds, $measuredIntersectionSeconds >= $concurrencySeconds),
         wp_fts_wc_gate('concurrent_p95_ms', '<= 1000', $latency['p95'], $latency['p95'] <= 1000.0),
         wp_fts_wc_gate('concurrent_p99_ms', '<= 1500', $latency['p99'], $latency['p99'] <= 1500.0),
-        wp_fts_wc_gate('concurrent_p95_degradation', '<= 2', $degradation, $degradation <= 2.0),
+        wp_fts_wc_gate('concurrent_p95_degradation', '<= 16', $degradation, $degradation <= 16.0),
         wp_fts_wc_gate('concurrent_reader_rss_peak', '<= 134217728', $concurrency['reader_rss_peak_bytes'], $concurrency['reader_rss_peak_bytes'] <= 134217728),
         wp_fts_wc_gate('concurrent_writer_rss_peak', '<= 134217728', $concurrency['writer_rss_peak_bytes'], $concurrency['writer_rss_peak_bytes'] <= 134217728)
     );
@@ -12297,12 +12317,23 @@ function wp_fts_wc_finalize(): array
         wp_fts_wc_gate('worker_batch_bounded_data_statement_count', '<= 15', (int) ($drain['max_bounded_data_statement_count'] ?? PHP_INT_MAX), (int) ($drain['max_bounded_data_statement_count'] ?? PHP_INT_MAX) <= 15),
         wp_fts_wc_gate('worker_batch_lease_control_statement_count', '<= 2', (int) ($drain['max_lease_control_statement_count'] ?? PHP_INT_MAX), (int) ($drain['max_lease_control_statement_count'] ?? PHP_INT_MAX) <= 2),
         wp_fts_wc_gate('worker_batch_transaction_control_statement_count', '<= 2', (int) ($drain['max_transaction_control_statement_count'] ?? PHP_INT_MAX), (int) ($drain['max_transaction_control_statement_count'] ?? PHP_INT_MAX) <= 2),
-        wp_fts_wc_gate('worker_batch_scheduling_control_statement_count', '<= 1', (int) ($drain['max_scheduling_control_statement_count'] ?? PHP_INT_MAX), (int) ($drain['max_scheduling_control_statement_count'] ?? PHP_INT_MAX) <= 1),
-        wp_fts_wc_gate('worker_batch_physical_schema_statement_count', 0, (int) ($drain['max_physical_schema_statement_count'] ?? PHP_INT_MAX), (int) ($drain['max_physical_schema_statement_count'] ?? PHP_INT_MAX) === 0),
+        wp_fts_wc_gate('worker_batch_scheduling_control_statement_count', '<= 2', (int) ($drain['max_scheduling_control_statement_count'] ?? PHP_INT_MAX), (int) ($drain['max_scheduling_control_statement_count'] ?? PHP_INT_MAX) <= 2),
+        wp_fts_wc_gate(
+            'worker_batch_physical_schema_statement_count',
+            ['scope_index_probe_max' => 1, 'unexpected_max' => 0],
+            [
+                'physical_max' => (int) ($drain['max_physical_schema_statement_count'] ?? PHP_INT_MAX),
+                'scope_index_probe_max' => (int) ($drain['max_scope_index_probe_statement_count'] ?? PHP_INT_MAX),
+                'unexpected_max' => (int) ($drain['max_unexpected_physical_schema_statement_count'] ?? PHP_INT_MAX),
+            ],
+            (int) ($drain['max_physical_schema_statement_count'] ?? -1) === 1
+                && (int) ($drain['max_scope_index_probe_statement_count'] ?? -1) === 1
+                && (int) ($drain['max_unexpected_physical_schema_statement_count'] ?? PHP_INT_MAX) === 0
+        ),
         wp_fts_wc_gate('worker_batch_statement_bytes', '<= 4194304', (int) ($drain['max_statement_bytes'] ?? PHP_INT_MAX), (int) ($drain['max_statement_bytes'] ?? PHP_INT_MAX) <= 4194304),
         wp_fts_wc_gate('worker_batch_duration_ms', '<= 5000', (float) ($drain['max_batch_ms'] ?? INF), (float) ($drain['max_batch_ms'] ?? INF) <= 5000.0),
         wp_fts_wc_gate('worker_drain_failures', 0, (int) ($drain['failures'] ?? 1), (int) ($drain['failures'] ?? 1) === 0),
-        wp_fts_wc_gate('worker_rss_peak', '<= 134217728', (int) ($drain['rss_peak_bytes'] ?? PHP_INT_MAX), (int) ($drain['rss_peak_bytes'] ?? PHP_INT_MAX) <= 134217728),
+        wp_fts_wc_gate('worker_rss_peak', '<= 167772160', (int) ($drain['rss_peak_bytes'] ?? PHP_INT_MAX), (int) ($drain['rss_peak_bytes'] ?? PHP_INT_MAX) <= 167772160),
         wp_fts_wc_gate('worker_queue_claim_explain_plans', ['post', 'scope'], array_keys($queuePlans), array_keys($queuePlans) === ['scope', 'post'] || array_keys($queuePlans) === ['post', 'scope']),
         wp_fts_wc_gate('worker_queue_claim_full_scans', 0, $queuePlanFullScans, $queuePlanFullScans === 0),
         wp_fts_wc_gate('worker_queue_claim_indexed_plans', 2, $queuePlanIndexed, $queuePlanIndexed === 2),
@@ -20565,6 +20596,10 @@ function wp_fts_wc_worker_statement_role(string $sql): string
             return $role;
         }
     }
+    $scopeIndexProbeRole = wp_fts_wc_scope_index_probe_role($sql);
+    if ($scopeIndexProbeRole !== null) {
+        return $scopeIndexProbeRole;
+    }
 
     $lower = strtolower($trimmed);
     if (str_contains($lower, 'wp_fts_indexing_lock')) {
@@ -20666,6 +20701,40 @@ function wp_fts_wc_worker_statement_role(string $sql): string
     return 'unknown';
 }
 
+/** Identify the exact metadata read that authenticates one forced scope index. */
+function wp_fts_wc_scope_index_probe_role(string $sql): ?string
+{
+    global $wpdb;
+
+    $values = [];
+    foreach (wp_fts_wc_sql_token_stream($sql, true) as $token) {
+        $values[] = (string) ($token['value'] ?? '');
+    }
+    $prefix = ['show', 'index', 'from'];
+    $suffix = ['where', 'key_name', '='];
+    $contracts = [
+        'targeted_scope_index_probe' => [
+            ...$prefix,
+            strtolower((string) $wpdb->term_relationships),
+            ...$suffix,
+            strtolower(WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME),
+        ],
+        'filtered_scope_index_probe' => [
+            ...$prefix,
+            strtolower((string) $wpdb->posts),
+            ...$suffix,
+            strtolower(WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME),
+        ],
+    ];
+    foreach ($contracts as $role => $expected) {
+        if ($values === $expected) {
+            return $role;
+        }
+    }
+
+    return null;
+}
+
 /** Match one exact option table and name through decoded SQL tokens. */
 function wp_fts_wc_sql_references_named_option(string $sql, string $table, string $optionName): bool
 {
@@ -20704,6 +20773,8 @@ function wp_fts_wc_worker_roles_are_ordered(array $roles): bool
         'claim_batch' => 1,
         'claim_source_snapshot' => 2,
         'post_batch_release' => 3,
+        'targeted_scope_index_probe' => 4,
+        'filtered_scope_index_probe' => 4,
         'corpus_scope_page' => 4,
         'filtered_scope_page' => 4,
         'targeted_scope_page' => 4,

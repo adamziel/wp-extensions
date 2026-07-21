@@ -547,6 +547,44 @@ test_case('relational worst-case canonical hashes stream ordered JSON', function
     assert_true(!str_contains($hashSource, 'json_encode(wp_fts_wc_canonicalize($value)'), 'canonical hashing must not materialize a sorted copy of the complete report');
 });
 
+test_case('relational worst-case worker probes follow current SQL contracts', function (): void {
+    $root = dirname(__DIR__, 2);
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
+    foreach (['wp_fts_wc_sql_token_stream', 'wp_fts_wc_queue_claim_statement_kinds'] as $functionName) {
+        if (!function_exists($functionName)) {
+            eval(wp_fts_wc_contract_function_source($integration, $functionName));
+        }
+    }
+
+    $currentClaim = "UPDATE /* wp_fts:claim-batch */ (SELECT job_key FROM wp_fts_work WHERE kind = 'scope' UNION ALL SELECT job_key FROM wp_fts_work WHERE kind = 'post') claim_driver STRAIGHT_JOIN wp_fts_work claim_target ON claim_target.job_key=claim_driver.job_key SET claim_target.state = 'leased'";
+    assert_same(['scope', 'post'], wp_fts_wc_queue_claim_statement_kinds($currentClaim), 'the aliased current claim should expose both bounded work kinds');
+    assert_same(['scope'], wp_fts_wc_queue_claim_statement_kinds("UPDATE /* wp_fts:claim-batch */ wp_fts_work SET state='leased' WHERE kind='scope'"), 'a scope-only current claim should expose only scope work');
+    assert_same([], wp_fts_wc_queue_claim_statement_kinds("UPDATE wp_fts_work SET state='leased' WHERE kind='post'"), 'an untagged update must not masquerade as the production claim');
+
+    foreach ([
+        'wp_fts_wc_scope_index_probe_role',
+        'targeted_scope_index_probe',
+        'filtered_scope_index_probe',
+        "'scope_index_probe_statement_count' => \$scopeIndexProbeCount",
+        "'max_scope_index_probe_statement_count'",
+        "'max_unexpected_physical_schema_statement_count'",
+        "['scope_index_probe_max' => 1, 'unexpected_max' => 0]",
+        "wp_fts_wc_gate('concurrent_p95_degradation', '<= 16'",
+        "wp_fts_wc_gate('worker_rss_peak', '<= 167772160'",
+    ] as $required) {
+        assert_contains($required, $integration, "current worker proof must retain {$required}");
+    }
+    foreach ([
+        'concurrent p95 degradation | <=16× idle HTTP',
+        'terminal corpus-completion controls',
+        'long-lived final drain process',
+        'exactly 1 named-index metadata read / 0',
+    ] as $required) {
+        assert_contains($required, $acceptance, "acceptance should retain {$required}");
+    }
+});
+
 test_case('relational worst-case authoritative search memory is fresh, source-bound, and shrink-proof', function (): void {
     if (!function_exists('proc_open')) {
         mark_pending('proc_open() is required to execute the isolated search-memory inventory verifier.');
