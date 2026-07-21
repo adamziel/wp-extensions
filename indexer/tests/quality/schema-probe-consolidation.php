@@ -29,7 +29,7 @@ test_case('set-oriented MySQL snapshot preserves every physical damage check', f
             $fake->schemaColumnDefinitions['wp_fts_terms']['term'] = ['Type' => 'varchar(255)'];
         },
         'index order' => static function (WP_FTS_Test_WPDB $fake): void {
-            $fake->schemaIndexes['wp_fts_postings']['post_term_impact'] = ['term_id', 'post_id', 'impact'];
+            $fake->schemaIndexes['wp_fts_postings']['post_term'] = ['term_id', 'post_id'];
         },
         'index uniqueness' => static function (WP_FTS_Test_WPDB $fake): void {
             $fake->schemaUniqueIndexes['wp_fts_terms']['term_identity'] = false;

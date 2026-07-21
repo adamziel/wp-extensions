@@ -796,6 +796,11 @@ Restore expectations:
 Current storage is intentionally simple and has known scaling limits:
 
 - Each matching term/document pair is stored as a row in `fts_postings`.
+- The post-first `post_term(post_id, term_id)` index deliberately leaves out
+  mutable `impact`. Document replacement can update scores without rewriting a
+  second copy of every score, which reduces rebuild writes and index growth.
+  Post-first ranking probes trade that saving for a clustered-row lookup when
+  they need the score; term-first broad searches already read clustered rows.
 - High-frequency terms create many posting rows and remain the most expensive
   to search and rewrite.
 - Exact broad OR and broad final-word prefix ranking must examine their matching
@@ -809,7 +814,7 @@ Current storage is intentionally simple and has known scaling limits:
   `anchor DF upper × 8,192`, using division so PHP integer overflow is
   impossible. The smaller/equal prefix range drives `term_identity` to posting
   `PRIMARY`; a larger prefix drives each candidate's capped posting envelope
-  through `post_term_impact` and classifies term IDs through dictionary
+  through `post_term` and classifies term IDs through dictionary
   `PRIMARY`. Both remain one rank statement and avoid a
   candidate×prefix-posting product. Worst-case acceptance proves range-first at
   9,900 / 103,500 / 201,000 prefix postings and candidate-first with one

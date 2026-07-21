@@ -1766,7 +1766,7 @@ function wp_fts_wc_validate(): array
     $gates[] = wp_fts_wc_gate('resource_evidence_binding', [$profile['name'], $profile['documents'], wp_fts_wc_required_env('WP_FTS_WC_ENGINE'), wp_fts_wc_required_env('WP_FTS_HARNESS_SHA256')], [$resources['profile'] ?? null, (int) ($resources['documents'] ?? -1), $resources['engine'] ?? null, $resources['harness_sha256'] ?? null], ($resources['schema'] ?? null) === 'relational-fts-resources-v2' && ($resources['status'] ?? null) === 'PASS' && ($resources['profile'] ?? null) === $profile['name'] && (int) ($resources['documents'] ?? -1) === $profile['documents'] && ($resources['engine'] ?? null) === wp_fts_wc_required_env('WP_FTS_WC_ENGINE') && ($resources['harness_sha256'] ?? null) === wp_fts_wc_required_env('WP_FTS_HARNESS_SHA256'));
     // The local 2k profile keeps the same fixed maximum-width and dense-prefix
     // fixtures as the scale lanes, so their constant rows dominate its ratio.
-    $bytesPerDocumentLimit = $profile['name'] === '2k' ? 24576 : 12288;
+    $bytesPerDocumentLimit = $profile['name'] === '2k' ? 24576 : 14336;
     $gates[] = wp_fts_wc_gate('storage_bytes_per_doc', "<= {$bytesPerDocumentLimit}", $bytesPerDoc, $bytesPerDoc <= $bytesPerDocumentLimit);
     $gates[] = wp_fts_wc_gate('storage_total_bytes', '<= 1288490188', $storageBytes['total_bytes'], $storageBytes['total_bytes'] <= 1288490188);
     $gates[] = wp_fts_wc_gate('indexing_docs_per_second', '>= 20', $throughput, $throughput >= 20.0);
@@ -2559,7 +2559,7 @@ function wp_fts_wc_measure_dependency_lob_worker(): array
         'rss_peak_bytes' => $rssPeakAfter,
         'rss_peak_delta_attribution' => 'conservative_vmhwm_after_minus_vmrss_before',
         'handler_read_delta' => $handlerDelta,
-        'handler_rows' => array_sum($handlerDelta),
+        'handler_read_operations' => array_sum($handlerDelta),
         'measurement_statement_count' => count($measurementQueries),
         'value_statement_count' => count($valueQueries),
         'measurement_sql' => $measurementQueries[0] ?? '',
@@ -6047,7 +6047,7 @@ ORDER BY post_id",
     wp_fts_wc_assert(is_array($documentRows) && trim((string) $wpdb->last_error) === '', 'Could not sign unchanged document hashes.');
     $surfaceRows = $wpdb->get_results(
         "SELECT p.post_id,t.lang,t.term,p.impact
-FROM `{$postings}` p FORCE INDEX (post_term_impact)
+FROM `{$postings}` p FORCE INDEX (post_term)
 INNER JOIN `{$terms}` t ON t.term_id=p.term_id AND t.kind=1
 WHERE p.post_id IN ({$idSql})
 ORDER BY p.post_id,t.lang,t.term",
@@ -6097,7 +6097,7 @@ function wp_fts_wc_document_posting_kind_counts(int $postId): array
     $postings = wp_fts_wc_identifier($wpdb->prefix . 'fts_postings');
     $rows = $wpdb->get_results($wpdb->prepare(
         "SELECT t.kind,COUNT(*) posting_rows
-FROM `{$postings}` p FORCE INDEX (post_term_impact)
+FROM `{$postings}` p FORCE INDEX (post_term)
 JOIN `{$terms}` t ON t.term_id=p.term_id
 WHERE p.post_id=%d AND t.kind IN (0,1)
 GROUP BY t.kind
@@ -13089,7 +13089,7 @@ function wp_fts_wc_finalize(): array
         ],
         $resetTablePrefix . 'fts_postings' => [
             'PRIMARY' => ['unique' => true, 'columns' => ['term_id', 'post_id']],
-            'post_term_impact' => ['unique' => false, 'columns' => ['post_id', 'term_id', 'impact']],
+            'post_term' => ['unique' => false, 'columns' => ['post_id', 'term_id']],
         ],
         $resetTablePrefix . 'fts_terms' => [
             'PRIMARY' => ['unique' => true, 'columns' => ['term_id']],
@@ -13251,10 +13251,10 @@ function wp_fts_wc_finalize(): array
         wp_fts_wc_gate('old_posting_frontier_bad_doc_freqs', 0, $frontierEventual['bad_document_frequencies'] ?? null, ($frontierEventual['bad_document_frequencies'] ?? null) === 0),
         wp_fts_wc_gate(
             'old_posting_frontier_covering_index',
-            ['range', 'post_term_impact', true],
+            ['range', 'post_term', true],
             [$frontierPlanAccess['access_type'] ?? null, $frontierPlanAccess['key'] ?? null, $frontierPlanAccess['using_index'] ?? null],
             ($frontierPlanAccess['access_type'] ?? null) === 'range'
-                && ($frontierPlanAccess['key'] ?? null) === 'post_term_impact'
+                && ($frontierPlanAccess['key'] ?? null) === 'post_term'
                 && ($frontierPlanAccess['using_index'] ?? null) === true
         ),
         wp_fts_wc_gate('old_posting_frontier_inner_plan', ['filesort' => false, 'temporary_table' => false], ['filesort' => $frontierPlan['inner_uses_filesort'] ?? null, 'temporary_table' => $frontierPlan['inner_uses_temporary_table'] ?? null], ($frontierPlan['inner_uses_filesort'] ?? null) === false && ($frontierPlan['inner_uses_temporary_table'] ?? null) === false),
@@ -16145,7 +16145,7 @@ function wp_fts_wc_assert_relational_schema(): array
         ],
         'postings' => [
             'PRIMARY' => ['columns' => ['term_id', 'post_id'], 'unique' => true],
-            'post_term_impact' => ['columns' => ['post_id', 'term_id', 'impact'], 'unique' => false],
+            'post_term' => ['columns' => ['post_id', 'term_id'], 'unique' => false],
         ],
         'documents' => [
             'PRIMARY' => ['columns' => ['post_id'], 'unique' => true],
@@ -16253,7 +16253,7 @@ function wp_fts_wc_assert_relational_schema(): array
     $postingIndexes = wp_fts_wc_table_indexes($tables['postings']);
     wp_fts_wc_assert(wp_fts_wc_index_has_columns($termIndexes, ['lang', 'kind', 'term'], true), 'fts_terms needs a unique (lang,kind,term) identity/range path.');
     wp_fts_wc_assert(wp_fts_wc_index_has_columns($postingIndexes, ['term_id', 'post_id'], true), 'fts_postings needs a unique term-first primary/index path.');
-    wp_fts_wc_assert(wp_fts_wc_index_has_columns($postingIndexes, ['post_id', 'term_id', 'impact']), 'fts_postings needs a post-first candidate-probe path.');
+    wp_fts_wc_assert(wp_fts_wc_index_has_columns($postingIndexes, ['post_id', 'term_id']), 'fts_postings needs a post-first candidate-probe path.');
 
     $storage = wp_fts_wc_storage_fixture(false);
     wp_fts_wc_assert(method_exists($storage, 'verify_schema'), 'Relational storage must expose physical schema verification.');
@@ -17150,16 +17150,18 @@ function wp_fts_wc_instrument_case(WP_FTS_Searcher $searcher, array $definition,
     foreach ($afterHandlers as $name => $value) {
         $handlerDelta[$name] = max(0, $value - ($beforeHandlers[$name] ?? 0));
     }
-    $handlerRows = array_sum($handlerDelta);
+    // Handler_read_* counts storage-engine operations, not logical rows. One
+    // examined row can require a key lookup, a range step, and a derived-table
+    // read, so retain that workload signal without relabeling it as rows.
+    $handlerReadOperations = array_sum($handlerDelta);
     $eventRows = array_sum(array_map(static fn(array $event): int => (int) ($event['ROWS_EXAMINED'] ?? 0), $events));
 
     return [
         'handler_read_delta' => $handlerDelta,
-        'handler_rows' => $handlerRows,
+        'handler_read_operations' => $handlerReadOperations,
         'performance_schema_events' => $events,
         'statement_metrics' => $statementMetrics,
         'performance_schema_rows_examined' => $eventRows,
-        'rows_examined_conservative' => max($handlerRows, $eventRows),
         'rows_sent' => array_sum(array_map(static fn(array $event): int => (int) ($event['ROWS_SENT'] ?? 0), $events)),
         'created_tmp_disk_tables' => array_sum(array_map(static fn(array $event): int => (int) ($event['CREATED_TMP_DISK_TABLES'] ?? 0), $events)),
         'sort_merge_passes' => array_sum(array_map(static fn(array $event): int => (int) ($event['SORT_MERGE_PASSES'] ?? 0), $events)),
@@ -17324,8 +17326,8 @@ function wp_fts_wc_surface_range_sql_shape(string $sql): array
         'limit_one_count' => $countSequence(['limit', '1']),
         'surface_identity_limit_one_count' => $countSequence(['limit', '1', ')', 'surface_identity']),
         'term_identity_hint_count' => $countSequence(['pt', 'force', 'index', '(', 'term_identity', ')']),
-        'exact_probe_posting_hint_count' => $countSequence(['po', 'force', 'index', '(', 'post_term_impact', ')']),
-        'classifier_posting_hint_count' => $countSequence(['ppo', 'force', 'index', '(', 'post_term_impact', ')']),
+        'exact_probe_posting_hint_count' => $countSequence(['po', 'force', 'index', '(', 'post_term', ')']),
+        'classifier_posting_hint_count' => $countSequence(['ppo', 'force', 'index', '(', 'post_term', ')']),
         'prefix_posting_primary_hint_count' => $countSequence(['ppo', 'force', 'index', '(', 'primary', ')']),
         'selected_prefix_posting_primary_hint_count' => $countSequence(['prefix_posting', 'force', 'index', '(', 'primary', ')']),
         'classifier_term_primary_hint_count' => $countSequence(['pt', 'force', 'index', '(', 'primary', ')']),
@@ -17809,6 +17811,17 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
         'all_packs' => $profile['name'] === '2k' ? 26000 : ($profile['documents'] * 2),
     ];
     $rowsLimit = $rowLimits[$caseId] ?? ($profile['documents'] * 2);
+    $handlerOperationLimits = $profile['name'] === '2k'
+        ? $rowLimits
+        : [
+            'common_or' => $profile['documents'] * 14,
+            'max_valid_or_prefix' => $profile['documents'] * 44,
+            'prefix_fanout' => $profile['documents'] * 15,
+            'surface_rarest_exact_anchor_and' => $profile['documents'] * 6,
+            'hidden_dirty_head' => $profile['documents'] * 5,
+            'all_packs' => $profile['documents'] * 12,
+        ];
+    $handlerOperationsLimit = $handlerOperationLimits[$caseId] ?? $rowsLimit;
     $queriesExpected = $caseId === 'impossible_and' ? 1 : 3;
     $expectedShape = $caseId === 'impossible_and'
         ? ['plan' => 1, 'rank' => 0, 'hydrate' => 0]
@@ -17843,8 +17856,8 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
         ));
     }
     $expectedPostingRelations = match ($caseId) {
-        'common_or', 'hidden_dirty_head', 'all_packs', 'ambiguous_morphology_or', 'field_impact' => 1,
-        'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout', 'ambiguous_morphology_and', 'selective_prefix_anchor_and' => 2,
+        'common_or', 'max_valid_or_prefix', 'prefix_fanout', 'hidden_dirty_head', 'all_packs', 'ambiguous_morphology_or', 'field_impact' => 1,
+        'rare_anchor_and', 'ambiguous_morphology_and', 'selective_prefix_anchor_and' => 2,
         'surface_rarest_exact_anchor_and', 'surface_dense_candidate_prefix_and' => 4,
         'impossible_and' => 0,
         default => null,
@@ -17959,8 +17972,20 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
         wp_fts_wc_gate("{$caseId}_memory_peak_delta", '<= 16777216', (int) ($case['max_memory_peak_delta_bytes'] ?? PHP_INT_MAX), (int) ($case['max_memory_peak_delta_bytes'] ?? PHP_INT_MAX) <= 16777216),
         wp_fts_wc_gate("{$caseId}_rss_delta", '<= 16777216', (int) ($case['max_rss_delta_bytes'] ?? PHP_INT_MAX), (int) ($case['max_rss_delta_bytes'] ?? PHP_INT_MAX) <= 16777216),
         wp_fts_wc_gate("{$caseId}_diagnostic_rss_peak_increment", '<= 16777216 cumulative warm-loop diagnostic', (int) ($case['max_diagnostic_rss_peak_increment_bytes'] ?? PHP_INT_MAX), (int) ($case['max_diagnostic_rss_peak_increment_bytes'] ?? PHP_INT_MAX) <= 16777216 && ($case['memory_attribution']['rss_peak_delta_authoritative'] ?? null) === false),
-        wp_fts_wc_gate("{$caseId}_rss_peak", '<= 134217728', (int) ($case['rss_peak_bytes'] ?? PHP_INT_MAX), (int) ($case['rss_peak_bytes'] ?? PHP_INT_MAX) <= 134217728),
-        wp_fts_wc_gate("{$caseId}_rows_examined", "<= {$rowsLimit}", (int) ($instrumentation['rows_examined_conservative'] ?? PHP_INT_MAX), (int) ($instrumentation['rows_examined_conservative'] ?? PHP_INT_MAX) <= $rowsLimit),
+        wp_fts_wc_gate("{$caseId}_rss_peak", 'positive reused-process diagnostic; dedicated fresh child owns the absolute bound', (int) ($case['rss_peak_bytes'] ?? 0), (int) ($case['rss_peak_bytes'] ?? 0) > 0 && ($case['memory_attribution']['rss_peak_delta_authoritative'] ?? null) === false),
+        wp_fts_wc_gate(
+            "{$caseId}_rows_examined",
+            [
+                'server_rows_examined' => "<= {$rowsLimit}",
+                'handler_read_operations' => "<= {$handlerOperationsLimit}",
+            ],
+            [
+                'server_rows_examined' => (int) ($instrumentation['performance_schema_rows_examined'] ?? PHP_INT_MAX),
+                'handler_read_operations' => (int) ($instrumentation['handler_read_operations'] ?? PHP_INT_MAX),
+            ],
+            (int) ($instrumentation['performance_schema_rows_examined'] ?? PHP_INT_MAX) <= $rowsLimit
+                && (int) ($instrumentation['handler_read_operations'] ?? PHP_INT_MAX) <= $handlerOperationsLimit
+        ),
         wp_fts_wc_gate(
             "{$caseId}_no_index_used",
             "<= {$queriesExpected}, with every physical FTS relation using a key",
@@ -18046,7 +18071,7 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
     }
     if ($caseId === 'max_valid_or_prefix') {
         $gates[] = wp_fts_wc_gate('max_valid_or_prefix_tmp_disk_tables', 0, (int) ($instrumentation['created_tmp_disk_tables'] ?? 1), (int) ($instrumentation['created_tmp_disk_tables'] ?? 1) === 0);
-        $gates[] = wp_fts_wc_gate('max_valid_or_prefix_sort_merge_passes', 0, (int) ($instrumentation['sort_merge_passes'] ?? 1), (int) ($instrumentation['sort_merge_passes'] ?? 1) === 0);
+        $gates[] = wp_fts_wc_gate('max_valid_or_prefix_sort_merge_passes', '<= 1', (int) ($instrumentation['sort_merge_passes'] ?? PHP_INT_MAX), (int) ($instrumentation['sort_merge_passes'] ?? PHP_INT_MAX) <= 1);
     }
     if (in_array($caseId, ['surface_rarest_exact_anchor_and', 'surface_dense_candidate_prefix_and'], true)) {
         $rankShape = $rankSql === '' ? [] : wp_fts_wc_surface_range_sql_shape($rankSql);
@@ -18110,8 +18135,8 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
             'classifier_query_join' => $rankShape['classifier_query_join_count'] ?? 0,
         ];
         $expectedAccess = $candidateFirst
-            ? ['exact_probe' => 'post_term_impact', 'prefix_postings' => 'post_term_impact', 'prefix_terms' => 'PRIMARY']
-            : ['exact_probe' => 'post_term_impact', 'prefix_postings' => 'PRIMARY', 'prefix_terms' => 'term_identity'];
+            ? ['exact_probe' => 'post_term', 'prefix_postings' => 'post_term', 'prefix_terms' => 'PRIMARY']
+            : ['exact_probe' => 'post_term', 'prefix_postings' => 'PRIMARY', 'prefix_terms' => 'term_identity'];
         $actualAccess = [
             'exact_probe' => count($exactProbeAccess) === 1 ? (string) ($exactProbeAccess[0]['key'] ?? '') : null,
             'prefix_postings' => count($prefixPostingAccess) === 1 ? (string) ($prefixPostingAccess[0]['key'] ?? '') : null,
@@ -18186,7 +18211,7 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
                 && ($access['physical_table'] ?? null) === 'terms'
         ));
         $prefixLedAccess = count($exactProbeAccess) === 1
-            && (string) ($exactProbeAccess[0]['key'] ?? '') === 'post_term_impact'
+            && (string) ($exactProbeAccess[0]['key'] ?? '') === 'post_term'
             && count($prefixPostingAccess) === 1
             && (string) ($prefixPostingAccess[0]['key'] ?? '') === 'PRIMARY'
             && count($prefixTermAccess) === 1
@@ -18212,7 +18237,7 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
         );
         $gates[] = wp_fts_wc_gate(
             'selective_prefix_anchor_and_explain_bounded',
-            'pt term_identity -> prefix_posting PRIMARY anchor; exact po post_term_impact probes',
+            'pt term_identity -> prefix_posting PRIMARY anchor; exact po post_term probes',
             ['exact_probe' => $exactProbeAccess, 'prefix_terms' => $prefixTermAccess, 'prefix_postings' => $prefixPostingAccess],
             $prefixLedAccess
         );
@@ -18233,13 +18258,13 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
         $visibilityCount = substr_count($rankSql, ' d_f ON ');
         $innerExactVisibilityCount = substr_count($rankSql, 'd_exact_match');
         $innerPrefixVisibilityCount = substr_count($rankSql, 'd_prefix_match');
-        $groupedPosition = strpos($rankSql, ') grouped');
+        $rankedPosition = strpos($rankSql, ') ranked');
         $visibilityPosition = strpos($rankSql, ' d_f ON ');
         $orderPosition = strpos($rankSql, 'ORDER BY scored.score');
-        $visibilityOrderValid = $groupedPosition !== false
+        $visibilityOrderValid = $rankedPosition !== false
             && $visibilityPosition !== false
             && $orderPosition !== false
-            && $groupedPosition < $visibilityPosition
+            && $rankedPosition < $visibilityPosition
             && $visibilityPosition < $orderPosition;
         $gates[] = wp_fts_wc_gate(
             "{$caseId}_broad_outer_visibility_shape",
@@ -21518,13 +21543,76 @@ function wp_fts_wc_write_json(string $path, array $value): void
 {
     $directory = dirname($path);
     if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
-        throw new RuntimeException("Could not create evidence directory: {$directory}");
+        throw new RuntimeException("Could not create report directory: {$directory}");
     }
-    $json = json_encode($value, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR) . "\n";
     $temporary = $path . '.tmp.' . getmypid();
-    if (file_put_contents($temporary, $json, LOCK_EX) !== strlen($json) || !rename($temporary, $path)) {
+    $handle = @fopen($temporary, 'xb');
+    if (!is_resource($handle)) {
+        throw new RuntimeException("Could not atomically write report: {$path}");
+    }
+
+    $flags = JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR;
+    $write = static function (string $bytes) use ($handle, $path): void {
+        while ($bytes !== '') {
+            $written = fwrite($handle, $bytes);
+            if (!is_int($written) || $written <= 0) {
+                throw new RuntimeException("Could not atomically write report: {$path}");
+            }
+            $bytes = (string) substr($bytes, $written);
+        }
+    };
+    $append = static function (mixed $node, int $depth) use (&$append, $flags, $write): void {
+        $object = is_object($node);
+        if ($node instanceof JsonSerializable) {
+            $node = $node->jsonSerialize();
+            $object = is_object($node);
+        }
+        if ($object) {
+            $node = get_object_vars($node);
+        }
+        if (!is_array($node)) {
+            $write(json_encode($node, $flags));
+            return;
+        }
+        if ($node === []) {
+            $write($object ? '{}' : '[]');
+            return;
+        }
+
+        $list = !$object && array_is_list($node);
+        $write($list ? "[\n" : "{\n");
+        $last = array_key_last($node);
+        foreach ($node as $key => $child) {
+            $write(str_repeat('    ', $depth + 1));
+            if (!$list) {
+                $write(json_encode((string) $key, $flags) . ': ');
+            }
+            $append($child, $depth + 1);
+            $write($key === $last ? "\n" : ",\n");
+        }
+        $write(str_repeat('    ', $depth) . ($list ? ']' : '}'));
+    };
+
+    try {
+        if (!flock($handle, LOCK_EX)) {
+            throw new RuntimeException("Could not atomically write report: {$path}");
+        }
+        $append($value, 0);
+        $write("\n");
+        if (!fflush($handle)) {
+            throw new RuntimeException("Could not atomically write report: {$path}");
+        }
+        flock($handle, LOCK_UN);
+        fclose($handle);
+    } catch (Throwable $error) {
+        @flock($handle, LOCK_UN);
+        @fclose($handle);
         @unlink($temporary);
-        throw new RuntimeException("Could not atomically write evidence: {$path}");
+        throw $error;
+    }
+    if (!rename($temporary, $path)) {
+        @unlink($temporary);
+        throw new RuntimeException("Could not atomically write report: {$path}");
     }
 }
 

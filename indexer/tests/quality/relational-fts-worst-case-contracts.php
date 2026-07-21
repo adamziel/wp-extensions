@@ -547,6 +547,56 @@ test_case('relational worst-case canonical hashes stream ordered JSON', function
     assert_true(!str_contains($hashSource, 'json_encode(wp_fts_wc_canonicalize($value)'), 'canonical hashing must not materialize a sorted copy of the complete report');
 });
 
+test_case('relational worst-case report writer streams atomic JSON', function (): void {
+    if (!function_exists('proc_open')) {
+        mark_pending('proc_open() is required to run the constrained report writer.');
+    }
+
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $writerSource = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_write_json');
+    assert_true(!str_contains($writerSource, '$json = json_encode($value'), 'the report writer must not retain one complete encoded copy');
+    if (!function_exists('wp_fts_wc_write_json')) {
+        eval($writerSource);
+    }
+
+    $temporary = sys_get_temp_dir() . '/wp-fts-streamed-report-' . bin2hex(random_bytes(6));
+    mkdir($temporary, 0777, true);
+    $path = $temporary . '/mixed.json';
+    $fixture = [
+        'slash' => 'path/Łódź',
+        'float' => 1.0,
+        'list' => [true, null, ['nested' => 'value']],
+        'map' => [2 => 'two', 0 => 'zero'],
+        'object' => (object) ['second' => 2, 'first' => 1],
+        'empty_object' => (object) [],
+    ];
+    $flags = JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR;
+
+    try {
+        wp_fts_wc_write_json($path, $fixture);
+        assert_same(json_encode($fixture, $flags) . "\n", file_get_contents($path), 'streaming must preserve the established pretty JSON bytes');
+
+        $script = $temporary . '/bounded.php';
+        $large = $temporary . '/large.json';
+        $program = "<?php\ndeclare(strict_types=1);\n" . $writerSource . <<<'PHP'
+
+$chunk = str_repeat('x', 1048576);
+$value = array_fill(0, 20, $chunk);
+wp_fts_wc_write_json($argv[1], $value);
+echo filesize($argv[1]), "\n";
+PHP;
+        file_put_contents($script, $program);
+        $result = test_run_subprocess([PHP_BINARY, '-d', 'memory_limit=16M', $script, $large], dirname(__DIR__, 2));
+        assert_same(0, $result['exit'], 'a report larger than the PHP limit must stream successfully');
+        assert_true((int) trim($result['stdout']) > 20 * 1048576, 'the constrained child must publish the complete large report');
+    } finally {
+        foreach (glob($temporary . '/*') ?: [] as $file) {
+            @unlink($file);
+        }
+        @rmdir($temporary);
+    }
+});
+
 test_case('relational worst-case worker probes follow current SQL contracts', function (): void {
     $root = dirname(__DIR__, 2);
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
@@ -2834,7 +2884,8 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
         'max_total_query_count',
         'max_fts_query_count',
         'max_sql_bytes',
-        'rows_examined_conservative',
+        'performance_schema_rows_examined',
+        'handler_read_operations',
         'max_rss_delta_bytes',
         'max_diagnostic_rss_peak_increment_bytes',
         'rss_peak_bytes',
@@ -3164,7 +3215,7 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     );
     assert_contains('/* wp_fts:dictionary-decrement */', $storage, 'the post-first old-frequency decrement must retain its exact evidence tag');
     assert_contains('UPDATE (', $storage, 'the old-frequency decrement must put its materialized posting relation before the update target');
-    assert_contains('changed FORCE INDEX (post_term_impact)', $storage, 'the old-frequency decrement must force its post-first covering driver');
+    assert_contains('changed FORCE INDEX (post_term)', $storage, 'the old-frequency decrement must force its post-first covering driver');
     assert_contains('STRAIGHT_JOIN {$this->termsTable} AS t FORCE INDEX (PRIMARY)', $storage, 'the old-frequency decrement must primary-key join the target after materialization');
     assert_contains('MAX_TERM_RESOLUTION_IDENTITIES = 8192', $storage, 'the maximum document must resolve its dictionary in one proven-width indexed read');
     assert_contains('$postsWithOldPostings = array_keys(array_filter(', $storage, 'fresh documents must derive an empty retirement set from measured old-posting counts');
@@ -3221,7 +3272,7 @@ test_case('relational worst-case retains the real 57344-row old-posting frontier
         'wp_fts:bounded-index-delete',
         'wp_fts:search-epoch-advance',
         'LIMIT 50100',
-        'candidate_posting FORCE INDEX (post_term_impact)',
+        'candidate_posting FORCE INDEX (post_term)',
         "foreach (['old_posting', 'retired_term', 'retired_document']",
         'wp_fts_frontier_delete_performance_events',
         "'bad_document_frequencies'",
@@ -3300,7 +3351,7 @@ test_case('relational worst-case retains the real 57344-row old-posting frontier
     ] as $required) {
         assert_contains($required, $integration, "final evidence should retain frontier gate: {$required}");
     }
-    foreach (['**57,344** old rows', '**50,001** rows inside', '**49,152** terms', '`doc_freq=2`', '`STRAIGHT_JOIN`', '**50,100**', 'combined posting/dictionary/document deletion', 'exactly **2** passes', '`post_term_impact`', '**157,344** populated postings', 'storage-only proof', 'exactly **9**', 'database statements', 'no `DELETE` or `COUNT`', '**10 plugin-owned', 'one epoch read plus **9 writes**'] as $required) {
+    foreach (['**57,344** old rows', '**50,001** rows inside', '**49,152** terms', '`doc_freq=2`', '`STRAIGHT_JOIN`', '**50,100**', 'combined posting/dictionary/document deletion', 'exactly **2** passes', '`post_term`', '**157,344** populated postings', 'storage-only proof', 'exactly **9**', 'database statements', 'no `DELETE` or `COUNT`', '**10 plugin-owned', 'one epoch read plus **9 writes**'] as $required) {
         assert_contains($required, $acceptance, "acceptance should retain the old-posting hard gate: {$required}");
     }
     assert_contains('exactly five', $acceptance, 'acceptance should retain the combined five-statement old-posting transaction boundary');
@@ -3375,7 +3426,7 @@ test_case('real broad-query evidence rejects repeated inner visibility joins', f
         "substr_count(\$rankSql, 'd_prefix_match')",
         "{\$caseId}_broad_outer_visibility_shape",
         "{\$caseId}_broad_visibility_order",
-        "\$groupedPosition < \$visibilityPosition",
+        "\$rankedPosition < \$visibilityPosition",
         "\$visibilityPosition < \$orderPosition",
     ] as $required) {
         assert_contains($required, $integration, "real broad-query gate should retain final ranking shape: {$required}");

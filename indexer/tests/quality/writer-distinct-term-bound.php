@@ -295,7 +295,7 @@ test_case('relational writer preflights 100 maximum-old documents as one bounded
         static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:replacement-frontier */')
     ));
     assert_same(1, count($frontierReads), 'one claimed batch should issue exactly one old-posting frontier query');
-    assert_contains('FORCE INDEX (post_term_impact)', $frontierReads[0]['sql'], 'MySQL frontier discovery must use the post-first covering index');
+    assert_contains('FORCE INDEX (post_term)', $frontierReads[0]['sql'], 'MySQL frontier discovery must use the post-first covering index');
     assert_contains('LIMIT 50001', $frontierReads[0]['sql'], 'the indexed inner scan must have the hard limit-plus-one row ceiling');
     assert_contains('COUNT(*) AS posting_count', $frontierReads[0]['sql'], 'the outer query must return per-post aggregates rather than posting rows');
     assert_same([], $wpdb->queries, 'frontier planning must defer the suffix before opening a transaction');
@@ -322,7 +322,7 @@ test_case('relational writer preflights 100 maximum-old documents as one bounded
         'the bounded DELETE must retain both derived-table levels that force materialization'
     );
     assert_contains('LIMIT 50100', $deleteWrites[0]['sql'], 'the materialized delete driver must retain its proven posting-plus-document ceiling');
-    assert_contains('candidate_posting FORCE INDEX (post_term_impact)', $deleteWrites[0]['sql'], 'the materialized delete driver must scan only the post-first frontier');
+    assert_contains('candidate_posting FORCE INDEX (post_term)', $deleteWrites[0]['sql'], 'the materialized delete driver must scan only the post-first frontier');
     foreach (['old_posting', 'retired_term', 'retired_document'] as $targetAlias) {
         assert_contains("{$targetAlias} FORCE INDEX (PRIMARY)", $deleteWrites[0]['sql'], "the {$targetAlias} delete target must use primary-key lookups");
     }

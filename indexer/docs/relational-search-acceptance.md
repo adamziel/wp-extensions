@@ -308,7 +308,7 @@ The plan already has the prefix posting sum `P` and an upper bound `A` for the
 exact anchor's document frequency. If `P <= A × 8,192`, the rank statement
 streams the indexed surface range and intersects the exact candidates. If the
 range is larger, it scans each exact candidate's hard-capped 8,192-posting
-envelope through `post_term_impact` and classifies those term IDs through the
+envelope through `post_term` and classifies those term IDs through the
 dictionary primary key. The comparison is multiplication-free in PHP, so even
 saturated integer costs cannot wrap. Both paths preserve exact membership and
 per-surface scoring in one rank statement; neither can create work proportional
@@ -330,6 +330,12 @@ duplicate scalar/JSON metadata, tombstone, or parallel retrieval table.
 probes are indexed, normalized term ranges are indexed, document frequency
 matches distinct live postings, and the last durable work record is never
 removed before its desired generation commits.
+
+The post-first key is exactly `post_term(post_id, term_id)`. It intentionally
+does not duplicate mutable `impact`: replacement can change a score without
+rewriting that secondary key, while rank probes fetch the score from the
+clustered term-first row. This keeps rebuild write amplification and storage
+bounded at the cost of one clustered lookup for post-first scoring probes.
 
 The proof compares every column and named index, including order and uniqueness,
 against the production DDL. `fts_terms` has exactly `term_id`, `lang`, `kind`,
@@ -376,7 +382,7 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    One post-first covering-index query scans at most **50,001** rows inside a
    derived table and returns at most seven per-post aggregates. A separate
    100,000-posting lower-key decoy forces the measured `old_posting` access to
-   be a covering `range` on `post_term_impact`, rather than letting a whole-index
+   be a covering `range` on `post_term`, rather than letting a whole-index
    scan look cheap. Performance Schema may account for both inner and outer
    query blocks, but must report at most **100,008 rows examined**, seven rows
    sent, zero disk temporary tables, zero sort-merge passes, and at most five
@@ -396,7 +402,7 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    production pass must change all 49,152 frequencies to one, remove only the
    target postings/documents, and retain every external posting, term, and exact
    frequency. Its dictionary UPDATE must put the materialized
-   `post_term_impact` driver first, `STRAIGHT_JOIN` the dictionary through
+   `post_term` driver first, `STRAIGHT_JOIN` the dictionary through
    `PRIMARY`, affect exactly 49,152 terms, examine at most 250,000 server rows,
    create no disk temporary table, require at most one bounded merge pass, stay
    at most 4 KiB, and complete within five seconds.
@@ -406,7 +412,7 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    postings plus at most 100 documents with no posting), then join the posting,
    dictionary, and document targets through `PRIMARY`. This prevents MariaDB
    from driving through the dictionary-wide `empty_terms` range. MySQL and
-   MariaDB `EXPLAIN FORMAT=JSON` must name `post_term_impact`; each pass has one
+   MariaDB `EXPLAIN FORMAT=JSON` must name `post_term`; each pass has one
    frontier statement and exactly five transaction statements at the full
    boundary: `START TRANSACTION`, post-first dictionary decrement, combined posting/dictionary/document deletion,
    epoch UPSERT, and `COMMIT`. The tagged
@@ -1179,6 +1185,7 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | --- | ---: |
 | common three-term OR warm p95 / p99 | <=500 / <=750 ms |
 | valid 12-group OR+prefix warm p95 / p99 | <=2,000 / <=3,000 ms |
+| valid 12-group OR+prefix temporary/sort work | 0 disk temporary tables; <=1 bounded merge pass |
 | rare-anchor AND warm p95 / p99 | <=150 / <=250 ms |
 | exact-anchor surface-range AND warm p95 / p99 | <=500 / <=750 ms |
 | exact-anchor candidate-first AND warm p95 / p99 | <=500 / <=750 ms |
@@ -1237,11 +1244,17 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 | SQLite maximum-width writer transport | 8,192 identities reject permanently before SQL; exact `wp_` fixture boundary is 7,098 accepted / 7,099 rejected; every accepted prefix uses 1 dictionary UPSERT + 1 resolver, each <=4 MiB; 100-document/8,192-identity preflight visits each identity once under 128 MiB; maximum accepted execution also passes with 60 MiB retained suite state under 128 MiB |
 | largest worker statement / transaction | <=4 MiB / <=5 seconds |
 | long-lived final drain process | <=160 MiB absolute RSS under the 128 MiB PHP allocator limit; fresh worker boundary processes remain <=128 MiB RSS |
-| FTS data+index bytes | <=12 KiB/eligible post in 50k/100k; <=24 KiB in the 2k diagnostic with the same fixed dense fixtures; <=1.2 GiB total |
+| FTS data+index bytes | <=14 KiB/eligible post in 50k/100k; <=24 KiB in the 2k diagnostic with the same fixed dense fixtures; <=1.2 GiB total |
 | pending post/scope work / terminal rows | 0 / no terminal state |
 | durable search-epoch metadata rows | exactly 1 singleton |
 | hot-path physical schema statements | 0 |
 | selective scope-page schema reads / repair statements | exactly 1 named-index metadata read / 0; all other worker schema inspection is 0 |
+
+Search work keeps two database counters separate. Performance Schema supplies
+logical rows examined. The `Handler_read_*` delta supplies storage-engine read
+operations, where one logical row can require several key, range, and
+derived-table operations. Each has its own ceiling; the report never presents
+their maximum as a row count.
 
 The relative concurrency ceiling is twice the fixed eight-reader count because
 all eight readers and both writers share one CPU. It does not replace the
@@ -1400,7 +1413,7 @@ The captured plans and metrics must also prove:
 - the one-candidate query proves the candidate-first side against that same
   broad prefix. Its prefix posting sum is greater than the anchor's 8,192-row
   upper bound in every lane, so the rank statement must drive
-  `post_term_impact` from the candidate and classify terms through dictionary
+  `post_term` from the candidate and classify terms through dictionary
   `PRIMARY`; a full prefix posting scan fails the SQL/EXPLAIN gates. Rank work is
   at most 32,768 rows and the complete three-statement search at most 65,536.
   The physical gate requires 4,000–4,096 lexical plus 4,000–4,096 surface rows,
@@ -2199,7 +2212,9 @@ Each required lane performs the same fail-closed sequence:
    processes and require their exact source/case/gate/file inventory, distinct
    Linux process identities, self-hashes, conservative peak formulas, <=16 MiB
    deltas, and positive <=128 MiB absolute PHP/`VmHWM` peaks. Treat the reused
-   200-sample warm-loop `VmHWM` increments only as cumulative diagnostics. Then
+   200-sample warm-loop `VmHWM` peak and increments only as cumulative
+   diagnostics; its earlier cases cannot be reset, so the fresh child owns the
+   absolute bound. Then
    verify the exact current schema and autoloaded request options, then prove fresh ready,
    impossible, nonhydrating, and hydrated requests execute exactly 0, 1, 2,
    and 3 marked search statements with zero standalone option/sitemeta reads

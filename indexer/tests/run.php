@@ -1493,7 +1493,7 @@ final class WP_FTS_Test_WPDB
             'wp_fts_term_object' => ['term_taxonomy_id', 'object_id'],
         ],
         'wp_fts_terms' => ['PRIMARY' => ['term_id'], 'term_identity' => ['lang', 'kind', 'term'], 'empty_terms' => ['doc_freq']],
-        'wp_fts_postings' => ['PRIMARY' => ['term_id', 'post_id'], 'post_term_impact' => ['post_id', 'term_id', 'impact']],
+        'wp_fts_postings' => ['PRIMARY' => ['term_id', 'post_id'], 'post_term' => ['post_id', 'term_id']],
         'wp_fts_documents' => ['PRIMARY' => ['post_id']],
         'wp_fts_work' => ['PRIMARY' => ['job_key'], 'ready' => ['kind', 'state', 'available_at', 'post_id', 'job_key'], 'recoverable' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key'], 'claim_token' => ['claim_token', 'post_id'], 'kind_job' => ['kind', 'job_key'], 'scope_subject' => ['kind', 'scope_coverage', 'scope_subject_type', 'scope_subject_id'], 'dirty' => ['post_id', 'kind']],
     ];
@@ -7309,7 +7309,7 @@ final class WP_FTS_Test_WPDB
 
             [$columns, $indexes] = match ($suffix) {
                 'fts_terms' => [['term_id', 'lang', 'kind', 'term', 'doc_freq'], ['PRIMARY' => ['term_id'], 'term_identity' => ['lang', 'kind', 'term'], 'empty_terms' => ['doc_freq']]],
-                'fts_postings' => [['term_id', 'post_id', 'impact'], ['PRIMARY' => ['term_id', 'post_id'], 'post_term_impact' => ['post_id', 'term_id', 'impact']]],
+                'fts_postings' => [['term_id', 'post_id', 'impact'], ['PRIMARY' => ['term_id', 'post_id'], 'post_term' => ['post_id', 'term_id']]],
                 'fts_documents' => [['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at'], ['PRIMARY' => ['post_id']]],
                 'fts_work' => [['job_key', 'kind', 'post_id', 'generation', 'state', 'available_at', 'attempts', 'claim_token', 'claimed_generation', 'claim_expires_at', 'cursor_post_id', 'scope_coverage', 'scope_incarnation', 'scope_subject_type', 'scope_subject_id', 'payload', 'last_error_code', 'last_error_at'], ['PRIMARY' => ['job_key'], 'ready' => ['kind', 'state', 'available_at', 'post_id', 'job_key'], 'recoverable' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key'], 'claim_token' => ['claim_token', 'post_id'], 'kind_job' => ['kind', 'job_key'], 'scope_subject' => ['kind', 'scope_coverage', 'scope_subject_type', 'scope_subject_id'], 'dirty' => ['post_id', 'kind']]],
             };
@@ -13135,9 +13135,9 @@ test_case('physical schema verification inspects the SQLite Playground contract'
     $storage = new WP_FTS_Relational_Storage($fake);
 
     assert_same(true, $storage->verify_schema()['valid'] ?? null, 'SQLite PRAGMA inspection should accept the complete table contract');
-    unset($fake->schemaIndexes['wp_fts_postings']['post_term_impact']);
+    unset($fake->schemaIndexes['wp_fts_postings']['post_term']);
     assert_same(
-        ['wp_fts_postings.post_term_impact(post_id,term_id,impact)'],
+        ['wp_fts_postings.post_term(post_id,term_id)'],
         $storage->verify_schema()['missing_indexes'] ?? null,
         'SQLite PRAGMA inspection should identify a missing covering postings index'
     );
@@ -30420,7 +30420,7 @@ test_case('relational storage emits the MySQL-dialect schema and stores per-lang
     assert_contains('CREATE TABLE wp_fts_postings', $schemaSql, 'schema should include row postings table');
     assert_contains('impact smallint unsigned NOT NULL', $schemaSql, 'postings table should store bounded ranking impact');
     assert_contains('PRIMARY KEY  (term_id,post_id)', $schemaSql, 'postings should be keyed by dictionary id and canonical post id');
-    assert_contains('KEY post_term_impact (post_id,term_id,impact)', $schemaSql, 'postings should cover document reconciliation and anchored ranking');
+    assert_contains('KEY post_term (post_id,term_id)', $schemaSql, 'postings should support document reconciliation and anchored membership probes without duplicating mutable impact');
     assert_contains('CREATE TABLE wp_fts_documents', $schemaSql, 'schema should include the bounded document projection');
     assert_contains('snippet_text mediumtext NOT NULL', $schemaSql, 'document projection should retain only bounded snippet text');
     assert_contains('CREATE TABLE wp_fts_work', $schemaSql, 'schema should colocate direct and scope work');

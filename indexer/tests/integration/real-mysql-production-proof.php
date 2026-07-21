@@ -722,7 +722,7 @@ function wp_fts_mysql_proof_assert_schema(object $wpdb, array $tables): void
             'columns' => ['term_id', 'post_id', 'impact'],
             'indexes' => [
                 'PRIMARY' => ['unique' => true, 'columns' => ['term_id', 'post_id']],
-                'post_term_impact' => ['unique' => false, 'columns' => ['post_id', 'term_id', 'impact']],
+                'post_term' => ['unique' => false, 'columns' => ['post_id', 'term_id']],
             ],
         ],
         $tables['documents'] => [
