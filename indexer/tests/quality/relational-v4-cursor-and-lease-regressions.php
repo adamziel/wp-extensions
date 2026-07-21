@@ -22,7 +22,7 @@ test_case_with_pdo_sqlite_fixture('relational query alternatives share their pos
         }
     };
     $payload = WP_FTS_Searcher::for_set_oriented_storage($storage, $analyzer)->search('ignored', [
-        'lang' => 'en',
+        'query_lang' => 'en',
         'mode' => 'AND',
         'limit' => 10,
         'post_type' => ['post'],
@@ -467,7 +467,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 validates cursors before every 
     wp_fts_v4_regression_assert_invalid_cursor(
         static fn() => WP_FTS_Searcher::for_set_oriented_storage($storage, $emptyAnalyzer)->search(
             'ignored',
-            ['cursor' => $cursor, 'lang' => 'en']
+            ['cursor' => $cursor, 'query_lang' => 'en']
         ),
         'the public searcher must reject a cursor when analysis produces no query groups'
     );
@@ -655,10 +655,10 @@ test_case('relational v6 real Russian ambiguity retains exact lemmas without mbs
     $analyzer = new WP_FTS_Analyzer([
         'default_lang' => 'ru',
         'auto_detect_language' => false,
-        'lemmatizer_packs_by_lang' => ['ru' => $manifest],
+        'lemma_packs_by_lang' => ['ru' => $manifest],
     ]);
     $analysis = $analyzer->analyze_query_occurrences('МАТЕРИ', [
-        'lang' => 'ru',
+        'query_lang' => 'ru',
         '_include_query_surface' => true,
     ]);
     assert_same(
@@ -682,7 +682,7 @@ test_case_with_pdo_sqlite_fixture('relational v6 real Russian ambiguity ranges o
     $analyzer = new WP_FTS_Analyzer([
         'default_lang' => 'ru',
         'auto_detect_language' => false,
-        'lemmatizer_packs_by_lang' => ['ru' => $manifest],
+        'lemma_packs_by_lang' => ['ru' => $manifest],
     ]);
 
     [$wpdb, $storage] = wp_fts_v4_regression_search_fixture();
@@ -705,7 +705,7 @@ test_case_with_pdo_sqlite_fixture('relational v6 real Russian ambiguity ranges o
 
     $wpdb->queries = [];
     $payload = (new WP_FTS_Searcher($storage, $analyzer))->search('МАТЕРИ', [
-        'lang' => 'ru',
+        'query_lang' => 'ru',
         'mode' => 'OR',
         'limit' => 10,
         'prefix_matching' => true,
@@ -1486,7 +1486,7 @@ test_case_with_pdo_sqlite_fixture('relational v4 real SQLite worker drains only 
         return WP_FTS_Searcher::for_set_oriented_storage($storage, WP_FTS_Plugin::runtime_analyzer())->search(
             'CommittedGenerationProjection',
             [
-                'lang' => 'en',
+                'query_lang' => 'en',
                 'mode' => 'OR',
                 'limit' => 10,
                 'post_type' => ['post'],
@@ -2503,8 +2503,7 @@ test_case_with_pdo_sqlite_fixture('relational v6 Mysql advertises set-oriented c
     assert_true(!$storage instanceof WP_FTS_Budgeted_Postings_Storage, 'Mysql must not publish a budgeted posting-list reader that always throws');
     assert_true(!$storage instanceof WP_FTS_DocumentMetadataFilterStorage, 'Mysql must not publish a PHP metadata-filter reader that always throws');
     assert_true(!$storage instanceof WP_FTS_Prefix_Term_Storage, 'Mysql must not publish a PHP prefix enumeration reader that always throws');
-    assert_true(new WP_FTS_Storage_InMemory() instanceof WP_FTS_Row_Postings_Storage, 'the legacy in-memory fixture should retain its existing decoded posting reader');
-    assert_true(!is_subclass_of(WP_FTS_Storage_File::class, WP_FTS_Row_Postings_Writer_Storage::class), 'the legacy file backend should retain its existing blob writer behavior');
+    assert_true(new WP_FTS_Storage_InMemory() instanceof WP_FTS_Row_Postings_Storage, 'the in-memory oracle should expose its decoded posting reader');
 
     foreach (['replace_doc_postings', 'get_terms', 'get_postings', 'put_doc', 'delete_doc'] as $method) {
         assert_true(!method_exists($storage, $method), "Mysql must not expose obsolete {$method}");

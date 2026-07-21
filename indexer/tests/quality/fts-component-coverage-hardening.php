@@ -69,7 +69,7 @@ test_case('quality component generated HTML extraction and analyzer hardening ma
         $visible = WP_FTS_Html_Text_Stream::visible_text($html);
         assert_true(!str_contains($visible, $hidden), "component HTML case {$i} should remove script/style text from visible stream");
 
-        $occurrences = $analyzer->analyze_content($html, ['lang' => 'en']);
+        $occurrences = $analyzer->analyze_content($html, ['document_lang' => 'en']);
         $terms = qfch_terms($occurrences);
         $langByTerm = qfch_lang_by_term($occurrences);
         assert_true(in_array($target, $terms, true), "component HTML case {$i} should join inline split word {$target}");
@@ -105,7 +105,7 @@ test_case('quality component generated search policies match deterministic metad
         ];
 
         assert_true($indexer->index_document($docId, $html, [
-            'lang' => 'en',
+            'document_lang' => 'en',
             'metadata' => [
                 'post_id' => $docId,
                 'post_type' => $type,
@@ -128,7 +128,7 @@ test_case('quality component generated search policies match deterministic metad
         sort($expectedPosts, SORT_NUMERIC);
 
         $payload = $searcher->search($topic, [
-            'lang' => 'en',
+            'query_lang' => 'en',
             'limit' => 50,
             'include_total' => true,
             'include_metadata' => true,
@@ -144,8 +144,8 @@ test_case('quality component generated search policies match deterministic metad
             assert_same('publish', $row['post_status'] ?? null, "component metadata enrichment for {$topic} should expose post status");
         }
 
-        $exact = $searcher->search($topic, ['lang' => 'en', 'limit' => 20, 'exact' => true]);
-        $fast = $searcher->search($topic, ['lang' => 'en', 'limit' => 20, 'fast_top_k' => true, 'candidate_cap' => 80]);
+        $exact = $searcher->search($topic, ['query_lang' => 'en', 'limit' => 20, 'exact' => true]);
+        $fast = $searcher->search($topic, ['query_lang' => 'en', 'limit' => 20, 'fast_top_k' => true, 'candidate_cap' => 80]);
         assert_same(array_column($exact, 'doc_id'), array_column($fast['results'], 'doc_id'), "component explicit candidate cap for {$topic} should match exact ordering with a safe cap");
     }
 });
@@ -190,12 +190,12 @@ test_case('quality component field-specific explain diagnostics are weighted bou
     ]), 'quality field explain swapped-field fixture should index');
 
     $searcher = new WP_FTS_Searcher($storage, $analyzer);
-    $plainRows = $searcher->search('titlealpha contentbeta', ['lang' => 'en', 'limit' => 10]);
+    $plainRows = $searcher->search('titlealpha contentbeta', ['query_lang' => 'en', 'limit' => 10]);
     assert_true(!array_key_exists('field_matches', $plainRows[0] ?? []), 'plain field search should not expose diagnostics');
-    assert_same([], $searcher->search('rendereddeltas', ['lang' => 'en', 'mode' => 'AND']), 'field explain should not introduce hard-coded morphology');
+    assert_same([], $searcher->search('rendereddeltas', ['query_lang' => 'en', 'mode' => 'AND']), 'field explain should not introduce hard-coded morphology');
 
     $payload = $searcher->search('titlealpha contentbeta excerptgamma rendereddelta customomega', [
-        'lang' => 'en',
+        'query_lang' => 'en',
         'limit' => 5,
         'include_total' => true,
         'explain' => true,
@@ -252,7 +252,7 @@ test_case('quality component field-specific explain diagnostics are weighted bou
         ],
     ]), 'quality field explain bounded fixture should index');
     $bounded = $searcher->search(implode(' ', $manyTerms), [
-        'lang' => 'en',
+        'query_lang' => 'en',
         'limit' => 1,
         'include_total' => true,
         'explain' => true,
@@ -277,7 +277,7 @@ test_case('quality component snippets return escaped text and generated marks on
         $query = $queries[$i % count($queries)];
         $html = "<article><p>Lead {$query} <strong onclick=\"unsafe{$i}()\">visible{$i}</strong> tail</p><script>{$query} scriptsecret{$i}</script><style>.x{content:\"{$query}\"}</style></article>";
         $snippet = $searcher->snippet_for_text($html, $query, [
-            'lang' => 'en',
+            'query_lang' => 'en',
             'highlight' => true,
             'snippet_length' => 80,
         ]);
@@ -292,7 +292,7 @@ test_case('quality component snippets return escaped text and generated marks on
     $entitySnippet = $searcher->snippet_for_text(
         '<p>alpha &lt;img src=x onerror=alert(1)&gt; tail</p>',
         'alpha',
-        ['lang' => 'en', 'highlight' => true, 'snippet_length' => 100]
+        ['query_lang' => 'en', 'highlight' => true, 'snippet_length' => 100]
     );
     $withoutMarks = str_replace(['<mark>', '</mark>'], '', $entitySnippet);
     assert_true(!str_contains($withoutMarks, '<'), 'component snippet should escape entity-decoded markup');

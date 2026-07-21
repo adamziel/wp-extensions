@@ -521,8 +521,9 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
                 'lookup_blocks' => $importSummary['lookup']['blocks'],
             ],
             'configuration_example' => [
-                'polish_lemma_pack' => $manifestPath,
-                'polish_lemmatizer_pack' => $manifestPath,
+                'lemma_packs_by_lang' => [
+                    'pl' => $manifestPath,
+                ],
             ],
             'package_boundary' => 'The full PoliMorf runtime pack is generated and installed externally, is opt-in, remains default-disabled, and is not committed or bundled in the plugin repository/package.',
             'runtime_network_access' => false,

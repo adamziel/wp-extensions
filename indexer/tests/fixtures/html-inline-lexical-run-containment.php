@@ -125,7 +125,7 @@ try {
             'max_term_bytes' => WP_FTS_Analysis_Limits::MAX_LEXICAL_RUN_BYTES,
             'html_processor_factory' => static fn(): object => $processor,
         ]);
-        $terms = $analyzer->analyze_content('<p>aa</p>', ['lang' => 'en']);
+        $terms = $analyzer->analyze_content('<p>aa</p>', ['document_lang' => 'en']);
     } catch (Throwable $caught) {
         $error = [
             'class' => get_class($caught),

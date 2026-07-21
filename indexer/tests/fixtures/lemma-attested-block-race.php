@@ -16,9 +16,6 @@ if (!mkdir($root, 0777, true) && !is_dir($root)) {
 try {
     $atomic = wp_fts_block_race_case($root . '/atomic');
     $atomicValidator = new WP_FTS_AnalyzerPackValidator();
-    $compatibilityStreamsBefore = count(get_resources('stream'));
-    $compatibilityResult = $atomicValidator->attest_runtime_file($atomic['file']);
-    $compatibilityStreamsAfter = count(get_resources('stream'));
     $oversizedFile = $atomic['file'];
     $oversizedFile['lookup']['blocks'] = array_fill(
         0,
@@ -49,12 +46,6 @@ try {
     file_put_contents($atomicReplacement, $atomic['mutant']);
     if (!rename($atomicReplacement, $atomic['runtime'])) {
         throw new RuntimeException('Could not publish the atomic runtime replacement.');
-    }
-    $compatibilityCorruptionError = null;
-    try {
-        (new WP_FTS_AnalyzerPackValidator())->attest_runtime_file($atomic['file']);
-    } catch (Throwable $error) {
-        $compatibilityCorruptionError = $error;
     }
     $atomicLookup = WP_FTS_LemmaPackLookupIndex::lookup_many(
         $atomic['metadata'],
@@ -134,14 +125,6 @@ try {
     }
 
     echo json_encode([
-        'compatibility_method_exists' => method_exists(
-            WP_FTS_AnalyzerPackValidator::class,
-            'attest_runtime_file'
-        ),
-        'compatibility_stream_delta' => $compatibilityStreamsAfter - $compatibilityStreamsBefore,
-        'compatibility_corruption_error_class' => $compatibilityCorruptionError === null
-            ? null
-            : get_class($compatibilityCorruptionError),
         'atomic_path_contains_mutant' => str_contains(
             (string) gzdecode((string) file_get_contents($atomic['runtime'])),
             "surface\tlemmab\n"
@@ -159,7 +142,6 @@ try {
             ? $oversizedError->reason_code
             : null,
         'cardinality_error_class' => $cardinalityError === null ? null : get_class($cardinalityError),
-        'compatibility_void_result' => $compatibilityResult === null,
         'block_cache_bound' => $cacheBound,
         'validation_error_class' => $validationError === null ? null : get_class($validationError),
         'restored_validation' => $restoredValidation,

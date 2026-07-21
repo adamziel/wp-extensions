@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 if (!function_exists('test_case')) {
     define('WP_FTS_QSSP_DIRECT_RUN', true);
-    require_once __DIR__ . '/../../src/bootstrap.php';
+    require_once __DIR__ . '/../bootstrap.php';
 
     final class WP_FTS_TestFailure extends RuntimeException
     {
@@ -81,35 +81,14 @@ if (!function_exists('test_case')) {
         }
     }
 
-    function temp_index_path(string $suffix): string
-    {
-        return sys_get_temp_dir() . '/wp_fts_' . getmypid() . '_' . $suffix . '_' . bin2hex(random_bytes(4)) . '.json';
-    }
-
     /**
      * @return array<string,callable():WP_FTS_Storage>
      */
-    function storage_factories(string $suffix): array
+    function storage_factories(): array
     {
         return [
             'memory' => static fn(): WP_FTS_Storage => new WP_FTS_Storage_InMemory(),
-            'file' => static fn(): WP_FTS_Storage => new WP_FTS_Storage_File(temp_index_path($suffix)),
         ];
-    }
-
-    function cleanup_storage(WP_FTS_Storage $storage): void
-    {
-        if (!$storage instanceof WP_FTS_Storage_File) {
-            return;
-        }
-
-        $ref = new ReflectionClass($storage);
-        $prop = $ref->getProperty('path');
-        $prop->setAccessible(true);
-        $path = (string) $prop->getValue($storage);
-        if (is_file($path)) {
-            unlink($path);
-        }
     }
 
     /**
@@ -385,13 +364,6 @@ function qssp_optimize_model(array &$model): void
     }
 }
 
-function qssp_cleanup_storage_list(WP_FTS_Storage ...$storages): void
-{
-    foreach ($storages as $storage) {
-        cleanup_storage($storage);
-    }
-}
-
 /**
  * @param array<int,array{html:string,lang:string}> $documents
  */
@@ -412,7 +384,7 @@ function qssp_term_frequencies_for_lang(WP_FTS_Analyzer $analyzer, string $html,
 {
     $queryLang = WP_FTS_TermNamespace::canonicalize_lang($queryLang);
     $weights = [];
-    foreach ($analyzer->analyze_content($html, ['lang' => $documentLang]) as $occurrence) {
+    foreach ($analyzer->analyze_content($html, ['document_lang' => $documentLang]) as $occurrence) {
         $term = (string) $occurrence['term'];
         $lang = WP_FTS_TermNamespace::canonicalize_lang((string) ($occurrence['lang'] ?? $documentLang), $documentLang);
         $split = WP_FTS_TermNamespace::split_term($term);
@@ -442,7 +414,7 @@ function qssp_query_terms_for_lang(WP_FTS_Analyzer $analyzer, string $query, str
 {
     $queryLang = WP_FTS_TermNamespace::canonicalize_lang($lang);
     $terms = [];
-    foreach ($analyzer->analyze_query_occurrences($query, ['lang' => $queryLang]) as $occurrence) {
+    foreach ($analyzer->analyze_query_occurrences($query, ['query_lang' => $queryLang]) as $occurrence) {
         $term = (string) $occurrence['term'];
         $termLang = WP_FTS_TermNamespace::canonicalize_lang((string) ($occurrence['lang'] ?? $queryLang), $queryLang);
         $split = WP_FTS_TermNamespace::split_term($term);
@@ -564,11 +536,10 @@ function qssp_generated_document(int $seed, int $docId, int $revision): array
     ];
 }
 
-test_case('quality storage backends stay in parity across language partitions, tombstones, and optimize', function (): void {
+test_case('quality in-memory storage matches language partition tombstone and optimize model', function (): void {
     $languages = qssp_languages();
     $memory = new WP_FTS_Storage_InMemory();
-    $file = new WP_FTS_Storage_File(temp_index_path('qssp_partition_parity'));
-    $storages = ['memory' => $memory, 'file' => $file];
+    $storages = ['memory' => $memory];
     $model = ['docs' => [], 'terms' => []];
     $docId = 100;
 
@@ -613,7 +584,6 @@ test_case('quality storage backends stay in parity across language partitions, t
     foreach ($storages as $name => $storage) {
         qssp_assert_storage_matches_model($storage, $model, "{$name} initial seed 04501");
     }
-    assert_same(storage_snapshot($memory), storage_snapshot($file), 'memory and file snapshots should match after initial generated partition load');
 
     $deletedIds = [102, 105, 108, 111, 114, 117, 120, 123];
     foreach ($deletedIds as $deletedId) {
@@ -627,13 +597,12 @@ test_case('quality storage backends stay in parity across language partitions, t
         qssp_assert_storage_matches_model($storage, $model, "{$name} tombstone seed 04501");
         $searcher = new WP_FTS_Searcher($storage, new WP_FTS_Analyzer());
         foreach ($languages as $lang) {
-            $resultIds = array_column($searcher->search('shared', ['lang' => $lang, 'limit' => 20]), 'doc_id');
+            $resultIds = array_column($searcher->search('shared', ['query_lang' => $lang, 'limit' => 20]), 'doc_id');
             foreach ($deletedIds as $deletedId) {
                 assert_true(!in_array($deletedId, $resultIds, true), "{$name} {$lang} search should hide tombstoned doc {$deletedId}");
             }
         }
     }
-    assert_same(storage_snapshot($memory), storage_snapshot($file), 'memory and file snapshots should match with tombstones retained');
 
     foreach ($storages as $storage) {
         $storage->optimize();
@@ -643,74 +612,11 @@ test_case('quality storage backends stay in parity across language partitions, t
     foreach ($storages as $name => $storage) {
         qssp_assert_storage_matches_model($storage, $model, "{$name} optimized seed 04501");
     }
-    assert_same(storage_snapshot($memory), storage_snapshot($file), 'memory and file snapshots should match after optimize purges tombstones');
-
-    qssp_cleanup_storage_list($memory, $file);
-});
-
-test_case('quality legacy storage calls and version-one file migration remain compatible', function (): void {
-    foreach (storage_factories('qssp_legacy_calls') as $name => $factory) {
-        $storage = $factory();
-        $storage->put_doc(7, 5, 'legacy-hash-7');
-        $storage->put_doc(8, 'pl', ['pl' => 4, 'en' => 2, 'de' => 0], 'aware-hash-8');
-        $storage->add_meta(1, 5);
-        $storage->add_meta('pl', 1, 4);
-
-        assert_same([
-            'primary_lang' => '',
-            'lang_lengths' => ['' => 5],
-            'doc_len' => 5,
-            'content_hash' => 'legacy-hash-7',
-            'deleted' => false,
-        ], $storage->get_doc(7), "{$name} legacy put_doc signature");
-        assert_same([7 => 5], $storage->get_doc_lengths([7, 8], ''), "{$name} legacy doc length lookup");
-        assert_same([8 => 4], $storage->get_doc_lengths([7, 8], 'pl'), "{$name} language-aware doc length lookup");
-        assert_same(['doc_count' => 1, 'len_sum' => 5], $storage->get_meta(''), "{$name} legacy meta partition");
-        assert_same(['doc_count' => 1, 'len_sum' => 4], $storage->get_meta('pl'), "{$name} language-aware meta partition");
-        cleanup_storage($storage);
-    }
-
-    $path = temp_index_path('qssp_v1_migration');
-    $legacyTerm = WP_FTS_TermNamespace::namespace_term('en', 'legacy');
-    file_put_contents($path, json_encode([
-        'version' => 1,
-        'terms' => [
-            $legacyTerm => [
-                'df' => 2,
-                'postings' => base64_encode(WP_FTS_PostingsCodec::encode([41 => 2, 42 => 1])),
-            ],
-        ],
-        'docs' => [
-            '41' => ['doc_len' => 4, 'content_hash' => 'h41', 'deleted' => false],
-            '42' => ['doc_len' => 3, 'content_hash' => 'h42', 'deleted' => true],
-            '43' => ['doc_len' => 5, 'content_hash' => 'h43', 'deleted' => false],
-        ],
-        'meta' => ['doc_count' => 2, 'len_sum' => 9],
-    ], JSON_THROW_ON_ERROR));
-
-    $storage = new WP_FTS_Storage_File($path);
-    assert_same([41 => 4, 43 => 5], $storage->get_doc_lengths([41, 42, 43], ''), 'v1 migrated active lengths should live in the unspecified partition');
-    assert_same(['doc_count' => 2, 'len_sum' => 9], $storage->get_meta(''), 'v1 migrated meta should be derived from active docs');
-    assert_same([41 => 2, 42 => 1], WP_FTS_PostingsCodec::decode($storage->get_terms([$legacyTerm])[$legacyTerm]['postings']), 'v1 postings should decode before optimize');
-
-    $storage->put_doc(44, 'pl', ['pl' => 2, 'en' => 1], 'h44');
-    $storage->put_term(WP_FTS_TermNamespace::namespace_term('pl', 'legacy'), 1, WP_FTS_PostingsCodec::encode([44 => 3]));
-    $storage->flush();
-    $reloaded = new WP_FTS_Storage_File($path);
-    assert_same(storage_snapshot($storage), storage_snapshot($reloaded), 'revisioned state should persist exactly after migration and new language records');
-
-    $reloaded->delete_doc(41);
-    $reloaded->optimize();
-    assert_same([], $reloaded->get_terms([$legacyTerm]), 'optimize after reload should purge legacy postings that only referenced tombstones');
-    assert_same([43, 44], $reloaded->all_doc_ids(true), 'optimize after reload should purge v1 tombstone rows');
-    assert_same(['doc_count' => 1, 'len_sum' => 5], $reloaded->get_meta(''), 'optimized legacy partition should retain only active legacy docs');
-
-    cleanup_storage($storage);
 });
 
 test_case('quality reindex deltas update language, term distribution, hashes, and delete-then-add paths', function (): void {
     $analyzer = new WP_FTS_Analyzer();
-    foreach (storage_factories('qssp_reindex') as $name => $factory) {
+    foreach (storage_factories() as $name => $factory) {
         $storage = $factory();
         $indexer = new WP_FTS_Indexer($storage, $analyzer);
         $searcher = new WP_FTS_Searcher($storage, $analyzer);
@@ -719,11 +625,11 @@ test_case('quality reindex deltas update language, term distribution, hashes, an
         $initial = storage_snapshot($storage);
         assert_true(!$indexer->index_document(77, '<p>shared alpha alpha</p>', ['lang' => 'en']), "{$name} same hash should skip");
         assert_same($initial, storage_snapshot($storage), "{$name} same hash skip should not mutate storage");
-        assert_same([77], array_column($searcher->search('shared', ['lang' => 'en']), 'doc_id'), "{$name} initial English search");
+        assert_same([77], array_column($searcher->search('shared', ['query_lang' => 'en']), 'doc_id'), "{$name} initial English search");
 
         assert_true($indexer->index_document(77, '<p>shared alpha alpha</p>', ['lang' => 'pl']), "{$name} language-only reindex should change content hash");
-        assert_same([], $searcher->search('shared', ['lang' => 'en']), "{$name} old language postings should be removed");
-        assert_same([77], array_column($searcher->search('shared', ['lang' => 'pl']), 'doc_id'), "{$name} new language postings should be searchable");
+        assert_same([], $searcher->search('shared', ['query_lang' => 'en']), "{$name} old language postings should be removed");
+        assert_same([77], array_column($searcher->search('shared', ['query_lang' => 'pl']), 'doc_id'), "{$name} new language postings should be searchable");
         assert_same(['doc_count' => 0, 'len_sum' => 0], $storage->get_meta('en'), "{$name} old language meta should be decremented");
         assert_same(['doc_count' => 1, 'len_sum' => 3], $storage->get_meta('pl'), "{$name} new language meta should be incremented");
 
@@ -733,17 +639,16 @@ test_case('quality reindex deltas update language, term distribution, hashes, an
         assert_same(['doc_count' => 1, 'len_sum' => 7], $storage->get_meta('pl'), "{$name} reindexed doc length should use rounded weighted term frequencies");
 
         assert_true($indexer->delete_document(77), "{$name} delete should tombstone active doc");
-        assert_same([], $searcher->search('shared', ['lang' => 'pl']), "{$name} tombstoned doc should be hidden from search");
+        assert_same([], $searcher->search('shared', ['query_lang' => 'pl']), "{$name} tombstoned doc should be hidden from search");
         assert_same(['doc_count' => 0, 'len_sum' => 0], $storage->get_meta('pl'), "{$name} tombstone should not leak stats");
 
         assert_true($indexer->index_document(77, '<p>shared neu</p>', ['lang' => 'de']), "{$name} delete then re-add should index active doc");
-        assert_same([], $searcher->search('shared', ['lang' => 'pl']), "{$name} re-add should not revive old Polish terms");
-        assert_same([77], array_column($searcher->search('shared', ['lang' => 'de']), 'doc_id'), "{$name} re-added German doc should be searchable");
+        assert_same([], $searcher->search('shared', ['query_lang' => 'pl']), "{$name} re-add should not revive old Polish terms");
+        assert_same([77], array_column($searcher->search('shared', ['query_lang' => 'de']), 'doc_id'), "{$name} re-added German doc should be searchable");
         assert_same(['doc_count' => 1, 'len_sum' => 2], $storage->get_meta('de'), "{$name} re-added German meta");
 
         $indexer->optimize();
         assert_same([77], $storage->all_doc_ids(true), "{$name} optimize should leave only re-added active doc");
-        cleanup_storage($storage);
     }
 });
 
@@ -771,29 +676,29 @@ test_case('quality per-language BM25 stats and boolean search properties are sta
     assert_same([], $storage->get_terms(['shared']), 'raw shared term should never be stored unnamespaced');
 
     assert_search_results_equal(
-        $searcher->search('shared', ['lang' => 'en', 'limit' => 10]),
-        $searcher->search('shared shared', ['lang' => 'en', 'limit' => 10]),
+        $searcher->search('shared', ['query_lang' => 'en', 'limit' => 10]),
+        $searcher->search('shared shared', ['query_lang' => 'en', 'limit' => 10]),
         'duplicate query terms should be deduplicated'
     );
-    assert_same([1, 2], array_column($searcher->search('tie', ['lang' => 'en', 'limit' => 10]), 'doc_id'), 'equal scores should tie-break by ascending doc id');
-    assert_same([4, 3], array_column($searcher->search('shared beta', ['lang' => 'en', 'mode' => 'AND', 'limit' => 10]), 'doc_id'), 'AND should require both known terms and keep BM25 ordering');
-    assert_same([], $searcher->search('shared missing', ['lang' => 'en', 'mode' => 'AND']), 'AND with unknown terms should be empty');
-    assert_same(4, count($searcher->search('shared missing', ['lang' => 'en', 'mode' => 'OR', 'limit' => 10])), 'OR should keep docs matching known terms');
+    assert_same([1, 2], array_column($searcher->search('tie', ['query_lang' => 'en', 'limit' => 10]), 'doc_id'), 'equal scores should tie-break by ascending doc id');
+    assert_same([4, 3], array_column($searcher->search('shared beta', ['query_lang' => 'en', 'mode' => 'AND', 'limit' => 10]), 'doc_id'), 'AND should require both known terms and keep BM25 ordering');
+    assert_same([], $searcher->search('shared missing', ['query_lang' => 'en', 'mode' => 'AND']), 'AND with unknown terms should be empty');
+    assert_same(4, count($searcher->search('shared missing', ['query_lang' => 'en', 'mode' => 'OR', 'limit' => 10])), 'OR should keep docs matching known terms');
     assert_same(
-        array_slice($searcher->search('shared', ['lang' => 'en', 'limit' => 10]), 0, 2),
-        $searcher->search('shared', ['lang' => 'en', 'limit' => 2]),
+        array_slice($searcher->search('shared', ['query_lang' => 'en', 'limit' => 10]), 0, 2),
+        $searcher->search('shared', ['query_lang' => 'en', 'limit' => 2]),
         'limit should return the top prefix only'
     );
-    assert_same([], $searcher->search('', ['lang' => 'en']), 'empty query should return no results');
-    assert_same([], $searcher->search('the and', ['lang' => 'en']), 'stopword-only query should return no results');
-    assert_same([], $searcher->search('shared', ['lang' => 'fr']), 'unpopulated language partition should not match same normalized term');
+    assert_same([], $searcher->search('', ['query_lang' => 'en']), 'empty query should return no results');
+    assert_same([], $searcher->search('the and', ['query_lang' => 'en']), 'stopword-only query should return no results');
+    assert_same([], $searcher->search('shared', ['query_lang' => 'fr']), 'unpopulated language partition should not match same normalized term');
 
-    $rare = $searcher->search('rareterm', ['lang' => 'en', 'limit' => 10]);
+    $rare = $searcher->search('rareterm', ['query_lang' => 'en', 'limit' => 10]);
     assert_same(3, $rare[0]['doc_id'] ?? null, 'rareterm should match the only containing English doc');
     assert_float_near(test_bm25_score(1, 5, 4, 1, 13 / 4), $rare[0]['score'], 'rareterm BM25 should use English partition stats');
 
     try {
-        $searcher->search('shared', ['lang' => 'en', 'mode' => 'XOR']);
+        $searcher->search('shared', ['query_lang' => 'en', 'mode' => 'XOR']);
         assert_true(false, 'invalid search mode should throw');
     } catch (InvalidArgumentException $e) {
         assert_contains('OR or AND', $e->getMessage(), 'invalid mode exception should describe accepted modes');
@@ -834,21 +739,21 @@ test_case('quality indexed search matches a language-aware brute-force oracle ov
 
             assert_search_results_equal(
                 qssp_language_oracle_search($documents, $analyzer, $query, $lang, $mode, $limit),
-                $searcher->search($query, ['lang' => $lang, 'mode' => $mode, 'limit' => $limit]),
+                $searcher->search($query, ['query_lang' => $lang, 'mode' => $mode, 'limit' => $limit]),
                 "seed {$seed} generated oracle {$mode} {$lang} {$query}"
             );
         }
     }
 });
 
-test_case('quality randomized incremental indexing converges with full rebuild for memory and file storage', function (): void {
+test_case('quality randomized incremental indexing converges with an in-memory full rebuild', function (): void {
     $seeds = [45101, 45102, 45103];
     $languages = qssp_languages();
     $vocab = qssp_vocab();
     $analyzer = new WP_FTS_Analyzer();
 
     foreach ($seeds as $seed) {
-        foreach (storage_factories("qssp_converge_{$seed}") as $backend => $factory) {
+        foreach (storage_factories() as $backend => $factory) {
             mt_srand($seed);
             $incremental = $factory();
             $indexer = new WP_FTS_Indexer($incremental, $analyzer);
@@ -905,14 +810,12 @@ test_case('quality randomized incremental indexing converges with full rebuild f
                 $query = $words[$i % count($words)] . ($i % 4 === 0 ? ' absentterm' : '');
                 $mode = $i % 5 === 0 ? 'AND' : 'OR';
                 assert_search_results_equal(
-                    $fullSearcher->search($query, ['lang' => $lang, 'mode' => $mode, 'limit' => 8]),
-                    $incrementalSearcher->search($query, ['lang' => $lang, 'mode' => $mode, 'limit' => 8]),
+                    $fullSearcher->search($query, ['query_lang' => $lang, 'mode' => $mode, 'limit' => 8]),
+                    $incrementalSearcher->search($query, ['query_lang' => $lang, 'mode' => $mode, 'limit' => 8]),
                     "seed {$seed} {$backend} converged search {$mode} {$lang} {$query}"
                 );
             }
 
-            cleanup_storage($incremental);
-            cleanup_storage($full);
         }
     }
 });

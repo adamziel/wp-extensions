@@ -32,7 +32,7 @@ test_case('morphology highlighting has a page-sized analyzer-call and memory cei
     $peakBefore = memory_get_peak_usage(true);
     for ($row = 0; $row < 20; $row++) {
         $snippet = $searcher->snippet_for_text($source, 'zamek', [
-            'lang' => 'pl',
+            'query_lang' => 'pl',
             'snippet_length' => 500,
             'highlight' => true,
         ]);

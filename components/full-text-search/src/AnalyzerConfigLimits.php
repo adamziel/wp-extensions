@@ -25,12 +25,7 @@ final class WP_FTS_Analyzer_Config_Limits
 {
     private const LANGUAGE_MAP_OPTION_KEYS = [
         'stemmers_by_lang',
-        'stemmers',
-        'lemmatizer_packs_by_lang',
         'lemma_packs_by_lang',
-        'tokenizer_packs_by_lang',
-        'cjk_tokenizer_packs_by_lang',
-        'cjk_segmenter_packs_by_lang',
         'segmenter_packs_by_lang',
     ];
     public const MAX_CONFIGURED_LANGUAGES = 32;
@@ -104,11 +99,6 @@ final class WP_FTS_Analyzer_Config_Limits
                 }
             }
         }
-        foreach (['polish_lemma_pack', 'polish_lemmatizer_pack'] as $key) {
-            if (array_key_exists($key, $options)) {
-                self::assert_pack_option($options[$key], "{$label} {$key}");
-            }
-        }
         self::assert_callback_captures($options, $label);
         self::assert_option_graph($options, $label);
     }
@@ -174,7 +164,7 @@ final class WP_FTS_Analyzer_Config_Limits
                 if (count($merged) > self::MAX_CONFIGURED_LANGUAGES) {
                     throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
                         'configured_languages',
-                        "{$label} exceeds the " . self::MAX_CONFIGURED_LANGUAGES . '-language limit across aliases.'
+                        "{$label} exceeds the " . self::MAX_CONFIGURED_LANGUAGES . '-language limit.'
                     );
                 }
             }
@@ -236,12 +226,10 @@ final class WP_FTS_Analyzer_Config_Limits
             'stemmer',
             'polish_stemmer',
             'cjk_tokenizer',
-            'cjk_segmenter',
             'token_normalizer',
             'document_language_resolver',
             'query_language_resolver',
             'query_term_language_resolver',
-            'term_language_resolver',
             'html_processor_factory',
         ] as $key) {
             if (($options[$key] ?? null) instanceof Closure) {
@@ -249,7 +237,7 @@ final class WP_FTS_Analyzer_Config_Limits
             }
         }
 
-        foreach (['stemmers_by_lang', 'stemmers'] as $key) {
+        foreach (['stemmers_by_lang'] as $key) {
             if (!isset($options[$key]) || !is_array($options[$key])) {
                 continue;
             }

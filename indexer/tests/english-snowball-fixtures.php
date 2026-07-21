@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 
 function wp_fts_english_fixture_fail(string $message): void
 {
@@ -81,7 +81,7 @@ $searcher = new WP_FTS_Searcher($storage, $analyzer);
 
 wp_fts_english_fixture_same(
     [901],
-    array_column($searcher->search('run cat pony hop', ['lang' => 'en', 'mode' => 'AND']), 'doc_id'),
+    array_column($searcher->search('run cat pony hop', ['query_lang' => 'en', 'mode' => 'AND']), 'doc_id'),
     'English query and document inflections should meet through the same stems'
 );
 

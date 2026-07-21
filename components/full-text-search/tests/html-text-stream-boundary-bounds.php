@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 
 /** @return array<string,int|float|bool|string> */
 function wp_fts_html_boundary_measure(int $paragraphs): array

@@ -64,7 +64,7 @@ test_case('quality analyzer configuration rejects one hundred thousand languages
     unset($hostileMap);
 });
 
-test_case('quality analyzer configuration bounds aliases generators captures graph shape and paths', function (): void {
+test_case('quality analyzer configuration bounds maps generators captures graph shape and paths', function (): void {
     $boundary = [];
     for ($number = 0; $number < WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES; $number++) {
         $boundary['q' . str_pad((string) $number, 2, '0', STR_PAD_LEFT)] = false;
@@ -76,13 +76,6 @@ test_case('quality analyzer configuration bounds aliases generators captures gra
     for ($number = 0; $number < WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES; $number++) {
         $otherBoundary['r' . str_pad((string) $number, 2, '0', STR_PAD_LEFT)] = false;
     }
-    $aliasError = acc_caught(static fn(): WP_FTS_LanguagePipeline => new WP_FTS_LanguagePipeline([
-        'lemmatizer_packs_by_lang' => $boundary,
-        'lemma_packs_by_lang' => $otherBoundary,
-    ]));
-    assert_true($aliasError instanceof WP_FTS_Analyzer_Config_Limit_Exceeded, 'disjoint aliases may not combine into more than 32 configured languages');
-    assert_same('configured_languages', $aliasError instanceof WP_FTS_Analyzer_Config_Limit_Exceeded ? $aliasError->reason_code : null, 'alias overflow should retain the configured-language reason');
-
     $lemmaHalf = array_slice($boundary, 0, 16, true);
     $segmenterHalf = array_slice($otherBoundary, 0, 17, true);
     $crossKindError = acc_caught(static fn(): WP_FTS_LanguagePipeline => new WP_FTS_LanguagePipeline([
@@ -196,7 +189,7 @@ test_case('quality WordPress analyzer configuration fails first search before SQ
     WP_FTS_Analyzer_Config_Probe_Stream::$filesystemCalls = 0;
     $hostileMap = array_fill(0, 100000, 'wpftsconfigprobe://manifest.json');
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
-        'lemmatizer_packs_by_lang' => $hostileMap,
+        'lemma_packs_by_lang' => $hostileMap,
     ];
     WP_FTS_Plugin::reset_request_caches();
 

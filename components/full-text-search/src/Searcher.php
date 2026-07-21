@@ -21,7 +21,7 @@ final class WP_FTS_Search_Budget_Exceeded extends RuntimeException
  * Searches a relational set-oriented index in production.
  *
  * `for_set_oriented_storage()` is the production boundary. The public
- * constructor remains only for the component's legacy File/InMemory fixtures;
+ * constructor remains only for the component's test-only in-memory oracle;
  * WordPress runtime code must never use that posting-list implementation.
  */
 final class WP_FTS_Searcher
@@ -93,8 +93,7 @@ final class WP_FTS_Searcher
 
     /**
      * @param WP_FTS_Storage|WP_FTS_Set_Oriented_Search_Storage $storage
-     *        Relational production storage, or a legacy File/InMemory backend
-     *        used only by component fixtures.
+     *        Relational production storage, or the in-memory test oracle.
      * @param object $analyzer Analyzer object exposing query analysis methods.
      * @param float $k1 BM25 term-frequency saturation parameter.
      * @param float $b BM25 document-length normalization parameter.
@@ -852,9 +851,6 @@ final class WP_FTS_Searcher
     /**
      * Analyze a set-oriented query with exactly one analyzer method call.
      *
-     * Older analyzers receive both occurrence-format hints in the same call. The
-     * legacy retry sequence remains available only to legacy storage backends.
-     *
      * @return array<int,array<string,mixed>|string>
      */
     private function analyze_query_once(string $query, array $opts): array
@@ -869,8 +865,6 @@ final class WP_FTS_Searcher
             $analysisOpts['language_fallback'],
             $analysisOpts['fallback_to_default_lang']
         );
-        $analysisOpts['return'] = 'occurrences';
-        $analysisOpts['format'] = 'occurrences';
         // Stop the analyzer at the same hard plan bound instead of first
         // materializing thousands of CJK n-grams or custom-tokenizer rows that
         // the relational backend must reject immediately afterward.
@@ -880,16 +874,13 @@ final class WP_FTS_Searcher
         // typed lexical key and must never be inferred from a lemma later.
         $analysisOpts['_include_query_surface'] = true;
 
-        if (method_exists($this->analyzer, 'analyze_query_occurrences')) {
-            return $this->normalize_set_oriented_query_analysis(
-                $this->analyzer->analyze_query_occurrences($query, $analysisOpts)
-            );
-        }
-        if (!is_callable([$this->analyzer, 'analyze_query'])) {
-            throw new LogicException('Analyzer must provide analyze_query().');
+        if (!is_callable([$this->analyzer, 'analyze_query_occurrences'])) {
+            throw new LogicException('Analyzer must provide analyze_query_occurrences().');
         }
 
-        return $this->normalize_set_oriented_query_analysis($this->analyzer->analyze_query($query, $analysisOpts));
+        return $this->normalize_set_oriented_query_analysis(
+            $this->analyzer->analyze_query_occurrences($query, $analysisOpts)
+        );
     }
 
     /**
@@ -2867,9 +2858,8 @@ final class WP_FTS_Searcher
      */
     private function with_query_language(array $opts, string $lang): array
     {
+        unset($opts['lang'], $opts['language'], $opts['locale'], $opts['default_lang']);
         $opts['query_lang'] = $lang;
-        $opts['lang'] = $lang;
-        $opts['language'] = $lang;
         $opts['_force_query_lang'] = true;
 
         return $opts;
@@ -3711,12 +3701,7 @@ final class WP_FTS_Searcher
      */
     private function analyze_explain_field(array $field, string $documentLang): array
     {
-        $opts = [
-            'lang' => $documentLang,
-            'language' => $documentLang,
-            'document_lang' => $documentLang,
-            'default_lang' => $documentLang,
-        ];
+        $opts = ['document_lang' => $documentLang];
 
         try {
             if (isset($field['html']) && is_scalar($field['html']) && trim((string) $field['html']) !== '' && is_callable([$this->analyzer, 'analyze_content'])) {
@@ -4474,65 +4459,26 @@ final class WP_FTS_Searcher
         return array_keys($terms);
     }
 
-    /**
-     * Analyze a query while supporting both current and legacy analyzer APIs.
-     *
-     * The preferred API is `analyze_query_occurrences()`. For older analyzers,
-     * this method tries `analyze_query()` with both `return` and `format`
-     * occurrence hints before falling back to whatever array that method returns.
-     *
-     * @return array<int,array<string,mixed>|string>
-     */
+    /** @return array<int,array<string,mixed>|string> */
     private function analyze_query(string $query, array $opts): array
     {
         $analysisOpts = $this->query_analysis_options($opts);
-        $analysisOpts['return'] = 'occurrences';
         $maxOccurrences = isset($analysisOpts['_max_query_occurrences']) && is_int($analysisOpts['_max_query_occurrences'])
             ? max(1, $analysisOpts['_max_query_occurrences'])
             : null;
 
-        if (method_exists($this->analyzer, 'analyze_query_occurrences')) {
-            return $this->normalize_query_analysis(
-                $this->analyzer->analyze_query_occurrences($query, $analysisOpts),
-                $maxOccurrences
-            );
-        }
-
-        if (!is_callable([$this->analyzer, 'analyze_query'])) {
-            throw new LogicException('Analyzer must provide analyze_query().');
-        }
-
-        $returnOpts = $analysisOpts;
-        $returnOpts['return'] = 'occurrences';
-        $occurrences = $this->normalize_query_analysis(
-            $this->analyzer->analyze_query($query, $returnOpts),
-            $maxOccurrences
-        );
-        if ($this->has_occurrence_rows($occurrences)) {
-            return $occurrences;
-        }
-
-        $formatOpts = $analysisOpts;
-        $formatOpts['format'] = 'occurrences';
-        $occurrences = $this->normalize_query_analysis(
-            $this->analyzer->analyze_query($query, $formatOpts),
-            $maxOccurrences
-        );
-        if ($this->has_occurrence_rows($occurrences)) {
-            return $occurrences;
+        if (!is_callable([$this->analyzer, 'analyze_query_occurrences'])) {
+            throw new LogicException('Analyzer must provide analyze_query_occurrences().');
         }
 
         return $this->normalize_query_analysis(
-            $this->analyzer->analyze_query($query, $analysisOpts),
+            $this->analyzer->analyze_query_occurrences($query, $analysisOpts),
             $maxOccurrences
         );
     }
 
     /**
-     * Prepare analyzer options with explicit query language aliases filled in.
-     *
-     * Older analyzers may read `lang` or `language` instead of `query_lang`, so
-     * an explicit query language is mirrored across all three names.
+     * Prepare analyzer options with the explicit query language resolved.
      *
      * @param array<string,mixed> $opts Public search options.
      * @return array<string,mixed> Options passed to analyzer methods.
@@ -4541,10 +4487,12 @@ final class WP_FTS_Searcher
     {
         $analysisOpts = $opts;
         $explicitLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['query_lang', 'lang', 'language']);
+        $defaultLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['default_lang', 'locale']);
+        unset($analysisOpts['lang'], $analysisOpts['language'], $analysisOpts['locale'], $analysisOpts['default_lang']);
         if ($explicitLang !== null) {
             $analysisOpts['query_lang'] = $explicitLang;
-            $analysisOpts['lang'] = $explicitLang;
-            $analysisOpts['language'] = $explicitLang;
+        } elseif ($defaultLang !== null) {
+            $analysisOpts['_default_query_lang'] = $defaultLang;
         }
         if ($this->explain_requested($opts)) {
             $analysisOpts['_include_query_surface'] = true;
@@ -4651,23 +4599,6 @@ final class WP_FTS_Searcher
         ) {
             throw new WP_FTS_Search_Budget_Exceeded('analyzer occurrence bytes');
         }
-    }
-
-    /**
-     * Check whether analyzer output contains structured occurrence rows.
-     *
-     * @param array<int,array<string,mixed>|string> $analysis
-     * @return bool True when at least one item is an array.
-     */
-    private function has_occurrence_rows(array $analysis): bool
-    {
-        foreach ($analysis as $occurrence) {
-            if (is_array($occurrence)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**

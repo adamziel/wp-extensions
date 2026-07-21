@@ -140,7 +140,7 @@ test_case_with_pdo_sqlite_fixture('a filtered final token cannot turn the previo
     [, $storage] = wp_fts_v4_regression_search_fixture();
     $searcher = WP_FTS_Searcher::for_set_oriented_storage($storage, $analyzer);
     $result = $searcher->search('dog the', [
-        'lang' => 'en',
+        'query_lang' => 'en',
         'prefix_matching' => true,
         'prefix_min_length' => 2,
         '_search_ready_incarnation' => wp_fts_v4_regression_ready_incarnation(),
@@ -149,7 +149,7 @@ test_case_with_pdo_sqlite_fixture('a filtered final token cannot turn the previo
     assert_same([], $result['results'] ?? null, 'a filtered trailing token must disable only the prefix branch without aborting exact search');
 
     $snippet = $searcher->snippet_for_text('dogmatic theorem', 'dog the', [
-        'lang' => 'en',
+        'query_lang' => 'en',
         'prefix_matching' => true,
         'prefix_min_length' => 2,
         'highlight' => true,
@@ -227,7 +227,7 @@ test_case('surface identities preserve Unicode numeric and long lexical runs', f
     $productionAnalyzer = new WP_FTS_Analyzer([
         'auto_detect_language' => false,
         'default_lang' => 'en',
-        'stemmer' => static fn(string $term): string => 'short',
+        'stemmer' => static fn(string $term, string $_language): string => 'short',
     ]);
     $productionLong = (new WP_FTS_Indexer($productionStorage, $productionAnalyzer))->prepare_document_fields(2, [[
         'name' => 'content',

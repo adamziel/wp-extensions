@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+require_once dirname(__DIR__) . '/bootstrap.php';
 
 $case = $argv[1] ?? '';
 try {
@@ -332,7 +332,7 @@ function wp_fts_lemma_sidecar_configured_maximum_case(): array
             'default_lang' => 'qaa',
             'document_lang' => 'qaa',
             'query_lang' => 'qaa',
-            'lemmatizer_packs_by_lang' => [
+            'lemma_packs_by_lang' => [
                 'qaa' => $packs['qaa']['manifest'],
                 'qab' => $packs['qab']['manifest'],
             ],
@@ -474,10 +474,10 @@ function wp_fts_lemma_sidecar_configured_overflow_case(): array
             'qaa' => $manifests[0],
             'qaa-x-copy2' => $manifests[1],
         ];
-        $acceptedPipeline = new WP_FTS_LanguagePipeline(['lemmatizer_packs_by_lang' => $twoPackOptions]);
+        $acceptedPipeline = new WP_FTS_LanguagePipeline(['lemma_packs_by_lang' => $twoPackOptions]);
         $statusMethod = new ReflectionMethod(WP_FTS_Plugin::class, 'analyzer_pack_statuses');
         $statusMethod->setAccessible(true);
-        $acceptedStatuses = $statusMethod->invoke(null, ['lemmatizer_packs_by_lang' => $twoPackOptions], false);
+        $acceptedStatuses = $statusMethod->invoke(null, ['lemma_packs_by_lang' => $twoPackOptions], false);
 
         $thirdLookups = glob(dirname($manifests[2]) . '/*.lookup');
         if (!is_array($thirdLookups) || !isset($thirdLookups[0])) {
@@ -490,7 +490,7 @@ function wp_fts_lemma_sidecar_configured_overflow_case(): array
         $pipelineIoBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
         $pipelineError = null;
         try {
-            new WP_FTS_LanguagePipeline(['lemmatizer_packs_by_lang' => $threePackOptions]);
+            new WP_FTS_LanguagePipeline(['lemma_packs_by_lang' => $threePackOptions]);
         } catch (Throwable $caught) {
             $pipelineError = $caught;
         }
@@ -501,7 +501,7 @@ function wp_fts_lemma_sidecar_configured_overflow_case(): array
         $statusIoBefore = WP_FTS_LemmaPackLookupIndex::io_diagnostics();
         $statusError = null;
         try {
-            $statusMethod->invoke(null, ['lemmatizer_packs_by_lang' => $threePackOptions], false);
+            $statusMethod->invoke(null, ['lemma_packs_by_lang' => $threePackOptions], false);
         } catch (Throwable $caught) {
             $statusError = $caught;
         }
@@ -720,7 +720,7 @@ function wp_fts_lemma_sidecar_analyzer(string $manifest): WP_FTS_Analyzer
         'default_lang' => 'qaa',
         'document_lang' => 'qaa',
         'query_lang' => 'qaa',
-        'lemmatizer_packs_by_lang' => ['qaa' => $manifest],
+        'lemma_packs_by_lang' => ['qaa' => $manifest],
     ]);
 }
 

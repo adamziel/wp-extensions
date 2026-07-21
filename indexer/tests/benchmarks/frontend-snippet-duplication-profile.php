@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+require_once dirname(__DIR__) . '/bootstrap.php';
 
 /**
  * Deterministic profile for duplicate frontend snippet work.
@@ -301,7 +301,6 @@ final class WP_FTS_Frontend_Snippet_Duplication_Profile
     private static function snippet_options(array $opts, int $length): array
     {
         return [
-            'lang' => 'en',
             'query_lang' => 'en',
             'result_lang' => 'en',
             'highlight' => (bool) ($opts['highlight'] ?? false),

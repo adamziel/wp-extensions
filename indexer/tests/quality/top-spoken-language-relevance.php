@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 $wp_fts_tslr_direct = !function_exists('test_case');
 if ($wp_fts_tslr_direct) {
-    require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+    require_once dirname(__DIR__) . '/bootstrap.php';
 
     final class WP_FTS_TSLR_TestFailure extends RuntimeException
     {
@@ -405,7 +405,9 @@ test_case('quality top spoken language relevance covers retrieval and bait isola
         $counts[$case['lang']] = ($counts[$case['lang']] ?? 0) + 1;
         $analyzer = new WP_FTS_Analyzer([
             'default_lang' => 'en',
-            'polish_lemma_pack' => wp_fts_tslr_polish_pack(),
+            'lemma_packs_by_lang' => [
+                'pl' => wp_fts_tslr_polish_pack(),
+            ],
         ]);
         $storage = new WP_FTS_Storage_InMemory();
         $indexer = new WP_FTS_Indexer($storage, $analyzer);
@@ -415,7 +417,7 @@ test_case('quality top spoken language relevance covers retrieval and bait isola
         $indexer->index_document($case['bait_id'], '<article><p>' . $case['bait'] . '</p></article>', ['lang' => $case['bait_lang']]);
 
         $results = $searcher->search($case['query'], [
-            'lang' => $case['lang'],
+            'query_lang' => $case['lang'],
             'mode' => 'AND',
             'limit' => 5,
         ]);
@@ -453,7 +455,7 @@ test_case('quality top spoken language relevance ranks longer Chinese n-gram evi
     $indexer->index_document($baitId, '<article><p>搜索工具系统报告</p></article>', ['lang' => 'zh']);
 
     $results = $searcher->search('搜索系统', [
-        'lang' => 'zh',
+        'query_lang' => 'zh',
         'mode' => 'OR',
         'limit' => 5,
     ]);

@@ -39,8 +39,8 @@ final class WP_FTS_LanguagePipeline
      * Configure the token analysis pipeline.
      *
      * Use `normalizer`, `snowball_stemmer`, or `polish_stemmer` to inject test
-     * doubles. Use `stemmer` for a custom stemmer; callables may accept either
-     * `($term)` or `($term, $language)`. Use `stemmers_by_lang` for verified
+     * doubles. Use `stemmer` for a custom stemmer; callables accept
+     * `($term, $language)`. Use `stemmers_by_lang` for verified
      * language-specific custom stemmers. `cjk_tokenizer` may return dictionary
      * segments for one CJK run; the built-in n-gram path remains the fallback.
      * `namespace_terms` is normally false for the high-level indexer, which
@@ -51,19 +51,11 @@ final class WP_FTS_LanguagePipeline
      *   snowball_stemmer?:WP_FTS_SnowballStemmer,
      *   baseline_stemmer?:WP_FTS_BaselineLanguageStemmer,
      *   polish_stemmer?:WP_FTS_Stemmer,
-     *   polish_lemma_pack?:bool|string|array<string,mixed>|null,
-     *   polish_lemmatizer_pack?:bool|string|array<string,mixed>|null,
      *   lemma_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
-     *   lemmatizer_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
      *   stemmer?:WP_FTS_Stemmer|callable|null,
      *   stemmers_by_lang?:array<string,WP_FTS_Stemmer|callable|null>,
-     *   stemmers?:array<string,WP_FTS_Stemmer|callable|null>,
      *   cjk_tokenizer?:callable|null,
-     *   cjk_segmenter?:callable|null,
      *   segmenter_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
-     *   cjk_segmenter_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
-     *   cjk_tokenizer_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
-     *   tokenizer_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
      *   token_normalizer?:callable|null,
      *   chinese_script_map?:array<string,string>|array<string,array<string,string>>,
      *   enable_stemming?:bool,
@@ -91,12 +83,12 @@ final class WP_FTS_LanguagePipeline
             : $this->default_polish_stemmer($options);
         $this->customStemmer = $this->normalize_custom_stemmer($options['stemmer'] ?? null);
         $this->customStemmersByLanguage = $this->normalize_custom_stemmers_by_language(
-            $options['stemmers_by_lang'] ?? $options['stemmers'] ?? []
+            $options['stemmers_by_lang'] ?? []
         );
         $this->lemmaPacksByLanguage = $this->normalize_lemma_packs_by_language(
             $this->lemma_pack_options_by_language($options)
         );
-        $tokenizer = $options['cjk_tokenizer'] ?? $options['cjk_segmenter'] ?? null;
+        $tokenizer = $options['cjk_tokenizer'] ?? null;
         $tokenizerAcceptsProducerLimit = $tokenizer instanceof WP_FTS_ChineseJiebaSegmenter;
         if (!is_callable($tokenizer)) {
             $tokenizer = $this->segmenter_pack_tokenizer_for_options($options);
@@ -114,8 +106,8 @@ final class WP_FTS_LanguagePipeline
     /**
      * Analyze text and return only term strings.
      *
-     * Use this for legacy consumers that do not need per-term language metadata.
-     * New document/search code generally uses `analyze_detailed()`.
+     * Use this for consumers that do not need per-term language metadata.
+     * Document/search code generally uses `analyze_detailed()`.
      *
      * @param string $text Plain visible text to tokenize.
      * @param string $language Document or query language hint.
@@ -391,54 +383,11 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
-     * Normalize one raw token and apply stemming/length filters.
-     *
-     * CJK tokens skip stemming and Latin minimum-length pruning because the CJK
-     * tokenizer already emits single characters and bounded n-grams as lexical
-     * units.
-     *
-     * @param string $rawToken Token text before case folding and dialect maps.
-     * @param string $language Language used for normalization and stemming.
-     * @param bool $isCjk True when the token came from a CJK script run.
-     * @return string|null Normalized term, or null when filtered by length or
-     *         byte-size limits.
-     */
-    public function normalize_raw_token(string $rawToken, string $language, bool $isCjk = false): ?string
-    {
-        $language = $this->canonicalize_language($language);
-        $term = $this->normalizer->normalize_token($rawToken, $language);
-
-        if ($isCjk) {
-            // CJK n-grams are already the lexical units; stemming and Latin
-            // minimum-length pruning would damage recall for single characters.
-        } else {
-            $customStemmer = $this->custom_stemmer_for_language($language);
-            if ($customStemmer !== null) {
-                $term = $customStemmer->stem($term, $language);
-            } elseif ($this->customStemmer !== null) {
-                $term = $this->customStemmer->stem($term, $language);
-            } elseif ($this->enableStemming) {
-                $term = $this->stem_for_language($term, $language);
-            }
-        }
-        // A stemmer is allowed to rewrite one bounded lexical run, not amplify
-        // it into unbounded text. Check bytes before character-length work.
-        WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($term));
-
-        if (!$this->term_passes_length_filters($term, $isCjk)) {
-            return null;
-        }
-
-        return $term;
-    }
-
-    /**
      * Normalize one raw token and return all valid analysis candidates.
      *
-     * This mirrors `normalize_raw_token()` for legacy callers, but lets
-     * dictionary lemma packs return multiple pack-backed candidates for one
-     * source token. Custom stemmers and non-pack language paths remain
-     * single-analysis.
+     * Dictionary lemma packs may return multiple pack-backed candidates for one
+     * source token. Custom stemmers and non-pack language paths remain one
+     * analysis.
      *
      * @return array<int,array{term:string,rank:int,source:string}>
      */
@@ -463,6 +412,8 @@ final class WP_FTS_LanguagePipeline
         $analyses = null;
 
         if ($isCjk) {
+            // CJK n-grams are already lexical units. Stemming and Latin
+            // minimum-length pruning would damage recall for single characters.
             $analyses = [['term' => $term, 'rank' => 0, 'source' => 'normalized']];
         } else {
             $customStemmer = $this->custom_stemmer_for_language($language);
@@ -495,6 +446,8 @@ final class WP_FTS_LanguagePipeline
                 continue;
             }
             $candidate = (string) $candidate;
+            // A stemmer may rewrite one bounded lexical run, not amplify it
+            // into unbounded text. Check bytes before character-length work.
             WP_FTS_Analysis_Limits::assert_lexical_run_bytes(strlen($candidate));
             $candidate = trim($candidate);
             if ($candidate === '' || isset($seen[$candidate]) || !$this->term_passes_length_filters($candidate, $isCjk)) {
@@ -750,8 +703,8 @@ final class WP_FTS_LanguagePipeline
                 // The analyzer must observe the first excess item, but an
                 // array-returning producer must not build the rest of a
                 // maximum-size query before that rejection occurs. Bundled
-                // producers receive the ceiling; custom and internal callables
-                // keep their original invocation contract regardless of arity.
+                // producers receive the ceiling; custom callables keep the
+                // public two-argument tokenizer contract.
                 $tokens = $this->cjkTokenizerAcceptsProducerLimit
                     ? ($this->cjkTokenizer)($run, $canonicalLanguage, $maxTerms + 1)
                     : ($this->cjkTokenizer)($run, $canonicalLanguage);
@@ -951,52 +904,17 @@ final class WP_FTS_LanguagePipeline
         return $normalized;
     }
 
-    /**
-     * Merge generic lemma-pack option aliases. `lemma_packs_by_lang` wins when
-     * both aliases provide the same language key.
-     *
-     * @param array<string,mixed> $options
-     * @return array<string,mixed>
-     */
+    /** @return array<string,mixed> */
     private function lemma_pack_options_by_language(array $options): array
     {
-        $maps = [];
-        if (isset($options['lemmatizer_packs_by_lang']) && is_array($options['lemmatizer_packs_by_lang'])) {
-            $maps[] = $options['lemmatizer_packs_by_lang'];
-        }
-        if (isset($options['lemma_packs_by_lang']) && is_array($options['lemma_packs_by_lang'])) {
-            $maps[] = $options['lemma_packs_by_lang'];
-        }
-        // Merge directly into the effective canonical map. Collapsing during
-        // the merge lets two bounded alias maps use equivalent underscore,
-        // hyphen, or case spellings without a false raw-key overflow. Later
-        // maps still win, and an explicit `PL` assignment suppresses the legacy
-        // base-Polish fallback before any manifest is touched.
+        $map = $options['lemma_packs_by_lang'] ?? [];
+        WP_FTS_Analyzer_Config_Limits::assert_language_map($map, 'Language pipeline lemma packs');
         $packs = [];
-        foreach ($maps as $map) {
-            WP_FTS_Analyzer_Config_Limits::assert_language_map($map, 'Language pipeline lemma packs');
-            foreach ($map as $language => $option) {
-                $canonicalLanguage = $this->canonicalize_language((string) $language);
-                if ($canonicalLanguage === 'und') {
-                    continue;
-                }
+        foreach ($map as $language => $option) {
+            $canonicalLanguage = $this->canonicalize_language((string) $language);
+            if ($canonicalLanguage !== 'und') {
                 $packs[$canonicalLanguage] = $option;
-                if (count($packs) > WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES) {
-                    throw new WP_FTS_Analyzer_Config_Limit_Exceeded(
-                        'configured_languages',
-                        'Language pipeline lemma packs exceeds the '
-                            . WP_FTS_Analyzer_Config_Limits::MAX_CONFIGURED_LANGUAGES
-                            . '-language limit across aliases.'
-                    );
-                }
             }
-        }
-        if (
-            !array_key_exists('pl', $packs)
-            && (array_key_exists('polish_lemma_pack', $options) || array_key_exists('polish_lemmatizer_pack', $options))
-        ) {
-            $packs['pl'] = $options['polish_lemma_pack'] ?? $options['polish_lemmatizer_pack'] ?? false;
-            WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'Language pipeline lemma packs');
         }
 
         return $packs;
@@ -1142,23 +1060,13 @@ final class WP_FTS_LanguagePipeline
         };
     }
 
-    /**
-     * Merge segmenter-pack option aliases. `segmenter_packs_by_lang` wins when
-     * aliases provide the same language key.
-     *
-     * @param array<string,mixed> $options
-     * @return array<string,mixed>
-     */
+    /** @return array<string,mixed> */
     private function segmenter_pack_options_by_language(array $options): array
     {
-        $maps = [];
-        foreach (['tokenizer_packs_by_lang', 'cjk_tokenizer_packs_by_lang', 'cjk_segmenter_packs_by_lang', 'segmenter_packs_by_lang'] as $key) {
-            if (isset($options[$key]) && is_array($options[$key])) {
-                $maps[] = $options[$key];
-            }
-        }
+        $packs = $options['segmenter_packs_by_lang'] ?? [];
+        WP_FTS_Analyzer_Config_Limits::assert_language_map($packs, 'Language pipeline segmenter packs');
 
-        return WP_FTS_Analyzer_Config_Limits::merge_language_maps($maps, 'Language pipeline segmenter packs');
+        return $packs;
     }
 
     /**
@@ -1184,7 +1092,7 @@ final class WP_FTS_LanguagePipeline
             'enable_stemming' => $this->enableStemming,
             'polish_stemming' => $polishMode,
             'stemmer' => $this->componentSignature($options['stemmer'] ?? null),
-            'stemmers_by_lang' => $this->stemmersByLanguageSignature($options['stemmers_by_lang'] ?? $options['stemmers'] ?? []),
+            'stemmers_by_lang' => $this->stemmersByLanguageSignature($options['stemmers_by_lang'] ?? []),
             'cjk_tokenizer' => $this->componentSignature($tokenizer),
             'token_normalizer' => $this->componentSignature($options['token_normalizer'] ?? null),
             'chinese_script_map' => $this->signatureValue($options['chinese_script_map'] ?? []),

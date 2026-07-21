@@ -56,7 +56,7 @@ test_case('set-oriented snippets use only the typed prefix surface', function ()
     ]));
 
     $snippet = $searcher->snippet_for_text('dog dogmatic', 'dogs', [
-        'lang' => 'en',
+        'query_lang' => 'en',
         'prefix_matching' => true,
         'prefix_min_length' => 2,
         'highlight' => true,
@@ -70,7 +70,7 @@ test_case('set-oriented snippets use only the typed prefix surface', function ()
     );
 
     $surfaceOnly = $searcher->snippet_for_text('running', 'runni', [
-        'lang' => 'en',
+        'query_lang' => 'en',
         'prefix_matching' => true,
         'prefix_min_length' => 2,
         'highlight' => true,
@@ -660,7 +660,7 @@ test_case('quality public search containment rejects custom analyzer expansion b
     $publicSnippetError = psic_caught(static fn(): string => $snippetSearcher->snippet_for_text(
         str_repeat('source ', 100000),
         'term',
-        ['lang' => 'en', 'highlight' => true, 'snippet_length' => 500]
+        ['query_lang' => 'en', 'highlight' => true, 'snippet_length' => 500]
     ));
     assert_true($publicSnippetError instanceof WP_FTS_Search_Budget_Exceeded, 'the public snippet API should reject hostile query-analyzer expansion before source processing');
     assert_same(2, $snippetAnalyzer->calls, 'the public snippet path should make one capped query-analyzer call');

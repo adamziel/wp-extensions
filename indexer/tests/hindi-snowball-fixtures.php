@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/snowball-fixture-stream.php';
 
 final class WP_FTS_HindiFixtureFailure extends RuntimeException
@@ -102,7 +102,7 @@ try {
 
     wp_fts_hindi_fixture_same(
         [973],
-        array_column($searcher->search('अधिनियम इंडिय कब्र हिंद खोज कर', ['lang' => 'hi', 'mode' => 'AND']), 'doc_id'),
+        array_column($searcher->search('अधिनियम इंडिय कब्र हिंद खोज कर', ['query_lang' => 'hi', 'mode' => 'AND']), 'doc_id'),
         'Hindi query and document inflections should meet through the same Snowball stems'
     );
 

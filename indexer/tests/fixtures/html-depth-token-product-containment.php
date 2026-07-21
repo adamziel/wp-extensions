@@ -65,7 +65,7 @@ try {
         'enable_stemming' => false,
         'document_lang' => 'en',
     ]);
-    $terms = $analyzer->analyze_content($html, ['lang' => 'en']);
+    $terms = $analyzer->analyze_content($html, ['document_lang' => 'en']);
     $peakAfter = memory_get_peak_usage(true);
     $termsDigest = hash_init('sha256');
     foreach ($terms as $term) {

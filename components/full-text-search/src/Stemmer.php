@@ -199,31 +199,23 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
     }
 }
 
-/**
- * Adapts a user callable to the stemmer interface.
- *
- * Legacy callers often supplied one-argument callbacks such as `metaphone`.
- * This adapter preserves that form and only passes `$language` when the
- * callable requires at least two parameters or is variadic.
- */
+/** Adapts a language-aware user callable to the stemmer interface. */
 final class WP_FTS_CallbackStemmer implements WP_FTS_Stemmer
 {
     /** @var callable */
     private $callback;
-    private bool $passesLanguage;
 
     /**
-     * @param callable $callback Function accepting either `($term)` or
-     *        `($term, $language)` and returning a replacement term.
+     * @param callable $callback Function accepting `($term, $language)` and
+     *        returning a replacement term.
      */
     public function __construct(callable $callback)
     {
         $this->callback = $callback;
-        $this->passesLanguage = $this->accepts_language($callback);
     }
 
     /**
-     * Run the configured callback with the arity it expects.
+     * Run the configured callback with the current two-argument contract.
      *
      * @param string $term Normalized term text.
      * @param string $language Canonical language tag.
@@ -231,30 +223,7 @@ final class WP_FTS_CallbackStemmer implements WP_FTS_Stemmer
      */
     public function stem(string $term, string $language): string
     {
-        return (string) (
-            $this->passesLanguage
-                ? ($this->callback)($term, $language)
-                : ($this->callback)($term)
-        );
-    }
-
-    /**
-     * Decide whether the callback should receive the language argument.
-     *
-     * Optional second parameters are not enough: many PHP callbacks use that
-     * slot for unrelated options. Required two-argument and variadic callbacks
-     * are treated as language-aware.
-     *
-     * @param callable $callback User callback being adapted.
-     * @return bool True when `stem()` should call it with two arguments.
-     */
-    private function accepts_language(callable $callback): bool
-    {
-        $reflection = new ReflectionFunction(Closure::fromCallable($callback));
-
-        // Preserve the legacy one-argument stemmer contract for callables such
-        // as metaphone(), whose optional second parameter is not a language.
-        return $reflection->isVariadic() || $reflection->getNumberOfRequiredParameters() >= 2;
+        return (string) ($this->callback)($term, $language);
     }
 }
 

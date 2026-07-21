@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 
 /**
  * Deterministic native many-language benchmark for the current indexer plugin.
@@ -552,19 +552,28 @@ final class WP_FTS_NMLB_Analyzer
     }
 
     /**
-     * @param array<string,mixed>|string|null $options
+     * @param array<string,mixed> $options
      * @return array<int,array{term:string,weight:float,lang:string}>
      */
-    public function analyze_content(string $html, array|string|null $options = []): array
+    public function analyze_content(string $html, array $options = []): array
     {
         return $this->inner->analyze_content($html, $options);
     }
 
     /**
-     * @param array<string,mixed>|string|null $options
+     * @param array<string,mixed> $options
+     * @return array<int,array{term:string,weight:float,lang:string}>
+     */
+    public function analyze_plain_content(string $text, array $options = []): array
+    {
+        return $this->inner->analyze_plain_content($text, $options);
+    }
+
+    /**
+     * @param array<string,mixed> $options
      * @return array<int,array{term:string,lang:string}>
      */
-    public function analyze_query_occurrences(string $query, array|string|null $options = []): array
+    public function analyze_query_occurrences(string $query, array $options = []): array
     {
         $occurrences = $this->inner->analyze_query_occurrences($query, $options);
         $lang = $this->query_lang($options);
@@ -593,17 +602,12 @@ final class WP_FTS_NMLB_Analyzer
     }
 
     /**
-     * @param array<string,mixed>|string|null $options
-     * @return string[]|array<int,array{term:string,lang:string}>
+     * @param array<string,mixed> $options
+     * @return string[]
      */
-    public function analyze_query(string $query, array|string|null $options = []): array
+    public function analyze_query(string $query, array $options = []): array
     {
-        $format = is_array($options) ? (string) ($options['return'] ?? $options['format'] ?? 'terms') : 'terms';
         $occurrences = $this->analyze_query_occurrences($query, $options);
-        if (in_array($format, ['occurrences', 'tokens', 'objects'], true)) {
-            return $occurrences;
-        }
-
         return array_map(static fn(array $occurrence): string => $occurrence['term'], $occurrences);
     }
 
@@ -612,17 +616,13 @@ final class WP_FTS_NMLB_Analyzer
         return 'task594-native-many-language-analyzer-v1';
     }
 
-    private function query_lang(array|string|null $options): string
+    private function query_lang(array $options): string
     {
-        if (is_array($options)) {
-            return WP_FTS_TermNamespace::language_from_options($options, 'qaa-cp00-exact', ['query_lang', 'lang', 'language', 'default_lang']) ?? 'qaa-cp00-exact';
-        }
-
-        if (is_string($options) && trim($options) !== '') {
-            return WP_FTS_TermNamespace::canonicalize_lang($options);
-        }
-
-        return 'qaa-cp00-exact';
+        return WP_FTS_TermNamespace::language_from_options(
+            $options,
+            'qaa-cp00-exact',
+            ['query_lang', '_default_query_lang']
+        ) ?? 'qaa-cp00-exact';
     }
 }
 
@@ -1035,7 +1035,7 @@ final class WP_FTS_NMLB_Counting_Storage implements WP_FTS_Storage, WP_FTS_Docum
         return $this->inner->get_doc($doc_id);
     }
 
-    public function put_doc(int $doc_id, string|int $primary_lang, array|string $lang_lengths, ?string $hash = null): void
+    public function put_doc(int $doc_id, string $primary_lang, array $lang_lengths, ?string $hash): void
     {
         $this->inner->put_doc($doc_id, $primary_lang, $lang_lengths, $hash);
     }
@@ -1053,7 +1053,7 @@ final class WP_FTS_NMLB_Counting_Storage implements WP_FTS_Storage, WP_FTS_Docum
         return $this->inner->get_meta($lang);
     }
 
-    public function add_meta(string|int $lang, int $d_docs, ?int $d_len = null): void
+    public function add_meta(string $lang, int $d_docs, int $d_len): void
     {
         $this->inner->add_meta($lang, $d_docs, $d_len);
     }

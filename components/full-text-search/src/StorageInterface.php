@@ -2,12 +2,10 @@
 declare(strict_types=1);
 
 /**
- * Legacy blob-storage contract used by the in-memory and file backends.
+ * Posting-list storage contract used by the in-memory test oracle.
  *
  * Implementations store postings by namespaced term key, document metadata with
- * per-language lengths, and collection metadata used by BM25. The interface also
- * preserves legacy aggregate document/meta call shapes so older tests and
- * adapters can still run.
+ * per-language lengths, and collection metadata used by BM25.
  */
 interface WP_FTS_Storage
 {
@@ -64,17 +62,11 @@ interface WP_FTS_Storage
     /**
      * Store or replace document metadata.
      *
-     * New callers pass `($doc_id, $primary_lang, $lang_lengths, $hash)`.
-     * Legacy callers may still pass ($doc_id, $doc_len, $hash), which maps to the
-     * aggregate/unspecified language partition.
-     *
-     * @param string|int $primary_lang Canonical primary language in the new
-     *        shape, or aggregate document length in the legacy shape.
-     * @param array<string,int>|string $lang_lengths Per-language lengths in the
-     *        new shape, or content hash in the legacy shape.
-     * @param string|null $hash Content hash in the new shape.
+     * @param string $primary_lang Canonical primary language.
+     * @param array<string,int> $lang_lengths Per-language lengths.
+     * @param string|null $hash Content hash.
      */
-    public function put_doc(int $doc_id, string|int $primary_lang, array|string $lang_lengths, ?string $hash = null): void;
+    public function put_doc(int $doc_id, string $primary_lang, array $lang_lengths, ?string $hash): void;
 
     /**
      * Mark a document as deleted.
@@ -97,11 +89,9 @@ interface WP_FTS_Storage
     /**
      * Add signed deltas to collection metadata.
      *
-     * New callers pass `($lang, $d_docs, $d_len)`. Legacy callers may still pass
-     * `($d_docs, $d_len)`, which updates the aggregate/unspecified partition.
      * Implementations should clamp stored totals at zero.
      */
-    public function add_meta(string|int $lang, int $d_docs, ?int $d_len = null): void;
+    public function add_meta(string $lang, int $d_docs, int $d_len): void;
 
     /**
      * List all term keys currently stored.
@@ -195,7 +185,7 @@ interface WP_FTS_Set_Oriented_Search_Storage
  * Optional writer extension for backends that replace one document's posting rows.
  *
  * The narrow contract lets a set-oriented production backend publish postings
- * without claiming that it can materialize posting lists for legacy readers.
+ * without claiming that it can materialize posting lists for readers.
  */
 interface WP_FTS_Row_Postings_Writer_Storage extends WP_FTS_Storage
 {
@@ -215,9 +205,9 @@ interface WP_FTS_Row_Postings_Writer_Storage extends WP_FTS_Storage
  * Optional read/write extension for backends that expose individual posting rows.
  *
  * The base storage interface keeps the blob-shaped `get_terms()`/`put_term()`
- * contract for file and in-memory compatibility. Implementations of this wider
- * contract support both native per-document replacement and bounded callers
- * that explicitly request decoded posting maps.
+ * contract used by the test oracle. Implementations of this wider contract
+ * support both native per-document replacement and bounded callers that
+ * explicitly request decoded posting maps.
  */
 interface WP_FTS_Row_Postings_Storage extends WP_FTS_Row_Postings_Writer_Storage
 {

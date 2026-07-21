@@ -335,7 +335,7 @@ function wp_fts_real_integration_wp_cli_process(object $wpdb, string $prefix, st
 
     $searcher = new WP_FTS_Searcher($storage, new WP_FTS_Analyzer());
     $payload = $searcher->search('wpftsneedle', [
-        'lang' => 'pl',
+        'query_lang' => 'pl',
         'limit' => 3,
         'post_type' => $postType,
         'post_status' => 'publish',

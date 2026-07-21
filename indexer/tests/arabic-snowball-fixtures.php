@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/snowball-fixture-stream.php';
 
 final class WP_FTS_ArabicFixtureFailure extends RuntimeException
@@ -98,7 +98,7 @@ try {
 
     wp_fts_arabic_fixture_same(
         [969],
-        array_column($searcher->search('اباح اقف بصن يييس بحث', ['lang' => 'ar', 'mode' => 'AND']), 'doc_id'),
+        array_column($searcher->search('اباح اقف بصن يييس بحث', ['query_lang' => 'ar', 'mode' => 'AND']), 'doc_id'),
         'Arabic query and document inflections should meet through the same Snowball stems'
     );
 

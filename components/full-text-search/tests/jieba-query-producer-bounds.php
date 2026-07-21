@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 
 final class WP_FTS_Jieba_Query_Bound_Storage implements WP_FTS_Set_Oriented_Search_Storage
 {

@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 
 /**
  * Parser, importer, and legacy component BM25 fixture for operator-provided
@@ -609,7 +609,6 @@ final class WP_FTS_Cranfield_Relevance_Gate
             }
 
             $nativeRows = $searcher->search($queryText, [
-                'lang' => $language,
                 'query_lang' => $language,
                 'mode' => 'OR',
                 'limit' => $resultLimit,
@@ -798,8 +797,6 @@ final class WP_FTS_Cranfield_Relevance_Gate
                 continue;
             }
             $occurrences = $analyzer->analyze_plain_content($fieldText, [
-                'lang' => $defaultLang,
-                'language' => $defaultLang,
                 'document_lang' => $defaultLang,
                 'field_name' => $fieldName,
             ]);
@@ -938,8 +935,6 @@ final class WP_FTS_Cranfield_Relevance_Gate
     private static function query_groups(WP_FTS_Analyzer $analyzer, string $query, string $language): array
     {
         $occurrences = $analyzer->analyze_query_occurrences($query, [
-            'lang' => $language,
-            'language' => $language,
             'query_lang' => $language,
             '_force_query_lang' => true,
         ]);

@@ -6,8 +6,8 @@ declare(strict_types=1);
  *
  * The postings contract stays focused on term statistics. Backends that support
  * search filters, snippets, and WordPress result fields expose this companion
- * interface so the searcher can enrich results without forcing legacy storage
- * implementations to grow new methods.
+ * interface so the searcher can enrich results without forcing every storage
+ * implementation to grow new methods.
  */
 interface WP_FTS_DocumentMetadataStorage
 {

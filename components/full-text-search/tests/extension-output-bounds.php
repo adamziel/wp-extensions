@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 
 $wp_fts_extension_output_checks = 0;
 
@@ -121,7 +121,7 @@ wp_fts_extension_output_check(
 $stemmerAttempt = static function (int $outputBytes): array {
     $pipeline = new WP_FTS_LanguagePipeline([
         'enable_stemming' => true,
-        'stemmer' => static fn(): string => str_repeat(' ', $outputBytes),
+        'stemmer' => static fn(string $_term, string $_language): string => str_repeat(' ', $outputBytes),
     ]);
 
     return $pipeline->analyze_detailed('needle', 'en');

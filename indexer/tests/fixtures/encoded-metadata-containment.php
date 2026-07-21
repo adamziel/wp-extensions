@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+require_once dirname(__DIR__) . '/bootstrap.php';
 
 /** @return array{VmHWM_bytes:?int,VmRSS_bytes:?int} */
 function wp_fts_encoded_metadata_proc_status(): array

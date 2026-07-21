@@ -4659,7 +4659,7 @@ function wp_fts_wc_analysis_proof(): array
     $query = 'Wrocław commonalpha Häusern 中文搜索';
     $recorded = wp_fts_wc_record_queries(static fn() => $analyzer->analyze_query_occurrences(
         $query,
-        ['lang' => 'en', 'return' => 'occurrences']
+        ['query_lang' => 'en']
     ));
     $occurrences = is_array($recorded['result']) ? $recorded['result'] : [];
     $queries = array_values($recorded['queries']);
@@ -16539,8 +16539,8 @@ function wp_fts_wc_enable_all_runtime_lemma_packs(): array
     WP_FTS_Plugin::reset_request_caches();
     $statuses = WP_FTS_Plugin::runtime_analyzer_pack_statuses();
     $runtimeOptions = WP_FTS_Plugin::runtime_analyzer_options();
-    $activeOptions = is_array($runtimeOptions['lemmatizer_packs_by_lang'] ?? null)
-        ? $runtimeOptions['lemmatizer_packs_by_lang']
+    $activeOptions = is_array($runtimeOptions['lemma_packs_by_lang'] ?? null)
+        ? $runtimeOptions['lemma_packs_by_lang']
         : [];
     $active = [];
     $runtimeStatusesValid = true;
@@ -18771,7 +18771,7 @@ function wp_fts_wc_pack_cardinality_statement_proof(array $definition, array $or
     $stored = get_option(WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION, []);
     $allPackAnalyzerOptions = WP_FTS_Plugin::runtime_analyzer_options();
     $onePackAnalyzerOptions = $allPackAnalyzerOptions;
-    $onePackAnalyzerOptions['lemmatizer_packs_by_lang'] = [$language => $manifestPath];
+    $onePackAnalyzerOptions['lemma_packs_by_lang'] = [$language => $manifestPath];
 
     // Keep the installed index publication intact. Mutating the stored analyzer
     // option would correctly revoke search readiness and enqueue reconciliation,

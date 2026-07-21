@@ -682,7 +682,7 @@ test_case('processor event state does not leak atomic tags and treats BR as a le
             'html_processor_factory' => static fn(): object => $processor,
         ]);
 
-        return $analyzer->analyze_content($source, ['lang' => 'en']);
+        return $analyzer->analyze_content($source, ['document_lang' => 'en']);
     };
 
     foreach (['SCRIPT', 'STYLE', 'TITLE'] as $atomicTag) {
@@ -701,7 +701,7 @@ test_case('processor event state does not leak atomic tags and treats BR as a le
     $fallback = new WP_FTS_Analyzer(['auto_detect_language' => false, 'enable_stemming' => false]);
     assert_same(
         ['foo', 'bar'],
-        array_column($fallback->analyze_content($separatorSource, ['lang' => 'en']), 'term'),
+        array_column($fallback->analyze_content($separatorSource, ['document_lang' => 'en']), 'term'),
         'fallback extraction should not join lexical words across BR'
     );
     $processorTerms = $analyze($separatorSource, [
@@ -735,7 +735,7 @@ test_case('processors without the WordPress 6.6 depth event contract use the fal
 
     assert_same(
         ['fallbackword'],
-        array_column($analyzer->analyze_content('<p>fallbackword</p>', ['lang' => 'en']), 'term'),
+        array_column($analyzer->analyze_content('<p>fallbackword</p>', ['document_lang' => 'en']), 'term'),
         'an incomplete processor should preserve complete analysis through the fallback parser'
     );
     assert_same(0, $processor->calls, 'processor capability checks should reject an incomplete provider before its first token');

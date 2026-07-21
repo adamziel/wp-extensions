@@ -357,26 +357,18 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
         return $this->docs[$doc_id] ?? null;
     }
 
-    /**
-     * Store document metadata in either language-aware or legacy shape.
-     *
-     * New calls pass primary language, per-language lengths, and content hash.
-     * Legacy calls pass aggregate doc length and hash.
-     */
-    public function put_doc(int $doc_id, string|int $primary_lang, array|string $lang_lengths, ?string $hash = null): void
+    /** Store language-aware document metadata. */
+    public function put_doc(int $doc_id, string $primary_lang, array $lang_lengths, ?string $hash): void
     {
         $this->remember_doc($doc_id);
-        [$primaryLang, $normalizedLengths, $contentHash] = $this->normalize_put_doc_args(
-            $primary_lang,
-            $lang_lengths,
-            $hash
-        );
+        $primaryLang = $this->normalize_lang($primary_lang);
+        $normalizedLengths = $this->normalize_lang_lengths($lang_lengths);
 
         $this->docs[$doc_id] = [
             'primary_lang' => $primaryLang,
             'lang_lengths' => $normalizedLengths,
             'doc_len' => array_sum($normalizedLengths),
-            'content_hash' => $contentHash,
+            'content_hash' => $hash,
             'deleted' => false,
         ];
         $this->clear_document_read_cache();
@@ -495,19 +487,15 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
         return $this->meta[$lang] ?? ['doc_count' => 0, 'len_sum' => 0];
     }
 
-    /**
-     * Add signed deltas to stored metadata.
-     *
-     * Supports both `($lang, $d_docs, $d_len)` and legacy `($d_docs, $d_len)`.
-     */
-    public function add_meta(string|int $lang, int $d_docs, ?int $d_len = null): void
+    /** Add signed deltas to stored metadata for one language partition. */
+    public function add_meta(string $lang, int $d_docs, int $d_len): void
     {
-        [$normalizedLang, $docDelta, $lenDelta] = $this->normalize_meta_args($lang, $d_docs, $d_len);
+        $normalizedLang = $this->normalize_lang($lang);
         $this->remember_meta($normalizedLang);
         $current = $this->meta[$normalizedLang] ?? ['doc_count' => 0, 'len_sum' => 0];
         $this->meta[$normalizedLang] = [
-            'doc_count' => max(0, $current['doc_count'] + $docDelta),
-            'len_sum' => max(0, $current['len_sum'] + $lenDelta),
+            'doc_count' => max(0, $current['doc_count'] + $d_docs),
+            'len_sum' => max(0, $current['len_sum'] + $d_len),
         ];
     }
 
@@ -1014,37 +1002,6 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
     }
 
     /**
-     * Normalize `put_doc()` overloads into one internal payload.
-     *
-     * @param string|int $primary_lang Primary language or legacy document length.
-     * @param array<string,int>|string $lang_lengths Per-language lengths or
-     *        legacy content hash.
-     * @param string|null $hash New-shape content hash.
-     * @return array{string,array<string,int>,string}
-     * @throws InvalidArgumentException For unsupported argument combinations.
-     */
-    private function normalize_put_doc_args(string|int $primary_lang, array|string $lang_lengths, ?string $hash): array
-    {
-        if (is_int($primary_lang) && is_string($lang_lengths) && $hash === null) {
-            return [
-                '',
-                $this->normalize_lang_lengths(['' => $primary_lang]),
-                $lang_lengths,
-            ];
-        }
-
-        if (!is_string($primary_lang) || !is_array($lang_lengths) || $hash === null) {
-            throw new InvalidArgumentException('put_doc expects ($doc_id, $primary_lang, $lang_lengths, $hash).');
-        }
-
-        return [
-            $this->normalize_lang($primary_lang),
-            $this->normalize_lang_lengths($lang_lengths),
-            $hash,
-        ];
-    }
-
-    /**
      * Drop non-positive lengths, normalize language keys, and sort them.
      *
      * @param array<string,int> $lang_lengths
@@ -1068,31 +1025,11 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
     /**
      * Normalize a storage-local language key.
      *
-     * In-memory storage preserves the legacy empty-string aggregate partition and
-     * otherwise trims only; canonicalization happens in higher-level adapters.
+     * Canonicalization happens in higher-level adapters.
      */
     private function normalize_lang(string $lang): string
     {
         return trim($lang);
-    }
-
-    /**
-     * Normalize `add_meta()` overloads into language, doc delta, and length delta.
-     *
-     * @return array{string,int,int}
-     * @throws InvalidArgumentException For unsupported argument combinations.
-     */
-    private function normalize_meta_args(string|int $lang, int $d_docs, ?int $d_len): array
-    {
-        if (is_int($lang) && $d_len === null) {
-            return ['', $lang, $d_docs];
-        }
-
-        if (!is_string($lang) || $d_len === null) {
-            throw new InvalidArgumentException('add_meta expects ($lang, $d_docs, $d_len).');
-        }
-
-        return [$this->normalize_lang($lang), $d_docs, $d_len];
     }
 
     /**

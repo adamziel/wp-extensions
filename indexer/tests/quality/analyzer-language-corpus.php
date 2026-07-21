@@ -392,7 +392,7 @@ test_case('quality corpus tokenizes mixed scripts punctuation numbers emoji and 
     foreach ($cases as [$lang, $minLen, $input, $expected, $label]) {
         record_check('tokenization scenario: ' . $label);
         $analyzer = new WP_FTS_Analyzer(['min_term_len' => $minLen]);
-        assert_same($expected, $analyzer->analyze_query($input, ['lang' => $lang]), $label);
+        assert_same($expected, $analyzer->analyze_query($input, ['query_lang' => $lang]), $label);
     }
 });
 
@@ -420,7 +420,7 @@ test_case('quality corpus canonicalizes locale dialect script and malformed lang
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'de-DE']);
     foreach (['', 'C.UTF-8', 'POSIX', '@@@', '123', 'toolongprimary'] as $language) {
         record_check('malformed analyzer language fallback: ' . ($language === '' ? 'empty' : $language));
-        $occurrences = $analyzer->analyze_content('<p>fallbackterm</p>', ['lang' => $language]);
+        $occurrences = $analyzer->analyze_content('<p>fallbackterm</p>', ['document_lang' => $language]);
         assert_same(['de-DE'], wp_fts_alc_langs_by_term($occurrences)['fallbackterm'] ?? [], "fallback {$language}");
     }
 });
@@ -487,13 +487,11 @@ test_case('quality corpus exposes query occurrence output while preserving plain
 
     foreach ($cases as [$lang, $query, $expectedTerms]) {
         record_check('query occurrence scenario: ' . $lang);
-        $plain = $analyzer->analyze_query($query, ['lang' => $lang]);
-        $occurrences = $analyzer->analyze_query_occurrences($query, ['lang' => $lang]);
-        $compatOccurrences = $analyzer->analyze_query($query, ['language' => $lang, 'return' => 'occurrences']);
+        $plain = $analyzer->analyze_query($query, ['query_lang' => $lang]);
+        $occurrences = $analyzer->analyze_query_occurrences($query, ['query_lang' => $lang]);
 
         assert_same($expectedTerms, $plain, "plain query terms {$lang}");
         assert_same($expectedTerms, array_column($occurrences, 'term'), "occurrence terms {$lang}");
-        assert_same($occurrences, $compatOccurrences, "compat occurrence terms {$lang}");
         foreach ($occurrences as $occurrence) {
             assert_same($normalLang = (new WP_FTS_Normalizer())->canonicalize_language($lang), $occurrence['lang'], "occurrence language {$normalLang}");
         }
@@ -560,8 +558,8 @@ test_case('quality corpus keeps plain content and query analysis equivalent over
         $canonical = $normalizer->canonicalize_language($language);
         foreach ($texts as $text) {
             record_check("content/query parity {$canonical}: {$text}");
-            $content = $analyzer->analyze_content($text, ['lang' => $language]);
-            $query = $analyzer->analyze_query($text, ['lang' => $language]);
+            $content = $analyzer->analyze_content($text, ['document_lang' => $language]);
+            $query = $analyzer->analyze_query($text, ['query_lang' => $language]);
 
             assert_same($query, test_terms($content), "content/query term parity {$canonical}");
             foreach ($content as $occurrence) {
@@ -571,38 +569,17 @@ test_case('quality corpus keeps plain content and query analysis equivalent over
     }
 });
 
-test_case('quality corpus keeps custom stemmer callable arities compatible', function (): void {
+test_case('quality corpus passes canonical languages to custom stemmers', function (): void {
     $cases = [
         [
-            'label' => 'internal one arg',
-            'stemmer' => 'strrev',
-            'input' => 'alpha',
-            'lang' => 'en',
-            'expected' => ['ahpla'],
-        ],
-        [
-            'label' => 'internal optional non-language arg',
-            'stemmer' => 'metaphone',
-            'input' => 'testing',
-            'lang' => 'en',
-            'expected' => ['TSTNK'],
-        ],
-        [
-            'label' => 'one required plus optional arg',
-            'stemmer' => static fn(string $term, string $language = 'unused'): string => func_num_args() . ':' . $term,
-            'input' => 'alpha',
-            'lang' => 'en-GB',
-            'expected' => ['1:alpha'],
-        ],
-        [
-            'label' => 'two required args',
+            'label' => 'two required arguments',
             'stemmer' => static fn(string $term, string $language): string => $language . ':' . $term,
             'input' => 'colour',
             'lang' => 'en-GB',
             'expected' => ['en-GB:color'],
         ],
         [
-            'label' => 'variadic args',
+            'label' => 'variadic second argument',
             'stemmer' => static fn(string $term, string ...$args): string => count($args) . ':' . $term,
             'input' => 'colour',
             'lang' => 'en-GB',
@@ -611,7 +588,7 @@ test_case('quality corpus keeps custom stemmer callable arities compatible', fun
     ];
 
     foreach ($cases as $case) {
-        record_check('custom stemmer arity scenario: ' . $case['label']);
+        record_check('custom stemmer signature scenario: ' . $case['label']);
         $pipeline = new WP_FTS_LanguagePipeline(['stemmer' => $case['stemmer']]);
         assert_same($case['expected'], $pipeline->analyze($case['input'], $case['lang']), $case['label']);
     }

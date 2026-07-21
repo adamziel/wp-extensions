@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/bootstrap.php';
 
 /**
  * Deterministic local BM25 reference fixture for the legacy component searcher.
@@ -386,7 +386,7 @@ final class WP_FTS_BM25_Reference_Gate
         $terms = self::string_list($query['terms'] ?? []);
         $oracleScores = self::oracle_scores($oraclePostings, $docLengths, $terms, 'OR');
         $nativeScores = self::scores_from_rows($searcher->search((string) $query['query'], [
-            'lang' => 'en',
+            'query_lang' => 'en',
             'mode' => 'OR',
             'limit' => 10,
         ]));
@@ -395,7 +395,7 @@ final class WP_FTS_BM25_Reference_Gate
 
         $andOracleScores = self::oracle_scores($oraclePostings, $docLengths, $terms, 'AND');
         $andNativeScores = self::scores_from_rows($searcher->search((string) $query['query'], [
-            'lang' => 'en',
+            'query_lang' => 'en',
             'mode' => 'AND',
             'limit' => 10,
         ]));

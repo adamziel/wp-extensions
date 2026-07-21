@@ -14,4 +14,4 @@ This pack is generated from source-approved UniMorph data through the repository
 - Runtime files: `2`
 - Runtime digest SHA-256: `551ac706ad1502bdfb0e1b1cc1bd3648912380a1b28deb8d6162ea929e2434eb`
 
-The generated pack is default-disabled. Callers must opt in through `lemma_packs_by_lang` or `lemmatizer_packs_by_lang`.
+The generated pack is default-disabled. Callers must opt in through `lemma_packs_by_lang`.
