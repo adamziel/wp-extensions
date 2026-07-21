@@ -1288,15 +1288,6 @@ test_case_with_pdo_sqlite_fixture('relational v4 SQLite rejects impossible multi
         'term_taxonomy',
         91
     );
-    $queue->promote_scope(
-        $targetedKey,
-        $targetedToken,
-        [],
-        2200,
-        WP_FTS_Index_Queue::SCOPE_COVERAGE_TARGETED,
-        'term_taxonomy',
-        91
-    );
     $queue->fence_scope($globalKey, $globalToken, [], 2500, WP_FTS_Index_Queue::SCOPE_COVERAGE_GLOBAL);
 
     $wpdb->queries = [];
