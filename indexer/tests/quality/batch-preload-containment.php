@@ -37,6 +37,9 @@ test_case('batch source preload has hard aggregate and dependency envelopes', fu
         'bounded_meta',
         'prepared_dependency_sql_bytes',
         'dependency_value_bucket',
+        "self::dependency_text_projection('tt.taxonomy', \$is_sqlite, 255)",
+        "self::dependency_text_projection('pm.meta_key', \$is_sqlite, 255)",
+        'CAST({$expression} AS CHAR({$max_chars}) CHARACTER SET utf8mb4) COLLATE utf8mb4_bin',
         'WHERE pm.meta_id IN (',
         'incomplete_post_ids',
         'is_selected',
@@ -310,7 +313,7 @@ test_case('dependency preload retains distinct bounded language-provider stateme
             if ($case['wpml']) {
                 assert_contains('FROM wp_posts wpml_post FORCE INDEX (PRIMARY)', $sql, "{$label} should drive WPML from only the requested canonical posts");
                 assert_contains('STRAIGHT_JOIN wp_icl_translations wpml_translation FORCE INDEX (el_type_id)', $sql, "{$label} should force WPML's unique element-type/id point key");
-                assert_contains("wpml_translation.element_type = CONCAT('post_', wpml_post.post_type)", $sql, "{$label} should probe the exact canonical WPML element type without a LIKE range");
+                assert_contains("wpml_translation.element_type = CAST(CONCAT('post_', wpml_post.post_type) AS CHAR(60) CHARACTER SET utf8mb4) COLLATE utf8mb4_bin", $sql, "{$label} should probe the exact canonical WPML element type without a LIKE range or cross-table collation dependency");
                 assert_true(!str_contains($sql, 'element_type LIKE'), "{$label} should never scan a broad WPML element-type range");
             }
             assert_true(strlen($sql) < 32768, "{$label} should remain below the complete 32 KiB statement limit");

@@ -20685,6 +20685,8 @@ FROM ({$relation_sql}) bounded";
         }
 
         $is_sqlite = self::database_adapter_is_sqlite($wpdb);
+        $term_item_key_sql = self::dependency_text_projection('tt.taxonomy', $is_sqlite, 255);
+        $meta_item_key_sql = self::dependency_text_projection('pm.meta_key', $is_sqlite, 255);
         $branches = [];
         foreach ($groups['term'] ?? [] as $bucket => $ids) {
             $id_sql = implode(',', array_map('intval', array_keys($ids)));
@@ -20692,7 +20694,7 @@ FROM ({$relation_sql}) bounded";
                 ? "SUBSTR(CAST(t.name AS BLOB), 1, {$bucket})"
                 : "LEFT(CAST(t.name AS BINARY), {$bucket})";
             $branches[] = "SELECT 'term' AS source_kind, /* wp_fts:dependency_values */ tt.term_taxonomy_id AS source_id,
-       tt.taxonomy AS item_key, {$value_sql} AS item_value,
+       {$term_item_key_sql} AS item_key, {$value_sql} AS item_value,
        OCTET_LENGTH(t.name) AS item_value_bytes
 FROM {$wpdb->term_taxonomy} tt
 JOIN {$wpdb->terms} t ON t.term_id=tt.term_id
@@ -20704,7 +20706,7 @@ WHERE tt.term_taxonomy_id IN ({$id_sql})";
                 ? "SUBSTR(CAST(pm.meta_value AS BLOB), 1, {$bucket})"
                 : "LEFT(CAST(pm.meta_value AS BINARY), {$bucket})";
             $branches[] = "SELECT 'meta' AS source_kind, /* wp_fts:dependency_values */ pm.meta_id AS source_id,
-       pm.meta_key AS item_key, {$value_sql} AS item_value,
+       {$meta_item_key_sql} AS item_key, {$value_sql} AS item_value,
        OCTET_LENGTH(pm.meta_value) AS item_value_bytes
 FROM {$wpdb->postmeta} pm
 WHERE pm.meta_id IN ({$id_sql})";
@@ -20858,6 +20860,8 @@ WHERE pm.meta_id IN ({$id_sql})";
         }
         $post_placeholders = implode(',', array_fill(0, count($post_ids), '%d'));
         $source_limit = self::MAX_INDEX_BATCH_DEPENDENCY_ROWS + 1;
+        $is_sqlite = self::database_adapter_is_sqlite($wpdb);
+        $term_item_key_sql = self::dependency_text_projection('tt.taxonomy', $is_sqlite, 255);
         $branches = [];
         $args = [];
         $source_kinds = [];
@@ -20868,12 +20872,12 @@ WHERE pm.meta_id IN ({$id_sql})";
             && is_scalar($wpdb->term_taxonomy)
             && is_scalar($wpdb->terms)
         ) {
-            $relationship_index_hint = self::database_adapter_is_sqlite($wpdb)
+            $relationship_index_hint = $is_sqlite
                 ? ''
                 : ' FORCE INDEX (PRIMARY)';
             $branches[] = "SELECT * FROM (
     SELECT tr.object_id AS post_order, 0 AS row_order, 'term' AS source_kind,
-           tr.object_id AS post_id, tt.taxonomy AS item_key,
+           tr.object_id AS post_id, {$term_item_key_sql} AS item_key,
            tt.term_taxonomy_id AS source_id, OCTET_LENGTH(t.name) AS item_value_bytes,
            tt.term_taxonomy_id AS source_order, 1 AS is_selected, '' AS item_value
     FROM {$wpdb->term_relationships} tr{$relationship_index_hint}
@@ -20897,14 +20901,24 @@ WHERE pm.meta_id IN ({$id_sql})";
             && is_scalar($wpdb->term_taxonomy)
             && is_scalar($wpdb->terms)
         ) {
+            $polylang_item_key_sql = self::dependency_text_projection(
+                "CASE WHEN tt.taxonomy = %s THEN t.slug ELSE '' END",
+                $is_sqlite,
+                255
+            );
+            $polylang_item_value_sql = self::dependency_text_projection(
+                "CASE WHEN tt.taxonomy = %s AND OCTET_LENGTH(tt.description) <= 4096
+                THEN tt.description ELSE '' END",
+                $is_sqlite,
+                4096
+            );
             $branches[] = "SELECT * FROM (
     SELECT tr.object_id AS post_order, 0 AS row_order, 'polylang' AS source_kind,
            /* wp_fts:polylang-languages */ tr.object_id AS post_id,
-           CASE WHEN tt.taxonomy = %s THEN t.slug ELSE '' END AS item_key,
+           {$polylang_item_key_sql} AS item_key,
            tt.term_taxonomy_id AS source_id,
            0 AS item_value_bytes, tt.term_taxonomy_id AS source_order, 0 AS is_selected,
-           CASE WHEN tt.taxonomy = %s AND OCTET_LENGTH(tt.description) <= 4096
-                THEN tt.description ELSE '' END AS item_value
+           {$polylang_item_value_sql} AS item_value
     FROM (
         SELECT raw_language_rel.object_id, raw_language_rel.term_taxonomy_id
         FROM {$wpdb->term_relationships} raw_language_rel{$relationship_index_hint}
@@ -20925,7 +20939,7 @@ WHERE pm.meta_id IN ({$id_sql})";
             // requested posts own most rows. Ordering only by the leading
             // `post_id` key is sufficient for the completion frontier, so
             // forcing that index makes LIMIT stop the actual source scan.
-            $postmeta_index_hint = self::database_adapter_is_sqlite($wpdb)
+            $postmeta_index_hint = $is_sqlite
                 ? ''
                 : ' FORCE INDEX (post_id)';
             $selected_keys = [];
@@ -20940,9 +20954,10 @@ WHERE pm.meta_id IN ({$id_sql})";
                 ? '0'
                 : 'CASE WHEN pm.meta_key IN (' . implode(',', array_fill(0, count($selected_keys), '%s'))
                     . ') THEN OCTET_LENGTH(pm.meta_value) ELSE 0 END';
+            $meta_item_key_sql = self::dependency_text_projection('pm.meta_key', $is_sqlite, 255);
             $branches[] = "SELECT * FROM (
     SELECT pm.post_id AS post_order, 0 AS row_order, 'meta' AS source_kind,
-           pm.post_id, pm.meta_key AS item_key, pm.meta_id AS source_id,
+           pm.post_id, {$meta_item_key_sql} AS item_key, pm.meta_id AS source_id,
            {$selected_value_bytes_sql} AS item_value_bytes,
            pm.meta_id AS source_order, 0 AS is_selected, '' AS item_value
     FROM {$wpdb->postmeta} pm{$postmeta_index_hint}
@@ -20959,22 +20974,31 @@ WHERE pm.meta_id IN ({$id_sql})";
             && (defined('ICL_SITEPRESS_VERSION') || isset($GLOBALS['sitepress']));
         if ($wpml_active) {
             $translations = (string) ($wpdb->prefix ?? '') . 'icl_translations';
-            $wpml_post_index_hint = self::database_adapter_is_sqlite($wpdb)
+            $wpml_post_index_hint = $is_sqlite
                 ? ''
                 : ' FORCE INDEX (PRIMARY)';
-            $wpml_translation_index_hint = self::database_adapter_is_sqlite($wpdb)
+            $wpml_translation_index_hint = $is_sqlite
                 ? ''
                 : ' FORCE INDEX (el_type_id)';
-            $wpml_join = self::database_adapter_is_sqlite($wpdb) ? 'INNER JOIN' : 'STRAIGHT_JOIN';
-            $wpml_element_type = self::database_adapter_is_sqlite($wpdb)
-                ? "('post_' || wpml_post.post_type)"
-                : "CONCAT('post_', wpml_post.post_type)";
+            $wpml_join = $is_sqlite ? 'INNER JOIN' : 'STRAIGHT_JOIN';
+            $wpml_element_type = self::dependency_text_projection(
+                $is_sqlite
+                    ? "('post_' || wpml_post.post_type)"
+                    : "CONCAT('post_', wpml_post.post_type)",
+                $is_sqlite,
+                60
+            );
+            $wpml_item_value_sql = self::dependency_text_projection(
+                "CASE WHEN OCTET_LENGTH(wpml_translation.language_code) <= 64 THEN wpml_translation.language_code ELSE '' END",
+                $is_sqlite,
+                4096
+            );
             $branches[] = "SELECT * FROM (
     SELECT wpml_post.ID AS post_order, 0 AS row_order, 'wpml' AS source_kind,
            /* wp_fts:wpml-languages */ wpml_post.ID AS post_id,
            '' AS item_key, wpml_translation.translation_id AS source_id,
            0 AS item_value_bytes, wpml_translation.translation_id AS source_order, 0 AS is_selected,
-           CASE WHEN OCTET_LENGTH(wpml_translation.language_code) <= 64 THEN wpml_translation.language_code ELSE '' END AS item_value
+           {$wpml_item_value_sql} AS item_value
     FROM {$wpdb->posts} wpml_post{$wpml_post_index_hint}
     {$wpml_join} {$translations} wpml_translation{$wpml_translation_index_hint}
       ON wpml_translation.element_type = {$wpml_element_type}
@@ -21002,6 +21026,14 @@ WHERE p.ID IN ({$post_placeholders})";
         }
 
         return [implode("\nUNION ALL\n", $branches), $args, $source_kinds];
+    }
+
+    /** Give bounded UNION text one collation without promoting VARCHAR fields to BLOBs. */
+    private static function dependency_text_projection(string $expression, bool $is_sqlite, int $max_chars): string
+    {
+        return $is_sqlite
+            ? $expression
+            : "CAST({$expression} AS CHAR({$max_chars}) CHARACTER SET utf8mb4) COLLATE utf8mb4_bin";
     }
 
     /** @param array<int,int|string> $args */
