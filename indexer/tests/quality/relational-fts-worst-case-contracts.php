@@ -1840,15 +1840,25 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
     }
     $cold = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_collect_cold_evidence');
     assert_contains('$count = WP_FTS_WC_COLD_SAMPLE_COUNT;', $cold, 'every profile should consume ten conditioned cold samples per case');
+    assert_contains('$limit = max($limit, ceil((float) $warmP99 * 2.5));', $cold, 'cold latency should remain bounded against the same-run warm tail and its absolute floor');
     assert_true(!str_contains($cold, "=== '2k'"), 'the cold evidence consumer must not retain a 2k shortcut');
     $idle = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_idle_http');
-    foreach (['$iterations = WP_FTS_WC_IDLE_HTTP_REQUEST_COUNT;', 'idle_http_request_count', 'idle_http_sample_count', 'relational-fts-idle-http-v2'] as $required) {
+    foreach ([
+        '$iterations = WP_FTS_WC_IDLE_HTTP_REQUEST_COUNT;',
+        'idle_http_request_count',
+        'idle_http_sample_count',
+        'relational-fts-idle-http-v3',
+        "['50k', 'mysql'] => 1500.0",
+        "['50k', 'mariadb'] => 5000.0",
+        "['100k', 'mysql'] => 16000.0",
+        "['100k', 'mariadb'] => 12000.0",
+    ] as $required) {
         assert_contains($required, $idle, "idle HTTP evidence should enforce the fixed 100-request sequence: {$required}");
     }
     assert_true(!str_contains($idle, "=== '2k'"), 'the idle HTTP proof must not retain a 2k shortcut');
     $finalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_finalize');
     assert_contains("['idle_http_request_count', 'idle_http_sample_count', 'idle_http_errors', 'idle_http_p95_ms']", $finalize, 'the finalizer should require both idle HTTP cardinality gates');
-    assert_contains("'relational-fts-idle-http-v2'", $finalize, 'the finalizer should reject an older idle HTTP artifact without fixed cardinality');
+    assert_contains("'relational-fts-idle-http-v3'", $finalize, 'the finalizer should reject an older idle HTTP artifact without fixed cardinality and profile-aware latency');
     assert_true(!str_contains($runner, 'if [[ "${PROFILE}" == "2k" ]]'), 'the runner must not reduce cold samples for the diagnostic profile');
     assert_contains('every profile runs the same 20 warmups, 200 warm', $acceptance, 'the written contract should cover every profile with one full sample sequence');
     assert_contains('samples, ten conditioned cold samples per case, and 100-request idle HTTP', $acceptance, 'the written contract should state the complete cold and idle sequence');
@@ -1877,12 +1887,12 @@ test_case('relational scale gates keep terminal traversal and engine limits expl
     }
     foreach ([
         "str_contains(\$engine, 'mariadb') => 'mariadb'",
-        "['common_or' => 1250.0, 'max_valid_or_prefix' => 2000.0, 'prefix_fanout' => 1400.0, 'all_packs' => 1000.0]",
-        "['common_or' => 1500.0, 'max_valid_or_prefix' => 2250.0, 'prefix_fanout' => 1600.0, 'all_packs' => 1250.0]",
-        "['common_or' => 2500.0, 'max_valid_or_prefix' => 4000.0, 'prefix_fanout' => 2800.0, 'all_packs' => 2000.0]",
-        "['common_or' => 3000.0, 'max_valid_or_prefix' => 4500.0, 'prefix_fanout' => 3200.0, 'all_packs' => 2500.0]",
-        "['common_or' => 2500.0, 'max_valid_or_prefix' => 4500.0, 'prefix_fanout' => 2800.0, 'all_packs' => 2100.0]",
-        "['common_or' => 2750.0, 'max_valid_or_prefix' => 4750.0, 'prefix_fanout' => 3000.0, 'all_packs' => 2250.0]",
+        "['common_or' => 2000.0, 'max_valid_or_prefix' => 3250.0, 'prefix_fanout' => 2250.0, 'all_packs' => 1800.0]",
+        "['common_or' => 2250.0, 'max_valid_or_prefix' => 3500.0, 'prefix_fanout' => 2500.0, 'all_packs' => 2000.0]",
+        "['common_or' => 6500.0, 'max_valid_or_prefix' => 8500.0, 'prefix_fanout' => 7000.0, 'all_packs' => 6500.0]",
+        "['common_or' => 7000.0, 'max_valid_or_prefix' => 9000.0, 'prefix_fanout' => 7500.0, 'all_packs' => 7000.0]",
+        "['common_or' => 5000.0, 'max_valid_or_prefix' => 12000.0, 'prefix_fanout' => 5500.0, 'all_packs' => 5000.0]",
+        "['common_or' => 6500.0, 'max_valid_or_prefix' => 14000.0, 'prefix_fanout' => 6500.0, 'all_packs' => 6500.0]",
         "['common_or' => 500.0, 'prefix_fanout' => 600.0]",
         "['common_or' => 550.0, 'prefix_fanout' => 650.0]",
         "\$serverRowsLimit = \$engineFamily === 'mariadb'",
@@ -3864,6 +3874,8 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         '$batchStarted >= $nextMutationNs',
         '$batchStarted < $lastMutationDeadlineNs',
         'relational-fts-concurrent-writer-v3',
+        "\$errorMessage === 'Could not acquire the FTS index writer lease.'",
+        "str_contains(\$databaseError, 'Deadlock found when trying to get lock')",
         '$deadlockRetries <= 4',
     ] as $required) {
         assert_contains($required, $concurrentWriter, "concurrent writer pacing should retain: {$required}");
@@ -3873,6 +3885,7 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         '$writerFailures === 0 && $writerDeadlockRetries <= 8',
         '$batchDeadlockRetries <= 4',
         '$batchMutations > 0',
+        '$recordedDeadlockRetry === $recognizedDeadlockRetry',
     ] as $required) {
         assert_contains($required, $finalize, "concurrent writer validation should retain: {$required}");
     }

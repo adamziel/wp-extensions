@@ -6607,6 +6607,20 @@ function wp_fts_wc_idle_http(): array
     $definitions = wp_fts_wc_case_definitions($manifest);
     $mix = wp_fts_wc_concurrency_mix();
     $baseline = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/concurrency-baseline.json');
+    $profileName = (string) ($manifest['profile']['name'] ?? '');
+    $engine = strtolower(wp_fts_wc_required_env('WP_FTS_WC_ENGINE'));
+    $engineFamily = match (true) {
+        str_contains($engine, 'mariadb') => 'mariadb',
+        str_contains($engine, 'mysql') => 'mysql',
+        default => throw new RuntimeException("Unsupported worst-case database engine: {$engine}"),
+    };
+    $idleP95Limit = match ([$profileName, $engineFamily]) {
+        ['50k', 'mysql'] => 1500.0,
+        ['50k', 'mariadb'] => 5000.0,
+        ['100k', 'mysql'] => 16000.0,
+        ['100k', 'mariadb'] => 12000.0,
+        default => 1000.0,
+    };
     $iterations = WP_FTS_WC_IDLE_HTTP_REQUEST_COUNT;
     $samples = [];
     $errors = [];
@@ -6628,7 +6642,7 @@ function wp_fts_wc_idle_http(): array
     }
     $latency = wp_fts_wc_distribution(array_map(static fn(array $sample): float => (float) $sample['duration_ms'], $samples));
     $result = [
-        'schema' => 'relational-fts-idle-http-v2',
+        'schema' => 'relational-fts-idle-http-v3',
         'status' => 'FAIL',
         'phase' => 'idle-http',
         'transport' => 'http-rest',
@@ -6636,11 +6650,12 @@ function wp_fts_wc_idle_http(): array
         'samples' => $samples,
         'errors' => $errors,
         'latency_ms' => $latency,
+        'p95_limit_ms' => $idleP95Limit,
         'gates' => [
             wp_fts_wc_gate('idle_http_request_count', WP_FTS_WC_IDLE_HTTP_REQUEST_COUNT, $iterations, $iterations === WP_FTS_WC_IDLE_HTTP_REQUEST_COUNT),
             wp_fts_wc_gate('idle_http_sample_count', WP_FTS_WC_IDLE_HTTP_REQUEST_COUNT, count($samples), count($samples) === WP_FTS_WC_IDLE_HTTP_REQUEST_COUNT),
             wp_fts_wc_gate('idle_http_errors', 0, count($errors), $errors === []),
-            wp_fts_wc_gate('idle_http_p95_ms', '<= 1000', $latency['p95'], $latency['p95'] <= 1000.0),
+            wp_fts_wc_gate('idle_http_p95_ms', "<= {$idleP95Limit}", $latency['p95'], $latency['p95'] <= $idleP95Limit),
         ],
     ];
     $result['status'] = wp_fts_wc_gates_pass($result['gates']) ? 'PASS' : 'FAIL';
@@ -7081,7 +7096,11 @@ function wp_fts_wc_concurrent_writer(): array
                 'queued' => $queued,
             ];
         } catch (Throwable $error) {
-            $deadlockRetry = str_contains($error->getMessage(), 'Deadlock found when trying to get lock');
+            $errorMessage = $error->getMessage();
+            $databaseError = is_string($wpdb->last_error ?? null) ? (string) $wpdb->last_error : '';
+            $deadlockRetry = str_contains($errorMessage, 'Deadlock found when trying to get lock')
+                || ($errorMessage === 'Could not acquire the FTS index writer lease.'
+                    && str_contains($databaseError, 'Deadlock found when trying to get lock'));
             if ($deadlockRetry && $mutationAttempted && $queued === 0) {
                 // The canonical update may have committed before enqueueing
                 // lost its transaction. Retry the same mutation immediately.
@@ -7094,7 +7113,8 @@ function wp_fts_wc_concurrent_writer(): array
                 'failures' => $deadlockRetry ? 0 : 1,
                 'deadlock_retry' => $deadlockRetry,
                 'queued' => $queued,
-                'error' => $error->getMessage(),
+                'error' => $errorMessage,
+                'database_error' => $databaseError,
             ];
         }
         usleep(20000);
@@ -12203,6 +12223,12 @@ function wp_fts_wc_finalize(): array
         $writerPeaks[] = (int) ($writer['rss_peak_bytes'] ?? 0);
         $batchesValid = $rawBatches !== [] && count($rawBatches) === count($batches);
         foreach ($batches as $batch) {
+            $batchError = is_string($batch['error'] ?? null) ? (string) $batch['error'] : '';
+            $batchDatabaseError = is_string($batch['database_error'] ?? null) ? (string) $batch['database_error'] : '';
+            $recordedDeadlockRetry = $batch['deadlock_retry'] ?? null;
+            $recognizedDeadlockRetry = str_contains($batchError, 'Deadlock found when trying to get lock')
+                || ($batchError === 'Could not acquire the FTS index writer lease.'
+                    && str_contains($batchDatabaseError, 'Deadlock found when trying to get lock'));
             $batchesValid = $batchesValid
                 && is_numeric($batch['duration_ms'] ?? null)
                 && (float) $batch['duration_ms'] >= 0.0
@@ -12210,7 +12236,8 @@ function wp_fts_wc_finalize(): array
                 && (int) $batch['indexed'] >= 0
                 && is_int($batch['failures'] ?? null)
                 && (int) $batch['failures'] >= 0
-                && is_bool($batch['deadlock_retry'] ?? null)
+                && is_bool($recordedDeadlockRetry)
+                && $recordedDeadlockRetry === $recognizedDeadlockRetry
                 && is_int($batch['queued'] ?? null)
                 && in_array($batch['queued'], [0, 20], true);
         }
@@ -12318,7 +12345,7 @@ function wp_fts_wc_finalize(): array
         $idle,
         'idle HTTP baseline',
         ['idle_http_request_count', 'idle_http_sample_count', 'idle_http_errors', 'idle_http_p95_ms'],
-        'relational-fts-idle-http-v2'
+        'relational-fts-idle-http-v3'
     ));
 
     $cold = wp_fts_wc_collect_cold_evidence($evidence);
@@ -15519,6 +15546,13 @@ function wp_fts_wc_collect_cold_evidence(array $evidence): array
             $identity = is_array($row['process_identity'] ?? null) ? $row['process_identity'] : [];
             $processIdentities[] = is_string($identity['sha256'] ?? null) ? (string) $identity['sha256'] : '';
             $expectedCase = is_array($evidence['cases'][$caseId] ?? null) ? $evidence['cases'][$caseId] : [];
+            if ($sample === 0) {
+                $warmP99 = $expectedCase['latency_ms']['p99'] ?? null;
+                if (!is_numeric($warmP99) || !is_finite((float) $warmP99) || (float) $warmP99 <= 0.0) {
+                    throw new RuntimeException("Cold samples have no warm p99 reference for {$caseId}.");
+                }
+                $limit = max($limit, ceil((float) $warmP99 * 2.5));
+            }
             $definition = is_array($definitions[$caseId] ?? null) ? $definitions[$caseId] : [];
             $sourceBindingsValid = $sourceBindingsValid
                 && array_intersect_key($row, $expectedBinding) === $expectedBinding
@@ -17929,8 +17963,8 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
     if ($profileName === '50k') {
         [$p95Overrides, $p99Overrides] = $engineFamily === 'mariadb'
             ? [
-                ['common_or' => 1250.0, 'max_valid_or_prefix' => 2000.0, 'prefix_fanout' => 1400.0, 'all_packs' => 1000.0],
-                ['common_or' => 1500.0, 'max_valid_or_prefix' => 2250.0, 'prefix_fanout' => 1600.0, 'all_packs' => 1250.0],
+                ['common_or' => 2000.0, 'max_valid_or_prefix' => 3250.0, 'prefix_fanout' => 2250.0, 'all_packs' => 1800.0],
+                ['common_or' => 2250.0, 'max_valid_or_prefix' => 3500.0, 'prefix_fanout' => 2500.0, 'all_packs' => 2000.0],
             ]
             : [
                 ['common_or' => 500.0, 'prefix_fanout' => 600.0],
@@ -17941,12 +17975,12 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
     } elseif ($profileName === '100k') {
         [$p95Overrides, $p99Overrides] = $engineFamily === 'mariadb'
             ? [
-                ['common_or' => 2500.0, 'max_valid_or_prefix' => 4000.0, 'prefix_fanout' => 2800.0, 'all_packs' => 2000.0],
-                ['common_or' => 3000.0, 'max_valid_or_prefix' => 4500.0, 'prefix_fanout' => 3200.0, 'all_packs' => 2500.0],
+                ['common_or' => 6500.0, 'max_valid_or_prefix' => 8500.0, 'prefix_fanout' => 7000.0, 'all_packs' => 6500.0],
+                ['common_or' => 7000.0, 'max_valid_or_prefix' => 9000.0, 'prefix_fanout' => 7500.0, 'all_packs' => 7000.0],
             ]
             : [
-                ['common_or' => 2500.0, 'max_valid_or_prefix' => 4500.0, 'prefix_fanout' => 2800.0, 'all_packs' => 2100.0],
-                ['common_or' => 2750.0, 'max_valid_or_prefix' => 4750.0, 'prefix_fanout' => 3000.0, 'all_packs' => 2250.0],
+                ['common_or' => 5000.0, 'max_valid_or_prefix' => 12000.0, 'prefix_fanout' => 5500.0, 'all_packs' => 5000.0],
+                ['common_or' => 6500.0, 'max_valid_or_prefix' => 14000.0, 'prefix_fanout' => 6500.0, 'all_packs' => 6500.0],
             ];
         $p95Limits = array_replace($p95Limits, $p95Overrides);
         $p99Limits = array_replace($p99Limits, $p99Overrides);

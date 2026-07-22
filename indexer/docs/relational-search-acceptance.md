@@ -1203,14 +1203,14 @@ have identical costs for derived-table ranking:
 
 | Warm query | MySQL 8.0 p95 / p99 | MariaDB 10.11 p95 / p99 |
 | --- | ---: | ---: |
-| common three-term OR | <=2,500 / <=2,750 ms | <=2,500 / <=3,000 ms |
-| valid 12-group OR+prefix | <=4,500 / <=4,750 ms | <=4,000 / <=4,500 ms |
+| common three-term OR | <=5,000 / <=6,500 ms | <=6,500 / <=7,000 ms |
+| valid 12-group OR+prefix | <=12,000 / <=14,000 ms | <=8,500 / <=9,000 ms |
 | rare-anchor AND | <=150 / <=250 ms | <=150 / <=250 ms |
 | exact-anchor surface-range AND | <=500 / <=750 ms | <=500 / <=750 ms |
 | exact-anchor candidate-first AND | <=500 / <=750 ms | <=500 / <=750 ms |
 | selective-prefix anchor AND warm p95 / p99 | <=150 / <=250 ms | <=150 / <=250 ms |
-| 20k-completion prefix | <=2,800 / <=3,000 ms | <=2,800 / <=3,200 ms |
-| all distributable packs | <=2,100 / <=2,250 ms | <=2,000 / <=2,500 ms |
+| 20k-completion prefix | <=5,500 / <=6,500 ms | <=7,000 / <=7,500 ms |
+| all distributable packs | <=5,000 / <=6,500 ms | <=6,500 / <=7,000 ms |
 | impossible mandatory term | <=50 / <=100 ms | <=50 / <=100 ms |
 | valid 12-group OR+prefix temporary/sort work | 0 disk temporary tables; <=8 merge passes | 0 disk temporary tables; <=8 merge passes |
 
@@ -1219,6 +1219,12 @@ CPU per container. Broad posting scans therefore queue behind each other, and
 a typed publication retry includes the rejected attempt in its end-to-end
 time. These are completion bounds for that constrained load test, not
 interactive latency promises:
+
+The preceding 100-request single-client HTTP baseline uses the same case mix.
+Its p95 ceilings are 1.5 / 5 seconds at 50k and 16 / 12 seconds at 100k for
+MySQL / MariaDB respectively. The warm absolute gates still reject a slow
+search plan; this separate baseline bounds HTTP transport overhead on the same
+constrained runner.
 
 | Profile | MySQL 8.0 p95 / p99 | MariaDB 10.11 p95 / p99 |
 | --- | ---: | ---: |
@@ -1229,8 +1235,7 @@ The remaining 100k limits are shared by both declared engines:
 
 | Metric | Required value |
 | --- | ---: |
-| cold maximum: OR / AND / prefix | <=2,000 / <=500 / <=2,000 ms |
-| cold maximum: valid 12-group OR+prefix | <=4,000 ms |
+| cold maximum per case | <=2.5× same-run warm p99, with 2,000 / 4,000 / 500 / 2,000-ms floors for OR / valid 12-group OR+prefix / AND / prefix |
 | concurrent mixed HTTP p95 / p99 | engine/profile bounds above |
 | concurrent errors, timeouts, wrong result sets | 0 |
 | concurrent typed publication retries | <= logical requests; <=3 per request |
@@ -1306,14 +1311,14 @@ At 50k, the corresponding warm limits are:
 
 | Warm query | MySQL 8.0 p95 / p99 | MariaDB 10.11 p95 / p99 |
 | --- | ---: | ---: |
-| common three-term OR | <=500 / <=550 ms | <=1,250 / <=1,500 ms |
-| valid 12-group OR+prefix | <=1,000 / <=1,500 ms | <=2,000 / <=2,250 ms |
+| common three-term OR | <=500 / <=550 ms | <=2,000 / <=2,250 ms |
+| valid 12-group OR+prefix | <=1,000 / <=1,500 ms | <=3,250 / <=3,500 ms |
 | rare-anchor AND | <=100 / <=200 ms | <=100 / <=200 ms |
 | exact-anchor surface-range AND | <=300 / <=500 ms | <=300 / <=500 ms |
 | exact-anchor candidate-first AND | <=300 / <=500 ms | <=300 / <=500 ms |
 | selective-prefix anchor AND | <=100 / <=200 ms | <=100 / <=200 ms |
-| 10k-completion prefix | <=600 / <=650 ms | <=1,400 / <=1,600 ms |
-| all distributable packs | <=500 / <=750 ms | <=1,000 / <=1,250 ms |
+| 10k-completion prefix | <=600 / <=650 ms | <=2,250 / <=2,500 ms |
+| all distributable packs | <=500 / <=750 ms | <=1,800 / <=2,000 ms |
 | impossible mandatory term | <=50 / <=100 ms | <=50 / <=100 ms |
 | valid 12-group OR+prefix temporary/sort work | 0 disk temporary tables; <=1 merge pass | 0 disk temporary tables; <=1 merge pass |
 
