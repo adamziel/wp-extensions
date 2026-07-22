@@ -967,11 +967,15 @@ vectors, duration, PHP peak delta, and conservative Linux RSS peak delta. PHP's
 peak counter is reset before each pass. Linux attribution remains `VmHWM` after
 minus live `VmRSS` before in the fresh worker process, never high-water mark
 minus an older high-water mark. The retained aggregate peak must dominate every
-per-pass peak. The enqueue uses the oldest valid timestamp and every worker
-claim is capped at the number of target rows still present, so this focused
-phase leaves the retained dirty-head backlog untouched. The aggregate must
-still index all twenty rows in at most 100 passes. Every pass executes at most
-20 recognized statements and emits
+per-pass peak. Before the focused phase, the harness moves the retained
+dirty-head backlog's availability exactly one day forward. It then exercises
+the normal 100-row worker claim while the source-byte budget indexes a bounded
+prefix and returns the oversized suffix for another pass. Finally, the harness
+reverses that exact offset and checks that the unrelated durable row count did
+not change. This isolates the measurement without adding a production-only
+worker mode or draining useful backlog. The aggregate must still index all
+twenty rows in at most 100 passes. Every pass executes at most 20 recognized
+statements and emits
 no statement above 4 MiB. Those passes finish within 30 seconds and
 add at most 32 MiB PHP and RSS while remaining below 128 MiB absolute PHP and RSS.
 The one enqueue is at most 1 MiB and five seconds. Fresh-process front-end

@@ -3206,21 +3206,32 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     $manifestRelease = strpos($maxValidSetup, 'unset($manifest);');
     $seedRelease = strpos($maxValidSetup, 'unset($seed, $seedHashInput, $seedRows);');
     $databaseRelease = strpos($maxValidSetup, '$wpdb->flush();');
-    $isolatedEnqueue = strpos($maxValidSetup, 'enqueue_many($ids, 1)');
+    $backlogDelay = strpos($maxValidSetup, '$backlogDelaySeconds = 86400;');
+    $backlogDefer = strpos($maxValidSetup, 'available_at=available_at+{$backlogDelaySeconds}');
+    $isolatedEnqueue = strpos($maxValidSetup, 'enqueue_many($ids)');
     $workerPasses = strpos($maxValidSetup, 'for ($pass = 0; $pass < 100; $pass++)');
+    $backlogRestore = strpos($maxValidSetup, 'available_at=available_at-{$backlogDelaySeconds}');
     assert_true(
         $manifestRelease !== false
             && $seedRelease !== false
             && $databaseRelease !== false
+            && $backlogDelay !== false
+            && $backlogDefer !== false
             && $isolatedEnqueue !== false
             && $workerPasses !== false
+            && $backlogRestore !== false
             && $manifestRelease < $seedRelease
             && $seedRelease < $databaseRelease
-            && $databaseRelease < $isolatedEnqueue
-            && $isolatedEnqueue < $workerPasses,
-        'near-limit setup should release seed records and prioritize only its own rows before measuring worker memory'
+            && $databaseRelease < $backlogDelay
+            && $backlogDelay < $backlogDefer
+            && $backlogDefer < $isolatedEnqueue
+            && $isolatedEnqueue < $workerPasses
+            && $workerPasses < $backlogRestore,
+        'near-limit setup should release seed records and reversibly defer unrelated work around the measured worker'
     );
-    assert_contains("'batch_size' => \$remainingTargets", $maxValidSetup, 'near-limit setup should not claim rows from the retained dirty-head backlog');
+    assert_contains("'batch_size' => 100", $maxValidSetup, 'near-limit setup should exercise the production-sized worker claim');
+    assert_contains('$deferredWork === $unrelatedWorkBefore', $maxValidSetup, 'near-limit setup should defer every unrelated durable row');
+    assert_contains('$restoredWork === $unrelatedWorkBefore', $maxValidSetup, 'near-limit setup should restore every deferred durable row');
     assert_contains('$unrelatedWorkAfter === $unrelatedWorkBefore', $maxValidSetup, 'near-limit setup should prove that it preserved unrelated durable work');
     foreach ([
         "\$rssBefore = wp_fts_wc_rss_bytes('VmRSS');",

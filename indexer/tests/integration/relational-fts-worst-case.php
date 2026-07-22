@@ -3606,12 +3606,22 @@ ORDER BY ID",
         "SELECT COUNT(*) FROM `{$work}` WHERE kind='post' AND post_id NOT IN ({$idSql})",
         'near-limit unrelated work before setup'
     );
+    $backlogDelaySeconds = 86400;
+    // Validation deliberately retains the dirty-head backlog. Delay that work
+    // for this focused phase, then reverse the exact offset before continuing.
+    $deferredWork = $wpdb->query(
+        "UPDATE `{$work}` SET available_at=available_at+{$backlogDelaySeconds}
+WHERE kind='post' AND post_id NOT IN ({$idSql})"
+    );
+    wp_fts_wc_assert(
+        is_int($deferredWork)
+            && $deferredWork === $unrelatedWorkBefore
+            && trim((string) $wpdb->last_error) === '',
+        'Near-limit setup could not defer the retained dirty-head backlog.'
+    );
     $queue = new WP_FTS_Index_Queue($wpdb);
     $enqueueStarted = hrtime(true);
-    // Validation deliberately retains the dirty-head backlog. Give this
-    // focused fixture the oldest valid timestamp, then claim no more rows than
-    // it still owns so the measured worker cannot consume unrelated work.
-    $enqueue = wp_fts_wc_record_queries(static fn() => $queue->enqueue_many($ids, 1));
+    $enqueue = wp_fts_wc_record_queries(static fn() => $queue->enqueue_many($ids));
     $enqueueDuration = wp_fts_wc_elapsed_ms($enqueueStarted);
     $enqueueBytes = array_map('strlen', array_values($enqueue['queries']));
     $enqueueMaxBytes = max($enqueueBytes ?: [0]);
@@ -3619,11 +3629,7 @@ ORDER BY ID",
     $passes = [];
     $phpLifetimePeak = memory_get_peak_usage(true);
     for ($pass = 0; $pass < 100; $pass++) {
-        $remainingTargets = wp_fts_wc_checked_count(
-            "SELECT COUNT(*) FROM `{$work}` WHERE post_id IN ({$idSql})",
-            'near-limit setup work'
-        );
-        if ($remainingTargets === 0) {
+        if (wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE post_id IN ({$idSql})", 'near-limit setup work') === 0) {
             break;
         }
         gc_collect_cycles();
@@ -3634,7 +3640,7 @@ ORDER BY ID",
         $started = hrtime(true);
         $recorded = wp_fts_wc_record_queries(static fn(): array => WP_FTS_Plugin::process_manual_index_batch([
             'source' => 'worst-case-max-valid',
-            'batch_size' => $remainingTargets,
+            'batch_size' => 100,
             'time_budget' => 20.0,
         ]));
         $duration = wp_fts_wc_elapsed_ms($started);
@@ -3675,12 +3681,27 @@ ORDER BY ID",
         unset($recorded, $summary, $queries, $statementBytes, $statementHashes, $statementRoles);
     }
     $remaining = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE post_id IN ({$idSql})", 'near-limit setup final work');
-    wp_fts_wc_assert($remaining === 0, 'Near-limit posts did not drain from durable work.');
+    $restoredWork = $wpdb->query(
+        "UPDATE `{$work}` SET available_at=available_at-{$backlogDelaySeconds}
+WHERE kind='post' AND post_id NOT IN ({$idSql})"
+    );
+    wp_fts_wc_assert(
+        is_int($restoredWork)
+            && $restoredWork === $unrelatedWorkBefore
+            && trim((string) $wpdb->last_error) === '',
+        'Near-limit setup could not restore the retained dirty-head backlog.'
+    );
     $unrelatedWorkAfter = wp_fts_wc_checked_count(
         "SELECT COUNT(*) FROM `{$work}` WHERE kind='post' AND post_id NOT IN ({$idSql})",
         'near-limit unrelated work after setup'
     );
     wp_fts_wc_assert($unrelatedWorkAfter === $unrelatedWorkBefore, 'Near-limit setup consumed unrelated durable work.');
+    wp_fts_wc_assert(
+        $remaining === 0,
+        'Near-limit posts did not drain from durable work: remaining=' . $remaining
+            . ', passes=' . count($passes)
+            . ', indexed=' . array_sum(array_column($passes, 'indexed')) . '.'
+    );
     $documents = wp_fts_wc_identifier($wpdb->prefix . 'fts_documents');
     $indexed = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$documents}` WHERE post_id IN ({$idSql})", 'near-limit indexed documents');
     wp_fts_wc_assert($indexed === 20, 'Near-limit posts were not all indexed.');
