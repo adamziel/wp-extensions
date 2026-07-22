@@ -1470,7 +1470,7 @@ final class WP_FTS_Test_WPDB
 
     /** @var array<string,string[]> */
     public array $schemaColumns = [
-        'wp_posts' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt'],
+        'wp_posts' => ['ID', 'post_type', 'post_status'],
         'wp_term_relationships' => ['object_id', 'term_taxonomy_id'],
         'wp_fts_terms' => ['term_id', 'lang', 'kind', 'term', 'doc_freq'],
         'wp_fts_postings' => ['term_id', 'post_id', 'impact'],
@@ -1485,7 +1485,7 @@ final class WP_FTS_Test_WPDB
     public array $schemaIndexes = [
         'wp_posts' => [
             'PRIMARY' => ['ID'],
-            'wp_fts_type_status_id' => ['post_type', 'post_status', 'ID', 'post_password', 'post_date_gmt'],
+            'wp_fts_type_status_id' => ['post_type', 'post_status', 'ID'],
         ],
         'wp_term_relationships' => [
             'PRIMARY' => ['object_id', 'term_taxonomy_id'],
@@ -1494,7 +1494,7 @@ final class WP_FTS_Test_WPDB
         ],
         'wp_fts_terms' => ['PRIMARY' => ['term_id'], 'term_identity' => ['lang', 'kind', 'term'], 'empty_terms' => ['doc_freq']],
         'wp_fts_postings' => ['PRIMARY' => ['term_id', 'post_id'], 'post_term' => ['post_id', 'term_id']],
-        'wp_fts_documents' => ['PRIMARY' => ['post_id'], 'visibility' => ['post_id']],
+        'wp_fts_documents' => ['PRIMARY' => ['post_id']],
         'wp_fts_work' => ['PRIMARY' => ['job_key'], 'ready' => ['kind', 'state', 'available_at', 'post_id', 'job_key'], 'recoverable' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key'], 'claim_token' => ['claim_token', 'post_id'], 'kind_job' => ['kind', 'job_key'], 'scope_subject' => ['kind', 'scope_coverage', 'scope_subject_type', 'scope_subject_id'], 'dirty' => ['post_id', 'kind']],
     ];
 
@@ -1973,7 +1973,7 @@ final class WP_FTS_Test_WPDB
             'filtered' => [
                 'table' => $this->posts,
                 'name' => WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME,
-                'columns' => ['post_type', 'post_status', 'ID', 'post_password', 'post_date_gmt'],
+                'columns' => ['post_type', 'post_status', 'ID'],
             ],
         ];
         foreach ($scopeIndexes as $scopeIndex) {
@@ -7310,7 +7310,7 @@ final class WP_FTS_Test_WPDB
             [$columns, $indexes] = match ($suffix) {
                 'fts_terms' => [['term_id', 'lang', 'kind', 'term', 'doc_freq'], ['PRIMARY' => ['term_id'], 'term_identity' => ['lang', 'kind', 'term'], 'empty_terms' => ['doc_freq']]],
                 'fts_postings' => [['term_id', 'post_id', 'impact'], ['PRIMARY' => ['term_id', 'post_id'], 'post_term' => ['post_id', 'term_id']]],
-                'fts_documents' => [['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at'], ['PRIMARY' => ['post_id'], 'visibility' => ['post_id']]],
+                'fts_documents' => [['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at'], ['PRIMARY' => ['post_id']]],
                 'fts_work' => [['job_key', 'kind', 'post_id', 'generation', 'state', 'available_at', 'attempts', 'claim_token', 'claimed_generation', 'claim_expires_at', 'cursor_post_id', 'scope_coverage', 'scope_incarnation', 'scope_subject_type', 'scope_subject_id', 'payload', 'last_error_code', 'last_error_at'], ['PRIMARY' => ['job_key'], 'ready' => ['kind', 'state', 'available_at', 'post_id', 'job_key'], 'recoverable' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key'], 'claim_token' => ['claim_token', 'post_id'], 'kind_job' => ['kind', 'job_key'], 'scope_subject' => ['kind', 'scope_coverage', 'scope_subject_type', 'scope_subject_id'], 'dirty' => ['post_id', 'kind']]],
             };
             $this->schemaColumns[$table] = $columns;
@@ -21772,7 +21772,7 @@ test_case('PHP and REST visibility stay exact inside set-oriented ranking', func
         assert_same(4, count($rankQueries), 'each supported PHP or REST request should execute one relational ranking statement');
         foreach ($rankQueries as $rankQuery) {
             $sql = (string) ($rankQuery['sql'] ?? '');
-            assert_contains('JOIN wp_posts wp_f FORCE INDEX (`wp_fts_type_status_id`) ON wp_f.ID = ranked.post_id', $sql, 'canonical WordPress visibility should use its covering index inside broad ranking');
+            assert_contains('JOIN wp_posts wp_f ON wp_f.ID = ranked.post_id', $sql, 'canonical WordPress visibility should be joined inside ranking');
             assert_contains("wp_f.post_password = ''", $sql, 'password visibility should be checked before LIMIT');
             assert_contains('LEFT JOIN wp_fts_work dirty_f', $sql, 'dirty generations should be excluded inside ranking');
             assert_true(strpos($sql, "wp_f.post_password = ''") < strrpos($sql, 'LIMIT %d'), 'visibility predicates must precede the page LIMIT');
@@ -30423,7 +30423,6 @@ test_case('relational storage emits the MySQL-dialect schema and stores per-lang
     assert_contains('KEY post_term (post_id,term_id)', $schemaSql, 'postings should support document reconciliation and anchored membership probes without duplicating mutable impact');
     assert_contains('CREATE TABLE wp_fts_documents', $schemaSql, 'schema should include the bounded document projection');
     assert_contains('snippet_text mediumtext NOT NULL', $schemaSql, 'document projection should retain only bounded snippet text');
-    assert_contains('KEY visibility (post_id)', $schemaSql, 'ranked visibility should not fetch broad candidates from snippet-bearing document rows');
     assert_contains('CREATE TABLE wp_fts_work', $schemaSql, 'schema should colocate direct and scope work');
     assert_contains('PRIMARY KEY  (job_key)', $schemaSql, 'work should use stable direct/scope job identities');
     assert_true(!str_contains(strtolower($schemaSql), 'fulltext'), 'schema must not use MySQL FULLTEXT');

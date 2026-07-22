@@ -1855,6 +1855,45 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
     record_check('relational worst-case fixed profile contract', 16);
 });
 
+test_case('relational scale gates keep terminal traversal and engine limits explicit', function (): void {
+    $root = dirname(__DIR__, 2);
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
+    $terminal = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_terminal_streaming_oracle');
+    $populate = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_populate_terminal_oracle');
+    $caseGates = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_case_gates');
+    $validate = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_validate');
+
+    assert_contains("const WP_FTS_WC_TERMINAL_QUERY_TERM = 'visibilityprobe';", $integration, 'terminal exact and prefix traversal should share one construction-known term');
+    assert_same(2, substr_count($terminal, "'query' => WP_FTS_WC_TERMINAL_QUERY_TERM"), 'both terminal cases should use the shared visible-band term');
+    assert_same(3, substr_count($populate, 'WP_FTS_WC_TERMINAL_QUERY_TERM'), 'the independent exact and prefix oracle should use the same term and prefix bound');
+    foreach ([
+        "\$expectedRows = (int) \$manifest['profile']['dirty'] + 200;",
+        "terminal_{\$caseId}_fixture_cardinality",
+        "['50k', '100k'], true) ? 5000 : 40",
+    ] as $required) {
+        assert_contains($required, $terminal, "terminal traversal should retain its explicit scale boundary: {$required}");
+    }
+    foreach ([
+        "str_contains(\$engine, 'mariadb') => 'mariadb'",
+        "['common_or' => 1250.0, 'max_valid_or_prefix' => 2000.0, 'prefix_fanout' => 1400.0, 'all_packs' => 1000.0]",
+        "['common_or' => 1500.0, 'max_valid_or_prefix' => 2250.0, 'prefix_fanout' => 1600.0, 'all_packs' => 1250.0]",
+        "['common_or' => 2500.0, 'max_valid_or_prefix' => 4000.0, 'prefix_fanout' => 2800.0, 'all_packs' => 2000.0]",
+        "['common_or' => 3000.0, 'max_valid_or_prefix' => 4500.0, 'prefix_fanout' => 3200.0, 'all_packs' => 2500.0]",
+        "['common_or' => 800.0, 'prefix_fanout' => 900.0, 'all_packs' => 600.0]",
+        "['common_or' => 900.0, 'prefix_fanout' => 1000.0]",
+        "['prefix_fanout' => 600.0]",
+        "\$serverRowsLimit = \$engineFamily === 'mariadb'",
+        "\$sortMergePassesLimit = \$profileName === '100k' ? 8 : 1;",
+    ] as $required) {
+        assert_contains($required, $caseGates, "scale limits should retain their measured engine/profile boundary: {$required}");
+    }
+    assert_contains("'storage_total_bytes', '<= 1342177280'", $validate, 'the total storage ceiling should retain the declared 1.25-GiB boundary');
+    foreach (['600 / 10,200 / 20,200 visible rows', 'MySQL 8.0 p95 / p99', 'MariaDB 10.11 p95 / p99', '<=1.25 GiB total'] as $required) {
+        assert_contains($required, $acceptance, "the written scale contract should retain: {$required}");
+    }
+});
+
 test_case('relational worst-case corpus starts with an empty configured post-type namespace', function (): void {
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     $setup = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_setup');
@@ -3288,7 +3327,6 @@ test_case('relational worst-case retains the real 57344-row old-posting frontier
         "'contains_delete_or_count' => \$resetHasForbiddenCorpusWork",
         "'schema_version' => 1",
         "'exact_current_contract' => true",
-        'KEY visibility (post_id)',
         "'recoverable' => ['unique' => false, 'columns' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key']]",
         "'only_canonical_tables' => \$postResetTables === \$expectedPostResetTables",
         'memory_reset_peak_usage()',
@@ -4020,7 +4058,7 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         'complete physical relation allowlist is',
         'The current schema requires two',
         '`wp_fts_term_object(term_taxonomy_id, object_id)`',
-        '`wp_fts_type_status_id(post_type, post_status, ID, post_password, post_date_gmt)`',
+        '`wp_fts_type_status_id(post_type, post_status, ID)`',
         'tables with their real InnoDB definitions',
         '100,001 posts and 300,001 relationships',
         'populated repair proof',

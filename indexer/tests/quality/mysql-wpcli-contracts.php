@@ -261,7 +261,6 @@ namespace {
             'snippet_text mediumtext NOT NULL',
             'indexed_at bigint unsigned NOT NULL DEFAULT 0',
             'PRIMARY KEY  (post_id)',
-            'KEY visibility (post_id)',
             'CREATE TABLE wp_fts_work',
             'job_key varbinary(191) NOT NULL',
             "kind varchar(16) NOT NULL",

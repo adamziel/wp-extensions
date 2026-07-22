@@ -68,7 +68,7 @@ test_case('quality schema creation records ownership before DDL and exact uninst
         assert_same(['filtered', 'targeted'], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION] ?? null, 'ownership intent must cover the exact two missing indexes');
         assert_same(2, count(wp_fts_scope_index_create_queries($fake)), 'a fresh scope capability should use exactly two core-table CREATE INDEX statements');
         assert_same(['term_taxonomy_id', 'object_id'], $fake->schemaIndexes['wp_term_relationships'][WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME] ?? null, 'targeted DDL must install the exact ordered columns');
-        assert_same(['post_type', 'post_status', 'ID', 'post_password', 'post_date_gmt'], $fake->schemaIndexes['wp_posts'][WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME] ?? null, 'filtered DDL must install the exact ordered covering columns');
+        assert_same(['post_type', 'post_status', 'ID'], $fake->schemaIndexes['wp_posts'][WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME] ?? null, 'filtered DDL must install the exact ordered columns');
 
         $fake->queries = [];
         WP_FTS_Plugin::uninstall();
@@ -191,7 +191,7 @@ test_case('quality schema creation stops after first DDL when its writer lease i
 test_case_with_pdo_sqlite_fixture('quality SQLite scope index names are complete, nonpartial, and unique per multisite table', function (): void {
     $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
     foreach (['wp_posts', 'wp_2_posts'] as $table) {
-        $wpdb->query("CREATE TABLE {$table} (ID INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL, post_password TEXT NOT NULL, post_date_gmt TEXT NOT NULL)");
+        $wpdb->query("CREATE TABLE {$table} (ID INTEGER PRIMARY KEY, post_type TEXT NOT NULL, post_status TEXT NOT NULL)");
     }
     foreach (['wp_term_relationships', 'wp_2_term_relationships'] as $table) {
         $wpdb->query("CREATE TABLE {$table} (object_id INTEGER NOT NULL, term_taxonomy_id INTEGER NOT NULL, PRIMARY KEY(object_id,term_taxonomy_id))");

@@ -816,19 +816,10 @@ test_case('relational visibility never walks taxonomy relationships per ranked c
     $storage = new WP_FTS_Relational_Storage(new WP_FTS_Test_WPDB());
     $visibilitySql = new ReflectionMethod(WP_FTS_Relational_Storage::class, 'visibility_sql');
     $visibilitySql->setAccessible(true);
-    $visibility = $visibilitySql->invoke($storage, 'ranked.post_id', 'ranked', ['post_types' => ['post']]);
+    $visibility = $visibilitySql->invoke($storage, 'ranked.post_id', 'ranked', []);
     assert_true(!str_contains((string) ($visibility['where'] ?? ''), 'term_relationships'), 'ranked visibility must not inspect taxonomy relationships');
     assert_true(!str_contains((string) ($visibility['joins'] ?? ''), 'term_relationships'), 'ranked visibility joins must remain independent of taxonomy fanout');
-    assert_contains('wp_fts_documents d_ranked FORCE INDEX (visibility)', (string) ($visibility['joins'] ?? ''), 'ranked visibility should probe the narrow document-existence index');
-    assert_contains('wp_posts wp_ranked FORCE INDEX (`wp_fts_type_status_id`)', (string) ($visibility['joins'] ?? ''), 'typed ranked visibility should stay on the covering WordPress index');
     assert_contains('LEFT JOIN wp_fts_work dirty_ranked FORCE INDEX (dirty)', (string) ($visibility['joins'] ?? ''), 'dirty visibility should always probe the post-first work index');
-
-    $hydration = $visibilitySql->invoke($storage, 'rank_ids.post_id', 'hydrated', ['post_types' => ['post']], true);
-    assert_true(!str_contains((string) ($hydration['joins'] ?? ''), 'd_hydrated FORCE INDEX (visibility)'), 'hydration must retain access to document language and snippet payload');
-    assert_contains('wp_posts wp_hydrated FORCE INDEX (`wp_fts_type_status_id`)', (string) ($hydration['joins'] ?? ''), 'bounded hydration may retain the covering visibility probe before reading selected post fields');
-
-    $untyped = $visibilitySql->invoke($storage, 'ranked.post_id', 'untyped', []);
-    assert_true(!str_contains((string) ($untyped['joins'] ?? ''), 'wp_untyped FORCE INDEX'), 'an all-post-type search must not force an index whose leading post_type key is unconstrained');
 });
 
 test_case('relational real Russian ambiguity retains exact lemmas without mbstring', function (): void {
@@ -1102,8 +1093,8 @@ test_case('relational MySQL rank arms pin bounded drivers ahead of postings and 
     $exactSql = (string) ($exact['sql'] ?? '');
 
     assert_contains('STRAIGHT_JOIN wp_fts_postings ap ON ap.term_id = aq.term_id', $exactSql, 'the rare dictionary arm must drive anchor postings by term id');
-    assert_contains('STRAIGHT_JOIN wp_fts_documents d_exact_anchor FORCE INDEX (visibility) ON', $exactSql, 'the rare posting candidate must drive its narrow document-existence probe');
-    assert_contains('STRAIGHT_JOIN wp_posts wp_exact_anchor FORCE INDEX (`wp_fts_type_status_id`) ON', $exactSql, 'the indexed candidate must drive its covering canonical visibility probe');
+    assert_contains('STRAIGHT_JOIN wp_fts_documents d_exact_anchor ON', $exactSql, 'the rare posting candidate must drive its indexed-document probe');
+    assert_contains('STRAIGHT_JOIN wp_posts wp_exact_anchor ON', $exactSql, 'the indexed candidate must drive its canonical visibility probe');
     assert_contains('STRAIGHT_JOIN wp_fts_postings po FORCE INDEX (post_term) ON po.post_id = c.post_id', $exactSql, 'the bounded candidate relation must drive every post-first mandatory-group probe');
     assert_contains('STRAIGHT_JOIN wp_posts wp_f ON wp_f.ID = ranked.post_id', $exactSql, 'the bounded ranked relation must drive the final canonical date lookup');
 
@@ -1575,7 +1566,7 @@ test_case_with_pdo_sqlite_fixture('relational SQLite reset rebuilds 409600 popul
     assert_same('sqlite_transactional_schema_rebuild', $summary['reset_strategy'] ?? null, 'SQLite reset should report its transactional schema strategy');
     assert_same(38, $summary['search_epoch'] ?? null, 'SQLite reset should carry the cursor epoch monotonically into the new work table');
     assert_same(2, $guardCalls, 'SQLite reset should validate writer ownership at entry and immediately before commit');
-    assert_same(22, count($resetQueries), 'SQLite reset statement count must remain constant at the 409,600-row boundary');
+    assert_same(21, count($resetQueries), 'SQLite reset statement count must remain constant at the 409,600-row boundary');
     assert_true(!str_contains(implode("\n", $resetQueries), 'DELETE FROM'), 'SQLite reset must not delete populated rows one by one');
     assert_true(!str_contains(implode("\n", $resetQueries), 'COUNT('), 'SQLite reset must not count populated rows during the reset operation');
     assert_true($elapsed <= 5.0, "SQLite 409,600-posting reset should finish within five seconds; observed {$elapsed}");
@@ -2764,7 +2755,6 @@ function wp_fts_relational_regression_create_schema(WP_FTS_Relational_Regression
         'CREATE TABLE wp_fts_postings (term_id INTEGER NOT NULL, post_id INTEGER NOT NULL, impact INTEGER NOT NULL, PRIMARY KEY(term_id,post_id))',
         'CREATE INDEX wp_fts_post_term ON wp_fts_postings(post_id,term_id)',
         'CREATE TABLE wp_fts_documents (post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL, content_hash BLOB NOT NULL, snippet_text TEXT NOT NULL, indexed_at INTEGER NOT NULL)',
-        'CREATE INDEX wp_fts_documents_visibility ON wp_fts_documents(post_id)',
         "CREATE TABLE wp_fts_work (job_key BLOB NOT NULL PRIMARY KEY, kind TEXT NOT NULL, post_id INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'pending', available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT NOT NULL DEFAULT '', claimed_generation INTEGER NOT NULL DEFAULT 0, claim_expires_at INTEGER NOT NULL DEFAULT 0, cursor_post_id INTEGER NOT NULL DEFAULT 0, scope_coverage TEXT NOT NULL DEFAULT '', scope_incarnation BLOB NOT NULL DEFAULT '', scope_subject_type TEXT NOT NULL DEFAULT '', scope_subject_id INTEGER NOT NULL DEFAULT 0, payload TEXT, last_error_code TEXT NOT NULL DEFAULT '', last_error_at INTEGER NOT NULL DEFAULT 0)",
         'CREATE INDEX wp_fts_work_ready ON wp_fts_work(kind,state,available_at,post_id,job_key)',
         'CREATE INDEX wp_fts_work_claim_token ON wp_fts_work(claim_token,post_id)',

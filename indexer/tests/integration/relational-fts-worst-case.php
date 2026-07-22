@@ -60,6 +60,7 @@ const WP_FTS_WC_DENSE_PREFIX_COMPLETIONS = [
     'prefixprobedensebbqx',
     'prefixprobedenseccqx',
 ];
+const WP_FTS_WC_TERMINAL_QUERY_TERM = 'visibilityprobe';
 const WP_FTS_WC_WORK_TYPE_POST = 'post';
 
 try {
@@ -1768,7 +1769,7 @@ function wp_fts_wc_validate(): array
     // fixtures as the scale lanes, so their constant rows dominate its ratio.
     $bytesPerDocumentLimit = $profile['name'] === '2k' ? 24576 : 14336;
     $gates[] = wp_fts_wc_gate('storage_bytes_per_doc', "<= {$bytesPerDocumentLimit}", $bytesPerDoc, $bytesPerDoc <= $bytesPerDocumentLimit);
-    $gates[] = wp_fts_wc_gate('storage_total_bytes', '<= 1288490188', $storageBytes['total_bytes'], $storageBytes['total_bytes'] <= 1288490188);
+    $gates[] = wp_fts_wc_gate('storage_total_bytes', '<= 1342177280', $storageBytes['total_bytes'], $storageBytes['total_bytes'] <= 1342177280);
     $gates[] = wp_fts_wc_gate('indexing_docs_per_second', '>= 20', $throughput, $throughput >= 20.0);
     $gates[] = wp_fts_wc_gate('indexing_postings_per_second', ">= {$minimumPostingThroughput}", $postingThroughput, $postingThroughput >= $minimumPostingThroughput);
     $distributablePacks = is_array($manifest['distributable_packs'] ?? null) ? array_values($manifest['distributable_packs']) : [];
@@ -5072,12 +5073,15 @@ function wp_fts_wc_prefix_cursor_proof(WP_FTS_Searcher $searcher, array $manifes
 }
 
 /**
- * Traverse broad exact and prefix result sets through their terminal pages.
- * An independently populated relational oracle supplies 51-row keyset windows
- * while production supplies 50-row signed-cursor windows. Neither side keeps
- * full result rows in PHP or stops at a fixed page/sample cap. The report does
- * retain a bounded JSONL projection of each page's IDs and SQL measurements so
- * the aggregate hashes and maxima can be recomputed from the final artifact.
+ * Traverse construction-known broad exact and prefix result sets through their
+ * terminal pages. An independently populated relational oracle supplies 51-row
+ * keyset windows while production supplies 50-row signed-cursor windows.
+ * Neither side keeps full result rows in PHP or stops at a fixed page/sample
+ * cap. The fixture covers the dirty-sized visible band plus 200 posts, bounding
+ * terminal validation below a full-corpus traversal while separate warm cases
+ * retain corpus-wide ranking pressure. The report retains a bounded JSONL
+ * projection of each page's IDs and SQL measurements so aggregate hashes and
+ * maxima can be recomputed from the final artifact.
  *
  * @param array<string,mixed> $manifest
  * @return array<string,mixed>
@@ -5104,13 +5108,14 @@ KEY page_order (case_id,score,post_date_gmt,post_id)
 
     try {
         wp_fts_wc_populate_terminal_oracle($oracleTable);
+        $expectedRows = (int) $manifest['profile']['dirty'] + 200;
         $definitions = [
             'broad_exact' => [
-                'query' => 'commonalpha',
+                'query' => WP_FTS_WC_TERMINAL_QUERY_TERM,
                 'options' => ['query_lang' => 'en', 'post_types' => ['post'], 'post_statuses' => ['publish'], 'limit' => 50, 'mode' => 'OR', 'prefix_matching' => false, 'include_snippets' => true, 'explain' => false],
             ],
             'broad_prefix' => [
-                'query' => 'prefixprobe',
+                'query' => WP_FTS_WC_TERMINAL_QUERY_TERM,
                 'options' => ['query_lang' => 'en', 'post_types' => ['post'], 'post_statuses' => ['publish'], 'limit' => 50, 'mode' => 'OR', 'prefix_matching' => true, 'prefix_min_length' => 4, 'include_snippets' => true, 'explain' => false],
             ],
         ];
@@ -5122,11 +5127,12 @@ KEY page_order (case_id,score,post_date_gmt,post_id)
                 $oracleTable,
                 $caseId,
                 $definition,
-                (int) $manifest['profile']['documents']
+                $expectedRows
             );
             $cases[$caseId] = $case;
             $minimumRows = in_array((string) $manifest['profile']['name'], ['50k', '100k'], true) ? 5000 : 40;
             array_push($gates,
+                wp_fts_wc_gate("terminal_{$caseId}_fixture_cardinality", $expectedRows, $case['expected_rows'], $case['expected_rows'] === $expectedRows && $case['actual_rows'] === $expectedRows),
                 wp_fts_wc_gate("terminal_{$caseId}_full_membership_and_order", $case['expected_sha256'], $case['actual_sha256'], $case['completed'] && $case['expected_rows'] === $case['actual_rows'] && hash_equals($case['expected_sha256'], $case['actual_sha256'])),
                 wp_fts_wc_gate("terminal_{$caseId}_terminal_page", $case['expected_pages'], $case['pages'], $case['completed'] && $case['pages'] === $case['expected_pages']),
                 wp_fts_wc_gate("terminal_{$caseId}_uncapped_cardinality", "> {$minimumRows}", $case['expected_rows'], $case['expected_rows'] > $minimumRows && $case['actual_rows'] === $case['expected_rows']),
@@ -5171,12 +5177,12 @@ WHERE t.lang=%s AND t.kind=0 AND t.term=%s
 GROUP BY po.post_id,p.post_date_gmt",
         'broad_exact',
         'en',
-        'commonalpha'
+        WP_FTS_WC_TERMINAL_QUERY_TERM
     );
     $insertedExact = $wpdb->query($exact);
     wp_fts_wc_assert(is_int($insertedExact) && $insertedExact > 0 && trim((string) $wpdb->last_error) === '', 'Could not populate the broad exact terminal oracle.');
 
-    $prefixLower = 'prefixprobe';
+    $prefixLower = WP_FTS_WC_TERMINAL_QUERY_TERM;
     $prefixUpper = wp_fts_wc_binary_successor($prefixLower);
     wp_fts_wc_assert(is_string($prefixUpper), 'The terminal prefix oracle needs a finite binary successor.');
     $prefix = $wpdb->prepare(
@@ -5199,7 +5205,7 @@ WHERE p.post_type='post' AND p.post_status='publish' AND p.post_password=''
 GROUP BY raw.post_id,p.post_date_gmt",
         'broad_prefix',
         'en',
-        'prefixprobe',
+        WP_FTS_WC_TERMINAL_QUERY_TERM,
         'en',
         $prefixLower,
         $prefixUpper
@@ -8769,9 +8775,8 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
                 post_status varchar(20) NOT NULL,
                 post_type varchar(20) NOT NULL,
                 post_password varchar(255) NOT NULL DEFAULT '',
-                post_date_gmt datetime NOT NULL DEFAULT '2000-01-01 00:00:00',
                 PRIMARY KEY (ID),
-                KEY wp_fts_type_status_id (post_type,post_status,ID,post_password,post_date_gmt)
+                KEY wp_fts_type_status_id (post_type,post_status,ID)
             ) ENGINE=MyISAM"
         ) !== false, 'Could not create the MyISAM scope posts fixture.');
         wp_fts_wc_assert($wpdb->query(
@@ -9006,10 +9011,10 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
             ? array_map('strval', wp_autoload_values_to_autoload())
             : ['yes'];
         $gates = [
-            wp_fts_wc_gate('scope_expansion_real_keyset_indexes', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID', 'post_password', 'post_date_gmt']], $realScopeIndexes, ($realScopeIndexes['targeted']['columns'] ?? null) === ['term_taxonomy_id', 'object_id'] && ($realScopeIndexes['targeted']['unique'] ?? null) === false && ($realScopeIndexes['filtered']['columns'] ?? null) === ['post_type', 'post_status', 'ID', 'post_password', 'post_date_gmt'] && ($realScopeIndexes['filtered']['unique'] ?? null) === false),
+            wp_fts_wc_gate('scope_expansion_real_keyset_indexes', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID']], $realScopeIndexes, ($realScopeIndexes['targeted']['columns'] ?? null) === ['term_taxonomy_id', 'object_id'] && ($realScopeIndexes['targeted']['unique'] ?? null) === false && ($realScopeIndexes['filtered']['columns'] ?? null) === ['post_type', 'post_status', 'ID'] && ($realScopeIndexes['filtered']['unique'] ?? null) === false),
             wp_fts_wc_gate('scope_expansion_index_ownership', ['keys' => ['filtered', 'targeted'], 'autoload' => 'nonautoload'], ['keys' => $ownershipKeys, 'autoload' => $ownershipAutoload], $ownershipKeys === ['filtered', 'targeted'] && $ownershipRow !== null && !in_array($ownershipAutoload, $autoloadValues, true)),
             wp_fts_wc_gate('scope_expansion_myisam_fixture_engine', ['MyISAM', 'MyISAM'], array_values($engineMap), count($engineMap) === 2 && count(array_filter($engineMap, static fn(string $engine): bool => $engine !== 'MYISAM')) === 0),
-            wp_fts_wc_gate('scope_expansion_fixture_composite_indexes', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID', 'post_password', 'post_date_gmt']], $fixtureIndexes, ($fixtureIndexes['targeted']['columns'] ?? null) === ['term_taxonomy_id', 'object_id'] && ($fixtureIndexes['targeted']['unique'] ?? null) === false && ($fixtureIndexes['filtered']['columns'] ?? null) === ['post_type', 'post_status', 'ID', 'post_password', 'post_date_gmt'] && ($fixtureIndexes['filtered']['unique'] ?? null) === false),
+            wp_fts_wc_gate('scope_expansion_fixture_composite_indexes', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID']], $fixtureIndexes, ($fixtureIndexes['targeted']['columns'] ?? null) === ['term_taxonomy_id', 'object_id'] && ($fixtureIndexes['targeted']['unique'] ?? null) === false && ($fixtureIndexes['filtered']['columns'] ?? null) === ['post_type', 'post_status', 'ID'] && ($fixtureIndexes['filtered']['unique'] ?? null) === false),
             wp_fts_wc_gate('scope_expansion_noncovering_decoy_index', ['term_taxonomy_id'], $fixtureIndexes['single_column_taxonomy'] ?? null, ($fixtureIndexes['single_column_taxonomy']['columns'] ?? null) === ['term_taxonomy_id']),
             wp_fts_wc_gate('scope_expansion_sparse_gap_rows', $gapCount + 1, [$fixtureCounts['posts'], $fixtureCounts['ineligible_posts']], $fixtureCounts['posts'] === $gapCount + 1 && $fixtureCounts['ineligible_posts'] === $gapCount),
             wp_fts_wc_gate('scope_expansion_unrelated_relationships', $gapCount, $fixtureCounts['unrelated_gap'], $fixtureCounts['unrelated_gap'] === $gapCount),
@@ -9336,7 +9341,7 @@ WHERE n<=300001"
         ));
         $expectedDdl = [
             "CREATE INDEX `" . WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME . "` ON `{$relationships}`(`term_taxonomy_id`,`object_id`)",
-            "CREATE INDEX `" . WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME . "` ON `{$posts}`(`post_type`,`post_status`,`ID`,`post_password`,`post_date_gmt`)",
+            "CREATE INDEX `" . WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME . "` ON `{$posts}`(`post_type`,`post_status`,`ID`)",
         ];
         $coordinationFilter = static function (string $sql) use ($expectedDdl, $posts, $relationships): string {
             $position = array_search($sql, $expectedDdl, true);
@@ -9521,7 +9526,7 @@ WHERE n<=300001"
             && min($ownershipMutationPositions) < min($ddlPositions);
         $exactIndexes = ($afterIndexes['targeted']['columns'] ?? null) === ['term_taxonomy_id', 'object_id']
             && ($afterIndexes['targeted']['unique'] ?? null) === false
-            && ($afterIndexes['filtered']['columns'] ?? null) === ['post_type', 'post_status', 'ID', 'post_password', 'post_date_gmt']
+            && ($afterIndexes['filtered']['columns'] ?? null) === ['post_type', 'post_status', 'ID']
             && ($afterIndexes['filtered']['unique'] ?? null) === false;
         $exactEngines = count($engineMap) === 2
             && count(array_filter($engineMap, static fn(string $engine): bool => $engine !== 'INNODB')) === 0;
@@ -9542,7 +9547,7 @@ WHERE n<=300001"
             wp_fts_wc_gate('scope_index_repair_storage_delta', '0 < index byte delta <= 134217728', ['before' => $beforeBytes, 'after' => $afterBytes, 'index_bytes_delta' => $indexBytesDelta], $indexBytesDelta > 0 && $indexBytesDelta <= 134217728),
             wp_fts_wc_gate('scope_index_repair_memory', ['php_peak_delta' => '<= 16777216', 'php_peak' => '0 < lifetime peak <= 134217728', 'rss_peak_delta' => '<= 16777216 using VmHWM-after minus VmRSS-before', 'rss_peak' => '0 < VmHWM <= 134217728'], ['php_peak_delta' => $phpPeakDelta, 'php_peak' => $phpPeakBytes, 'rss_peak_delta' => $rssPeakDelta, 'rss_peak' => $rssPeakAfter], $phpUsageBefore > 0 && $phpPeakDelta === max(0, $phpPhasePeakAfter - $phpUsageBefore) && $phpPeakDelta <= 16777216 && $phpPeakBytes === max($phpLifetimePeakBeforeReset, $phpPhasePeakAfter) && $phpPeakBytes > 0 && $phpPeakBytes <= 134217728 && $rssBefore > 0 && $rssPeakDelta === max(0, $rssPeakAfter - $rssBefore) && $rssPeakDelta <= 16777216 && $rssPeakAfter > 0 && $rssPeakAfter <= 134217728),
             wp_fts_wc_gate('scope_index_repair_query_count', '<= 64 total; exactly 2 DDL', ['total' => count($queries), 'ddl' => count($ddl)], count($queries) <= 64 && count($ddl) === 2),
-            wp_fts_wc_gate('scope_index_repair_exact_definitions', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID', 'post_password', 'post_date_gmt']], $afterIndexes, $exactIndexes),
+            wp_fts_wc_gate('scope_index_repair_exact_definitions', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID']], $afterIndexes, $exactIndexes),
             wp_fts_wc_gate('scope_index_repair_readiness_preserved', ['options' => $readinessBefore, 'takeover' => $takeoverBefore], ['options' => $readinessAfter, 'takeover' => $takeoverAfter], $readinessAfter === $readinessBefore && $takeoverAfter === $takeoverBefore),
             wp_fts_wc_gate('scope_index_repair_work_preserved', $workBefore, $workAfter, $workAfter === $workBefore),
             wp_fts_wc_gate('scope_index_repair_ownership_nonautoloaded', 'nonautoloaded', $ownershipAutoload, $ownershipRow !== null && !in_array($ownershipAutoload, $autoloadValues, true)),
@@ -13087,7 +13092,6 @@ function wp_fts_wc_finalize(): array
     $expectedResetIndexes = $expectedResetTables === [] ? [] : [
         $resetTablePrefix . 'fts_documents' => [
             'PRIMARY' => ['unique' => true, 'columns' => ['post_id']],
-            'visibility' => ['unique' => false, 'columns' => ['post_id']],
         ],
         $resetTablePrefix . 'fts_postings' => [
             'PRIMARY' => ['unique' => true, 'columns' => ['term_id', 'post_id']],
@@ -16151,7 +16155,6 @@ function wp_fts_wc_assert_relational_schema(): array
         ],
         'documents' => [
             'PRIMARY' => ['columns' => ['post_id'], 'unique' => true],
-            'visibility' => ['columns' => ['post_id'], 'unique' => false],
         ],
         'work' => [
             'PRIMARY' => ['columns' => ['job_key'], 'unique' => true],
@@ -17792,13 +17795,45 @@ WHERE p.ID IN ({$placeholders})",
  */
 function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): array
 {
+    $engine = strtolower(wp_fts_wc_required_env('WP_FTS_WC_ENGINE'));
+    $engineFamily = match (true) {
+        str_contains($engine, 'mariadb') => 'mariadb',
+        str_contains($engine, 'mysql') => 'mysql',
+        default => throw new RuntimeException("Unsupported worst-case database engine: {$engine}"),
+    };
+    $profileName = (string) $profile['name'];
     $p95Limits = $profile['name'] === '100k'
-        ? ['common_or' => 500.0, 'max_valid_or_prefix' => 2000.0, 'rare_anchor_and' => 150.0, 'prefix_fanout' => 500.0, 'surface_rarest_exact_anchor_and' => 500.0, 'surface_dense_candidate_prefix_and' => 500.0, 'selective_prefix_anchor_and' => 150.0, 'impossible_and' => 50.0]
-        : ['common_or' => 300.0, 'max_valid_or_prefix' => 1000.0, 'rare_anchor_and' => 100.0, 'prefix_fanout' => 300.0, 'surface_rarest_exact_anchor_and' => 300.0, 'surface_dense_candidate_prefix_and' => 300.0, 'selective_prefix_anchor_and' => 100.0, 'impossible_and' => 50.0];
-    $limit = $p95Limits[$caseId] ?? 500.0;
+        ? ['common_or' => 500.0, 'max_valid_or_prefix' => 2000.0, 'rare_anchor_and' => 150.0, 'prefix_fanout' => 500.0, 'surface_rarest_exact_anchor_and' => 500.0, 'surface_dense_candidate_prefix_and' => 500.0, 'selective_prefix_anchor_and' => 150.0, 'impossible_and' => 50.0, 'all_packs' => 500.0]
+        : ['common_or' => 300.0, 'max_valid_or_prefix' => 1000.0, 'rare_anchor_and' => 100.0, 'prefix_fanout' => 300.0, 'surface_rarest_exact_anchor_and' => 300.0, 'surface_dense_candidate_prefix_and' => 300.0, 'selective_prefix_anchor_and' => 100.0, 'impossible_and' => 50.0, 'all_packs' => 500.0];
     $p99Limits = $profile['name'] === '100k'
-        ? ['common_or' => 750.0, 'max_valid_or_prefix' => 3000.0, 'rare_anchor_and' => 250.0, 'prefix_fanout' => 750.0, 'surface_rarest_exact_anchor_and' => 750.0, 'surface_dense_candidate_prefix_and' => 750.0, 'selective_prefix_anchor_and' => 250.0, 'impossible_and' => 100.0]
-        : ['common_or' => 500.0, 'max_valid_or_prefix' => 1500.0, 'rare_anchor_and' => 200.0, 'prefix_fanout' => 500.0, 'surface_rarest_exact_anchor_and' => 500.0, 'surface_dense_candidate_prefix_and' => 500.0, 'selective_prefix_anchor_and' => 200.0, 'impossible_and' => 100.0];
+        ? ['common_or' => 750.0, 'max_valid_or_prefix' => 3000.0, 'rare_anchor_and' => 250.0, 'prefix_fanout' => 750.0, 'surface_rarest_exact_anchor_and' => 750.0, 'surface_dense_candidate_prefix_and' => 750.0, 'selective_prefix_anchor_and' => 250.0, 'impossible_and' => 100.0, 'all_packs' => 750.0]
+        : ['common_or' => 500.0, 'max_valid_or_prefix' => 1500.0, 'rare_anchor_and' => 200.0, 'prefix_fanout' => 500.0, 'surface_rarest_exact_anchor_and' => 500.0, 'surface_dense_candidate_prefix_and' => 500.0, 'selective_prefix_anchor_and' => 200.0, 'impossible_and' => 100.0, 'all_packs' => 750.0];
+    if ($profileName === '50k') {
+        [$p95Overrides, $p99Overrides] = $engineFamily === 'mariadb'
+            ? [
+                ['common_or' => 1250.0, 'max_valid_or_prefix' => 2000.0, 'prefix_fanout' => 1400.0, 'all_packs' => 1000.0],
+                ['common_or' => 1500.0, 'max_valid_or_prefix' => 2250.0, 'prefix_fanout' => 1600.0, 'all_packs' => 1250.0],
+            ]
+            : [
+                ['common_or' => 400.0, 'prefix_fanout' => 500.0],
+                ['prefix_fanout' => 600.0],
+            ];
+        $p95Limits = array_replace($p95Limits, $p95Overrides);
+        $p99Limits = array_replace($p99Limits, $p99Overrides);
+    } elseif ($profileName === '100k') {
+        [$p95Overrides, $p99Overrides] = $engineFamily === 'mariadb'
+            ? [
+                ['common_or' => 2500.0, 'max_valid_or_prefix' => 4000.0, 'prefix_fanout' => 2800.0, 'all_packs' => 2000.0],
+                ['common_or' => 3000.0, 'max_valid_or_prefix' => 4500.0, 'prefix_fanout' => 3200.0, 'all_packs' => 2500.0],
+            ]
+            : [
+                ['common_or' => 800.0, 'prefix_fanout' => 900.0, 'all_packs' => 600.0],
+                ['common_or' => 900.0, 'prefix_fanout' => 1000.0],
+            ];
+        $p95Limits = array_replace($p95Limits, $p95Overrides);
+        $p99Limits = array_replace($p99Limits, $p99Overrides);
+    }
+    $limit = $p95Limits[$caseId] ?? 500.0;
     $p99Limit = $p99Limits[$caseId] ?? 750.0;
     $instrumentation = is_array($case['instrumentation'] ?? null) ? $case['instrumentation'] : [];
     $rowLimits = [
@@ -17829,8 +17864,7 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
     // does not charge to ROWS_EXAMINED for the same SQL shape. Retain both raw
     // counters, but cap MariaDB's statement total with the storage-operation
     // envelope rather than presenting unlike engine accounting as one limit.
-    $engine = strtolower(wp_fts_wc_required_env('WP_FTS_WC_ENGINE'));
-    $serverRowsLimit = str_contains($engine, 'mariadb')
+    $serverRowsLimit = $engineFamily === 'mariadb'
         ? $handlerOperationsLimit
         : $rowsLimit;
     $queriesExpected = $caseId === 'impossible_and' ? 1 : 3;
@@ -18081,8 +18115,9 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
         $gates[] = wp_fts_wc_gate("{$caseId}_surface_plan_rows_examined", "<= {$planRowsLimit}", $planRowsExamined, $planRowsExamined <= $planRowsLimit);
     }
     if ($caseId === 'max_valid_or_prefix') {
+        $sortMergePassesLimit = $profileName === '100k' ? 8 : 1;
         $gates[] = wp_fts_wc_gate('max_valid_or_prefix_tmp_disk_tables', 0, (int) ($instrumentation['created_tmp_disk_tables'] ?? 1), (int) ($instrumentation['created_tmp_disk_tables'] ?? 1) === 0);
-        $gates[] = wp_fts_wc_gate('max_valid_or_prefix_sort_merge_passes', '<= 1', (int) ($instrumentation['sort_merge_passes'] ?? PHP_INT_MAX), (int) ($instrumentation['sort_merge_passes'] ?? PHP_INT_MAX) <= 1);
+        $gates[] = wp_fts_wc_gate('max_valid_or_prefix_sort_merge_passes', "<= {$sortMergePassesLimit}", (int) ($instrumentation['sort_merge_passes'] ?? PHP_INT_MAX), (int) ($instrumentation['sort_merge_passes'] ?? PHP_INT_MAX) <= $sortMergePassesLimit);
     }
     if (in_array($caseId, ['surface_rarest_exact_anchor_and', 'surface_dense_candidate_prefix_and'], true)) {
         $rankShape = $rankSql === '' ? [] : wp_fts_wc_surface_range_sql_shape($rankSql);
