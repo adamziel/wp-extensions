@@ -4019,7 +4019,7 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         'complete physical relation allowlist is',
         'The current schema requires two',
         '`wp_fts_term_object(term_taxonomy_id, object_id)`',
-        '`wp_fts_type_status_id(post_type, post_status, ID)`',
+        '`wp_fts_type_status_id(post_type, post_status, ID, post_password, post_date_gmt)`',
         'tables with their real InnoDB definitions',
         '100,001 posts and 300,001 relationships',
         'populated repair proof',

@@ -195,9 +195,17 @@ The relational backend creates four tables under the active WordPress table pref
   source surface used by one indexed prefix range, not a row per proper prefix.
 - `fts_postings`: compact rows keyed by `(term_id, post_id)` with precomputed
   field impact and a post-first probe index.
-- `fts_documents`: one bounded source-hash/snippet row per live document.
+- `fts_documents`: one bounded source-hash/snippet row per live document, plus
+  a slim post-ID visibility index used while ranking.
 - `fts_work`: coalesced post generations, retry timing, and leased worker
   ownership for pending indexing work.
+
+The plugin-owned `wp_fts_type_status_id` index on `wp_posts` keeps its
+`(post_type, post_status, ID)` keyset prefix and also covers `post_password` and
+`post_date_gmt`. Typed searches can therefore check canonical visibility and
+date ordering without fetching every broad candidate's complete post row. The
+tradeoff is a somewhat larger core-table index and extra maintenance on post
+writes.
 
 Physical verification compares the complete current table contract. Because the
 index is derived, repair replaces an incompatible FTS table rather than trying

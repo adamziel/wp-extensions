@@ -1253,8 +1253,11 @@ At 100k on the declared MariaDB 10.11 and MySQL 8.0 profiles:
 Search work keeps two database counters separate. Performance Schema supplies
 logical rows examined. The `Handler_read_*` delta supplies storage-engine read
 operations, where one logical row can require several key, range, and
-derived-table operations. Each has its own ceiling; the report never presents
-their maximum as a row count.
+derived-table operations. MariaDB also charges derived-table iteration to its
+statement `ROWS_EXAMINED` total more broadly than MySQL for these plans, so its
+statement counter uses the storage-operation envelope while retaining the raw
+value. MySQL keeps the tighter logical-row ceiling. The report never presents
+the maximum of the two counters as a row count.
 
 The relative concurrency ceiling is twice the fixed eight-reader count because
 all eight readers and both writers share one CPU. It does not replace the
@@ -1878,12 +1881,16 @@ rather than merely budgeting a relationship probe per candidate.
 
 The current schema requires two plugin-namespaced supporting indexes on
 WordPress's core tables: `wp_fts_term_object(term_taxonomy_id, object_id)` and
-`wp_fts_type_status_id(post_type, post_status, ID)`. The proof reads their exact
-real definitions before substituting any fixture. Creation intent is persisted
-first in the nonautoloaded `wp_fts_scope_index_ownership` option. An exact
-pre-existing namespaced index may be reused without claiming it; a same-name
-different-definition collision fails closed. Uninstall drops only an exact
-index whose ownership was recorded, never a merely similar site-owned index.
+`wp_fts_type_status_id(post_type, post_status, ID, post_password, post_date_gmt)`.
+The first three columns remain the filtered-scope keyset. The
+last two let typed search visibility and date ordering stay inside the narrow
+secondary index instead of fetching broad candidates' complete `wp_posts`
+rows. The proof reads the exact real definitions before substituting any
+fixture. Creation intent is persisted first in the nonautoloaded
+`wp_fts_scope_index_ownership` option. An exact pre-existing namespaced index
+may be reused without claiming it; a same-name different-definition collision
+fails closed. Uninstall drops only an exact index whose ownership was recorded,
+never a merely similar site-owned index.
 
 The populated repair proof clones WordPress's canonical posts and relationships
 tables with their real InnoDB definitions, removes only the two scope

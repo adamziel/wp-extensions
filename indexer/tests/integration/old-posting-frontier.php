@@ -1389,6 +1389,7 @@ function wp_fts_frontier_schema_evidence(mysqli $db, array $tables): array
         ],
         $documentsTable => [
             'PRIMARY' => ['unique' => true, 'columns' => ['post_id']],
+            'visibility' => ['unique' => false, 'columns' => ['post_id']],
         ],
         $workTable => [
             'PRIMARY' => ['unique' => true, 'columns' => ['job_key']],

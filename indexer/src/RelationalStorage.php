@@ -220,7 +220,8 @@ primary_lang varbinary(32) NOT NULL DEFAULT 'und',
 content_hash varbinary(40) NOT NULL,
 snippet_text mediumtext NOT NULL,
 indexed_at bigint unsigned NOT NULL DEFAULT 0,
-PRIMARY KEY  (post_id)
+PRIMARY KEY  (post_id),
+KEY visibility (post_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
             "CREATE TABLE {$this->workTable} (
 job_key varbinary(191) NOT NULL,
@@ -311,7 +312,7 @@ KEY dirty (post_id,kind)
         return $missing;
     }
 
-    /** Install the two indexes that make selective scope pages direct keysets. */
+    /** Install the two indexes used by selective scope pages and ranked visibility. */
     public function ensure_scope_keyset_indexes(): void
     {
         foreach ($this->scope_keyset_index_contracts() as $contract) {
@@ -419,7 +420,7 @@ KEY dirty (post_id,kind)
                 'key' => 'filtered',
                 'table' => $this->postsTable,
                 'name' => self::FILTERED_SCOPE_INDEX_NAME,
-                'columns' => ['post_type', 'post_status', 'ID'],
+                'columns' => ['post_type', 'post_status', 'ID', 'post_password', 'post_date_gmt'],
                 'unique' => false,
             ],
         ];
@@ -810,7 +811,10 @@ KEY dirty (post_id,kind)
                     'snippet_text' => ['type' => 'mediumtext', 'nullable' => false],
                     'indexed_at' => ['type' => 'bigint unsigned', 'nullable' => false],
                 ],
-                'indexes' => [['name' => 'PRIMARY', 'columns' => ['post_id'], 'unique' => true]],
+                'indexes' => [
+                    ['name' => 'PRIMARY', 'columns' => ['post_id'], 'unique' => true],
+                    ['name' => 'visibility', 'columns' => ['post_id'], 'unique' => false],
+                ],
             ],
             $this->workTable => [
                 'engine' => 'innodb',
@@ -2608,7 +2612,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             }
         }
         $idRows = implode(' UNION ALL ', array_fill(0, count($ids), 'SELECT %d AS post_id'));
-        $visible = $this->visibility_sql('rank_ids.post_id', 'h', $options);
+        $visible = $this->visibility_sql('rank_ids.post_id', 'h', $options, true);
         $control = $this->search_snapshot_control_sql($options);
         $detailSql = 'SELECT ' . implode(',', $select)
             . " FROM ({$idRows}) rank_ids {$visible['joins']} WHERE {$visible['where']}";
@@ -3412,19 +3416,33 @@ WHERE {$visible['where']}",
     }
 
     /** @return array{joins:string,where:string,args:array<int,mixed>} */
-    private function visibility_sql(string $postIdExpression, string $suffix, array $options): array
+    private function visibility_sql(
+        string $postIdExpression,
+        string $suffix,
+        array $options,
+        bool $needsDocumentPayload = false
+    ): array
     {
         $post = 'wp_' . $suffix;
         $doc = 'd_' . $suffix;
         $dirty = 'dirty_' . $suffix;
         $orderedJoin = $this->is_sqlite_runtime() ? 'JOIN' : 'STRAIGHT_JOIN';
+        $types = $this->normalize_filter_values($options['post_types'] ?? []);
+        // Ranking needs only document existence and canonical visibility. Use
+        // the two narrow covering indexes instead of fetching every candidate's
+        // snippet row and wp_posts content. Hydration still reads document data
+        // from PRIMARY, after LIMIT has reduced the relation to one page.
+        $documentIndexHint = $this->is_sqlite_runtime() || $needsDocumentPayload
+            ? ''
+            : ' FORCE INDEX (visibility)';
+        $postIndexHint = $types === [] ? '' : $this->scope_keyset_index_hint('filtered');
         // Visibility runs once per ranked candidate. Any scope reconciliation
         // makes planning fail closed, so this hot path needs only the direct
         // post-generation probe; it must never walk taxonomy relationships for
         // every broad-query candidate.
         $dirtyIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (dirty)';
-        $joins = "{$orderedJoin} {$this->documentsTable} {$doc} ON {$doc}.post_id = {$postIdExpression}
-{$orderedJoin} {$this->postsTable} {$post} ON {$post}.ID = {$postIdExpression}
+        $joins = "{$orderedJoin} {$this->documentsTable} {$doc}{$documentIndexHint} ON {$doc}.post_id = {$postIdExpression}
+{$orderedJoin} {$this->postsTable} {$post}{$postIndexHint} ON {$post}.ID = {$postIdExpression}
 LEFT JOIN {$this->workTable} {$dirty}{$dirtyIndexHint} ON {$dirty}.kind = 'post' AND {$dirty}.post_id = {$postIdExpression}";
         $where = [
             "{$dirty}.job_key IS NULL",
@@ -3437,7 +3455,6 @@ LEFT JOIN {$this->workTable} {$dirty}{$dirtyIndexHint} ON {$dirty}.kind = 'post'
         }
         $where[] = "{$post}.post_status IN (" . implode(',', array_fill(0, count($statuses), '%s')) . ')';
         array_push($args, ...$statuses);
-        $types = $this->normalize_filter_values($options['post_types'] ?? []);
         if ($types !== []) {
             $where[] = "{$post}.post_type IN (" . implode(',', array_fill(0, count($types), '%s')) . ')';
             array_push($args, ...$types);
@@ -3822,6 +3839,7 @@ VALUES (%s, 'meta', 0, %d, 'meta', 0, 0, '', 0, 0, 0, '', 0, %s, '', 0)",
             "CREATE TABLE {$postings} (term_id INTEGER NOT NULL, post_id INTEGER NOT NULL, impact INTEGER NOT NULL, PRIMARY KEY(term_id,post_id))",
             'CREATE INDEX ' . $index($this->postingsTable, 'post_term') . " ON {$postings}(post_id,term_id)",
             "CREATE TABLE {$documents} (post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL DEFAULT 'und', content_hash BLOB NOT NULL, snippet_text TEXT NOT NULL, indexed_at INTEGER NOT NULL DEFAULT 0)",
+            'CREATE INDEX ' . $index($this->documentsTable, 'visibility') . " ON {$documents}(post_id)",
             "CREATE TABLE {$work} (job_key BLOB NOT NULL PRIMARY KEY, kind TEXT NOT NULL, post_id INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'pending', available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT NOT NULL DEFAULT '', claimed_generation INTEGER NOT NULL DEFAULT 0, claim_expires_at INTEGER NOT NULL DEFAULT 0, cursor_post_id INTEGER NOT NULL DEFAULT 0, scope_coverage TEXT NOT NULL DEFAULT '', scope_incarnation BLOB NOT NULL DEFAULT '', scope_subject_type TEXT NOT NULL DEFAULT '', scope_subject_id INTEGER NOT NULL DEFAULT 0, payload TEXT NULL, last_error_code TEXT NOT NULL DEFAULT '', last_error_at INTEGER NOT NULL DEFAULT 0)",
             'CREATE INDEX ' . $index($this->workTable, 'ready') . " ON {$work}(kind,state,available_at,post_id,job_key)",
             'CREATE INDEX ' . $index($this->workTable, 'recoverable') . " ON {$work}(kind,state,claim_expires_at,available_at,post_id,job_key)",

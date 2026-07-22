@@ -186,7 +186,7 @@ returns a bounded page.
 | --- | --- |
 | `fts_terms` | One binary-stable dictionary row per language, identity kind, and normalized term, plus document frequency. |
 | `fts_postings` | One compact `(term_id, post_id)` row with precomputed field impact and indexes for both term-first and post-first work. |
-| `fts_documents` | One bounded derived row per indexed post: primary language, content hash, snippet source, and indexing time. Canonical visibility and post metadata stay in WordPress. |
+| `fts_documents` | One bounded derived row per indexed post: primary language, content hash, snippet source, and indexing time. A slim post-ID index answers ranking-time existence probes without reading snippet-bearing rows. Canonical visibility and post metadata stay in WordPress. |
 | `fts_work` | Post generations, reconciliation scopes, claims, leases, retries, failure codes, and the search epoch used to invalidate stale cursors. |
 
 Lexical analyzer identities use `kind=0`. Word-beginning search uses one
@@ -226,7 +226,9 @@ The newer generation stays dirty until a later worker publishes it.
    the current cursor epoch.
 3. One ranking statement chooses the bounded relational shape, applies `OR` or
    `AND` membership, filters current WordPress visibility and dirty generations,
-   scores the candidates, orders them, and asks for one lookahead row.
+   scores the candidates, orders them, and asks for one lookahead row. Typed
+   searches use the plugin-owned WordPress scope index as a covering visibility
+   and date-ordering path, so broad ranking does not fetch complete post rows.
 4. When metadata or snippets are requested, one final statement hydrates only
    the returned page. Snippet highlighting also stays page-sized.
 
@@ -268,8 +270,9 @@ exhaustive count.
 - **Pagination favors bounded work.** Callers get adjacent cursors and
   `has_more`, not exact totals, deep offsets, or arbitrary numbered pages.
 - **The index has a write and storage cost.** Every indexed term creates derived
-  dictionary/posting work, and content changes require background database
-  writes even though foreground hooks stay small.
+  dictionary/posting work. The slim document visibility index and wider
+  WordPress scope index consume additional space and must be maintained on
+  writes; in return, broad ranking avoids reading content and snippet rows.
 - **Concurrency has a deployment contract.** Every PHP process sharing the
   database must also see the same stable lock-file inode with working POSIX
   `flock()` behavior. Node-local lock directories are not supported.

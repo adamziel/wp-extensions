@@ -473,6 +473,7 @@ function wp_fts_real_integration_assert_schema(object $wpdb, array $tables): voi
             'columns' => ['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at'],
             'indexes' => [
                 'PRIMARY' => ['unique' => true, 'columns' => ['post_id']],
+                'visibility' => ['unique' => false, 'columns' => ['post_id']],
             ],
         ],
         $tables['work'] => [
