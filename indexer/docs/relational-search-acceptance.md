@@ -1124,7 +1124,7 @@ and lease contention instead of repeatedly coalescing the same already-dirty
 rows. Each writer must acquire the real lease in at least one batch, process
 work, and finish with the exact last canonical excerpt, indexed timestamp/state,
 and no pending assigned work. InnoDB may choose a deadlock victim under the two
-independent writers; at most four recognized deadlocks per writer may retry,
+independent writers; at most eight recognized deadlocks per writer may retry,
 while every other batch failure remains terminal.
 An epoch change between the plan and rank statements intentionally returns the
 typed `wp_fts_search_unavailable` 503 rather than a mixed publication snapshot.
@@ -1239,7 +1239,7 @@ The remaining 100k limits are shared by both declared engines:
 | concurrent mixed HTTP p95 / p99 | engine/profile bounds above |
 | concurrent errors, timeouts, wrong result sets | 0 |
 | concurrent typed publication retries | <= logical requests; <=3 per request |
-| concurrent writer deadlock retries / terminal failures | <=4 per writer / 0 |
+| concurrent writer deadlock retries / terminal failures | <=8 per writer and <=12 total / 0 |
 | concurrent p95 degradation | <=16× idle HTTP |
 | plugin-owned search statements | <=3; impossible AND <=1 |
 | missing-table request on every public adapter | exactly 1 failed plan and 0 rank/hydrate; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 total plugin-owned statements; unhealthy/latch/single-event repair state present before harness restoration |

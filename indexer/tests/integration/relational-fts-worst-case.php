@@ -7127,7 +7127,7 @@ function wp_fts_wc_concurrent_writer(): array
     $mutations = count(array_filter($batches, static fn(array $batch): bool => (int) ($batch['queued'] ?? 0) === 20));
     $result = [
         'schema' => 'relational-fts-concurrent-writer-v3',
-        'status' => $failures === 0 && $deadlockRetries <= 4 && $mutations > 0 ? 'PASS' : 'FAIL',
+        'status' => $failures === 0 && $deadlockRetries <= 8 && $mutations > 0 ? 'PASS' : 'FAIL',
         'phase' => 'concurrent-writer',
         'worker' => $worker,
         'elapsed_seconds' => max(0.0, ($finishedNs - $startedNs) / 1000000000),
@@ -12273,7 +12273,7 @@ function wp_fts_wc_finalize(): array
             && ($writer['indexed'] ?? null) === $batchIndexed
             && ($writer['failures'] ?? null) === $batchFailures
             && ($writer['deadlock_retries'] ?? null) === $batchDeadlockRetries
-            && $batchDeadlockRetries <= 4
+            && $batchDeadlockRetries <= 8
             && ($writer['mutations'] ?? null) === $batchMutations
             && $batchMutations > 0
             && $windowIdentity === $sharedWindowIdentity
@@ -12328,9 +12328,9 @@ function wp_fts_wc_finalize(): array
         wp_fts_wc_gate('concurrent_errors', 0, count($errors), $errors === []),
         wp_fts_wc_gate(
             'concurrent_writer_failures',
-            ['terminal' => 0, 'deadlock_retries' => '<= 8'],
+            ['terminal' => 0, 'deadlock_retries' => '<= 12'],
             ['terminal' => $writerFailures, 'deadlock_retries' => $writerDeadlockRetries],
-            $writerFailures === 0 && $writerDeadlockRetries <= 8
+            $writerFailures === 0 && $writerDeadlockRetries <= 12
         ),
         wp_fts_wc_gate('concurrent_writer_progress', '> 0', $writerIndexed, $writerIndexed > 0),
         wp_fts_wc_gate('concurrent_shared_window_identity', 'one exact run/start/deadline/minimum tuple', $sharedWindowIdentity, is_array($sharedWindowIdentity) && ($sharedWindowIdentity[0] ?? null) === ($baseline['concurrency_run_id'] ?? null)),

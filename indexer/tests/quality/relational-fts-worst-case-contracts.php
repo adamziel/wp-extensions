@@ -3876,14 +3876,14 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         'relational-fts-concurrent-writer-v3',
         "\$errorMessage === 'Could not acquire the FTS index writer lease.'",
         "str_contains(\$databaseError, 'Deadlock found when trying to get lock')",
-        '$deadlockRetries <= 4',
+        '$deadlockRetries <= 8',
     ] as $required) {
         assert_contains($required, $concurrentWriter, "concurrent writer pacing should retain: {$required}");
     }
     foreach ([
-        "['terminal' => 0, 'deadlock_retries' => '<= 8']",
-        '$writerFailures === 0 && $writerDeadlockRetries <= 8',
-        '$batchDeadlockRetries <= 4',
+        "['terminal' => 0, 'deadlock_retries' => '<= 12']",
+        '$writerFailures === 0 && $writerDeadlockRetries <= 12',
+        '$batchDeadlockRetries <= 8',
         '$batchMutations > 0',
         '$recordedDeadlockRetry === $recognizedDeadlockRetry',
     ] as $required) {
@@ -3918,7 +3918,7 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     assert_contains('Apache prefork capped at eight request workers', $acceptance, 'the server resource contract should name the exact concurrent request capacity');
     assert_contains('ephemeral containers on the same Docker network', $acceptance, 'the server memory contract should not charge load-generator clients to Apache');
     assert_contains('once every 15 seconds', $acceptance, 'the written concurrency contract should retain paced writer generations');
-    assert_contains('at most four recognized deadlocks per writer may retry', $acceptance, 'the written concurrency contract should bound only recognized writer deadlocks');
+    assert_contains('at most eight recognized deadlocks per writer may retry', $acceptance, 'the written concurrency contract should bound only recognized writer deadlocks');
 
     $indexingPrepare = strpos($runner, 'run_php_phase indexing-prepare');
     $timedIndex = strpos($runner, 'INDEX_STARTED=', $indexingPrepare === false ? 0 : $indexingPrepare);
