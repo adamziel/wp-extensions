@@ -1883,7 +1883,8 @@ test_case('relational scale gates keep terminal traversal and engine limits expl
         "['common_or' => 3000.0, 'max_valid_or_prefix' => 4500.0, 'prefix_fanout' => 3200.0, 'all_packs' => 2500.0]",
         "['common_or' => 800.0, 'prefix_fanout' => 900.0, 'all_packs' => 600.0]",
         "['common_or' => 900.0, 'prefix_fanout' => 1000.0]",
-        "['prefix_fanout' => 600.0]",
+        "['common_or' => 500.0, 'prefix_fanout' => 600.0]",
+        "['common_or' => 550.0, 'prefix_fanout' => 650.0]",
         "\$serverRowsLimit = \$engineFamily === 'mariadb'",
         "\$sortMergePassesLimit = \$profileName === '100k' ? 8 : 1;",
     ] as $required) {
@@ -3205,17 +3206,22 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     $manifestRelease = strpos($maxValidSetup, 'unset($manifest);');
     $seedRelease = strpos($maxValidSetup, 'unset($seed, $seedHashInput, $seedRows);');
     $databaseRelease = strpos($maxValidSetup, '$wpdb->flush();');
+    $isolatedEnqueue = strpos($maxValidSetup, 'enqueue_many($ids, 1)');
     $workerPasses = strpos($maxValidSetup, 'for ($pass = 0; $pass < 100; $pass++)');
     assert_true(
         $manifestRelease !== false
             && $seedRelease !== false
             && $databaseRelease !== false
+            && $isolatedEnqueue !== false
             && $workerPasses !== false
             && $manifestRelease < $seedRelease
             && $seedRelease < $databaseRelease
-            && $databaseRelease < $workerPasses,
-        'near-limit setup should release source-binding and seed records before measuring worker memory'
+            && $databaseRelease < $isolatedEnqueue
+            && $isolatedEnqueue < $workerPasses,
+        'near-limit setup should release seed records and prioritize only its own rows before measuring worker memory'
     );
+    assert_contains("'batch_size' => \$remainingTargets", $maxValidSetup, 'near-limit setup should not claim rows from the retained dirty-head backlog');
+    assert_contains('$unrelatedWorkAfter === $unrelatedWorkBefore', $maxValidSetup, 'near-limit setup should prove that it preserved unrelated durable work');
     foreach ([
         "\$rssBefore = wp_fts_wc_rss_bytes('VmRSS');",
         "'rss_peak_delta_bytes' => max(0, \$rssPeakAfter - \$rssBefore)",

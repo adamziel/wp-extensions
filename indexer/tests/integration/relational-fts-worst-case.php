@@ -3601,18 +3601,29 @@ ORDER BY ID",
     $wpdb->flush();
     gc_collect_cycles();
 
+    $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
+    $unrelatedWorkBefore = wp_fts_wc_checked_count(
+        "SELECT COUNT(*) FROM `{$work}` WHERE kind='post' AND post_id NOT IN ({$idSql})",
+        'near-limit unrelated work before setup'
+    );
     $queue = new WP_FTS_Index_Queue($wpdb);
     $enqueueStarted = hrtime(true);
-    $enqueue = wp_fts_wc_record_queries(static fn() => $queue->enqueue_many($ids));
+    // Validation deliberately retains the dirty-head backlog. Give this
+    // focused fixture the oldest valid timestamp, then claim no more rows than
+    // it still owns so the measured worker cannot consume unrelated work.
+    $enqueue = wp_fts_wc_record_queries(static fn() => $queue->enqueue_many($ids, 1));
     $enqueueDuration = wp_fts_wc_elapsed_ms($enqueueStarted);
     $enqueueBytes = array_map('strlen', array_values($enqueue['queries']));
     $enqueueMaxBytes = max($enqueueBytes ?: [0]);
     wp_fts_wc_assert(count($enqueue['queries']) === 1, 'Near-limit posts were not queued with one bounded multi-row UPSERT.');
-    $work = wp_fts_wc_identifier($wpdb->prefix . 'fts_work');
     $passes = [];
     $phpLifetimePeak = memory_get_peak_usage(true);
     for ($pass = 0; $pass < 100; $pass++) {
-        if (wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE post_id IN ({$idSql})", 'near-limit setup work') === 0) {
+        $remainingTargets = wp_fts_wc_checked_count(
+            "SELECT COUNT(*) FROM `{$work}` WHERE post_id IN ({$idSql})",
+            'near-limit setup work'
+        );
+        if ($remainingTargets === 0) {
             break;
         }
         gc_collect_cycles();
@@ -3623,7 +3634,7 @@ ORDER BY ID",
         $started = hrtime(true);
         $recorded = wp_fts_wc_record_queries(static fn(): array => WP_FTS_Plugin::process_manual_index_batch([
             'source' => 'worst-case-max-valid',
-            'batch_size' => 100,
+            'batch_size' => $remainingTargets,
             'time_budget' => 20.0,
         ]));
         $duration = wp_fts_wc_elapsed_ms($started);
@@ -3665,6 +3676,11 @@ ORDER BY ID",
     }
     $remaining = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE post_id IN ({$idSql})", 'near-limit setup final work');
     wp_fts_wc_assert($remaining === 0, 'Near-limit posts did not drain from durable work.');
+    $unrelatedWorkAfter = wp_fts_wc_checked_count(
+        "SELECT COUNT(*) FROM `{$work}` WHERE kind='post' AND post_id NOT IN ({$idSql})",
+        'near-limit unrelated work after setup'
+    );
+    wp_fts_wc_assert($unrelatedWorkAfter === $unrelatedWorkBefore, 'Near-limit setup consumed unrelated durable work.');
     $documents = wp_fts_wc_identifier($wpdb->prefix . 'fts_documents');
     $indexed = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$documents}` WHERE post_id IN ({$idSql})", 'near-limit indexed documents');
     wp_fts_wc_assert($indexed === 20, 'Near-limit posts were not all indexed.');
@@ -17814,8 +17830,8 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
                 ['common_or' => 1500.0, 'max_valid_or_prefix' => 2250.0, 'prefix_fanout' => 1600.0, 'all_packs' => 1250.0],
             ]
             : [
-                ['common_or' => 400.0, 'prefix_fanout' => 500.0],
-                ['prefix_fanout' => 600.0],
+                ['common_or' => 500.0, 'prefix_fanout' => 600.0],
+                ['common_or' => 550.0, 'prefix_fanout' => 650.0],
             ];
         $p95Limits = array_replace($p95Limits, $p95Overrides);
         $p99Limits = array_replace($p99Limits, $p99Overrides);

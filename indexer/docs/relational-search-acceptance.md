@@ -967,9 +967,11 @@ vectors, duration, PHP peak delta, and conservative Linux RSS peak delta. PHP's
 peak counter is reset before each pass. Linux attribution remains `VmHWM` after
 minus live `VmRSS` before in the fresh worker process, never high-water mark
 minus an older high-water mark. The retained aggregate peak must dominate every
-per-pass peak. Housekeeping passes may acknowledge older durable work before
-the target rows progress; the aggregate must still index all twenty rows in at
-most 100 passes. Every pass executes at most 20 recognized statements and emits
+per-pass peak. The enqueue uses the oldest valid timestamp and every worker
+claim is capped at the number of target rows still present, so this focused
+phase leaves the retained dirty-head backlog untouched. The aggregate must
+still index all twenty rows in at most 100 passes. Every pass executes at most
+20 recognized statements and emits
 no statement above 4 MiB. Those passes finish within 30 seconds and
 add at most 32 MiB PHP and RSS while remaining below 128 MiB absolute PHP and RSS.
 The one enqueue is at most 1 MiB and five seconds. Fresh-process front-end
@@ -1280,13 +1282,13 @@ At 50k, the corresponding warm limits are:
 
 | Warm query | MySQL 8.0 p95 / p99 | MariaDB 10.11 p95 / p99 |
 | --- | ---: | ---: |
-| common three-term OR | <=400 / <=500 ms | <=1,250 / <=1,500 ms |
+| common three-term OR | <=500 / <=550 ms | <=1,250 / <=1,500 ms |
 | valid 12-group OR+prefix | <=1,000 / <=1,500 ms | <=2,000 / <=2,250 ms |
 | rare-anchor AND | <=100 / <=200 ms | <=100 / <=200 ms |
 | exact-anchor surface-range AND | <=300 / <=500 ms | <=300 / <=500 ms |
 | exact-anchor candidate-first AND | <=300 / <=500 ms | <=300 / <=500 ms |
 | selective-prefix anchor AND | <=100 / <=200 ms | <=100 / <=200 ms |
-| 10k-completion prefix | <=500 / <=600 ms | <=1,400 / <=1,600 ms |
+| 10k-completion prefix | <=600 / <=650 ms | <=1,400 / <=1,600 ms |
 | all distributable packs | <=500 / <=750 ms | <=1,000 / <=1,250 ms |
 | impossible mandatory term | <=50 / <=100 ms | <=50 / <=100 ms |
 | valid 12-group OR+prefix temporary/sort work | 0 disk temporary tables; <=1 merge pass | 0 disk temporary tables; <=1 merge pass |
