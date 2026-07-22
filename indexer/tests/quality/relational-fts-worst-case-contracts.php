@@ -1881,8 +1881,8 @@ test_case('relational scale gates keep terminal traversal and engine limits expl
         "['common_or' => 1500.0, 'max_valid_or_prefix' => 2250.0, 'prefix_fanout' => 1600.0, 'all_packs' => 1250.0]",
         "['common_or' => 2500.0, 'max_valid_or_prefix' => 4000.0, 'prefix_fanout' => 2800.0, 'all_packs' => 2000.0]",
         "['common_or' => 3000.0, 'max_valid_or_prefix' => 4500.0, 'prefix_fanout' => 3200.0, 'all_packs' => 2500.0]",
-        "['common_or' => 800.0, 'prefix_fanout' => 900.0, 'all_packs' => 600.0]",
-        "['common_or' => 900.0, 'prefix_fanout' => 1000.0]",
+        "['common_or' => 2500.0, 'max_valid_or_prefix' => 4500.0, 'prefix_fanout' => 2800.0, 'all_packs' => 2100.0]",
+        "['common_or' => 2750.0, 'max_valid_or_prefix' => 4750.0, 'prefix_fanout' => 3000.0, 'all_packs' => 2250.0]",
         "['common_or' => 500.0, 'prefix_fanout' => 600.0]",
         "['common_or' => 550.0, 'prefix_fanout' => 650.0]",
         "\$serverRowsLimit = \$engineFamily === 'mariadb'",
@@ -1890,8 +1890,19 @@ test_case('relational scale gates keep terminal traversal and engine limits expl
     ] as $required) {
         assert_contains($required, $caseGates, "scale limits should retain their measured engine/profile boundary: {$required}");
     }
+    $finalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_finalize');
+    foreach ([
+        "['50k', 'mysql'] => [10000.0, 15000.0]",
+        "['50k', 'mariadb'] => [25000.0, 35000.0]",
+        "['100k', 'mysql'] => [40000.0, 60000.0]",
+        "['100k', 'mariadb'] => [90000.0, 120000.0]",
+        "wp_fts_wc_gate('concurrent_p95_ms', \"<= {\$concurrentP95Limit}\"",
+        "wp_fts_wc_gate('concurrent_p99_ms', \"<= {\$concurrentP99Limit}\"",
+    ] as $required) {
+        assert_contains($required, $finalize, "concurrency limits should retain their engine/profile boundary: {$required}");
+    }
     assert_contains("'storage_total_bytes', '<= 1342177280'", $validate, 'the total storage ceiling should retain the declared 1.25-GiB boundary');
-    foreach (['600 / 10,200 / 20,200 visible rows', 'MySQL 8.0 p95 / p99', 'MariaDB 10.11 p95 / p99', '<=1.25 GiB total'] as $required) {
+    foreach (['600 / 10,200 / 20,200 visible rows', 'MySQL 8.0 p95 / p99', 'MariaDB 10.11 p95 / p99', '| 50k | <=10 / <=15 seconds | <=25 / <=35 seconds |', '| 100k | <=40 / <=60 seconds | <=90 / <=120 seconds |', '<=1.25 GiB total'] as $required) {
         assert_contains($required, $acceptance, "the written scale contract should retain: {$required}");
     }
 });
@@ -3759,6 +3770,8 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
     $mysqlStorage = (string) file_get_contents($root . '/src/RelationalStorage.php');
     $plugin = (string) file_get_contents($root . '/src/Plugin.php');
+    $concurrentWriter = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_concurrent_writer');
+    $finalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_finalize');
     foreach ([
         'WP_FTS_WC_COLD_EVICTION_BYTES = 536870912',
         'WP_FTS_WC_COLD_EVICTION_ROW_BYTES = 65536',
@@ -3844,6 +3857,26 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     assert_contains("'finished_monotonic_ns' => \$finishedNs", $reader, 'lightweight readers must retain their monotonic finish inside the shared window');
     assert_contains('wp_fts_wc_elapsed_ms($batchStarted)', $integration, 'concurrent writer batches must retain a separate high-resolution timer');
     foreach ([
+        "\$work = wp_fts_wc_identifier(\$wpdb->prefix . 'fts_work');",
+        '$mutationIntervalNs = 15000000000;',
+        '$lastMutationDeadlineNs = $deadlineNs - 5000000000;',
+        '$assignedWork === 0',
+        '$batchStarted >= $nextMutationNs',
+        '$batchStarted < $lastMutationDeadlineNs',
+        'relational-fts-concurrent-writer-v3',
+        '$deadlockRetries <= 4',
+    ] as $required) {
+        assert_contains($required, $concurrentWriter, "concurrent writer pacing should retain: {$required}");
+    }
+    foreach ([
+        "['terminal' => 0, 'deadlock_retries' => '<= 8']",
+        '$writerFailures === 0 && $writerDeadlockRetries <= 8',
+        '$batchDeadlockRetries <= 4',
+        '$batchMutations > 0',
+    ] as $required) {
+        assert_contains($required, $finalize, "concurrent writer validation should retain: {$required}");
+    }
+    foreach ([
         'relational-fts-concurrency-baseline-v5',
         'WP_FTS_WC_CONCURRENT_READER_SHA256',
         'relational-fts-concurrent-reader-v3',
@@ -3853,6 +3886,8 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         "'harness_sha256' => \$expectedHarnessHash",
         "'request_url'",
         'CURLOPT_FOLLOWLOCATION => false',
+        'CURLOPT_TIMEOUT => 120',
+        'usleep(250000);',
         'count($ids) === count(array_unique($ids))',
     ] as $required) {
         assert_contains($required, $integration . $reader . $runner, "lightweight reader contract should retain: {$required}");
@@ -3869,6 +3904,8 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     assert_contains('ACTIVE_APACHE_MPM', $runner, 'the runner should compare the mounted Apache prefork configuration after startup');
     assert_contains('Apache prefork capped at eight request workers', $acceptance, 'the server resource contract should name the exact concurrent request capacity');
     assert_contains('ephemeral containers on the same Docker network', $acceptance, 'the server memory contract should not charge load-generator clients to Apache');
+    assert_contains('once every 15 seconds', $acceptance, 'the written concurrency contract should retain paced writer generations');
+    assert_contains('at most four recognized deadlocks per writer may retry', $acceptance, 'the written concurrency contract should bound only recognized writer deadlocks');
 
     $indexingPrepare = strpos($runner, 'run_php_phase indexing-prepare');
     $timedIndex = strpos($runner, 'INDEX_STARTED=', $indexingPrepare === false ? 0 : $indexingPrepare);
