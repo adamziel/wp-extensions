@@ -3288,6 +3288,7 @@ test_case('relational worst-case retains the real 57344-row old-posting frontier
         "'contains_delete_or_count' => \$resetHasForbiddenCorpusWork",
         "'schema_version' => 1",
         "'exact_current_contract' => true",
+        'KEY visibility (post_id)',
         "'recoverable' => ['unique' => false, 'columns' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key']]",
         "'only_canonical_tables' => \$postResetTables === \$expectedPostResetTables",
         'memory_reset_peak_usage()',

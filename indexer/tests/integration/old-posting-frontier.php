@@ -1547,7 +1547,7 @@ PRIMARY KEY (term_id,post_id), KEY post_term (post_id,term_id)
         "CREATE TABLE {$documents} (
 post_id bigint unsigned NOT NULL, primary_lang varbinary(32) NOT NULL DEFAULT 'und',
 content_hash varbinary(40) NOT NULL, snippet_text mediumtext NOT NULL, indexed_at bigint unsigned NOT NULL DEFAULT 0,
-PRIMARY KEY (post_id)
+PRIMARY KEY (post_id), KEY visibility (post_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
         "CREATE TABLE {$work} (
 job_key varbinary(191) NOT NULL, kind varchar(16) NOT NULL, post_id bigint unsigned NOT NULL DEFAULT 0,
