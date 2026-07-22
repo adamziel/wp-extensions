@@ -5132,10 +5132,9 @@ KEY page_order (case_id,score,post_date_gmt,post_id)
             $cases[$caseId] = $case;
             $minimumRows = in_array((string) $manifest['profile']['name'], ['50k', '100k'], true) ? 5000 : 40;
             array_push($gates,
-                wp_fts_wc_gate("terminal_{$caseId}_fixture_cardinality", $expectedRows, $case['expected_rows'], $case['expected_rows'] === $expectedRows && $case['actual_rows'] === $expectedRows),
                 wp_fts_wc_gate("terminal_{$caseId}_full_membership_and_order", $case['expected_sha256'], $case['actual_sha256'], $case['completed'] && $case['expected_rows'] === $case['actual_rows'] && hash_equals($case['expected_sha256'], $case['actual_sha256'])),
                 wp_fts_wc_gate("terminal_{$caseId}_terminal_page", $case['expected_pages'], $case['pages'], $case['completed'] && $case['pages'] === $case['expected_pages']),
-                wp_fts_wc_gate("terminal_{$caseId}_uncapped_cardinality", "> {$minimumRows}", $case['expected_rows'], $case['expected_rows'] > $minimumRows && $case['actual_rows'] === $case['expected_rows']),
+                wp_fts_wc_gate("terminal_{$caseId}_uncapped_cardinality", "{$expectedRows} (> {$minimumRows})", $case['expected_rows'], $case['expected_rows'] === $expectedRows && $case['expected_rows'] > $minimumRows && $case['actual_rows'] === $expectedRows),
                 wp_fts_wc_gate("terminal_{$caseId}_bounded_page_rows", '<= 50', $case['max_page_rows'], $case['max_page_rows'] <= 50),
                 wp_fts_wc_gate("terminal_{$caseId}_hydrated_full_50_row_page", 50, $case['max_page_rows'], $case['max_page_rows'] === 50 && $case['statement_shapes_valid']),
                 wp_fts_wc_gate("terminal_{$caseId}_query_count", 3, $case['max_query_count'], $case['statement_shapes_valid'] && $case['max_query_count'] === 3),

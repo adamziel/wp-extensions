@@ -1869,7 +1869,8 @@ test_case('relational scale gates keep terminal traversal and engine limits expl
     assert_same(3, substr_count($populate, 'WP_FTS_WC_TERMINAL_QUERY_TERM'), 'the independent exact and prefix oracle should use the same term and prefix bound');
     foreach ([
         "\$expectedRows = (int) \$manifest['profile']['dirty'] + 200;",
-        "terminal_{\$caseId}_fixture_cardinality",
+        "terminal_{\$caseId}_uncapped_cardinality\", \"{\$expectedRows} (> {\$minimumRows})\"",
+        "\$case['expected_rows'] === \$expectedRows",
         "['50k', '100k'], true) ? 5000 : 40",
     ] as $required) {
         assert_contains($required, $terminal, "terminal traversal should retain its explicit scale boundary: {$required}");
