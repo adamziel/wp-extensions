@@ -4610,6 +4610,58 @@ test_case('HTTP attribution classifies physical table tokens without comment or 
     assert_true(!str_contains($attribution, "strtolower(\$wpdb->prefix . 'fts_')"), 'HTTP attribution must not classify its own request-marker substring as a plugin table');
 });
 
+test_case('relational worst-case queue claim plan classification excludes materialized work aliases', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    foreach (['wp_fts_wc_collect_database_table_access', 'wp_fts_wc_collect_work_table_access'] as $functionName) {
+        if (!function_exists($functionName)) {
+            eval(wp_fts_wc_contract_function_source($integration, $functionName));
+        }
+    }
+    $plan = [
+        'query_block' => [
+            'nested_loop' => [
+                [
+                    'table' => [
+                        'table_name' => 'chosen_fts_work',
+                        'access_type' => 'ALL',
+                        'rows_examined_per_scan' => 9,
+                        'materialized_from_subquery' => [
+                            'query_block' => [
+                                'table' => [
+                                    'table_name' => 'wp_fts_work',
+                                    'access_type' => 'range',
+                                    'possible_keys' => ['ready', 'recoverable'],
+                                    'key' => 'ready',
+                                    'rows_examined_per_scan' => 100,
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                [
+                    'table' => [
+                        'table_name' => 'claim_target',
+                        'access_type' => 'eq_ref',
+                        'possible_keys' => ['PRIMARY'],
+                        'key' => 'PRIMARY',
+                        'rows_examined_per_scan' => 1,
+                    ],
+                ],
+            ],
+        ],
+    ];
+    $access = [];
+    wp_fts_wc_collect_work_table_access($plan, $access);
+
+    assert_same([[
+        'table_name' => 'wp_fts_work',
+        'access_type' => 'range',
+        'possible_keys' => ['ready', 'recoverable'],
+        'key' => 'ready',
+        'rows' => 100,
+    ]], $access, 'queue claim plans should retain the indexed physical leaf without classifying its materialized container');
+});
+
 test_case('physical schema classification streams maximum worker statements', function (): void {
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     foreach (['wp_fts_wc_sql_token_stream', 'wp_fts_wc_is_physical_schema_statement'] as $function) {

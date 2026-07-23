@@ -12044,19 +12044,21 @@ function wp_fts_wc_explain_queue_claim(string $sql): array
  */
 function wp_fts_wc_collect_work_table_access(array $node, array &$access): void
 {
-    if (isset($node['table_name']) && is_string($node['table_name']) && str_ends_with(strtolower($node['table_name']), 'fts_work')) {
-        $access[] = [
-            'table_name' => $node['table_name'],
-            'access_type' => is_scalar($node['access_type'] ?? null) ? (string) $node['access_type'] : '',
-            'possible_keys' => is_array($node['possible_keys'] ?? null) ? array_values($node['possible_keys']) : [],
-            'key' => is_scalar($node['key'] ?? null) ? (string) $node['key'] : '',
-            'rows' => is_numeric($node['rows'] ?? null) ? (int) $node['rows'] : null,
-        ];
-    }
-    foreach ($node as $child) {
-        if (is_array($child)) {
-            wp_fts_wc_collect_work_table_access($child, $access);
+    $tableAccess = [];
+    wp_fts_wc_collect_database_table_access($node, $tableAccess);
+    foreach ($tableAccess as $row) {
+        // MySQL may name a bounded derived container chosen_fts_work; only its
+        // non-materialized leaves represent physical queue-table access.
+        if (!empty($row['materialized']) || !str_ends_with(strtolower((string) ($row['table_name'] ?? '')), 'fts_work')) {
+            continue;
         }
+        $access[] = [
+            'table_name' => (string) $row['table_name'],
+            'access_type' => (string) $row['access_type'],
+            'possible_keys' => $row['possible_keys'],
+            'key' => (string) $row['key'],
+            'rows' => $row['rows'],
+        ];
     }
 }
 
