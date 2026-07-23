@@ -254,7 +254,7 @@ namespace {
             'post_id bigint unsigned NOT NULL',
             'impact smallint unsigned NOT NULL',
             'PRIMARY KEY  (term_id,post_id)',
-            'KEY post_term_impact (post_id,term_id,impact)',
+            'KEY post_term (post_id,term_id)',
             'CREATE TABLE wp_fts_documents',
             "primary_lang varbinary(32) NOT NULL DEFAULT 'und'",
             'content_hash varbinary(40) NOT NULL',

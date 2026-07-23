@@ -252,7 +252,7 @@ test_case('quality real mysql harness source tracks exact four-table current sch
         "['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at']",
         "['job_key', 'kind', 'post_id', 'generation', 'state', 'available_at', 'attempts', 'claim_token', 'claimed_generation', 'claim_expires_at', 'cursor_post_id', 'scope_coverage', 'scope_incarnation', 'scope_subject_type', 'scope_subject_id', 'payload', 'last_error_code', 'last_error_at']",
         "'term_identity' => ['unique' => true, 'columns' => ['lang', 'kind', 'term']]",
-        "'post_term_impact' => ['unique' => false, 'columns' => ['post_id', 'term_id', 'impact']]",
+        "'post_term' => ['unique' => false, 'columns' => ['post_id', 'term_id']]",
         "'ready' => ['unique' => false, 'columns' => ['kind', 'state', 'available_at', 'post_id', 'job_key']]",
         "'scope_subject' => ['unique' => false, 'columns' => ['kind', 'scope_coverage', 'scope_subject_type', 'scope_subject_id']]",
     ] as $contract) {

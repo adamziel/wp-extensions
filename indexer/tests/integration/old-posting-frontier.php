@@ -923,7 +923,7 @@ function wp_fts_frontier_write_evidence(array $statements): array
     $decrementSql = (string) ($decrementStatement['sql'] ?? '');
     wp_fts_frontier_assert(($decrementStatement['method'] ?? null) === 'query', 'The bounded dictionary decrement must be one data statement.');
     wp_fts_frontier_assert(str_starts_with($decrementSql, 'UPDATE ('), 'The bounded dictionary decrement must begin from its materialized driver.');
-    wp_fts_frontier_assert(str_contains($decrementSql, 'changed FORCE INDEX (post_term_impact)'), 'The bounded dictionary decrement lost its post-first driver.');
+    wp_fts_frontier_assert(str_contains($decrementSql, 'changed FORCE INDEX (post_term)'), 'The bounded dictionary decrement lost its post-first driver.');
     wp_fts_frontier_assert(str_contains($decrementSql, 'STRAIGHT_JOIN '), 'The bounded dictionary decrement lost its fixed join order.');
     wp_fts_frontier_assert(str_contains($decrementSql, 'AS t FORCE INDEX (PRIMARY)'), 'The bounded dictionary decrement lost its primary-key target lookup.');
     wp_fts_frontier_assert(!str_contains($decrementSql, 'INSERT INTO '), 'The bounded dictionary decrement became a self-referential INSERT again.');
@@ -936,7 +936,7 @@ function wp_fts_frontier_write_evidence(array $statements): array
     $deleteSql = (string) ($deleteStatement['sql'] ?? '');
     wp_fts_frontier_assert(($deleteStatement['method'] ?? null) === 'query', 'The bounded index DELETE must be one data statement.');
     wp_fts_frontier_assert(str_contains($deleteSql, 'LIMIT 50100'), 'The bounded index DELETE lost its 50,100-row materialization barrier.');
-    wp_fts_frontier_assert(str_contains($deleteSql, 'candidate_posting FORCE INDEX (post_term_impact)'), 'The bounded index DELETE lost its post-first driver.');
+    wp_fts_frontier_assert(str_contains($deleteSql, 'candidate_posting FORCE INDEX (post_term)'), 'The bounded index DELETE lost its post-first driver.');
     foreach (['old_posting', 'retired_term', 'retired_document'] as $targetAlias) {
         wp_fts_frontier_assert(
             str_contains($deleteSql, "{$targetAlias} FORCE INDEX (PRIMARY)"),
@@ -983,7 +983,7 @@ function wp_fts_frontier_explain(mysqli $db, string $sql): array
     wp_fts_frontier_assert(count($oldPostingAccess) === 1, 'The frontier EXPLAIN must contain exactly one old_posting access.');
     $oldAccess = $oldPostingAccess[0];
     wp_fts_frontier_assert(($oldAccess['access_type'] ?? null) === 'range', 'The old-posting frontier must use range access, not a table/index scan.');
-    wp_fts_frontier_assert(($oldAccess['key'] ?? null) === 'post_term_impact', 'The old-posting frontier did not select post_term_impact.');
+    wp_fts_frontier_assert(($oldAccess['key'] ?? null) === 'post_term', 'The old-posting frontier did not select post_term.');
     wp_fts_frontier_assert(($oldAccess['using_index'] ?? null) === true, 'The old-posting frontier access is not covering.');
 
     $queryBlocks = [];
@@ -1385,7 +1385,7 @@ function wp_fts_frontier_schema_evidence(mysqli $db, array $tables): array
         ],
         $postingsTable => [
             'PRIMARY' => ['unique' => true, 'columns' => ['term_id', 'post_id']],
-            'post_term_impact' => ['unique' => false, 'columns' => ['post_id', 'term_id', 'impact']],
+            'post_term' => ['unique' => false, 'columns' => ['post_id', 'term_id']],
         ],
         $documentsTable => [
             'PRIMARY' => ['unique' => true, 'columns' => ['post_id']],
@@ -1541,7 +1541,7 @@ KEY empty_terms (doc_freq)
 ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=binary",
         "CREATE TABLE {$postings} (
 term_id bigint unsigned NOT NULL, post_id bigint unsigned NOT NULL, impact smallint unsigned NOT NULL,
-PRIMARY KEY (term_id,post_id), KEY post_term_impact (post_id,term_id,impact)
+PRIMARY KEY (term_id,post_id), KEY post_term (post_id,term_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=binary",
         "CREATE TABLE {$documents} (
 post_id bigint unsigned NOT NULL, primary_lang varbinary(32) NOT NULL DEFAULT 'und',

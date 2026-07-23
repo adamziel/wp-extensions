@@ -798,7 +798,8 @@ test_case_with_pdo_sqlite_fixture('relational ranges over one normalized surface
     assert_same(1, substr_count($rankSql, 'JOIN wp_fts_documents d_f'), 'a broad exact-plus-prefix query should pay one visibility join after compacting posting arms');
     assert_true(!str_contains($rankSql, 'd_exact_match') && !str_contains($rankSql, 'd_prefix_match'), 'broad posting arms must not repeat visibility per alternative or prefix row');
     assert_same(2, count($wpdb->queries), 'a surface-range prefix search should remain exactly one plan plus one rank statement');
-    $groupedPosition = strpos($rankSql, ') grouped');
+    assert_same(1, substr_count($rankSql, 'JOIN wp_fts_postings po'), 'exact and prefix identities should share one posting scan');
+    $groupedPosition = strpos($rankSql, 'GROUP BY po.post_id');
     $visibilityPosition = strpos($rankSql, 'JOIN wp_fts_documents d_f');
     $orderPosition = strpos($rankSql, 'ORDER BY scored.score');
     assert_true(
@@ -1094,7 +1095,7 @@ test_case('relational MySQL rank arms pin bounded drivers ahead of postings and 
     assert_contains('STRAIGHT_JOIN wp_fts_postings ap ON ap.term_id = aq.term_id', $exactSql, 'the rare dictionary arm must drive anchor postings by term id');
     assert_contains('STRAIGHT_JOIN wp_fts_documents d_exact_anchor ON', $exactSql, 'the rare posting candidate must drive its indexed-document probe');
     assert_contains('STRAIGHT_JOIN wp_posts wp_exact_anchor ON', $exactSql, 'the indexed candidate must drive its canonical visibility probe');
-    assert_contains('STRAIGHT_JOIN wp_fts_postings po FORCE INDEX (post_term_impact) ON po.post_id = c.post_id', $exactSql, 'the bounded candidate relation must drive every post-first mandatory-group probe');
+    assert_contains('STRAIGHT_JOIN wp_fts_postings po FORCE INDEX (post_term) ON po.post_id = c.post_id', $exactSql, 'the bounded candidate relation must drive every post-first mandatory-group probe');
     assert_contains('STRAIGHT_JOIN wp_posts wp_f ON wp_f.ID = ranked.post_id', $exactSql, 'the bounded ranked relation must drive the final canonical date lookup');
 
     $prefix = [
@@ -1108,14 +1109,14 @@ test_case('relational MySQL rank arms pin bounded drivers ahead of postings and 
     $prefixRank = $buildRankQuery->invoke($storage, $prefixGroups, 3, $prefix, 'AND', $options, null);
     $prefixRankSql = (string) ($prefixRank['sql'] ?? '');
     assert_same(0, $prefixRank['anchor_group'] ?? null, 'the prefix group must include its complete range cost before anchor selection');
-    assert_contains('STRAIGHT_JOIN wp_fts_postings po FORCE INDEX (post_term_impact) ON po.post_id = c.post_id AND po.term_id = q.term_id', $prefixRankSql, 'exact alternatives must remain bounded candidate-first primary-key probes');
+    assert_contains('STRAIGHT_JOIN wp_fts_postings po FORCE INDEX (post_term) ON po.post_id = c.post_id AND po.term_id = q.term_id', $prefixRankSql, 'exact alternatives must remain bounded candidate-first primary-key probes');
     assert_contains("FROM (SELECT pt.term_id, pt.doc_freq\nFROM wp_fts_terms pt FORCE INDEX (term_identity)", $prefixRankSql, 'the surface arm must start from the one indexed dictionary range');
     assert_contains('STRAIGHT_JOIN wp_fts_postings ppo FORCE INDEX (PRIMARY) ON ppo.term_id = pt.term_id', $prefixRankSql, 'the surface dictionary range must drive its posting lists by term-id primary-key prefix');
     assert_contains('STRAIGHT_JOIN (SELECT anchor_posts.post_id', $prefixRankSql, 'surface postings must intersect the complete exact candidate relation');
     assert_contains('prefix_candidate ON prefix_candidate.post_id = ppo.post_id', $prefixRankSql, 'the range-led stream must intersect candidates by post id');
     assert_contains('pt.kind = 1 AND pt.term >=', $prefixRankSql, 'range-led membership must apply the normalized-surface lower bound');
     assert_contains('pt.term <', $prefixRankSql, 'range-led membership must apply the byte successor');
-    assert_true(!str_contains($prefixRankSql, 'ppo FORCE INDEX (post_term_impact) ON ppo.post_id = c.post_id'), 'the rank query must not classify every posting of every exact candidate');
+    assert_true(!str_contains($prefixRankSql, 'ppo FORCE INDEX (post_term) ON ppo.post_id = c.post_id'), 'the rank query must not classify every posting of every exact candidate');
     assert_same(1, substr_count($prefixRankSql, 'pt.term >='), 'range-led ranking must contain exactly one range predicate rather than SQL arms per completion');
 
     $candidateLedGroups = [
@@ -1125,7 +1126,7 @@ test_case('relational MySQL rank arms pin bounded drivers ahead of postings and 
     $nonAnchorPrefix = array_replace($prefix, ['group_id' => 1, 'doc_freq' => 5000]);
     $candidateLed = $buildRankQuery->invoke($storage, $candidateLedGroups, 2, $nonAnchorPrefix, 'AND', $options, null);
     $candidateLedSql = (string) ($candidateLed['sql'] ?? '');
-    assert_contains('STRAIGHT_JOIN wp_fts_postings po FORCE INDEX (post_term_impact) ON po.post_id = c.post_id AND po.term_id = q.term_id', $candidateLedSql, 'a rare exact anchor must retain bounded exact term-id probes');
+    assert_contains('STRAIGHT_JOIN wp_fts_postings po FORCE INDEX (post_term) ON po.post_id = c.post_id AND po.term_id = q.term_id', $candidateLedSql, 'a rare exact anchor must retain bounded exact term-id probes');
     assert_contains('STRAIGHT_JOIN wp_fts_postings ppo FORCE INDEX (PRIMARY) ON ppo.term_id = pt.term_id', $candidateLedSql, 'the non-anchor surface range must drive only its posting lists by term-id primary-key prefix');
     assert_contains('prefix_candidate ON prefix_candidate.post_id = ppo.post_id', $candidateLedSql, 'the surface posting stream must intersect rare exact candidates');
     assert_contains('pt.kind = 1 AND pt.term >=', $candidateLedSql, 'range-led membership must apply the same normalized-surface predicate');
@@ -1140,7 +1141,7 @@ test_case('relational MySQL rank arms pin bounded drivers ahead of postings and 
             && $postingPosition < $candidatePosition,
         'the bounded non-anchor join order must be dictionary range, matching postings, then exact candidate intersection'
     );
-    assert_true(!str_contains($candidateLedSql, 'ppo FORCE INDEX (post_term_impact) ON ppo.post_id = c.post_id'), 'the non-anchor surface branch must not retain a post-first classifier');
+    assert_true(!str_contains($candidateLedSql, 'ppo FORCE INDEX (post_term) ON ppo.post_id = c.post_id'), 'the non-anchor surface branch must not retain a post-first classifier');
     assert_same(1, substr_count($candidateLedSql, 'pt.term >='), 'the range-led branch must retain one predicate regardless of completion count');
 
     $commonExactGroups = $candidateLedGroups;
@@ -1151,7 +1152,7 @@ test_case('relational MySQL rank arms pin bounded drivers ahead of postings and 
     $commonExactSql = (string) ($commonExact['sql'] ?? '');
     assert_same(1, $commonExact['anchor_group'] ?? null, 'a selective final prefix must anchor ahead of a common exact group');
     assert_contains('STRAIGHT_JOIN wp_fts_postings prefix_posting FORCE INDEX (PRIMARY)', $commonExactSql, 'the prefix anchor must stream only matching term-first postings');
-    assert_contains('LEFT JOIN wp_fts_postings po FORCE INDEX (post_term_impact)', $commonExactSql, 'the prefix candidate set must drive post-first probes for common exact groups');
+    assert_contains('LEFT JOIN wp_fts_postings po FORCE INDEX (post_term)', $commonExactSql, 'the prefix candidate set must drive post-first probes for common exact groups');
     assert_true(!str_contains($commonExactSql, 'SELECT DISTINCT ap.post_id'), 'the common exact posting list must not be materialized as an anchor');
     assert_same(1, substr_count($commonExactSql, 'pt.term >='), 'the prefix anchor must retain one surface predicate');
 });
@@ -1195,6 +1196,30 @@ test_case_with_pdo_sqlite_fixture('relational overlap costing uses dictionary DF
     $rankSql = wp_fts_relational_regression_last_rank_sql($wpdb);
     assert_same(1, substr_count($rankSql, 'JOIN wp_fts_documents d_exact_anchor'), 'exact AND should apply complete visibility once at the rare anchor');
     assert_true(!str_contains($rankSql, 'JOIN wp_fts_documents d_f'), 'exact AND must not repeat complete visibility after bounded post-first probes');
+});
+
+test_case_with_pdo_sqlite_fixture('relational OR ranking adds singleton groups without double-counting alternatives', function (): void {
+    [$wpdb, $storage] = wp_fts_relational_regression_search_fixture();
+    wp_fts_relational_regression_add_post($wpdb, 1, '2026-04-03 00:00:00');
+    wp_fts_relational_regression_add_post($wpdb, 2, '2026-04-03 00:00:00');
+    wp_fts_relational_regression_add_term($wpdb, 'alternativealpha', [1 => 100.0]);
+    wp_fts_relational_regression_add_term($wpdb, 'alternativebeta', [1 => 100.0]);
+    wp_fts_relational_regression_add_term($wpdb, 'singleton', [1 => 10.0, 2 => 250.0]);
+
+    $groups = [
+        [
+            ['key' => WP_FTS_TermNamespace::namespace_term('en', 'alternativealpha'), 'rank' => 0],
+            ['key' => WP_FTS_TermNamespace::namespace_term('en', 'alternativebeta'), 'rank' => 1],
+        ],
+        [['key' => WP_FTS_TermNamespace::namespace_term('en', 'singleton'), 'rank' => 0]],
+    ];
+    $payload = $storage->search_page($groups, wp_fts_relational_regression_search_options());
+
+    assert_same([2, 1], array_column($payload['results'], 'doc_id'), 'two alternatives in one group must contribute only their maximum before the singleton group is added');
+    $rankSql = wp_fts_relational_regression_last_rank_sql($wpdb);
+    assert_contains('SUM(CASE WHEN q.additive_group = 1', $rankSql, 'singleton groups should share one additive aggregate');
+    assert_contains('MAX(CASE WHEN q.group_id = 0', $rankSql, 'alternative groups should retain one maximum aggregate');
+    assert_same(1, substr_count($rankSql, 'JOIN wp_fts_postings po'), 'both aggregate classes should share one posting relation');
 });
 
 test_case_with_pdo_sqlite_fixture('relational regression fences an explicit retry that arrives during an active lease', function (): void {
@@ -2728,7 +2753,7 @@ function wp_fts_relational_regression_create_schema(WP_FTS_Relational_Regression
         'CREATE UNIQUE INDEX wp_fts_term_identity ON wp_fts_terms(lang,kind,term)',
         'CREATE INDEX wp_fts_empty_terms ON wp_fts_terms(doc_freq)',
         'CREATE TABLE wp_fts_postings (term_id INTEGER NOT NULL, post_id INTEGER NOT NULL, impact INTEGER NOT NULL, PRIMARY KEY(term_id,post_id))',
-        'CREATE INDEX wp_fts_post_term_impact ON wp_fts_postings(post_id,term_id,impact)',
+        'CREATE INDEX wp_fts_post_term ON wp_fts_postings(post_id,term_id)',
         'CREATE TABLE wp_fts_documents (post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL, content_hash BLOB NOT NULL, snippet_text TEXT NOT NULL, indexed_at INTEGER NOT NULL)',
         "CREATE TABLE wp_fts_work (job_key BLOB NOT NULL PRIMARY KEY, kind TEXT NOT NULL, post_id INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'pending', available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT NOT NULL DEFAULT '', claimed_generation INTEGER NOT NULL DEFAULT 0, claim_expires_at INTEGER NOT NULL DEFAULT 0, cursor_post_id INTEGER NOT NULL DEFAULT 0, scope_coverage TEXT NOT NULL DEFAULT '', scope_incarnation BLOB NOT NULL DEFAULT '', scope_subject_type TEXT NOT NULL DEFAULT '', scope_subject_id INTEGER NOT NULL DEFAULT 0, payload TEXT, last_error_code TEXT NOT NULL DEFAULT '', last_error_at INTEGER NOT NULL DEFAULT 0)",
         'CREATE INDEX wp_fts_work_ready ON wp_fts_work(kind,state,available_at,post_id,job_key)',

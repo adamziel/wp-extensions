@@ -212,7 +212,7 @@ term_id bigint unsigned NOT NULL,
 post_id bigint unsigned NOT NULL,
 impact smallint unsigned NOT NULL,
 PRIMARY KEY  (term_id,post_id),
-KEY post_term_impact (post_id,term_id,impact)
+KEY post_term (post_id,term_id)
 ) ENGINE=InnoDB {$binary};",
             "CREATE TABLE {$this->documentsTable} (
 post_id bigint unsigned NOT NULL,
@@ -790,7 +790,7 @@ KEY dirty (post_id,kind)
                 ],
                 'indexes' => [
                     ['name' => 'PRIMARY', 'columns' => ['term_id', 'post_id'], 'unique' => true],
-                    ['name' => 'post_term_impact', 'columns' => ['post_id', 'term_id', 'impact'], 'unique' => false],
+                    ['name' => 'post_term', 'columns' => ['post_id', 'term_id'], 'unique' => false],
                 ],
             ],
             $this->documentsTable => [
@@ -2100,7 +2100,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         $postIds = array_keys($normalized);
         $scanLimit = self::MAX_BATCH_POSTINGS + 1;
         $placeholders = implode(',', array_fill(0, count($postIds), '%d'));
-        $indexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (post_term_impact)';
+        $indexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (post_term)';
         $rows = $this->get_results($this->wpdb->prepare(
             "/* wp_fts:replacement-frontier */
 	SELECT capped.post_id, COUNT(*) AS posting_count
@@ -3054,6 +3054,7 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
 
         $args = [];
         $rawParts = [];
+        $rankedSql = '';
         if ($anchorGroup !== null) {
             if ($prefix !== null && $anchorGroup === $prefixGroup) {
                 $candidate = $this->prefix_candidate_sql(
@@ -3072,7 +3073,7 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
                     }
                 }
                 $probeSql = implode("\nUNION ALL\n", $probeRows);
-                $indexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (post_term_impact)';
+                $indexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (post_term)';
                 $rawParts[] = "SELECT c.post_id, q.group_id,
        MAX(CASE WHEN q.term_id = 0 THEN c.group_score ELSE po.impact * q.weight END) AS group_score
 FROM ({$candidate['sql']}) c
@@ -3084,7 +3085,7 @@ GROUP BY c.post_id, q.group_id";
                 array_push($args, ...$candidate['args']);
             } else {
                 $candidate = $this->candidate_sql($qSql, $anchorGroup, $options, 'exact_anchor');
-                $indexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (post_term_impact)';
+                $indexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (post_term)';
                 if ($prefix !== null) {
                     // Exact groups use primary-key probes inside the rare anchor.
                     $rawParts[] = "SELECT c.post_id, q.group_id, MAX(po.impact * q.weight) AS group_score
@@ -3113,7 +3114,7 @@ GROUP BY c.post_id, q.group_id";
                         $surfacePredicate = $this->surface_range_predicate($prefix, 'pt');
                         $prefixPostingIndexHint = $this->is_sqlite_runtime()
                             ? ''
-                            : ' FORCE INDEX (post_term_impact)';
+                            : ' FORCE INDEX (post_term)';
                         $prefixTermIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (PRIMARY)';
                         $rawParts[] = "SELECT prefix_candidate.post_id, " . (int) $prefix['group_id'] . " AS group_id,
 MAX({$prefixScore}) AS group_score
@@ -3146,33 +3147,75 @@ GROUP BY c.post_id, q.group_id";
                 }
             }
         } else {
-            if ($qSql !== '') {
-                $rawParts[] = "SELECT po.post_id, q.group_id, po.impact * q.weight AS group_score
-FROM {$rankGateSql}
-{$rankGateJoin} ({$qSql}) q{$rankGatePredicate}
-{$orderedJoin} {$this->postingsTable} po ON po.term_id = q.term_id";
-                array_push($args, ...$rankControl['args']);
+            // OR and one-group AND searches can aggregate every logical group in
+            // one pass over the posting rows. The older raw -> group -> document
+            // pipeline put two derived aggregation layers over the broad posting
+            // union, even though a conditional MAX preserves alternatives per group.
+            $orQueryRows = [];
+            $additiveGroupIds = [];
+            $complexGroupIds = [];
+            foreach ($qRowsByGroup as $groupId => $groupRows) {
+                $additive = count($groupRows) === 1 && ($prefixGroup === null || (int) $groupId !== $prefixGroup);
+                if ($additive) {
+                    $additiveGroupIds[] = (int) $groupId;
+                } else {
+                    $complexGroupIds[] = (int) $groupId;
+                }
+                foreach ($groupRows as $row) {
+                    $orQueryRows[] = $row . ', 1 AS doc_freq, 0 AS prefix_term, ' . ($additive ? '1' : '0') . ' AS additive_group';
+                }
             }
             if ($prefix !== null) {
                 $surfaceRange = $this->surface_range_sql($prefix);
+                $complexGroupIds[] = (int) $prefix['group_id'];
+                $orQueryRows[] = "SELECT prefix_terms.term_id, " . (int) $prefix['group_id'] . " AS group_id,
+       0 AS weight, prefix_terms.doc_freq, 1 AS prefix_term, 0 AS additive_group
+FROM ({$surfaceRange['sql']}) prefix_terms";
+            }
+            if ($orQueryRows !== []) {
+                $complexGroupIds = array_values(array_unique($complexGroupIds));
+                $orQuerySql = implode("\nUNION ALL\n", $orQueryRows);
                 $prefixIntegerType = $this->is_sqlite_runtime() ? 'INTEGER' : 'SIGNED';
-                $prefixScore = "CAST(ppo.impact * CAST(" . self::RARITY_SCALE
-                    . " / CASE WHEN pt.doc_freq < 1 THEN 1 ELSE pt.doc_freq END AS {$prefixIntegerType}) * "
+                $exactScore = 'po.impact * q.weight';
+                $prefixScore = "CAST(po.impact * CAST(" . self::RARITY_SCALE
+                    . " / CASE WHEN q.doc_freq < 1 THEN 1 ELSE q.doc_freq END AS {$prefixIntegerType}) * "
                     . self::PREFIX_WEIGHT . " / 1000 AS {$prefixIntegerType})";
-                array_push($args, ...$rankControl['args'], ...$surfaceRange['args']);
-                $rawParts[] = "SELECT ppo.post_id, " . (int) $prefix['group_id'] . " AS group_id,
-{$prefixScore} AS group_score
+                $scoreParts = [];
+                if ($additiveGroupIds !== []) {
+                    $scoreParts[] = $complexGroupIds === []
+                        ? "SUM({$exactScore})"
+                        : "SUM(CASE WHEN q.additive_group = 1 THEN {$exactScore} ELSE 0 END)";
+                }
+                foreach ($complexGroupIds as $groupId) {
+                    $score = $prefix !== null && (int) $prefix['group_id'] === $groupId
+                        ? "CASE WHEN q.prefix_term = 1 THEN {$prefixScore} ELSE {$exactScore} END"
+                        : $exactScore;
+                    $scoreParts[] = count($complexGroupIds) === 1 && $additiveGroupIds === []
+                        ? "MAX({$score})"
+                        : "COALESCE(MAX(CASE WHEN q.group_id = {$groupId} THEN {$score} END), 0)";
+                }
+                $score = implode(' + ', $scoreParts);
+                $groupBy = count($orQueryRows) === 1 && $prefix === null ? '' : "\nGROUP BY po.post_id";
+                if ($groupBy === '') {
+                    $score = $exactScore;
+                }
+                $rankedSql = "SELECT po.post_id, {$score} AS score
 FROM {$rankGateSql}
-{$rankGateJoin} ({$surfaceRange['sql']}) pt{$rankGatePredicate}
-{$orderedJoin} {$this->postingsTable} ppo ON ppo.term_id = pt.term_id";
+{$rankGateJoin} ({$orQuerySql}) q{$rankGatePredicate}
+{$orderedJoin} {$this->postingsTable} po ON po.term_id = q.term_id{$groupBy}";
+                array_push($args, ...$rankControl['args']);
+                if ($prefix !== null) {
+                    array_push($args, ...$surfaceRange['args']);
+                }
             }
         }
-        if ($rawParts === []) {
+        if ($rankedSql === '' && $rawParts === []) {
             return ['sql' => 'SELECT 0 WHERE 1=0', 'args' => [], 'reverse' => false, 'anchor_group' => $anchorGroup, 'prefix_strategy' => $prefixStrategy, 'scoring_now_gmt' => ''];
         }
-        $having = $mode === 'AND' ? 'HAVING COUNT(*) = ' . $groupCount : '';
-        $rawSql = implode("\nUNION ALL\n", $rawParts);
-        $rankedSql = "SELECT grouped.post_id, SUM(grouped.group_score) AS score
+        if ($rankedSql === '') {
+            $having = $mode === 'AND' ? 'HAVING COUNT(*) = ' . $groupCount : '';
+            $rawSql = implode("\nUNION ALL\n", $rawParts);
+            $rankedSql = "SELECT grouped.post_id, SUM(grouped.group_score) AS score
 FROM (
     SELECT raw.post_id, raw.group_id, MAX(raw.group_score) AS group_score
     FROM ({$rawSql}) raw
@@ -3180,6 +3223,7 @@ FROM (
 ) grouped
 GROUP BY grouped.post_id
 {$having}";
+        }
         $limit = $options['page_size'] + 1;
         if ($anchorGroup === null) {
             // Broad OR and single-group searches compact postings to one row
@@ -3776,7 +3820,7 @@ VALUES (%s, 'meta', 0, %d, 'meta', 0, 0, '', 0, 0, 0, '', 0, %s, '', 0)",
             'CREATE UNIQUE INDEX ' . $index($this->termsTable, 'term_identity') . " ON {$terms}(lang,kind,term)",
             'CREATE INDEX ' . $index($this->termsTable, 'empty_terms') . " ON {$terms}(doc_freq)",
             "CREATE TABLE {$postings} (term_id INTEGER NOT NULL, post_id INTEGER NOT NULL, impact INTEGER NOT NULL, PRIMARY KEY(term_id,post_id))",
-            'CREATE INDEX ' . $index($this->postingsTable, 'post_term_impact') . " ON {$postings}(post_id,term_id,impact)",
+            'CREATE INDEX ' . $index($this->postingsTable, 'post_term') . " ON {$postings}(post_id,term_id)",
             "CREATE TABLE {$documents} (post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL DEFAULT 'und', content_hash BLOB NOT NULL, snippet_text TEXT NOT NULL, indexed_at INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE {$work} (job_key BLOB NOT NULL PRIMARY KEY, kind TEXT NOT NULL, post_id INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'pending', available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT NOT NULL DEFAULT '', claimed_generation INTEGER NOT NULL DEFAULT 0, claim_expires_at INTEGER NOT NULL DEFAULT 0, cursor_post_id INTEGER NOT NULL DEFAULT 0, scope_coverage TEXT NOT NULL DEFAULT '', scope_incarnation BLOB NOT NULL DEFAULT '', scope_subject_type TEXT NOT NULL DEFAULT '', scope_subject_id INTEGER NOT NULL DEFAULT 0, payload TEXT NULL, last_error_code TEXT NOT NULL DEFAULT '', last_error_at INTEGER NOT NULL DEFAULT 0)",
             'CREATE INDEX ' . $index($this->workTable, 'ready') . " ON {$work}(kind,state,available_at,post_id,job_key)",
@@ -4277,7 +4321,7 @@ FROM (
     FROM (
         SELECT affected.post_id, affected.delete_document, candidate_posting.term_id
         FROM (" . implode("\nUNION ALL\n", $driver) . ") affected
-        LEFT JOIN {$this->postingsTable} candidate_posting FORCE INDEX (post_term_impact)
+        LEFT JOIN {$this->postingsTable} candidate_posting FORCE INDEX (post_term)
           ON candidate_posting.post_id = affected.post_id
     ) bounded_rows
     LIMIT {$driverLimit}
@@ -4347,7 +4391,7 @@ WHERE t.term_id IN (
         } else {
             $sql = "UPDATE (
     SELECT changed.term_id, COUNT(*) AS document_delta
-    FROM {$this->postingsTable} changed FORCE INDEX (post_term_impact)
+    FROM {$this->postingsTable} changed FORCE INDEX (post_term)
     WHERE changed.post_id IN ({$placeholders})
     GROUP BY changed.term_id
 ) affected

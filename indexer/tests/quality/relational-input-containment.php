@@ -525,12 +525,12 @@ test_case('quality relational input containment rejects truncated or disabled re
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $fake->schemaIndexSubParts['wp_fts_terms']['term_identity'][2] = 16;
-    $fake->schemaInvisibleIndexes['wp_fts_postings']['post_term_impact'] = true;
+    $fake->schemaInvisibleIndexes['wp_fts_postings']['post_term'] = true;
 
     try {
         $before = (new WP_FTS_Relational_Storage($fake))->verify_schema();
         assert_contains('wp_fts_terms.term_identity(lang,kind,term)', implode(',', $before['missing_indexes'] ?? []), 'a prefix-truncated unique identity must not satisfy the exact lexical identity contract');
-        assert_contains('wp_fts_postings.post_term_impact(post_id,term_id,impact)', implode(',', $before['missing_indexes'] ?? []), 'a disabled candidate index must not satisfy the production access contract');
+        assert_contains('wp_fts_postings.post_term(post_id,term_id)', implode(',', $before['missing_indexes'] ?? []), 'a disabled candidate index must not satisfy the production access contract');
 
         WP_FTS_Plugin::create_or_repair_schema();
         assert_same(true, (new WP_FTS_Relational_Storage($fake))->verify_schema()['valid'] ?? null, 'maintenance should rebuild truncated and disabled required indexes');

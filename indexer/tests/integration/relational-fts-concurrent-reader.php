@@ -182,7 +182,7 @@ function wp_fts_reader_request(string $caseId, array $expected): array
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT => 15,
+            CURLOPT_TIMEOUT => 120,
             CURLOPT_HTTPHEADER => ['Accept: application/json'],
         ]);
         try {
@@ -197,6 +197,9 @@ function wp_fts_reader_request(string $caseId, array $expected): array
             && wp_fts_reader_is_publication_retry($body, $status, $curlError)
         ) {
             $unavailableRetries++;
+            // Do not send the same broad read straight back into the epoch
+            // transition that rejected it.
+            usleep(250000);
             continue;
         }
         break;

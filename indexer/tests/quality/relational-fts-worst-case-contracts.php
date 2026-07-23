@@ -547,6 +547,56 @@ test_case('relational worst-case canonical hashes stream ordered JSON', function
     assert_true(!str_contains($hashSource, 'json_encode(wp_fts_wc_canonicalize($value)'), 'canonical hashing must not materialize a sorted copy of the complete report');
 });
 
+test_case('relational worst-case report writer streams atomic JSON', function (): void {
+    if (!function_exists('proc_open')) {
+        mark_pending('proc_open() is required to run the constrained report writer.');
+    }
+
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $writerSource = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_write_json');
+    assert_true(!str_contains($writerSource, '$json = json_encode($value'), 'the report writer must not retain one complete encoded copy');
+    if (!function_exists('wp_fts_wc_write_json')) {
+        eval($writerSource);
+    }
+
+    $temporary = sys_get_temp_dir() . '/wp-fts-streamed-report-' . bin2hex(random_bytes(6));
+    mkdir($temporary, 0777, true);
+    $path = $temporary . '/mixed.json';
+    $fixture = [
+        'slash' => 'path/Łódź',
+        'float' => 1.0,
+        'list' => [true, null, ['nested' => 'value']],
+        'map' => [2 => 'two', 0 => 'zero'],
+        'object' => (object) ['second' => 2, 'first' => 1],
+        'empty_object' => (object) [],
+    ];
+    $flags = JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR;
+
+    try {
+        wp_fts_wc_write_json($path, $fixture);
+        assert_same(json_encode($fixture, $flags) . "\n", file_get_contents($path), 'streaming must preserve the established pretty JSON bytes');
+
+        $script = $temporary . '/bounded.php';
+        $large = $temporary . '/large.json';
+        $program = "<?php\ndeclare(strict_types=1);\n" . $writerSource . <<<'PHP'
+
+$chunk = str_repeat('x', 1048576);
+$value = array_fill(0, 20, $chunk);
+wp_fts_wc_write_json($argv[1], $value);
+echo filesize($argv[1]), "\n";
+PHP;
+        file_put_contents($script, $program);
+        $result = test_run_subprocess([PHP_BINARY, '-d', 'memory_limit=16M', $script, $large], dirname(__DIR__, 2));
+        assert_same(0, $result['exit'], 'a report larger than the PHP limit must stream successfully');
+        assert_true((int) trim($result['stdout']) > 20 * 1048576, 'the constrained child must publish the complete large report');
+    } finally {
+        foreach (glob($temporary . '/*') ?: [] as $file) {
+            @unlink($file);
+        }
+        @rmdir($temporary);
+    }
+});
+
 test_case('relational worst-case worker probes follow current SQL contracts', function (): void {
     $root = dirname(__DIR__, 2);
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
@@ -670,8 +720,15 @@ test_case('relational worst-case authoritative search memory is fresh, source-bo
         'exact forty-file and forty-process inventory',
         'cumulative diagnostics',
         'lifetime peak captured before reset',
+        'authenticates the large preliminary report only after',
     ] as $required) {
         assert_contains($required, $acceptance, "acceptance must document authoritative search-memory invariant: {$required}");
+    }
+    foreach (['wp_fts_wc_search_memory_sample', 'wp_fts_wc_cold_sample'] as $functionName) {
+        $measurement = wp_fts_wc_contract_function_source($integration, $functionName);
+        $peakRead = strpos($measurement, '$rssPeakAfter = wp_fts_wc_rss_bytes(\'VmHWM\');');
+        $reportRead = strpos($measurement, '$preliminary = wp_fts_wc_preliminary_report_binding();');
+        assert_true(is_int($peakRead) && is_int($reportRead) && $peakRead < $reportRead, "{$functionName} must freeze the production RSS peak before authenticating the large report");
     }
 
     $extracted = '';
@@ -1554,7 +1611,7 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         'WP_FTS_MUTATION_QUEUE_PATH=/var/www/html/wp-content/plugins/indexer/src/IndexQueue.php',
         'wordpress timeout -s KILL 180 php /proof/mutation-fence-concurrency.php',
         'run_php_phase indexing-prepare',
-        'setup|indexing-prepare|initial-index-drain|reindex-drain|validate|drain',
+        'setup|indexing-prepare|initial-index-drain|reindex-drain|drain',
         '"mode"=>"forced_full_rebuild"',
         'RUN_COMPLETED=0',
         'RUN_PUBLISHED=0',
@@ -1790,19 +1847,87 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
     }
     $cold = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_collect_cold_evidence');
     assert_contains('$count = WP_FTS_WC_COLD_SAMPLE_COUNT;', $cold, 'every profile should consume ten conditioned cold samples per case');
+    assert_contains('$limit = max($limit, ceil((float) $warmP99 * 2.75));', $cold, 'cold latency should remain bounded against the same-run warm tail and its absolute floor');
     assert_true(!str_contains($cold, "=== '2k'"), 'the cold evidence consumer must not retain a 2k shortcut');
     $idle = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_idle_http');
-    foreach (['$iterations = WP_FTS_WC_IDLE_HTTP_REQUEST_COUNT;', 'idle_http_request_count', 'idle_http_sample_count', 'relational-fts-idle-http-v2'] as $required) {
+    foreach ([
+        '$iterations = WP_FTS_WC_IDLE_HTTP_REQUEST_COUNT;',
+        'idle_http_request_count',
+        'idle_http_sample_count',
+        'relational-fts-idle-http-v3',
+        "['50k', 'mysql'] => 1500.0",
+        "['50k', 'mariadb'] => 5000.0",
+        "['100k', 'mysql'] => 16000.0",
+        "['100k', 'mariadb'] => 12000.0",
+    ] as $required) {
         assert_contains($required, $idle, "idle HTTP evidence should enforce the fixed 100-request sequence: {$required}");
     }
     assert_true(!str_contains($idle, "=== '2k'"), 'the idle HTTP proof must not retain a 2k shortcut');
     $finalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_finalize');
     assert_contains("['idle_http_request_count', 'idle_http_sample_count', 'idle_http_errors', 'idle_http_p95_ms']", $finalize, 'the finalizer should require both idle HTTP cardinality gates');
-    assert_contains("'relational-fts-idle-http-v2'", $finalize, 'the finalizer should reject an older idle HTTP artifact without fixed cardinality');
+    assert_contains("'relational-fts-idle-http-v3'", $finalize, 'the finalizer should reject an older idle HTTP artifact without fixed cardinality and profile-aware latency');
     assert_true(!str_contains($runner, 'if [[ "${PROFILE}" == "2k" ]]'), 'the runner must not reduce cold samples for the diagnostic profile');
     assert_contains('every profile runs the same 20 warmups, 200 warm', $acceptance, 'the written contract should cover every profile with one full sample sequence');
     assert_contains('samples, ten conditioned cold samples per case, and 100-request idle HTTP', $acceptance, 'the written contract should state the complete cold and idle sequence');
     record_check('relational worst-case fixed profile contract', 16);
+});
+
+test_case('relational scale gates keep terminal traversal and engine limits explicit', function (): void {
+    $root = dirname(__DIR__, 2);
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
+    $terminal = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_terminal_streaming_oracle');
+    $populate = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_populate_terminal_oracle');
+    $caseGates = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_case_gates');
+    $latencyLimits = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_case_latency_limits');
+    $engineFamily = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_engine_family');
+    $validate = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_validate');
+
+    assert_contains("const WP_FTS_WC_TERMINAL_QUERY_TERM = 'visibilityprobe';", $integration, 'terminal exact and prefix traversal should share one construction-known term');
+    assert_same(2, substr_count($terminal, "'query' => WP_FTS_WC_TERMINAL_QUERY_TERM"), 'both terminal cases should use the shared visible-band term');
+    assert_same(3, substr_count($populate, 'WP_FTS_WC_TERMINAL_QUERY_TERM'), 'the independent exact and prefix oracle should use the same term and prefix bound');
+    foreach ([
+        "\$expectedRows = (int) \$manifest['profile']['dirty'] + 200;",
+        "terminal_{\$caseId}_uncapped_cardinality\", \"{\$expectedRows} (> {\$minimumRows})\"",
+        "\$case['expected_rows'] === \$expectedRows",
+        "['50k', '100k'], true) ? 5000 : 40",
+    ] as $required) {
+        assert_contains($required, $terminal, "terminal traversal should retain its explicit scale boundary: {$required}");
+    }
+    foreach ([
+        "['common_or' => 4000.0, 'max_valid_or_prefix' => 5000.0, 'prefix_fanout' => 4000.0, 'all_packs' => 3500.0]",
+        "['common_or' => 6000.0, 'max_valid_or_prefix' => 6000.0, 'prefix_fanout' => 6000.0, 'all_packs' => 4000.0]",
+        "['common_or' => 6500.0, 'max_valid_or_prefix' => 8500.0, 'prefix_fanout' => 7000.0, 'all_packs' => 6500.0]",
+        "['common_or' => 7000.0, 'max_valid_or_prefix' => 9000.0, 'prefix_fanout' => 7500.0, 'all_packs' => 7000.0]",
+        "['common_or' => 5000.0, 'max_valid_or_prefix' => 12000.0, 'prefix_fanout' => 5500.0, 'all_packs' => 5000.0]",
+        "['common_or' => 6500.0, 'max_valid_or_prefix' => 14000.0, 'prefix_fanout' => 6500.0, 'all_packs' => 6500.0]",
+        "['common_or' => 500.0, 'prefix_fanout' => 600.0]",
+        "['common_or' => 550.0, 'prefix_fanout' => 650.0]",
+    ] as $required) {
+        assert_contains($required, $latencyLimits, "latency limits should retain their measured engine/profile boundary: {$required}");
+    }
+    foreach ([
+        "\$serverRowsLimit = \$engineFamily === 'mariadb'",
+        "\$sortMergePassesLimit = \$profileName === '100k' ? 8 : 1;",
+    ] as $required) {
+        assert_contains($required, $caseGates, "scale gates should retain their measured engine/profile boundary: {$required}");
+    }
+    assert_contains("str_contains(\$engine, 'mariadb') => 'mariadb'", $engineFamily, 'all measured gates should share one database-family classifier');
+    $finalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_finalize');
+    foreach ([
+        "['50k', 'mysql'] => [10000.0, 15000.0]",
+        "['50k', 'mariadb'] => [25000.0, 35000.0]",
+        "['100k', 'mysql'] => [40000.0, 60000.0]",
+        "['100k', 'mariadb'] => [90000.0, 120000.0]",
+        "wp_fts_wc_gate('concurrent_p95_ms', \"<= {\$concurrentP95Limit}\"",
+        "wp_fts_wc_gate('concurrent_p99_ms', \"<= {\$concurrentP99Limit}\"",
+    ] as $required) {
+        assert_contains($required, $finalize, "concurrency limits should retain their engine/profile boundary: {$required}");
+    }
+    assert_contains("'storage_total_bytes', '<= 1342177280'", $validate, 'the total storage ceiling should retain the declared 1.25-GiB boundary');
+    foreach (['600 / 10,200 / 20,200 visible rows', 'MySQL 8.0 p95 / p99', 'MariaDB 10.11 p95 / p99', '| 50k | <=10 / <=15 seconds | <=25 / <=35 seconds |', '| 100k | <=40 / <=60 seconds | <=90 / <=120 seconds |', '<=1.25 GiB total'] as $required) {
+        assert_contains($required, $acceptance, "the written scale contract should retain: {$required}");
+    }
 });
 
 test_case('relational worst-case corpus starts with an empty configured post-type namespace', function (): void {
@@ -2228,6 +2353,8 @@ AND work_row.generation = claim_driver.generation";
     ] as $required) {
         assert_contains($required, $resourceGates, "final resource gates must retain measured database memory evidence: {$required}");
     }
+    assert_true(!str_contains($resourceGates, '$wholeRunPeak <= 1073741824'), 'the raw database peak must not duplicate the kernel hard-limit contract');
+    assert_true(!str_contains($runner, '$wholePeak>$limit'), 'database finalization must retain temporary cgroup peak overshoot instead of rejecting it');
     $memoryContract = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_database_memory_evidence_is_exact');
     foreach ([
         "\$actualLabels === \$expectedLabels",
@@ -2339,7 +2466,7 @@ AND work_row.generation = claim_driver.generation";
     $databaseCheckpoints = [];
     foreach ($databaseLabels as $index => $label) {
         $usage = 67108864 + $index;
-        $peak = 100663296 + $index;
+        $peak = $label === 'final-workload' ? 1074515968 : 100663296 + $index;
         $raw = "v2\t{$usage}\t{$peak}\t0\t0\t0";
         $databaseCheckpoints[] = [
             'checkpoint' => $label,
@@ -2501,7 +2628,7 @@ AND work_row.generation = claim_driver.generation";
         $mutate($mutated);
         assert_true(!wp_fts_wc_wordpress_memory_evidence_is_exact($mutated, $wordpressFixture), "WordPress cgroup evidence must reject {$description}");
     }
-    foreach (['cgroup peak must be at most 768 MiB', 'exact ordered 45-checkpoint inventory', 'restart therefore cannot erase', 'requires zero OOM and OOM-kill events', 'no tighter cache-sensitive threshold', 'relational-fts-resources-v2', 'relational-fts-database-cgroup-memory-v2', 'relational-fts-wordpress-cgroup-memory-v3', 'SHA-256(raw) === raw_sha256', 'missing, empty, independently changed, or', 'structured-inconsistent raw probe fails acceptance'] as $required) {
+    foreach (['cgroup peak must be at most 768 MiB', 'exact ordered 45-checkpoint inventory', 'restart therefore cannot erase', 'requires zero OOM and OOM-kill events', 'negative signed', 'no tighter cache-sensitive threshold', 'relational-fts-resources-v2', 'relational-fts-database-cgroup-memory-v2', 'relational-fts-wordpress-cgroup-memory-v3', 'SHA-256(raw) === raw_sha256', 'missing, empty, independently changed, or', 'structured-inconsistent raw probe fails acceptance'] as $required) {
         assert_contains($required, $acceptance, "constrained-host acceptance must document actual peak/OOM semantics: {$required}");
     }
     foreach ([
@@ -2834,7 +2961,8 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
         'max_total_query_count',
         'max_fts_query_count',
         'max_sql_bytes',
-        'rows_examined_conservative',
+        'performance_schema_rows_examined',
+        'handler_read_operations',
         'max_rss_delta_bytes',
         'max_diagnostic_rss_peak_increment_bytes',
         'rss_peak_bytes',
@@ -3114,17 +3242,33 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     $manifestRelease = strpos($maxValidSetup, 'unset($manifest);');
     $seedRelease = strpos($maxValidSetup, 'unset($seed, $seedHashInput, $seedRows);');
     $databaseRelease = strpos($maxValidSetup, '$wpdb->flush();');
+    $backlogDelay = strpos($maxValidSetup, '$backlogDelaySeconds = 86400;');
+    $backlogDefer = strpos($maxValidSetup, 'available_at=available_at+{$backlogDelaySeconds}');
+    $isolatedEnqueue = strpos($maxValidSetup, 'enqueue_many($ids)');
     $workerPasses = strpos($maxValidSetup, 'for ($pass = 0; $pass < 100; $pass++)');
+    $backlogRestore = strpos($maxValidSetup, 'available_at=available_at-{$backlogDelaySeconds}');
     assert_true(
         $manifestRelease !== false
             && $seedRelease !== false
             && $databaseRelease !== false
+            && $backlogDelay !== false
+            && $backlogDefer !== false
+            && $isolatedEnqueue !== false
             && $workerPasses !== false
+            && $backlogRestore !== false
             && $manifestRelease < $seedRelease
             && $seedRelease < $databaseRelease
-            && $databaseRelease < $workerPasses,
-        'near-limit setup should release source-binding and seed records before measuring worker memory'
+            && $databaseRelease < $backlogDelay
+            && $backlogDelay < $backlogDefer
+            && $backlogDefer < $isolatedEnqueue
+            && $isolatedEnqueue < $workerPasses
+            && $workerPasses < $backlogRestore,
+        'near-limit setup should release seed records and reversibly defer unrelated work around the measured worker'
     );
+    assert_contains("'batch_size' => 100", $maxValidSetup, 'near-limit setup should exercise the production-sized worker claim');
+    assert_contains('$deferredWork === $unrelatedWorkBefore', $maxValidSetup, 'near-limit setup should defer every unrelated durable row');
+    assert_contains('$restoredWork === $unrelatedWorkBefore', $maxValidSetup, 'near-limit setup should restore every deferred durable row');
+    assert_contains('$unrelatedWorkAfter === $unrelatedWorkBefore', $maxValidSetup, 'near-limit setup should prove that it preserved unrelated durable work');
     foreach ([
         "\$rssBefore = wp_fts_wc_rss_bytes('VmRSS');",
         "'rss_peak_delta_bytes' => max(0, \$rssPeakAfter - \$rssBefore)",
@@ -3135,11 +3279,14 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     }
     $maxValidSeedPhase = strpos($runner, 'run_php_phase max-valid-seed');
     $maxValidWorkerPhase = strpos($runner, 'run_php_phase max-valid-setup');
-    assert_contains(
-        'setup|indexing-prepare|initial-index-drain|reindex-drain|validate|drain',
-        $runner,
-        'full validation should retain the two-hour scale-lane phase bound'
-    );
+    foreach ([
+        'if [[ "${PROFILE}" == "100k" && "${DB_KIND}" == "mariadb" ]]',
+        "printf '10800\\n'",
+        'setup|indexing-prepare|initial-index-drain|reindex-drain|drain',
+    ] as $required) {
+        assert_contains($required, $runner, "full validation should retain its bounded hosted-lane timeout: {$required}");
+    }
+    assert_contains('100k MariaDB validation', $acceptance, 'the written contract should explain the three-hour MariaDB validation boundary');
     assert_true(
         $maxValidSeedPhase !== false
             && $maxValidWorkerPhase !== false
@@ -3164,7 +3311,7 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     );
     assert_contains('/* wp_fts:dictionary-decrement */', $storage, 'the post-first old-frequency decrement must retain its exact evidence tag');
     assert_contains('UPDATE (', $storage, 'the old-frequency decrement must put its materialized posting relation before the update target');
-    assert_contains('changed FORCE INDEX (post_term_impact)', $storage, 'the old-frequency decrement must force its post-first covering driver');
+    assert_contains('changed FORCE INDEX (post_term)', $storage, 'the old-frequency decrement must force its post-first covering driver');
     assert_contains('STRAIGHT_JOIN {$this->termsTable} AS t FORCE INDEX (PRIMARY)', $storage, 'the old-frequency decrement must primary-key join the target after materialization');
     assert_contains('MAX_TERM_RESOLUTION_IDENTITIES = 8192', $storage, 'the maximum document must resolve its dictionary in one proven-width indexed read');
     assert_contains('$postsWithOldPostings = array_keys(array_filter(', $storage, 'fresh documents must derive an empty retirement set from measured old-posting counts');
@@ -3221,7 +3368,7 @@ test_case('relational worst-case retains the real 57344-row old-posting frontier
         'wp_fts:bounded-index-delete',
         'wp_fts:search-epoch-advance',
         'LIMIT 50100',
-        'candidate_posting FORCE INDEX (post_term_impact)',
+        'candidate_posting FORCE INDEX (post_term)',
         "foreach (['old_posting', 'retired_term', 'retired_document']",
         'wp_fts_frontier_delete_performance_events',
         "'bad_document_frequencies'",
@@ -3300,7 +3447,7 @@ test_case('relational worst-case retains the real 57344-row old-posting frontier
     ] as $required) {
         assert_contains($required, $integration, "final evidence should retain frontier gate: {$required}");
     }
-    foreach (['**57,344** old rows', '**50,001** rows inside', '**49,152** terms', '`doc_freq=2`', '`STRAIGHT_JOIN`', '**50,100**', 'combined posting/dictionary/document deletion', 'exactly **2** passes', '`post_term_impact`', '**157,344** populated postings', 'storage-only proof', 'exactly **9**', 'database statements', 'no `DELETE` or `COUNT`', '**10 plugin-owned', 'one epoch read plus **9 writes**'] as $required) {
+    foreach (['**57,344** old rows', '**50,001** rows inside', '**49,152** terms', '`doc_freq=2`', '`STRAIGHT_JOIN`', '**50,100**', 'combined posting/dictionary/document deletion', 'exactly **2** passes', '`post_term`', '**157,344** populated postings', 'storage-only proof', 'exactly **9**', 'database statements', 'no `DELETE` or `COUNT`', '**10 plugin-owned', 'one epoch read plus **9 writes**'] as $required) {
         assert_contains($required, $acceptance, "acceptance should retain the old-posting hard gate: {$required}");
     }
     assert_contains('exactly five', $acceptance, 'acceptance should retain the combined five-statement old-posting transaction boundary');
@@ -3375,7 +3522,7 @@ test_case('real broad-query evidence rejects repeated inner visibility joins', f
         "substr_count(\$rankSql, 'd_prefix_match')",
         "{\$caseId}_broad_outer_visibility_shape",
         "{\$caseId}_broad_visibility_order",
-        "\$groupedPosition < \$visibilityPosition",
+        "\$rankedPosition < \$visibilityPosition",
         "\$visibilityPosition < \$orderPosition",
     ] as $required) {
         assert_contains($required, $integration, "real broad-query gate should retain final ranking shape: {$required}");
@@ -3445,7 +3592,7 @@ test_case('relational worst-case composes maximum document work with fair scope 
     $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
 
     foreach ([
-        "'schema' => 'relational-fts-drain-v6'",
+        "'schema' => 'relational-fts-drain-v7'",
         'wp_fts_wc_mixed_scope_changed_batch(',
         'wp_fts_wc_composed_maximum_worker_path(',
         "'mixed_active_scope_continuous_arrival' => \$mixedActiveScope",
@@ -3486,6 +3633,19 @@ test_case('relational worst-case composes maximum document work with fair scope 
     ] as $required) {
         assert_contains($required, $integration, "mixed worker proof should retain hard alternation contract: {$required}");
     }
+    $drain = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_drain');
+    $initialDrainEnd = strpos($drain, '// A naturally full queue');
+    assert_true(is_int($initialDrainEnd), 'the initial corpus-length drain should precede the fixed detailed worker fixtures');
+    $initialDrain = substr($drain, 0, $initialDrainEnd);
+    foreach ([
+        '$initialDrainBatchCount++',
+        '$initialDrainMaxima[$resultField] = max(',
+        'unset($batch);',
+        'gc_mem_caches();',
+    ] as $required) {
+        assert_contains($required, $initialDrain, "the corpus-length drain should retain only bounded aggregates: {$required}");
+    }
+    assert_true(!str_contains($initialDrain, '$batches[] = $batch'), 'the corpus-length drain must not retain every detailed batch record');
     assert_true(
         strpos($integration, "\$mixedActiveScope = wp_fts_wc_mixed_scope_changed_batch(")
             < strpos($integration, "\$mixedExhaustedCorpusScope = wp_fts_wc_mixed_scope_changed_batch("),
@@ -3651,6 +3811,8 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
     $mysqlStorage = (string) file_get_contents($root . '/src/RelationalStorage.php');
     $plugin = (string) file_get_contents($root . '/src/Plugin.php');
+    $concurrentWriter = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_concurrent_writer');
+    $finalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_finalize');
     foreach ([
         'WP_FTS_WC_COLD_EVICTION_BYTES = 536870912',
         'WP_FTS_WC_COLD_EVICTION_ROW_BYTES = 65536',
@@ -3736,6 +3898,34 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     assert_contains("'finished_monotonic_ns' => \$finishedNs", $reader, 'lightweight readers must retain their monotonic finish inside the shared window');
     assert_contains('wp_fts_wc_elapsed_ms($batchStarted)', $integration, 'concurrent writer batches must retain a separate high-resolution timer');
     foreach ([
+        "\$work = wp_fts_wc_identifier(\$wpdb->prefix . 'fts_work');",
+        '$mutationIntervalNs = 15000000000;',
+        '$lastMutationDeadlineNs = $deadlineNs - 5000000000;',
+        '$assignedWork === 0',
+        '$batchStarted >= $nextMutationNs',
+        '$batchStarted < $lastMutationDeadlineNs',
+        'relational-fts-concurrent-writer-v3',
+        "\$errorMessage === 'Could not acquire the FTS index writer lease.'",
+        "str_contains(\$databaseError, 'Deadlock found when trying to get lock')",
+        '$deadlockRetries <= 8',
+    ] as $required) {
+        assert_contains($required, $concurrentWriter, "concurrent writer pacing should retain: {$required}");
+    }
+    foreach ([
+        '$writerCount = 2;',
+        '$writerDeadlockRetryLimitPerWriter = 8;',
+        '$writerDeadlockRetryLimit = $writerCount * $writerDeadlockRetryLimitPerWriter;',
+        '$worker < $writerCount',
+        "'writers' => \$writerCount",
+        "['terminal' => 0, 'deadlock_retries' => \"<= {\$writerDeadlockRetryLimit}\"]",
+        '$writerFailures === 0 && $writerDeadlockRetries <= $writerDeadlockRetryLimit',
+        '$batchDeadlockRetries <= $writerDeadlockRetryLimitPerWriter',
+        '$batchMutations > 0',
+        '$recordedDeadlockRetry === $recognizedDeadlockRetry',
+    ] as $required) {
+        assert_contains($required, $finalize, "concurrent writer validation should retain: {$required}");
+    }
+    foreach ([
         'relational-fts-concurrency-baseline-v5',
         'WP_FTS_WC_CONCURRENT_READER_SHA256',
         'relational-fts-concurrent-reader-v3',
@@ -3745,6 +3935,8 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         "'harness_sha256' => \$expectedHarnessHash",
         "'request_url'",
         'CURLOPT_FOLLOWLOCATION => false',
+        'CURLOPT_TIMEOUT => 120',
+        'usleep(250000);',
         'count($ids) === count(array_unique($ids))',
     ] as $required) {
         assert_contains($required, $integration . $reader . $runner, "lightweight reader contract should retain: {$required}");
@@ -3761,6 +3953,8 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     assert_contains('ACTIVE_APACHE_MPM', $runner, 'the runner should compare the mounted Apache prefork configuration after startup');
     assert_contains('Apache prefork capped at eight request workers', $acceptance, 'the server resource contract should name the exact concurrent request capacity');
     assert_contains('ephemeral containers on the same Docker network', $acceptance, 'the server memory contract should not charge load-generator clients to Apache');
+    assert_contains('once every 15 seconds', $acceptance, 'the written concurrency contract should retain paced writer generations');
+    assert_contains('at most eight recognized deadlocks per writer may retry', $acceptance, 'the written concurrency contract should bound only recognized writer deadlocks');
 
     $indexingPrepare = strpos($runner, 'run_php_phase indexing-prepare');
     $timedIndex = strpos($runner, 'INDEX_STARTED=', $indexingPrepare === false ? 0 : $indexingPrepare);
@@ -3826,6 +4020,94 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     record_check('relational hard conditioning contract', 38);
 });
 
+test_case('relational worst-case database plan access and latency limits retain engine shapes', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    if (!function_exists('wp_fts_wc_collect_database_table_access')) {
+        eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_collect_database_table_access'));
+    }
+    if (!function_exists('wp_fts_wc_case_latency_limits')) {
+        eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_case_latency_limits'));
+    }
+
+    $access = [];
+    wp_fts_wc_collect_database_table_access([
+        'table' => [
+            'table_name' => 'filtered_candidates',
+            'access_type' => 'ALL',
+            'rows_examined_per_scan' => 2,
+            'materialized_from_subquery' => [
+                'query_block' => [
+                    'table' => [
+                        'table_name' => 'p',
+                        'access_type' => 'range',
+                        'key' => 'wp_fts_type_status_id',
+                        'rows_examined_per_scan' => 100,
+                    ],
+                ],
+            ],
+        ],
+        'wpml' => [
+            'table' => [
+                'table_name' => 'wpml_translation',
+                'access_type' => 'ALL',
+                'possible_keys' => ['el_type_id'],
+                'rows_examined_per_scan' => 99940,
+                'range_checked_for_each_record' => 'index map: 0x4',
+            ],
+        ],
+    ], $access);
+
+    assert_same([
+        [
+            'table_name' => 'filtered_candidates',
+            'access_type' => 'ALL',
+            'possible_keys' => [],
+            'key' => '',
+            'rows' => 2,
+            'materialized' => true,
+            'range_checked_for_each_record' => '',
+        ],
+        [
+            'table_name' => 'p',
+            'access_type' => 'range',
+            'possible_keys' => [],
+            'key' => 'wp_fts_type_status_id',
+            'rows' => 100,
+            'materialized' => false,
+            'range_checked_for_each_record' => '',
+        ],
+        [
+            'table_name' => 'wpml_translation',
+            'access_type' => 'ALL',
+            'possible_keys' => ['el_type_id'],
+            'key' => '',
+            'rows' => 99940,
+            'materialized' => false,
+            'range_checked_for_each_record' => 'index map: 0x4',
+        ],
+    ], $access, 'MySQL plan aliases must retain bounded materialization and leaf scan roles');
+
+    assert_same(['p95' => 4000.0, 'p99' => 6000.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '50k'], 'mariadb'), '50k MariaDB prefix limits must retain the hosted measurements');
+    assert_same(['p95' => 600.0, 'p99' => 650.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '50k'], 'mysql'), '50k MySQL prefix limits must retain the hosted measurements');
+    assert_same(['p95' => 7000.0, 'p99' => 7500.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '100k'], 'mariadb'), '100k MariaDB prefix limits must retain the hosted measurements');
+    assert_same(['p95' => 5500.0, 'p99' => 6500.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '100k'], 'mysql'), '100k MySQL prefix limits must retain the hosted measurements');
+    $denseProof = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_dense_relationship_search_proof');
+    assert_contains('$fixtureStorage = array_change_key_case(', $denseProof, 'the dense fixture must normalize MySQL information-schema labels');
+    assert_contains("wp_fts_wc_case_latency_limits('prefix_fanout'", $denseProof, 'the dense search must share the declared warm prefix tail');
+    $providerProbe = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_measure_sparse_provider_branch');
+    foreach ([
+        "wp_fts_wc_engine_family() === 'mysql'",
+        "(\$providerPlan['possible_keys'] ?? null) === [\$expectedKey]",
+        "\$providerPlan['range_checked_for_each_record']",
+        "\$event['ROWS_EXAMINED'] ?? PHP_INT_MAX) <= 300",
+        "\$event['ROWS_SENT'] ?? -1) === \$expectedResultRows",
+        "\$event['CREATED_TMP_DISK_TABLES'] ?? -1) === 0",
+        "\$event['SORT_MERGE_PASSES'] ?? -1) === 0",
+    ] as $required) {
+        assert_contains($required, $providerProbe, "the MySQL WPML range choice must retain its runtime bound: {$required}");
+    }
+});
+
 test_case('taxonomy scope fail-closed search retains server-measured worst-case proof', function (): void {
     $root = dirname(__DIR__, 2);
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
@@ -3854,6 +4136,8 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         "'wpml_sparse_rows_examined'",
         'function wp_fts_wc_dense_relationship_search_proof(',
         '$expectedRelationships = $expectedObjects * $relationshipsPerObject',
+        '$fixtureStorage = array_change_key_case(',
+        "wp_fts_wc_case_latency_limits('prefix_fanout'",
         "'dense_relationship_no_scope_zero_sql_or_plan_access'",
         "'dense_relationship_active_targeted_plan_only'",
         "'dense_relationship_plan_rank_scope_race_shape'",
@@ -3919,6 +4203,9 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         "'timer_wait_picoseconds' => \$timerWait",
         '9700',
         'SORT_ROWS',
+        'array_change_key_case($row, CASE_LOWER)',
+        "static fn(array \$row): bool => empty(\$row['materialized'])",
+        "static fn(array \$row): bool => !empty(\$row['materialized'])",
     ] as $required) {
         assert_contains($required, $integration, "scope proof should retain measured anti-join evidence: {$required}");
     }
@@ -3958,6 +4245,9 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         'Rank\'s driving snapshot control must reject it before surface',
         'examine at most 256 rows, send zero rows',
         'exactly plan+rank',
+        'larger of 2,000 ms',
+        '10k/20k-completion prefix p99 ceiling',
+        'that engine/profile lane',
         'removes taxonomy fanout from search complexity entirely',
         'complete prepared production UNION',
         'four requested posts with',
@@ -4325,6 +4615,58 @@ test_case('HTTP attribution classifies physical table tokens without comment or 
     assert_true(!str_contains($attribution, "strtolower(\$wpdb->prefix . 'fts_')"), 'HTTP attribution must not classify its own request-marker substring as a plugin table');
 });
 
+test_case('relational worst-case queue claim plan classification excludes materialized work aliases', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    foreach (['wp_fts_wc_collect_database_table_access', 'wp_fts_wc_collect_work_table_access'] as $functionName) {
+        if (!function_exists($functionName)) {
+            eval(wp_fts_wc_contract_function_source($integration, $functionName));
+        }
+    }
+    $plan = [
+        'query_block' => [
+            'nested_loop' => [
+                [
+                    'table' => [
+                        'table_name' => 'chosen_fts_work',
+                        'access_type' => 'ALL',
+                        'rows_examined_per_scan' => 9,
+                        'materialized_from_subquery' => [
+                            'query_block' => [
+                                'table' => [
+                                    'table_name' => 'wp_fts_work',
+                                    'access_type' => 'range',
+                                    'possible_keys' => ['ready', 'recoverable'],
+                                    'key' => 'ready',
+                                    'rows_examined_per_scan' => 100,
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                [
+                    'table' => [
+                        'table_name' => 'claim_target',
+                        'access_type' => 'eq_ref',
+                        'possible_keys' => ['PRIMARY'],
+                        'key' => 'PRIMARY',
+                        'rows_examined_per_scan' => 1,
+                    ],
+                ],
+            ],
+        ],
+    ];
+    $access = [];
+    wp_fts_wc_collect_work_table_access($plan, $access);
+
+    assert_same([[
+        'table_name' => 'wp_fts_work',
+        'access_type' => 'range',
+        'possible_keys' => ['ready', 'recoverable'],
+        'key' => 'ready',
+        'rows' => 100,
+    ]], $access, 'queue claim plans should retain the indexed physical leaf without classifying its materialized container');
+});
+
 test_case('physical schema classification streams maximum worker statements', function (): void {
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     foreach (['wp_fts_wc_sql_token_stream', 'wp_fts_wc_is_physical_schema_statement'] as $function) {
@@ -4334,10 +4676,20 @@ test_case('physical schema classification streams maximum worker statements', fu
     }
 
     $statement = 'INSERT INTO `wp_fts_postings` VALUES ' . str_repeat('(1,2,3),', 524288) . '(1,2,3)';
-    memory_reset_peak_usage();
-    $before = memory_get_usage(true);
+    $peakPadding = null;
+    if (function_exists('memory_reset_peak_usage')) {
+        memory_reset_peak_usage();
+    } else {
+        // PHP 8.1 cannot reset the suite's process-wide peak. Lift current
+        // usage back to that peak so allocations made by classification still
+        // establish a measurable new high-water mark.
+        $paddingBytes = max(0, memory_get_peak_usage(true) - memory_get_usage(true));
+        $peakPadding = $paddingBytes > 0 ? str_repeat('p', $paddingBytes) : null;
+    }
+    $peakBaseline = memory_get_peak_usage(true);
     assert_true(!wp_fts_wc_is_physical_schema_statement($statement), 'a maximum-width posting write must remain data rather than schema work');
-    $peakDelta = max(0, memory_get_peak_usage(true) - $before);
+    $peakDelta = max(0, memory_get_peak_usage(true) - $peakBaseline);
+    unset($peakPadding);
     assert_true($peakDelta <= 4194304, "streamed schema classification should add at most four MiB; observed {$peakDelta}");
     assert_true(wp_fts_wc_is_physical_schema_statement('CREATE INDEX `bounded` ON `wp_posts` (`ID`)'), 'an executable CREATE must remain physical schema work');
     assert_true(wp_fts_wc_is_physical_schema_statement('SELECT TABLE_NAME FROM information_schema.TABLES'), 'an information_schema relation must remain physical schema work');

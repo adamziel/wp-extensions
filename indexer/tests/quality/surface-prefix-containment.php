@@ -261,8 +261,8 @@ test_case('surface SQL cost-selects one bounded AND-prefix driver', function ():
     ]);
     $candidateSql = (string) ($candidateFirst['sql'] ?? '');
     assert_same('candidate_first', $candidateFirst['prefix_strategy'] ?? null, 'a 100,000-row prefix must lose to one 8,192-posting candidate upper bound');
-    assert_contains('STRAIGHT_JOIN wp_fts_postings po FORCE INDEX (post_term_impact) ON po.post_id = c.post_id AND po.term_id = q.term_id', $candidateSql, 'exact groups must use bounded candidate/key probes');
-    assert_contains('STRAIGHT_JOIN wp_fts_postings ppo FORCE INDEX (post_term_impact) ON prefix_candidate.post_id = ppo.post_id', $candidateSql, 'a broad prefix must scan the bounded candidate posting envelope first');
+    assert_contains('STRAIGHT_JOIN wp_fts_postings po FORCE INDEX (post_term) ON po.post_id = c.post_id AND po.term_id = q.term_id', $candidateSql, 'exact groups must use bounded candidate/key probes');
+    assert_contains('STRAIGHT_JOIN wp_fts_postings ppo FORCE INDEX (post_term) ON prefix_candidate.post_id = ppo.post_id', $candidateSql, 'a broad prefix must scan the bounded candidate posting envelope first');
     assert_contains('STRAIGHT_JOIN wp_fts_terms pt FORCE INDEX (PRIMARY) ON pt.term_id = ppo.term_id', $candidateSql, 'candidate postings must classify their term identities by primary key');
     assert_true(!str_contains($candidateSql, 'ppo FORCE INDEX (PRIMARY)'), 'candidate-first SQL must not scan the complete prefix posting range');
     assert_same(1, substr_count($candidateSql, 'pt.term >='), 'candidate-first AND must contain exactly one surface predicate');
@@ -277,7 +277,7 @@ test_case('surface SQL cost-selects one bounded AND-prefix driver', function ():
     assert_same('surface_range', $rangeFirst['prefix_strategy'] ?? null, 'an 8,191-row prefix must remain cheaper than one maximum-size candidate envelope');
     assert_contains('STRAIGHT_JOIN wp_fts_postings ppo FORCE INDEX (PRIMARY) ON ppo.term_id = pt.term_id', $rangeFirstSql, 'the smaller prefix range must drive posting-primary ranges from the indexed dictionary range');
     assert_contains('prefix_candidate ON prefix_candidate.post_id = ppo.post_id', $rangeFirstSql, 'range-first SQL must intersect actual matching postings with rare candidates');
-    assert_true(!str_contains($rangeFirstSql, 'ppo FORCE INDEX (post_term_impact)'), 'range-first SQL must not scan unrelated candidate postings');
+    assert_true(!str_contains($rangeFirstSql, 'ppo FORCE INDEX (post_term)'), 'range-first SQL must not scan unrelated candidate postings');
     assert_true(!str_contains($rangeFirstSql, 'pt FORCE INDEX (PRIMARY)'), 'range-first SQL must not classify candidate term ids individually');
 
     $overflowSafe = wp_fts_surface_storage_method($storage, 'build_rank_query', [
@@ -308,7 +308,7 @@ test_case('surface SQL cost-selects one bounded AND-prefix driver', function ():
     $commonExactSql = (string) ($commonExact['sql'] ?? '');
     assert_same(1, $commonExact['anchor_group'] ?? null, 'a selective final prefix must anchor ahead of a corpus-wide exact group');
     assert_contains('STRAIGHT_JOIN wp_fts_postings prefix_posting FORCE INDEX (PRIMARY)', $commonExactSql, 'the selective prefix anchor must stream its matching postings by term id');
-    assert_contains('LEFT JOIN wp_fts_postings po FORCE INDEX (post_term_impact)', $commonExactSql, 'the selective prefix candidates must probe remaining exact terms post-first');
+    assert_contains('LEFT JOIN wp_fts_postings po FORCE INDEX (post_term)', $commonExactSql, 'the selective prefix candidates must probe remaining exact terms post-first');
     assert_same(1, substr_count($commonExactSql, 'pt.term >='), 'the selective prefix anchor must contain one dictionary range');
     assert_true(!str_contains($commonExactSql, 'SELECT DISTINCT ap.post_id'), 'the selective prefix plan must not materialize the common exact posting list as an anchor');
 
@@ -364,11 +364,18 @@ test_case('surface planning gates and costs every final-prefix range once', func
     ], 1, ['group_id' => 0, 'lang' => 'en', 'term' => 'runn'], 'OR', $options, null]);
     $rankSql = (string) ($rank['sql'] ?? '');
     assert_contains(') rank_gate', $rankSql, 'ranking must repeat the publication/scope controls inside the expensive limited relation');
-    assert_contains(
-        ") rank_gate\nSTRAIGHT_JOIN (SELECT pt.term_id, pt.doc_freq",
-        $rankSql,
-        'rank control must drive the nonmergeable surface-posting relation before it can materialize'
+    $rankGatePosition = strpos($rankSql, ') rank_gate');
+    $surfacePosition = strpos($rankSql, 'SELECT pt.term_id, pt.doc_freq');
+    $postingPosition = strpos($rankSql, 'STRAIGHT_JOIN wp_fts_postings po');
+    assert_true(
+        is_int($rankGatePosition)
+            && is_int($surfacePosition)
+            && is_int($postingPosition)
+            && $rankGatePosition < $surfacePosition
+            && $surfacePosition < $postingPosition,
+        'rank control must drive the one exact-plus-surface identity relation before its posting scan'
     );
+    assert_same(1, substr_count($rankSql, 'STRAIGHT_JOIN wp_fts_postings po'), 'OR alternatives and the surface range must share one posting relation');
 });
 
 test_case('surface bounds and cursors are bytewise and tied to the current index signature', function (): void {
