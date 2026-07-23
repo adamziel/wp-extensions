@@ -1366,8 +1366,10 @@ relationship prefix, including non-language taxonomies, and also stops at 2,049;
 only then may PHP classify language rows. WPML drives at most 100 requested
 `wp_posts` primary-key rows into exact
 `(element_type=CONCAT('post_',post_type), element_id=ID)` probes of its unique
-`el_type_id` key and stops at 101 as defense in depth. It never uses a
-`post_%` pattern or scans the 100,000 unrelated translation decoys. PHP
+`el_type_id` key and stops at 101 as defense in depth. The generated element
+type has an explicit binary collation so differently configured WordPress and
+WPML tables cannot make the comparison invalid. It never uses a `post_%`
+pattern or scans the 100,000 unrelated translation decoys. PHP
 therefore receives at most 6,348 rows including 100 post sentinels. It retains
 only the first 513 combined rows per post, accepts row 512, rejects row
 513, and defers any source frontier it cannot prove complete. A 100-post request
@@ -1378,10 +1380,13 @@ and defers a whole-document suffix beyond that bound. Distinct quote-heavy
 must never enlarge the SQL packet or prevent the first document from advancing.
 The provider-plan artifact executes the complete prepared production UNION for
 none, Polylang, WPML, and both providers, then extracts the already-prepared
-provider branches for exact Performance Schema attribution and JSON plans. The
-WPML table access must name `el_type_id`, never `ALL`, estimate at most 100
-translation rows, return 100 rows, and examine at most 200 rows for its two-table
-post-plus-translation arm. The Polylang boundary uses four requested posts with
+provider branches for exact Performance Schema attribution and JSON plans.
+MariaDB's WPML table access must name `el_type_id`, avoid `ALL`, and estimate at
+most 100 translation rows. MySQL may instead expose the forced lookup as `ALL`
+plus `range_checked_for_each_record`; that shape passes only when
+`possible_keys` contains exactly `el_type_id` and the exactly attributed
+statement returns 100 rows, examines at most 300 rows, and creates no disk
+temporary table or sort. The Polylang boundary uses four requested posts with
 exactly 512 non-language relationships each plus one explicit 2,049th cursor sentinel
 on a fifth post. Its raw branch must return all 2,049 rows through
 `PRIMARY`; the first four posts remain complete while only the sentinel post is

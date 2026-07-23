@@ -2626,6 +2626,9 @@ function wp_fts_wc_collect_database_table_access(array $node, array &$access): v
             'key' => is_scalar($node['key'] ?? null) ? (string) $node['key'] : '',
             'rows' => is_numeric($rows) ? (int) $rows : null,
             'materialized' => is_array($node['materialized_from_subquery'] ?? null),
+            'range_checked_for_each_record' => is_scalar($node['range_checked_for_each_record'] ?? null)
+                ? (string) $node['range_checked_for_each_record']
+                : '',
         ];
     }
     foreach ($node as $child) {
@@ -8238,11 +8241,27 @@ function wp_fts_wc_measure_sparse_provider_branch(
         static fn(array $row): bool => strtolower((string) ($row['table_name'] ?? '')) === $providerAlias
     ));
     $expectedKey = $provider === 'wpml' ? 'el_type_id' : 'PRIMARY';
-    $planValid = count($providerAccess) === 1
-        && strcasecmp((string) ($providerAccess[0]['key'] ?? ''), $expectedKey) === 0
-        && strtoupper((string) ($providerAccess[0]['access_type'] ?? '')) !== 'ALL'
-        && is_int($providerAccess[0]['rows'] ?? null)
-        && (int) $providerAccess[0]['rows'] <= ($provider === 'wpml' ? 100 : 2049);
+    $providerPlan = $providerAccess[0] ?? [];
+    $statementAttributed = count($events) === 1 && (string) ($event['SQL_TEXT'] ?? '') === $sql;
+    $directKeyedPlan = strcasecmp((string) ($providerPlan['key'] ?? ''), $expectedKey) === 0
+        && strtoupper((string) ($providerPlan['access_type'] ?? '')) !== 'ALL'
+        && is_int($providerPlan['rows'] ?? null)
+        && (int) $providerPlan['rows'] <= ($provider === 'wpml' ? 100 : 2049);
+    // MySQL reports this forced expression lookup as a table estimate plus a
+    // per-outer-row range choice. Accept that exact shape only when the
+    // attributed statement proves it touched the bounded runtime frontier.
+    $mysqlRangeCheckedPlan = $provider === 'wpml'
+        && wp_fts_wc_engine_family() === 'mysql'
+        && strtoupper((string) ($providerPlan['access_type'] ?? '')) === 'ALL'
+        && (string) ($providerPlan['key'] ?? '') === ''
+        && ($providerPlan['possible_keys'] ?? null) === [$expectedKey]
+        && trim((string) ($providerPlan['range_checked_for_each_record'] ?? '')) !== ''
+        && $statementAttributed
+        && (int) ($event['ROWS_EXAMINED'] ?? PHP_INT_MAX) <= 300
+        && (int) ($event['ROWS_SENT'] ?? -1) === $expectedResultRows
+        && (int) ($event['CREATED_TMP_DISK_TABLES'] ?? -1) === 0
+        && (int) ($event['SORT_MERGE_PASSES'] ?? -1) === 0;
+    $planValid = count($providerAccess) === 1 && ($directKeyedPlan || $mysqlRangeCheckedPlan);
     $postIds = array_values(array_unique(array_map(
         static fn(array $row): int => (int) ($row['post_id'] ?? 0),
         $rows
@@ -8262,7 +8281,7 @@ function wp_fts_wc_measure_sparse_provider_branch(
         'sort_merge_passes' => $event === [] ? -1 : (int) ($event['SORT_MERGE_PASSES'] ?? -1),
         'no_index_used' => $event === [] ? -1 : (int) ($event['NO_INDEX_USED'] ?? -1),
         'no_good_index_used' => $event === [] ? -1 : (int) ($event['NO_GOOD_INDEX_USED'] ?? -1),
-        'statement_attributed' => count($events) === 1 && (string) ($event['SQL_TEXT'] ?? '') === $sql,
+        'statement_attributed' => $statementAttributed,
         'performance_schema_event' => $event,
         'plan' => $plan,
         'table_access' => $access,

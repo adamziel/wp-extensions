@@ -4026,6 +4026,15 @@ test_case('relational worst-case database plan access and latency limits retain 
                 ],
             ],
         ],
+        'wpml' => [
+            'table' => [
+                'table_name' => 'wpml_translation',
+                'access_type' => 'ALL',
+                'possible_keys' => ['el_type_id'],
+                'rows_examined_per_scan' => 99940,
+                'range_checked_for_each_record' => 'index map: 0x4',
+            ],
+        ],
     ], $access);
 
     assert_same([
@@ -4036,6 +4045,7 @@ test_case('relational worst-case database plan access and latency limits retain 
             'key' => '',
             'rows' => 2,
             'materialized' => true,
+            'range_checked_for_each_record' => '',
         ],
         [
             'table_name' => 'p',
@@ -4044,6 +4054,16 @@ test_case('relational worst-case database plan access and latency limits retain 
             'key' => 'wp_fts_type_status_id',
             'rows' => 100,
             'materialized' => false,
+            'range_checked_for_each_record' => '',
+        ],
+        [
+            'table_name' => 'wpml_translation',
+            'access_type' => 'ALL',
+            'possible_keys' => ['el_type_id'],
+            'key' => '',
+            'rows' => 99940,
+            'materialized' => false,
+            'range_checked_for_each_record' => 'index map: 0x4',
         ],
     ], $access, 'MySQL plan aliases must retain bounded materialization and leaf scan roles');
 
@@ -4054,6 +4074,18 @@ test_case('relational worst-case database plan access and latency limits retain 
     $denseProof = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_dense_relationship_search_proof');
     assert_contains('$fixtureStorage = array_change_key_case(', $denseProof, 'the dense fixture must normalize MySQL information-schema labels');
     assert_contains("wp_fts_wc_case_latency_limits('prefix_fanout'", $denseProof, 'the dense search must share the declared warm prefix tail');
+    $providerProbe = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_measure_sparse_provider_branch');
+    foreach ([
+        "wp_fts_wc_engine_family() === 'mysql'",
+        "(\$providerPlan['possible_keys'] ?? null) === [\$expectedKey]",
+        "\$providerPlan['range_checked_for_each_record']",
+        "\$event['ROWS_EXAMINED'] ?? PHP_INT_MAX) <= 300",
+        "\$event['ROWS_SENT'] ?? -1) === \$expectedResultRows",
+        "\$event['CREATED_TMP_DISK_TABLES'] ?? -1) === 0",
+        "\$event['SORT_MERGE_PASSES'] ?? -1) === 0",
+    ] as $required) {
+        assert_contains($required, $providerProbe, "the MySQL WPML range choice must retain its runtime bound: {$required}");
+    }
 });
 
 test_case('taxonomy scope fail-closed search retains server-measured worst-case proof', function (): void {

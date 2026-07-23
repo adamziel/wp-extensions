@@ -19701,9 +19701,13 @@ WHERE pm.meta_id IN ({$id_sql})";
                 ? ''
                 : ' FORCE INDEX (el_type_id)';
             $wpml_join = $is_sqlite ? 'INNER JOIN' : 'STRAIGHT_JOIN';
-            $wpml_element_type = $is_sqlite
-                ? "('post_' || wpml_post.post_type)"
-                : "CONCAT('post_', wpml_post.post_type)";
+            $wpml_element_type = self::dependency_text_projection(
+                $is_sqlite
+                    ? "('post_' || wpml_post.post_type)"
+                    : "CONCAT('post_', wpml_post.post_type)",
+                $is_sqlite,
+                60
+            );
             $wpml_item_value_sql = self::dependency_text_projection(
                 "CASE WHEN OCTET_LENGTH(wpml_translation.language_code) <= 64 THEN wpml_translation.language_code ELSE '' END",
                 $is_sqlite,
