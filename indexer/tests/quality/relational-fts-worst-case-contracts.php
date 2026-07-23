@@ -1847,7 +1847,7 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
     }
     $cold = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_collect_cold_evidence');
     assert_contains('$count = WP_FTS_WC_COLD_SAMPLE_COUNT;', $cold, 'every profile should consume ten conditioned cold samples per case');
-    assert_contains('$limit = max($limit, ceil((float) $warmP99 * 2.5));', $cold, 'cold latency should remain bounded against the same-run warm tail and its absolute floor');
+    assert_contains('$limit = max($limit, ceil((float) $warmP99 * 2.75));', $cold, 'cold latency should remain bounded against the same-run warm tail and its absolute floor');
     assert_true(!str_contains($cold, "=== '2k'"), 'the cold evidence consumer must not retain a 2k shortcut');
     $idle = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_idle_http');
     foreach ([

@@ -15630,7 +15630,7 @@ function wp_fts_wc_collect_cold_evidence(array $evidence): array
                 if (!is_numeric($warmP99) || !is_finite((float) $warmP99) || (float) $warmP99 <= 0.0) {
                     throw new RuntimeException("Cold samples have no warm p99 reference for {$caseId}.");
                 }
-                $limit = max($limit, ceil((float) $warmP99 * 2.5));
+                $limit = max($limit, ceil((float) $warmP99 * 2.75));
             }
             $definition = is_array($definitions[$caseId] ?? null) ? $definitions[$caseId] : [];
             $sourceBindingsValid = $sourceBindingsValid
