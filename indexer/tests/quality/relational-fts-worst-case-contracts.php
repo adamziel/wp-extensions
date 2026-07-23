@@ -1611,7 +1611,7 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         'WP_FTS_MUTATION_QUEUE_PATH=/var/www/html/wp-content/plugins/indexer/src/IndexQueue.php',
         'wordpress timeout -s KILL 180 php /proof/mutation-fence-concurrency.php',
         'run_php_phase indexing-prepare',
-        'setup|indexing-prepare|initial-index-drain|reindex-drain|validate|drain',
+        'setup|indexing-prepare|initial-index-drain|reindex-drain|drain',
         '"mode"=>"forced_full_rebuild"',
         'RUN_COMPLETED=0',
         'RUN_PUBLISHED=0',
@@ -1894,8 +1894,8 @@ test_case('relational scale gates keep terminal traversal and engine limits expl
     }
     foreach ([
         "str_contains(\$engine, 'mariadb') => 'mariadb'",
-        "['common_or' => 2000.0, 'max_valid_or_prefix' => 3250.0, 'prefix_fanout' => 2250.0, 'all_packs' => 1800.0]",
-        "['common_or' => 2250.0, 'max_valid_or_prefix' => 3500.0, 'prefix_fanout' => 2500.0, 'all_packs' => 2000.0]",
+        "['common_or' => 4000.0, 'max_valid_or_prefix' => 5000.0, 'prefix_fanout' => 4000.0, 'all_packs' => 3500.0]",
+        "['common_or' => 4500.0, 'max_valid_or_prefix' => 6000.0, 'prefix_fanout' => 4500.0, 'all_packs' => 4000.0]",
         "['common_or' => 6500.0, 'max_valid_or_prefix' => 8500.0, 'prefix_fanout' => 7000.0, 'all_packs' => 6500.0]",
         "['common_or' => 7000.0, 'max_valid_or_prefix' => 9000.0, 'prefix_fanout' => 7500.0, 'all_packs' => 7000.0]",
         "['common_or' => 5000.0, 'max_valid_or_prefix' => 12000.0, 'prefix_fanout' => 5500.0, 'all_packs' => 5000.0]",
@@ -3271,11 +3271,14 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     }
     $maxValidSeedPhase = strpos($runner, 'run_php_phase max-valid-seed');
     $maxValidWorkerPhase = strpos($runner, 'run_php_phase max-valid-setup');
-    assert_contains(
-        'setup|indexing-prepare|initial-index-drain|reindex-drain|validate|drain',
-        $runner,
-        'full validation should retain the two-hour scale-lane phase bound'
-    );
+    foreach ([
+        'if [[ "${PROFILE}" == "100k" && "${DB_KIND}" == "mariadb" ]]',
+        "printf '10800\\n'",
+        'setup|indexing-prepare|initial-index-drain|reindex-drain|drain',
+    ] as $required) {
+        assert_contains($required, $runner, "full validation should retain its bounded hosted-lane timeout: {$required}");
+    }
+    assert_contains('100k MariaDB validation', $acceptance, 'the written contract should explain the three-hour MariaDB validation boundary');
     assert_true(
         $maxValidSeedPhase !== false
             && $maxValidWorkerPhase !== false

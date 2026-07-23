@@ -17975,8 +17975,8 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
     if ($profileName === '50k') {
         [$p95Overrides, $p99Overrides] = $engineFamily === 'mariadb'
             ? [
-                ['common_or' => 2000.0, 'max_valid_or_prefix' => 3250.0, 'prefix_fanout' => 2250.0, 'all_packs' => 1800.0],
-                ['common_or' => 2250.0, 'max_valid_or_prefix' => 3500.0, 'prefix_fanout' => 2500.0, 'all_packs' => 2000.0],
+                ['common_or' => 4000.0, 'max_valid_or_prefix' => 5000.0, 'prefix_fanout' => 4000.0, 'all_packs' => 3500.0],
+                ['common_or' => 4500.0, 'max_valid_or_prefix' => 6000.0, 'prefix_fanout' => 4500.0, 'all_packs' => 4000.0],
             ]
             : [
                 ['common_or' => 500.0, 'prefix_fanout' => 600.0],

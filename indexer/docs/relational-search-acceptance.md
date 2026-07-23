@@ -1315,16 +1315,21 @@ At 50k, the corresponding warm limits are:
 
 | Warm query | MySQL 8.0 p95 / p99 | MariaDB 10.11 p95 / p99 |
 | --- | ---: | ---: |
-| common three-term OR | <=500 / <=550 ms | <=2,000 / <=2,250 ms |
-| valid 12-group OR+prefix | <=1,000 / <=1,500 ms | <=3,250 / <=3,500 ms |
+| common three-term OR | <=500 / <=550 ms | <=4,000 / <=4,500 ms |
+| valid 12-group OR+prefix | <=1,000 / <=1,500 ms | <=5,000 / <=6,000 ms |
 | rare-anchor AND | <=100 / <=200 ms | <=100 / <=200 ms |
 | exact-anchor surface-range AND | <=300 / <=500 ms | <=300 / <=500 ms |
 | exact-anchor candidate-first AND | <=300 / <=500 ms | <=300 / <=500 ms |
 | selective-prefix anchor AND | <=100 / <=200 ms | <=100 / <=200 ms |
-| 10k-completion prefix | <=600 / <=650 ms | <=2,250 / <=2,500 ms |
-| all distributable packs | <=500 / <=750 ms | <=1,800 / <=2,000 ms |
+| 10k-completion prefix | <=600 / <=650 ms | <=4,000 / <=4,500 ms |
+| all distributable packs | <=500 / <=750 ms | <=3,500 / <=4,000 ms |
 | impossible mandatory term | <=50 / <=100 ms | <=50 / <=100 ms |
 | valid 12-group OR+prefix temporary/sort work | 0 disk temporary tables; <=1 merge pass | 0 disk temporary tables; <=1 merge pass |
+
+MariaDB's 50k hosted lane has shown multi-second scheduler and storage tails
+without a plan or row-count change. These ceilings cover that measured host
+variation; they are not latency promises and do not relax the exact plan,
+row, temporary-table, or sort gates.
 
 All structural, memory, row, and byte limits otherwise remain unchanged.
 
@@ -2179,6 +2184,10 @@ class, and the last stage and phase before archive compression or container
 cleanup begins. A preliminary validation report is
 retained only as `.partial-evidence.json` beside the raw artifact bundle; it can
 never occupy the primary path or masquerade as the completed report.
+Full-traversal phases normally have a two-hour kill. The 100k MariaDB validation
+phase has three hours because its fixed 20 warmups and 200 samples cover all
+thirteen query shapes on one constrained CPU; the overall 19,800-second watchdog
+and 345-minute workflow-step limit remain unchanged.
 The completed report and raw artifact bundle are each published by atomic
 rename. Failure to create either complete file turns the run into a failure
 envelope; a partial archive can never accompany a successful exit.

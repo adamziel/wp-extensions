@@ -1155,7 +1155,14 @@ phase_timeout_seconds() {
     case "$1" in
         # Full validation traverses the complete corpus and exceeds thirty
         # minutes on the constrained 50k and 100k hosted lanes.
-        setup|indexing-prepare|initial-index-drain|reindex-drain|validate|drain) printf '7200\n' ;;
+        validate)
+            if [[ "${PROFILE}" == "100k" && "${DB_KIND}" == "mariadb" ]]; then
+                printf '10800\n'
+            else
+                printf '7200\n'
+            fi
+            ;;
+        setup|indexing-prepare|initial-index-drain|reindex-drain|drain) printf '7200\n' ;;
         cold-prepare|dependency-lob|max-valid-seed|max-valid-setup|max-valid-search|search-memory-sample|writer-aggregate|old-posting-frontier|scope-ddl-writer|scope-proof) printf '1800\n' ;;
         concurrent-reader|concurrent-writer) printf '%s\n' "$((CONCURRENCY_SECONDS + 180))" ;;
         *) printf '600\n' ;;
