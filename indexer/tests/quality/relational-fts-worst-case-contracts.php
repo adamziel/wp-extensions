@@ -3912,9 +3912,14 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         assert_contains($required, $concurrentWriter, "concurrent writer pacing should retain: {$required}");
     }
     foreach ([
-        "['terminal' => 0, 'deadlock_retries' => '<= 12']",
-        '$writerFailures === 0 && $writerDeadlockRetries <= 12',
-        '$batchDeadlockRetries <= 8',
+        '$writerCount = 2;',
+        '$writerDeadlockRetryLimitPerWriter = 8;',
+        '$writerDeadlockRetryLimit = $writerCount * $writerDeadlockRetryLimitPerWriter;',
+        '$worker < $writerCount',
+        "'writers' => \$writerCount",
+        "['terminal' => 0, 'deadlock_retries' => \"<= {\$writerDeadlockRetryLimit}\"]",
+        '$writerFailures === 0 && $writerDeadlockRetries <= $writerDeadlockRetryLimit',
+        '$batchDeadlockRetries <= $writerDeadlockRetryLimitPerWriter',
         '$batchMutations > 0',
         '$recordedDeadlockRetry === $recognizedDeadlockRetry',
     ] as $required) {

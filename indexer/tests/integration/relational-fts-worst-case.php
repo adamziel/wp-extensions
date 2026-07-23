@@ -12287,7 +12287,9 @@ function wp_fts_wc_finalize(): array
     $writerMutations = 0;
     $writerPeaks = [];
     $writerEvidence = [];
-    for ($worker = 0; $worker < 2; $worker++) {
+    $writerCount = 2;
+    $writerDeadlockRetryLimitPerWriter = 8;
+    for ($worker = 0; $worker < $writerCount; $worker++) {
         $writer = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . "/concurrent-writer-{$worker}.json");
         $writerEvidence[$worker] = $writer;
         $rawBatches = is_array($writer['batches'] ?? null) ? array_values($writer['batches']) : [];
@@ -12353,7 +12355,7 @@ function wp_fts_wc_finalize(): array
             && ($writer['indexed'] ?? null) === $batchIndexed
             && ($writer['failures'] ?? null) === $batchFailures
             && ($writer['deadlock_retries'] ?? null) === $batchDeadlockRetries
-            && $batchDeadlockRetries <= 8
+            && $batchDeadlockRetries <= $writerDeadlockRetryLimitPerWriter
             && ($writer['mutations'] ?? null) === $batchMutations
             && $batchMutations > 0
             && $windowIdentity === $sharedWindowIdentity
@@ -12375,11 +12377,12 @@ function wp_fts_wc_finalize(): array
     $idleLatency = is_array($idle['latency_ms'] ?? null) ? $idle['latency_ms'] : [];
     $idleP95 = (float) ($idleLatency['p95'] ?? INF);
     $degradation = $idleP95 > 0.0 && is_finite($idleP95) ? $latency['p95'] / $idleP95 : INF;
+    $writerDeadlockRetryLimit = $writerCount * $writerDeadlockRetryLimitPerWriter;
     $concurrency = [
         'transport' => 'http-rest',
         'duration_seconds' => $concurrencySeconds,
         'readers' => 8,
-        'writers' => 2,
+        'writers' => $writerCount,
         'requests' => $readerRequests,
         'http_attempts' => $readerHttpAttempts,
         'unavailable_retries' => $readerUnavailableRetries,
@@ -12408,9 +12411,9 @@ function wp_fts_wc_finalize(): array
         wp_fts_wc_gate('concurrent_errors', 0, count($errors), $errors === []),
         wp_fts_wc_gate(
             'concurrent_writer_failures',
-            ['terminal' => 0, 'deadlock_retries' => '<= 12'],
+            ['terminal' => 0, 'deadlock_retries' => "<= {$writerDeadlockRetryLimit}"],
             ['terminal' => $writerFailures, 'deadlock_retries' => $writerDeadlockRetries],
-            $writerFailures === 0 && $writerDeadlockRetries <= 12
+            $writerFailures === 0 && $writerDeadlockRetries <= $writerDeadlockRetryLimit
         ),
         wp_fts_wc_gate('concurrent_writer_progress', '> 0', $writerIndexed, $writerIndexed > 0),
         wp_fts_wc_gate('concurrent_shared_window_identity', 'one exact run/start/deadline/minimum tuple', $sharedWindowIdentity, is_array($sharedWindowIdentity) && ($sharedWindowIdentity[0] ?? null) === ($baseline['concurrency_run_id'] ?? null)),

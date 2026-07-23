@@ -1246,7 +1246,7 @@ The remaining scale limits are shared by both declared engines:
 | concurrent mixed HTTP p95 / p99 | engine/profile bounds above |
 | concurrent errors, timeouts, wrong result sets | 0 |
 | concurrent typed publication retries | <= logical requests; <=3 per request |
-| concurrent writer deadlock retries / terminal failures | <=8 per writer and <=12 total / 0 |
+| concurrent writer deadlock retries / terminal failures | <=8 per writer and <=16 total for the two writers / 0 |
 | concurrent p95 degradation | <=16× idle HTTP |
 | plugin-owned search statements | <=3; impossible AND <=1 |
 | missing-table request on every public adapter | exactly 1 failed plan and 0 rank/hydrate; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 total plugin-owned statements; unhealthy/latch/single-event repair state present before harness restoration |
