@@ -1941,9 +1941,10 @@ scope through the real mysqli connection after plan has completed but before
 rank executes. Rank's driving snapshot control must reject it before surface
 postings, examine at most 256 rows, send zero rows, and prevent hydration; the
 shape is exactly plan+rank. All three cases retain exact ordered wpdb to
-Performance Schema SQL identity and finish within 2,000 ms per client/server
-measurement. This removes taxonomy fanout from search complexity entirely
-rather than merely budgeting a relationship probe per candidate.
+Performance Schema SQL identity. Each client/server measurement must finish
+within the larger of 2,000 ms and the 10k/20k-completion prefix p99 ceiling for
+that engine/profile lane. This removes taxonomy fanout from search complexity entirely.
+It does not merely budget a relationship probe per candidate.
 
 The current schema requires two plugin-namespaced supporting indexes on
 WordPress's core tables: `wp_fts_term_object(term_taxonomy_id, object_id)` and

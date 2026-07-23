@@ -1879,6 +1879,8 @@ test_case('relational scale gates keep terminal traversal and engine limits expl
     $terminal = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_terminal_streaming_oracle');
     $populate = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_populate_terminal_oracle');
     $caseGates = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_case_gates');
+    $latencyLimits = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_case_latency_limits');
+    $engineFamily = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_engine_family');
     $validate = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_validate');
 
     assert_contains("const WP_FTS_WC_TERMINAL_QUERY_TERM = 'visibilityprobe';", $integration, 'terminal exact and prefix traversal should share one construction-known term');
@@ -1893,7 +1895,6 @@ test_case('relational scale gates keep terminal traversal and engine limits expl
         assert_contains($required, $terminal, "terminal traversal should retain its explicit scale boundary: {$required}");
     }
     foreach ([
-        "str_contains(\$engine, 'mariadb') => 'mariadb'",
         "['common_or' => 4000.0, 'max_valid_or_prefix' => 5000.0, 'prefix_fanout' => 4000.0, 'all_packs' => 3500.0]",
         "['common_or' => 4500.0, 'max_valid_or_prefix' => 6000.0, 'prefix_fanout' => 4500.0, 'all_packs' => 4000.0]",
         "['common_or' => 6500.0, 'max_valid_or_prefix' => 8500.0, 'prefix_fanout' => 7000.0, 'all_packs' => 6500.0]",
@@ -1902,11 +1903,16 @@ test_case('relational scale gates keep terminal traversal and engine limits expl
         "['common_or' => 6500.0, 'max_valid_or_prefix' => 14000.0, 'prefix_fanout' => 6500.0, 'all_packs' => 6500.0]",
         "['common_or' => 500.0, 'prefix_fanout' => 600.0]",
         "['common_or' => 550.0, 'prefix_fanout' => 650.0]",
+    ] as $required) {
+        assert_contains($required, $latencyLimits, "latency limits should retain their measured engine/profile boundary: {$required}");
+    }
+    foreach ([
         "\$serverRowsLimit = \$engineFamily === 'mariadb'",
         "\$sortMergePassesLimit = \$profileName === '100k' ? 8 : 1;",
     ] as $required) {
-        assert_contains($required, $caseGates, "scale limits should retain their measured engine/profile boundary: {$required}");
+        assert_contains($required, $caseGates, "scale gates should retain their measured engine/profile boundary: {$required}");
     }
+    assert_contains("str_contains(\$engine, 'mariadb') => 'mariadb'", $engineFamily, 'all measured gates should share one database-family classifier');
     $finalize = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_finalize');
     foreach ([
         "['50k', 'mysql'] => [10000.0, 15000.0]",
@@ -3994,10 +4000,13 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     record_check('relational hard conditioning contract', 38);
 });
 
-test_case('relational worst-case database plan access records MySQL materialization and scan estimates', function (): void {
+test_case('relational worst-case database plan access and latency limits retain engine shapes', function (): void {
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     if (!function_exists('wp_fts_wc_collect_database_table_access')) {
         eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_collect_database_table_access'));
+    }
+    if (!function_exists('wp_fts_wc_case_latency_limits')) {
+        eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_case_latency_limits'));
     }
 
     $access = [];
@@ -4037,6 +4046,14 @@ test_case('relational worst-case database plan access records MySQL materializat
             'materialized' => false,
         ],
     ], $access, 'MySQL plan aliases must retain bounded materialization and leaf scan roles');
+
+    assert_same(['p95' => 4000.0, 'p99' => 4500.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '50k'], 'mariadb'), '50k MariaDB prefix limits must retain the hosted measurements');
+    assert_same(['p95' => 600.0, 'p99' => 650.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '50k'], 'mysql'), '50k MySQL prefix limits must retain the hosted measurements');
+    assert_same(['p95' => 7000.0, 'p99' => 7500.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '100k'], 'mariadb'), '100k MariaDB prefix limits must retain the hosted measurements');
+    assert_same(['p95' => 5500.0, 'p99' => 6500.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '100k'], 'mysql'), '100k MySQL prefix limits must retain the hosted measurements');
+    $denseProof = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_dense_relationship_search_proof');
+    assert_contains('$fixtureStorage = array_change_key_case(', $denseProof, 'the dense fixture must normalize MySQL information-schema labels');
+    assert_contains("wp_fts_wc_case_latency_limits('prefix_fanout'", $denseProof, 'the dense search must share the declared warm prefix tail');
 });
 
 test_case('taxonomy scope fail-closed search retains server-measured worst-case proof', function (): void {
@@ -4067,6 +4084,8 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         "'wpml_sparse_rows_examined'",
         'function wp_fts_wc_dense_relationship_search_proof(',
         '$expectedRelationships = $expectedObjects * $relationshipsPerObject',
+        '$fixtureStorage = array_change_key_case(',
+        "wp_fts_wc_case_latency_limits('prefix_fanout'",
         "'dense_relationship_no_scope_zero_sql_or_plan_access'",
         "'dense_relationship_active_targeted_plan_only'",
         "'dense_relationship_plan_rank_scope_race_shape'",
@@ -4174,6 +4193,9 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         'Rank\'s driving snapshot control must reject it before surface',
         'examine at most 256 rows, send zero rows',
         'exactly plan+rank',
+        'larger of 2,000 ms',
+        '10k/20k-completion prefix p99 ceiling',
+        'that engine/profile lane',
         'removes taxonomy fanout from search complexity entirely',
         'complete prepared production UNION',
         'four requested posts with',

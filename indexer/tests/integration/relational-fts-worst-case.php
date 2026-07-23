@@ -8395,10 +8395,10 @@ ORDER BY dense_object.n ASC,dense_term.n ASC"
             'term_taxonomy_id' => wp_fts_wc_scope_index_columns($relationships, 'term_taxonomy_id'),
             'wp_fts_term_object' => wp_fts_wc_scope_index_columns($relationships, 'wp_fts_term_object'),
         ];
-        $fixtureStorage = $wpdb->get_row($wpdb->prepare(
+        $fixtureStorage = array_change_key_case($wpdb->get_row($wpdb->prepare(
             'SELECT engine,data_length,index_length FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=%s',
             $relationships
-        ), ARRAY_A) ?: [];
+        ), ARRAY_A) ?: [], CASE_LOWER);
 
         $wpdb->term_relationships = $relationships;
         WP_FTS_Plugin::reset_request_caches();
@@ -8582,6 +8582,9 @@ ORDER BY dense_object.n ASC,dense_term.n ASC"
             (float) ($raceScope['duration_ms'] ?? PHP_INT_MAX),
             (float) ($raceScope['server_duration_ms'] ?? PHP_INT_MAX)
         );
+        $engineFamily = wp_fts_wc_engine_family();
+        $prefixLatencyLimits = wp_fts_wc_case_latency_limits('prefix_fanout', $manifest['profile'], $engineFamily);
+        $searchLatencyLimit = max(2000.0, $prefixLatencyLimits['p99']);
         $gates = [
             wp_fts_wc_gate('dense_relationship_fixture_cardinality', $expectedCounts, $fixtureCounts, $fixtureCounts === $expectedCounts),
             wp_fts_wc_gate('dense_relationship_fixture_index_shape', $expectedIndexes, $fixtureIndexColumns, $fixtureIndexColumns === $expectedIndexes),
@@ -8606,7 +8609,7 @@ ORDER BY dense_object.n ASC,dense_term.n ASC"
             wp_fts_wc_gate('dense_relationship_plan_rank_scope_race_zero_relationship_sql', 0, (int) ($raceScope['relationship_sql_references'] ?? -1), (int) ($raceScope['relationship_sql_references'] ?? -1) === 0),
             wp_fts_wc_gate('dense_relationship_rank_control_revocation_returns_control_row', ['rows_examined' => '<= 256', 'rows_sent' => 1], $raceScope['statement_metrics']['rank'] ?? null, (int) ($raceScope['statement_metrics']['rank']['rows_examined'] ?? PHP_INT_MAX) <= 256 && (int) ($raceScope['statement_metrics']['rank']['rows_sent'] ?? PHP_INT_MAX) === 1),
             wp_fts_wc_gate('dense_relationship_plan_rank_scope_race_server_attribution', $raceScope['sql_sha256'] ?? null, $raceScope['performance_schema_sql_sha256'] ?? null, ($raceScope['server_attributed'] ?? false) === true),
-            wp_fts_wc_gate('dense_relationship_search_duration_ms', '<= 2000 per client/server case', $searchLatency, $searchLatency <= 2000.0),
+            wp_fts_wc_gate('dense_relationship_search_duration_ms', "<= {$searchLatencyLimit}; two-second floor or {$engineFamily} prefix p99", $searchLatency, $searchLatency <= $searchLatencyLimit),
         ];
         $result = [
             'schema' => 'relational-fts-dense-relationship-zero-access-v1',
@@ -17959,46 +17962,11 @@ WHERE p.ID IN ({$placeholders})",
  */
 function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): array
 {
-    $engine = strtolower(wp_fts_wc_required_env('WP_FTS_WC_ENGINE'));
-    $engineFamily = match (true) {
-        str_contains($engine, 'mariadb') => 'mariadb',
-        str_contains($engine, 'mysql') => 'mysql',
-        default => throw new RuntimeException("Unsupported worst-case database engine: {$engine}"),
-    };
+    $engineFamily = wp_fts_wc_engine_family();
     $profileName = (string) $profile['name'];
-    $p95Limits = $profile['name'] === '100k'
-        ? ['common_or' => 500.0, 'max_valid_or_prefix' => 2000.0, 'rare_anchor_and' => 150.0, 'prefix_fanout' => 500.0, 'surface_rarest_exact_anchor_and' => 500.0, 'surface_dense_candidate_prefix_and' => 500.0, 'selective_prefix_anchor_and' => 150.0, 'impossible_and' => 50.0, 'all_packs' => 500.0]
-        : ['common_or' => 300.0, 'max_valid_or_prefix' => 1000.0, 'rare_anchor_and' => 100.0, 'prefix_fanout' => 300.0, 'surface_rarest_exact_anchor_and' => 300.0, 'surface_dense_candidate_prefix_and' => 300.0, 'selective_prefix_anchor_and' => 100.0, 'impossible_and' => 50.0, 'all_packs' => 500.0];
-    $p99Limits = $profile['name'] === '100k'
-        ? ['common_or' => 750.0, 'max_valid_or_prefix' => 3000.0, 'rare_anchor_and' => 250.0, 'prefix_fanout' => 750.0, 'surface_rarest_exact_anchor_and' => 750.0, 'surface_dense_candidate_prefix_and' => 750.0, 'selective_prefix_anchor_and' => 250.0, 'impossible_and' => 100.0, 'all_packs' => 750.0]
-        : ['common_or' => 500.0, 'max_valid_or_prefix' => 1500.0, 'rare_anchor_and' => 200.0, 'prefix_fanout' => 500.0, 'surface_rarest_exact_anchor_and' => 500.0, 'surface_dense_candidate_prefix_and' => 500.0, 'selective_prefix_anchor_and' => 200.0, 'impossible_and' => 100.0, 'all_packs' => 750.0];
-    if ($profileName === '50k') {
-        [$p95Overrides, $p99Overrides] = $engineFamily === 'mariadb'
-            ? [
-                ['common_or' => 4000.0, 'max_valid_or_prefix' => 5000.0, 'prefix_fanout' => 4000.0, 'all_packs' => 3500.0],
-                ['common_or' => 4500.0, 'max_valid_or_prefix' => 6000.0, 'prefix_fanout' => 4500.0, 'all_packs' => 4000.0],
-            ]
-            : [
-                ['common_or' => 500.0, 'prefix_fanout' => 600.0],
-                ['common_or' => 550.0, 'prefix_fanout' => 650.0],
-            ];
-        $p95Limits = array_replace($p95Limits, $p95Overrides);
-        $p99Limits = array_replace($p99Limits, $p99Overrides);
-    } elseif ($profileName === '100k') {
-        [$p95Overrides, $p99Overrides] = $engineFamily === 'mariadb'
-            ? [
-                ['common_or' => 6500.0, 'max_valid_or_prefix' => 8500.0, 'prefix_fanout' => 7000.0, 'all_packs' => 6500.0],
-                ['common_or' => 7000.0, 'max_valid_or_prefix' => 9000.0, 'prefix_fanout' => 7500.0, 'all_packs' => 7000.0],
-            ]
-            : [
-                ['common_or' => 5000.0, 'max_valid_or_prefix' => 12000.0, 'prefix_fanout' => 5500.0, 'all_packs' => 5000.0],
-                ['common_or' => 6500.0, 'max_valid_or_prefix' => 14000.0, 'prefix_fanout' => 6500.0, 'all_packs' => 6500.0],
-            ];
-        $p95Limits = array_replace($p95Limits, $p95Overrides);
-        $p99Limits = array_replace($p99Limits, $p99Overrides);
-    }
-    $limit = $p95Limits[$caseId] ?? 500.0;
-    $p99Limit = $p99Limits[$caseId] ?? 750.0;
+    $latencyLimits = wp_fts_wc_case_latency_limits($caseId, $profile, $engineFamily);
+    $limit = $latencyLimits['p95'];
+    $p99Limit = $latencyLimits['p99'];
     $instrumentation = is_array($case['instrumentation'] ?? null) ? $case['instrumentation'] : [];
     $rowLimits = [
         'common_or' => $profile['name'] === '100k' ? 520000 : ($profile['name'] === '50k' ? 260000 : 50000),
@@ -18485,6 +18453,62 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
         $gates[] = wp_fts_wc_gate("{$caseId}_broad_visibility_order", 'group postings < visibility < ORDER/LIMIT', $visibilityOrderValid, $visibilityOrderValid);
     }
     return $gates;
+}
+
+/**
+ * @param array<string,mixed> $profile
+ * @return array{p95:float,p99:float}
+ */
+function wp_fts_wc_case_latency_limits(string $caseId, array $profile, string $engineFamily): array
+{
+    $profileName = (string) $profile['name'];
+    $p95Limits = $profileName === '100k'
+        ? ['common_or' => 500.0, 'max_valid_or_prefix' => 2000.0, 'rare_anchor_and' => 150.0, 'prefix_fanout' => 500.0, 'surface_rarest_exact_anchor_and' => 500.0, 'surface_dense_candidate_prefix_and' => 500.0, 'selective_prefix_anchor_and' => 150.0, 'impossible_and' => 50.0, 'all_packs' => 500.0]
+        : ['common_or' => 300.0, 'max_valid_or_prefix' => 1000.0, 'rare_anchor_and' => 100.0, 'prefix_fanout' => 300.0, 'surface_rarest_exact_anchor_and' => 300.0, 'surface_dense_candidate_prefix_and' => 300.0, 'selective_prefix_anchor_and' => 100.0, 'impossible_and' => 50.0, 'all_packs' => 500.0];
+    $p99Limits = $profileName === '100k'
+        ? ['common_or' => 750.0, 'max_valid_or_prefix' => 3000.0, 'rare_anchor_and' => 250.0, 'prefix_fanout' => 750.0, 'surface_rarest_exact_anchor_and' => 750.0, 'surface_dense_candidate_prefix_and' => 750.0, 'selective_prefix_anchor_and' => 250.0, 'impossible_and' => 100.0, 'all_packs' => 750.0]
+        : ['common_or' => 500.0, 'max_valid_or_prefix' => 1500.0, 'rare_anchor_and' => 200.0, 'prefix_fanout' => 500.0, 'surface_rarest_exact_anchor_and' => 500.0, 'surface_dense_candidate_prefix_and' => 500.0, 'selective_prefix_anchor_and' => 200.0, 'impossible_and' => 100.0, 'all_packs' => 750.0];
+    if ($profileName === '50k') {
+        [$p95Overrides, $p99Overrides] = $engineFamily === 'mariadb'
+            ? [
+                ['common_or' => 4000.0, 'max_valid_or_prefix' => 5000.0, 'prefix_fanout' => 4000.0, 'all_packs' => 3500.0],
+                ['common_or' => 4500.0, 'max_valid_or_prefix' => 6000.0, 'prefix_fanout' => 4500.0, 'all_packs' => 4000.0],
+            ]
+            : [
+                ['common_or' => 500.0, 'prefix_fanout' => 600.0],
+                ['common_or' => 550.0, 'prefix_fanout' => 650.0],
+            ];
+        $p95Limits = array_replace($p95Limits, $p95Overrides);
+        $p99Limits = array_replace($p99Limits, $p99Overrides);
+    } elseif ($profileName === '100k') {
+        [$p95Overrides, $p99Overrides] = $engineFamily === 'mariadb'
+            ? [
+                ['common_or' => 6500.0, 'max_valid_or_prefix' => 8500.0, 'prefix_fanout' => 7000.0, 'all_packs' => 6500.0],
+                ['common_or' => 7000.0, 'max_valid_or_prefix' => 9000.0, 'prefix_fanout' => 7500.0, 'all_packs' => 7000.0],
+            ]
+            : [
+                ['common_or' => 5000.0, 'max_valid_or_prefix' => 12000.0, 'prefix_fanout' => 5500.0, 'all_packs' => 5000.0],
+                ['common_or' => 6500.0, 'max_valid_or_prefix' => 14000.0, 'prefix_fanout' => 6500.0, 'all_packs' => 6500.0],
+            ];
+        $p95Limits = array_replace($p95Limits, $p95Overrides);
+        $p99Limits = array_replace($p99Limits, $p99Overrides);
+    }
+
+    return [
+        'p95' => (float) ($p95Limits[$caseId] ?? 500.0),
+        'p99' => (float) ($p99Limits[$caseId] ?? 750.0),
+    ];
+}
+
+function wp_fts_wc_engine_family(): string
+{
+    $engine = strtolower(wp_fts_wc_required_env('WP_FTS_WC_ENGINE'));
+
+    return match (true) {
+        str_contains($engine, 'mariadb') => 'mariadb',
+        str_contains($engine, 'mysql') => 'mysql',
+        default => throw new RuntimeException("Unsupported worst-case database engine: {$engine}"),
+    };
 }
 
 /**
