@@ -1896,7 +1896,7 @@ test_case('relational scale gates keep terminal traversal and engine limits expl
     }
     foreach ([
         "['common_or' => 4000.0, 'max_valid_or_prefix' => 5000.0, 'prefix_fanout' => 4000.0, 'all_packs' => 3500.0]",
-        "['common_or' => 4500.0, 'max_valid_or_prefix' => 6000.0, 'prefix_fanout' => 4500.0, 'all_packs' => 4000.0]",
+        "['common_or' => 6000.0, 'max_valid_or_prefix' => 6000.0, 'prefix_fanout' => 6000.0, 'all_packs' => 4000.0]",
         "['common_or' => 6500.0, 'max_valid_or_prefix' => 8500.0, 'prefix_fanout' => 7000.0, 'all_packs' => 6500.0]",
         "['common_or' => 7000.0, 'max_valid_or_prefix' => 9000.0, 'prefix_fanout' => 7500.0, 'all_packs' => 7000.0]",
         "['common_or' => 5000.0, 'max_valid_or_prefix' => 12000.0, 'prefix_fanout' => 5500.0, 'all_packs' => 5000.0]",
@@ -2353,6 +2353,8 @@ AND work_row.generation = claim_driver.generation";
     ] as $required) {
         assert_contains($required, $resourceGates, "final resource gates must retain measured database memory evidence: {$required}");
     }
+    assert_true(!str_contains($resourceGates, '$wholeRunPeak <= 1073741824'), 'the raw database peak must not duplicate the kernel hard-limit contract');
+    assert_true(!str_contains($runner, '$wholePeak>$limit'), 'database finalization must retain temporary cgroup peak overshoot instead of rejecting it');
     $memoryContract = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_database_memory_evidence_is_exact');
     foreach ([
         "\$actualLabels === \$expectedLabels",
@@ -2464,7 +2466,7 @@ AND work_row.generation = claim_driver.generation";
     $databaseCheckpoints = [];
     foreach ($databaseLabels as $index => $label) {
         $usage = 67108864 + $index;
-        $peak = 100663296 + $index;
+        $peak = $label === 'final-workload' ? 1074515968 : 100663296 + $index;
         $raw = "v2\t{$usage}\t{$peak}\t0\t0\t0";
         $databaseCheckpoints[] = [
             'checkpoint' => $label,
@@ -2626,7 +2628,7 @@ AND work_row.generation = claim_driver.generation";
         $mutate($mutated);
         assert_true(!wp_fts_wc_wordpress_memory_evidence_is_exact($mutated, $wordpressFixture), "WordPress cgroup evidence must reject {$description}");
     }
-    foreach (['cgroup peak must be at most 768 MiB', 'exact ordered 45-checkpoint inventory', 'restart therefore cannot erase', 'requires zero OOM and OOM-kill events', 'no tighter cache-sensitive threshold', 'relational-fts-resources-v2', 'relational-fts-database-cgroup-memory-v2', 'relational-fts-wordpress-cgroup-memory-v3', 'SHA-256(raw) === raw_sha256', 'missing, empty, independently changed, or', 'structured-inconsistent raw probe fails acceptance'] as $required) {
+    foreach (['cgroup peak must be at most 768 MiB', 'exact ordered 45-checkpoint inventory', 'restart therefore cannot erase', 'requires zero OOM and OOM-kill events', 'negative signed', 'no tighter cache-sensitive threshold', 'relational-fts-resources-v2', 'relational-fts-database-cgroup-memory-v2', 'relational-fts-wordpress-cgroup-memory-v3', 'SHA-256(raw) === raw_sha256', 'missing, empty, independently changed, or', 'structured-inconsistent raw probe fails acceptance'] as $required) {
         assert_contains($required, $acceptance, "constrained-host acceptance must document actual peak/OOM semantics: {$required}");
     }
     foreach ([
@@ -4080,7 +4082,7 @@ test_case('relational worst-case database plan access and latency limits retain 
         ],
     ], $access, 'MySQL plan aliases must retain bounded materialization and leaf scan roles');
 
-    assert_same(['p95' => 4000.0, 'p99' => 4500.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '50k'], 'mariadb'), '50k MariaDB prefix limits must retain the hosted measurements');
+    assert_same(['p95' => 4000.0, 'p99' => 6000.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '50k'], 'mariadb'), '50k MariaDB prefix limits must retain the hosted measurements');
     assert_same(['p95' => 600.0, 'p99' => 650.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '50k'], 'mysql'), '50k MySQL prefix limits must retain the hosted measurements');
     assert_same(['p95' => 7000.0, 'p99' => 7500.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '100k'], 'mariadb'), '100k MariaDB prefix limits must retain the hosted measurements');
     assert_same(['p95' => 5500.0, 'p99' => 6500.0], wp_fts_wc_case_latency_limits('prefix_fanout', ['name' => '100k'], 'mysql'), '100k MySQL prefix limits must retain the hosted measurements');

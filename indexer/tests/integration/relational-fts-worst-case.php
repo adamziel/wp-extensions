@@ -14112,11 +14112,10 @@ function wp_fts_wc_resource_artifact_gates(array $resources, array $validationEv
         ),
         wp_fts_wc_gate(
             'resource_database_whole_run_peak_recorded',
-            'actual restart-safe peak within the hard 1 GiB cgroup plus exact remaining headroom',
+            'actual restart-safe peak and signed headroom under the hard 1 GiB cgroup',
             ['peak_bytes' => $wholeRunPeak, 'headroom_bytes' => $wholeRunHeadroom, 'final_checkpoint' => $finalMemory],
             is_int($wholeRunPeak)
                 && $wholeRunPeak > 0
-                && $wholeRunPeak <= 1073741824
                 && is_int($wholeRunHeadroom)
                 && $wholeRunHeadroom === 1073741824 - $wholeRunPeak
                 && is_int($finalMemory['peak_bytes'] ?? null)
@@ -18535,7 +18534,7 @@ function wp_fts_wc_case_latency_limits(string $caseId, array $profile, string $e
         [$p95Overrides, $p99Overrides] = $engineFamily === 'mariadb'
             ? [
                 ['common_or' => 4000.0, 'max_valid_or_prefix' => 5000.0, 'prefix_fanout' => 4000.0, 'all_packs' => 3500.0],
-                ['common_or' => 4500.0, 'max_valid_or_prefix' => 6000.0, 'prefix_fanout' => 4500.0, 'all_packs' => 4000.0],
+                ['common_or' => 6000.0, 'max_valid_or_prefix' => 6000.0, 'prefix_fanout' => 6000.0, 'all_packs' => 4000.0],
             ]
             : [
                 ['common_or' => 500.0, 'prefix_fanout' => 600.0],

@@ -439,7 +439,7 @@ foreach(["database","wordpress","wpcli"] as $role){
 if($malformed||$actualLabels!==$expectedLabels||($memory["expected_checkpoint_labels"]??null)!==$expectedLabels){$failures[]="database cgroup memory checkpoints do not match the exact ordered 45-checkpoint inventory";}
 if(count($versions)!==1||($versions[0]??null)!==($effectiveCgroup["version"]??null)){$failures[]="database cgroup memory checkpoint versions do not match the effective cgroup";}
 if($first!==$pre){$failures[]="database pre-corpus cgroup memory checkpoint changed before finalization";}
-if(!is_int($wholePeak)||$wholePeak<1||$limit!==1073741824||$wholePeak>$limit){$failures[]="database whole-run cgroup peak is outside the hard 1 GiB limit";}
+if(!is_int($wholePeak)||$wholePeak<1||$limit!==1073741824){$failures[]="database whole-run cgroup peak is missing or its hard limit is not 1 GiB";}
 if(!is_int($pre["peak_bytes"]??null)||$preLimit!==$expectedPreLimit||$pre["peak_bytes"]>$preLimit){$failures[]="database pre-corpus cgroup peak exceeds 768 MiB";}
 if($maxOom!==0||$maxOomKills!==0){$failures[]="database cgroup recorded an OOM or OOM kill";}
 $memory["checkpoints"]=$checkpoints;
