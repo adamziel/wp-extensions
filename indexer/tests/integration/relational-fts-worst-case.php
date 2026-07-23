@@ -2618,12 +2618,14 @@ function wp_fts_wc_explain_dependency_sql(string $sql, array $tableNames): array
 function wp_fts_wc_collect_database_table_access(array $node, array &$access): void
 {
     if (isset($node['table_name']) && is_scalar($node['table_name'])) {
+        $rows = $node['rows'] ?? $node['rows_examined_per_scan'] ?? null;
         $access[] = [
             'table_name' => (string) $node['table_name'],
             'access_type' => is_scalar($node['access_type'] ?? null) ? (string) $node['access_type'] : '',
             'possible_keys' => is_array($node['possible_keys'] ?? null) ? array_values($node['possible_keys']) : [],
             'key' => is_scalar($node['key'] ?? null) ? (string) $node['key'] : '',
-            'rows' => is_numeric($node['rows'] ?? null) ? (int) $node['rows'] : null,
+            'rows' => is_numeric($rows) ? (int) $rows : null,
+            'materialized' => is_array($node['materialized_from_subquery'] ?? null),
         ];
     }
     foreach ($node as $child) {
@@ -8926,6 +8928,9 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
         ), ARRAY_A) ?: [];
         $engineMap = [];
         foreach ($engines as $row) {
+            // MySQL returns information_schema column labels in uppercase even
+            // when the SELECT spells them in lowercase; MariaDB preserves them.
+            $row = array_change_key_case($row, CASE_LOWER);
             $engineMap[(string) ($row['table_name'] ?? '')] = strtoupper((string) ($row['engine'] ?? ''));
         }
         $fixtureIndexes = [
@@ -10340,11 +10345,13 @@ function wp_fts_wc_scope_page_explain(string $sql, string $caseId, int $derivedR
     wp_fts_wc_collect_database_table_access($plan, $access);
     $physicalAccess = array_values(array_filter(
         $access,
-        static fn(array $row): bool => !str_starts_with((string) ($row['table_name'] ?? ''), '<')
+        static fn(array $row): bool => empty($row['materialized'])
+            && !str_starts_with((string) ($row['table_name'] ?? ''), '<')
     ));
     $derivedAccess = array_values(array_filter(
         $access,
-        static fn(array $row): bool => str_starts_with(strtolower((string) ($row['table_name'] ?? '')), '<derived')
+        static fn(array $row): bool => !empty($row['materialized'])
+            || str_starts_with(strtolower((string) ($row['table_name'] ?? '')), '<derived')
     ));
     $expectedPhysical = match ($caseId) {
         'targeted_scope_expansion', 'filtered_scope_expansion' => 1,

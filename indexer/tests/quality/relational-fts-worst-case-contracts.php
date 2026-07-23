@@ -3984,6 +3984,51 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     record_check('relational hard conditioning contract', 38);
 });
 
+test_case('relational worst-case database plan access records MySQL materialization and scan estimates', function (): void {
+    $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
+    if (!function_exists('wp_fts_wc_collect_database_table_access')) {
+        eval(wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_collect_database_table_access'));
+    }
+
+    $access = [];
+    wp_fts_wc_collect_database_table_access([
+        'table' => [
+            'table_name' => 'filtered_candidates',
+            'access_type' => 'ALL',
+            'rows_examined_per_scan' => 2,
+            'materialized_from_subquery' => [
+                'query_block' => [
+                    'table' => [
+                        'table_name' => 'p',
+                        'access_type' => 'range',
+                        'key' => 'wp_fts_type_status_id',
+                        'rows_examined_per_scan' => 100,
+                    ],
+                ],
+            ],
+        ],
+    ], $access);
+
+    assert_same([
+        [
+            'table_name' => 'filtered_candidates',
+            'access_type' => 'ALL',
+            'possible_keys' => [],
+            'key' => '',
+            'rows' => 2,
+            'materialized' => true,
+        ],
+        [
+            'table_name' => 'p',
+            'access_type' => 'range',
+            'possible_keys' => [],
+            'key' => 'wp_fts_type_status_id',
+            'rows' => 100,
+            'materialized' => false,
+        ],
+    ], $access, 'MySQL plan aliases must retain bounded materialization and leaf scan roles');
+});
+
 test_case('taxonomy scope fail-closed search retains server-measured worst-case proof', function (): void {
     $root = dirname(__DIR__, 2);
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
@@ -4077,6 +4122,9 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         "'timer_wait_picoseconds' => \$timerWait",
         '9700',
         'SORT_ROWS',
+        'array_change_key_case($row, CASE_LOWER)',
+        "static fn(array \$row): bool => empty(\$row['materialized'])",
+        "static fn(array \$row): bool => !empty(\$row['materialized'])",
     ] as $required) {
         assert_contains($required, $integration, "scope proof should retain measured anti-join evidence: {$required}");
     }
