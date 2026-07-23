@@ -720,8 +720,15 @@ test_case('relational worst-case authoritative search memory is fresh, source-bo
         'exact forty-file and forty-process inventory',
         'cumulative diagnostics',
         'lifetime peak captured before reset',
+        'authenticates the large preliminary report only after',
     ] as $required) {
         assert_contains($required, $acceptance, "acceptance must document authoritative search-memory invariant: {$required}");
+    }
+    foreach (['wp_fts_wc_search_memory_sample', 'wp_fts_wc_cold_sample'] as $functionName) {
+        $measurement = wp_fts_wc_contract_function_source($integration, $functionName);
+        $peakRead = strpos($measurement, '$rssPeakAfter = wp_fts_wc_rss_bytes(\'VmHWM\');');
+        $reportRead = strpos($measurement, '$preliminary = wp_fts_wc_preliminary_report_binding();');
+        assert_true(is_int($peakRead) && is_int($reportRead) && $peakRead < $reportRead, "{$functionName} must freeze the production RSS peak before authenticating the large report");
     }
 
     $extracted = '';

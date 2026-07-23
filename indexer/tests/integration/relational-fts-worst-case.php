@@ -3467,7 +3467,7 @@ function wp_fts_wc_max_valid_seed(): array
     wp_fts_wc_assert_source_binding();
     wp_fts_wc_require_plugin();
     $manifest = wp_fts_wc_manifest();
-    $preliminary = wp_fts_wc_preliminary_evidence_binding();
+    $preliminary = wp_fts_wc_preliminary_report_binding();
     $sourceBinding = wp_fts_wc_artifact_source_binding($manifest, $preliminary['sha256']);
     $processIdentity = wp_fts_wc_process_identity();
     wp_fts_wc_assert(wp_fts_wc_process_identity_valid($processIdentity), 'Near-limit seed requires an exact Linux process identity.');
@@ -4030,12 +4030,6 @@ function wp_fts_wc_search_memory_sample(): array
         throw new RuntimeException("Required search-memory case definition is absent: {$caseId}");
     }
     $searchOptions = wp_fts_wc_search_ready_options($definition['options']);
-    $preliminary = wp_fts_wc_preliminary_evidence_binding();
-    $expected = $preliminary['evidence']['cases'][$caseId] ?? null;
-    if (!is_array($expected)) {
-        throw new RuntimeException("Preliminary validation result is absent for search-memory case: {$caseId}");
-    }
-    $sourceBinding = wp_fts_wc_artifact_source_binding($manifest, $preliminary['sha256']);
     $processIdentity = wp_fts_wc_process_identity();
     $storage = wp_fts_wc_storage_fixture(false);
     if (!interface_exists('WP_FTS_Set_Oriented_Search_Storage') || !($storage instanceof WP_FTS_Set_Oriented_Search_Storage)) {
@@ -4058,6 +4052,15 @@ function wp_fts_wc_search_memory_sample(): array
     $phpPeakDelta = max(0, $phpPhasePeakAfter - $phpUsageBefore);
     $rssDelta = max(0, $rssAfter - $rssBefore);
     $rssPeakDelta = max(0, $rssPeakAfter - $rssBefore);
+    // Authenticate the large preliminary report only after freezing the
+    // production-search counters so harness JSON is not charged to the query.
+    $preliminary = wp_fts_wc_preliminary_report_binding();
+    $preliminaryReport = $preliminary[array_key_first($preliminary)] ?? null;
+    $expected = is_array($preliminaryReport) ? ($preliminaryReport['cases'][$caseId] ?? null) : null;
+    if (!is_array($expected)) {
+        throw new RuntimeException("Preliminary validation result is absent for search-memory case: {$caseId}");
+    }
+    $sourceBinding = wp_fts_wc_artifact_source_binding($manifest, $preliminary['sha256']);
     $payload = wp_fts_wc_payload($recorded['result']);
     $rows = wp_fts_wc_payload_results($payload);
     $queries = array_values($recorded['queries']);
@@ -4175,7 +4178,7 @@ function wp_fts_wc_authoritative_search_memory_gate_ids(string $caseId): array
 }
 
 /** Authenticate the source-bound preliminary report consumed by later children. */
-function wp_fts_wc_preliminary_evidence_binding(): array
+function wp_fts_wc_preliminary_report_binding(): array
 {
     $evidence = wp_fts_wc_read_json(wp_fts_wc_evidence_path());
     $recordedHash = $evidence['evidence_sha256'] ?? null;
@@ -6742,8 +6745,6 @@ function wp_fts_wc_cold_sample(): array
     $caseId = wp_fts_wc_required_env('WP_FTS_WC_CASE');
     $sample = wp_fts_wc_required_non_negative_int_env('WP_FTS_WC_SAMPLE');
     $manifest = wp_fts_wc_manifest();
-    $preliminary = wp_fts_wc_preliminary_evidence_binding();
-    $sourceBinding = wp_fts_wc_artifact_source_binding($manifest, $preliminary['sha256']);
     $processIdentity = wp_fts_wc_process_identity();
     $definitions = wp_fts_wc_case_definitions($manifest);
     if (!in_array($caseId, ['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout'], true) || !isset($definitions[$caseId])) {
@@ -6791,7 +6792,11 @@ function wp_fts_wc_cold_sample(): array
     $memoryPeakDelta = max(0, $memoryPhasePeakAfter - $memoryBefore);
     $rssDelta = max(0, $rssAfter - $rssBefore);
     $rssPeakDelta = max(0, $rssPeakAfter - $rssBefore);
-    $expected = is_array($preliminary['evidence']['cases'][$caseId] ?? null) ? $preliminary['evidence']['cases'][$caseId] : [];
+    // Keep report authentication outside the conditioned-search counters.
+    $preliminary = wp_fts_wc_preliminary_report_binding();
+    $sourceBinding = wp_fts_wc_artifact_source_binding($manifest, $preliminary['sha256']);
+    $preliminaryReport = $preliminary[array_key_first($preliminary)] ?? null;
+    $expected = is_array($preliminaryReport['cases'][$caseId] ?? null) ? $preliminaryReport['cases'][$caseId] : [];
     $statementShape = wp_fts_wc_statement_shape(array_map(static fn(string $sql): array => ['sql' => $sql], $queries));
     $actualIds = array_map('intval', array_column($rows, 'doc_id'));
     array_push(

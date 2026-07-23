@@ -1158,8 +1158,12 @@ authoritative Linux growth is `VmHWM` after minus `VmRSS` before—never
 `VmHWM` after minus an older `VmHWM`. Reset support is a hard runtime
 precondition, not an optional downgrade. The PHP absolute peak is the maximum
 of the lifetime peak captured before reset and the measured phase peak after
-reset; it is never relabeled from the reset phase alone. Both deltas must be at
-most 16 MiB, and both absolute peaks must be positive and at most 128 MiB. Each of the forty
+reset; it is never relabeled from the reset phase alone. Each child loads and
+authenticates the large preliminary report only after those production counters
+are frozen, so report JSON is not mislabeled as search memory. A malformed
+report can therefore be discovered after the read-only sample executes, but it
+still cannot publish a passing artifact. Both deltas must be at most 16 MiB,
+and both absolute peaks must be positive and at most 128 MiB. Each of the forty
 conditioned cold samples uses the same formula and absolute gates in its own
 source-bound process, with an exact forty-file and forty-process inventory.
 The ten-page maximum-valid front-end traversal likewise uses its complete fresh
