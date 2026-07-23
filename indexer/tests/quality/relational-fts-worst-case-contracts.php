@@ -3590,7 +3590,7 @@ test_case('relational worst-case composes maximum document work with fair scope 
     $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
 
     foreach ([
-        "'schema' => 'relational-fts-drain-v6'",
+        "'schema' => 'relational-fts-drain-v7'",
         'wp_fts_wc_mixed_scope_changed_batch(',
         'wp_fts_wc_composed_maximum_worker_path(',
         "'mixed_active_scope_continuous_arrival' => \$mixedActiveScope",
@@ -3631,6 +3631,19 @@ test_case('relational worst-case composes maximum document work with fair scope 
     ] as $required) {
         assert_contains($required, $integration, "mixed worker proof should retain hard alternation contract: {$required}");
     }
+    $drain = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_drain');
+    $initialDrainEnd = strpos($drain, '// A naturally full queue');
+    assert_true(is_int($initialDrainEnd), 'the initial corpus-length drain should precede the fixed detailed worker fixtures');
+    $initialDrain = substr($drain, 0, $initialDrainEnd);
+    foreach ([
+        '$initialDrainBatchCount++',
+        '$initialDrainMaxima[$resultField] = max(',
+        'unset($batch);',
+        'gc_mem_caches();',
+    ] as $required) {
+        assert_contains($required, $initialDrain, "the corpus-length drain should retain only bounded aggregates: {$required}");
+    }
+    assert_true(!str_contains($initialDrain, '$batches[] = $batch'), 'the corpus-length drain must not retain every detailed batch record');
     assert_true(
         strpos($integration, "\$mixedActiveScope = wp_fts_wc_mixed_scope_changed_batch(")
             < strpos($integration, "\$mixedExhaustedCorpusScope = wp_fts_wc_mixed_scope_changed_batch("),

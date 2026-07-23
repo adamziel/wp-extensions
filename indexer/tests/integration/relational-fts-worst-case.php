@@ -10621,6 +10621,26 @@ function wp_fts_wc_drain(): array
     $started = hrtime(true);
     $batches = [];
     $queueClaimPlans = [];
+    $batchMaximumFields = [
+        'max_total_statement_count' => 'total_statement_count',
+        'max_fts_data_statement_count' => 'fts_data_statement_count',
+        'max_bounded_data_statement_count' => 'bounded_data_statement_count',
+        'max_lease_control_statement_count' => 'lease_control_statement_count',
+        'max_transaction_control_statement_count' => 'worker_transaction_control_statement_count',
+        'max_scheduling_control_statement_count' => 'scheduling_control_statement_count',
+        'max_physical_schema_statement_count' => 'physical_schema_statement_count',
+        'max_scope_index_probe_statement_count' => 'scope_index_probe_statement_count',
+        'max_unexpected_physical_schema_statement_count' => 'unexpected_physical_schema_statement_count',
+        'max_statement_bytes' => 'max_statement_bytes',
+        'max_batch_ms' => 'duration_ms',
+    ];
+    $initialDrainMaxima = array_fill_keys(array_keys($batchMaximumFields), 0);
+    $initialDrainBatchCount = 0;
+    $initialDrainIndexed = 0;
+    $initialDrainMaxIndexed = 0;
+    $initialDrainFullBatchCount = 0;
+    $initialDrainFailures = 0;
+    $initialDrainTotalStatementsBounded = true;
     $deadline = microtime(true) + 7200.0;
     $consecutiveNoProgress = 0;
     $remaining = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')", 'work rows before the instrumented drain');
@@ -10632,9 +10652,26 @@ function wp_fts_wc_drain(): array
         $remainingAfter = wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$work}` WHERE kind IN ('post','scope')", 'work rows after an instrumented drain pass');
         $batch['work_rows_before'] = $remaining;
         $batch['work_rows_after'] = $remainingAfter;
-        $batches[] = $batch;
+        $initialDrainBatchCount++;
+        $initialDrainIndexed += (int) ($batch['indexed'] ?? 0);
+        $initialDrainMaxIndexed = max($initialDrainMaxIndexed, (int) ($batch['indexed'] ?? 0));
+        $initialDrainFullBatchCount += (int) ($batch['indexed'] ?? 0) === 100 ? 1 : 0;
+        $initialDrainFailures += (int) ($batch['failures'] ?? 0);
+        $initialDrainTotalStatementsBounded = $initialDrainTotalStatementsBounded
+            && (int) ($batch['total_statement_count'] ?? PHP_INT_MAX) <= 20;
+        foreach ($batchMaximumFields as $resultField => $batchField) {
+            $initialDrainMaxima[$resultField] = max(
+                $initialDrainMaxima[$resultField],
+                $batch[$batchField] ?? 0
+            );
+        }
         wp_fts_wc_wait_after_worker_no_progress($batch, $deadline, 'Instrumented work drain', $consecutiveNoProgress);
         $remaining = $remainingAfter;
+        // The taxonomy scope can take hundreds of bounded worker calls. Keep
+        // its scalar totals, not every query hash and server event until exit.
+        unset($batch);
+        gc_collect_cycles();
+        gc_mem_caches();
     }
 
     // A naturally full queue can still take the unchanged-hash fast path. Build
@@ -10714,16 +10751,24 @@ ORDER BY OCTET_LENGTH(post_content) ASC,ID ASC LIMIT 100",
             is_array($changedBatch['statement_roles'] ?? null) ? $changedBatch['statement_roles'] : [],
             static fn(string $role): bool => str_starts_with($role, 'transaction_')
         )) === ['transaction_start', 'transaction_commit'];
-    $allBatchesHaveBoundedTotal = count(array_filter(
+    $allBatchesHaveBoundedTotal = $initialDrainTotalStatementsBounded && count(array_filter(
         $batches,
         static fn(array $batch): bool => (int) ($batch['total_statement_count'] ?? PHP_INT_MAX) > 20
     )) === 0;
 
-    $maxIndexed = max(array_column($batches, 'indexed') ?: [0]);
-    $fullBatchCount = count(array_filter($batches, static fn(array $batch): bool => (int) ($batch['indexed'] ?? 0) === 100));
-    $failures = array_sum(array_column($batches, 'failures'));
+    $maxIndexed = max($initialDrainMaxIndexed, max(array_column($batches, 'indexed') ?: [0]));
+    $fullBatchCount = $initialDrainFullBatchCount
+        + count(array_filter($batches, static fn(array $batch): bool => (int) ($batch['indexed'] ?? 0) === 100));
+    $failures = $initialDrainFailures + array_sum(array_column($batches, 'failures'));
+    $batchMaxima = $initialDrainMaxima;
+    foreach ($batchMaximumFields as $resultField => $batchField) {
+        $batchMaxima[$resultField] = max(
+            $batchMaxima[$resultField],
+            max(array_column($batches, $batchField) ?: [0])
+        );
+    }
     $result = [
-        'schema' => 'relational-fts-drain-v6',
+        'schema' => 'relational-fts-drain-v7',
         'status' => $batches !== []
             && $fullBatchCount > 0
             && $failures === 0
@@ -10742,8 +10787,17 @@ ORDER BY OCTET_LENGTH(post_content) ASC,ID ASC LIMIT 100",
             : 'FAIL',
         'phase' => 'drain',
         'elapsed_ms' => wp_fts_wc_elapsed_ms($started),
+        'batch_count' => $initialDrainBatchCount + count($batches),
         'batches' => $batches,
-        'indexed' => array_sum(array_column($batches, 'indexed')),
+        'initial_drain' => [
+            'batch_count' => $initialDrainBatchCount,
+            'indexed' => $initialDrainIndexed,
+            'max_indexed' => $initialDrainMaxIndexed,
+            'full_100_document_batches' => $initialDrainFullBatchCount,
+            'failures' => $initialDrainFailures,
+            'maxima' => $initialDrainMaxima,
+        ],
+        'indexed' => $initialDrainIndexed + array_sum(array_column($batches, 'indexed')),
         'max_indexed' => $maxIndexed,
         'full_100_document_batches' => $fullBatchCount,
         'changed_100_document_batch' => [
@@ -10761,23 +10815,13 @@ ORDER BY OCTET_LENGTH(post_content) ASC,ID ASC LIMIT 100",
         'mixed_active_scope_continuous_arrival' => $mixedActiveScope,
         'mixed_exhausted_corpus_scope_continuous_arrival' => $mixedExhaustedCorpusScope,
         'composed_maximum_worker_path' => $composedMaximumWorker,
-        'max_total_statement_count' => max(array_column($batches, 'total_statement_count') ?: [0]),
-        'max_fts_data_statement_count' => max(array_column($batches, 'fts_data_statement_count') ?: [0]),
-        'max_bounded_data_statement_count' => max(array_column($batches, 'bounded_data_statement_count') ?: [0]),
-        'max_lease_control_statement_count' => max(array_column($batches, 'lease_control_statement_count') ?: [0]),
-        'max_transaction_control_statement_count' => max(array_column($batches, 'worker_transaction_control_statement_count') ?: [0]),
-        'max_scheduling_control_statement_count' => max(array_column($batches, 'scheduling_control_statement_count') ?: [0]),
-        'max_physical_schema_statement_count' => max(array_column($batches, 'physical_schema_statement_count') ?: [0]),
-        'max_scope_index_probe_statement_count' => max(array_column($batches, 'scope_index_probe_statement_count') ?: [0]),
-        'max_unexpected_physical_schema_statement_count' => max(array_column($batches, 'unexpected_physical_schema_statement_count') ?: [0]),
-        'max_statement_bytes' => max(array_column($batches, 'max_statement_bytes') ?: [0]),
-        'max_batch_ms' => max(array_column($batches, 'duration_ms') ?: [0]),
         'failures' => $failures,
         'remaining' => $remaining,
         'php_peak_bytes' => memory_get_peak_usage(true),
         'rss_peak_bytes' => wp_fts_wc_rss_bytes('VmHWM'),
         'queue_claim_explain' => $queueClaimPlans,
     ];
+    $result = array_replace($result, $batchMaxima);
     wp_fts_wc_write_json(wp_fts_wc_evidence_dir() . '/drain.json', $result);
     if ($result['status'] !== 'PASS') {
         throw new RuntimeException('Final work-drain proof failed.');
@@ -12451,7 +12495,7 @@ function wp_fts_wc_finalize(): array
             'worker_drain_artifact',
             'complete PASS instrumented drain',
             [$drain['schema'] ?? null, $drain['status'] ?? null, $drain['phase'] ?? null, count(is_array($drain['batches'] ?? null) ? $drain['batches'] : [])],
-            ($drain['schema'] ?? null) === 'relational-fts-drain-v6'
+            ($drain['schema'] ?? null) === 'relational-fts-drain-v7'
                 && ($drain['status'] ?? null) === 'PASS'
                 && ($drain['phase'] ?? null) === 'drain'
                 && is_array($drain['batches'] ?? null)

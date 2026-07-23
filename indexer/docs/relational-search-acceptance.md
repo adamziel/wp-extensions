@@ -1531,6 +1531,14 @@ pre-write hashes, enqueues them in one statement, and runs exactly one
 analyzed documents, zero unchanged documents and failures, 100 rewritten
 hashes, and an empty queue.
 
+The prior drain may traverse the entire corpus after a taxonomy edit. Every
+worker pass still contributes its counts and maximum statement, duration, and
+plan measurements, but the proof does not retain every query hash and server
+event in memory until exit. Detailed per-batch records begin with the fixed
+100-document and mixed-work fixtures below. This keeps the long-lived proof
+process proportional to one worker batch rather than to the number of scope
+pages it has already completed.
+
 That isolated batch is not allowed to hide composition cost. The drain then
 builds two real corpus-scope collisions with **100** newly changed direct documents,
 so each claim contains the maximum direct batch plus one scope. The
