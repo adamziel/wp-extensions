@@ -7336,6 +7336,8 @@ WHERE kind = 'scope' AND scope_coverage = ''"
                 'cursor' => ['required' => false],
                 'direction' => ['required' => false],
                 'explain' => ['required' => false],
+                'approximate' => ['required' => false],
+                'candidate_budget' => ['required' => false],
             ],
         ]);
     }
@@ -13322,6 +13324,21 @@ LIMIT %d",
                 $search_args['cursor'] = $cursor;
                 $search_args['direction'] = $direction;
             }
+            $approximate = self::rest_approximate_requested($request);
+            $candidateBudget = self::rest_candidate_budget($request);
+            if ($candidateBudget !== null && !$approximate) {
+                return self::rest_error(
+                    'wp_fts_invalid_candidate_budget',
+                    'REST search candidate_budget requires approximate=1.',
+                    400
+                );
+            }
+            if ($approximate) {
+                $search_args['approximate_top_k'] = true;
+                if ($candidateBudget !== null) {
+                    $search_args['candidate_budget'] = $candidateBudget;
+                }
+            }
 
             if (self::rest_explain_requested($request) && self::current_user_can_search_explain()) {
                 return self::search_visible_payload($query, $search_args, true);
@@ -13472,6 +13489,8 @@ LIMIT %d",
         foreach ([
             'max_query_terms',
             'request_budget_guard',
+            'approximate_top_k',
+            'candidate_budget',
             'cursor',
             'after_cursor',
             'before_cursor',
@@ -13595,6 +13614,15 @@ LIMIT %d",
                 ? (string) $payload['query_lang']
                 : '',
         ];
+        if (($payload['retrieval_mode'] ?? null) === 'approximate') {
+            $result['retrieval_mode'] = 'approximate';
+            $result['results_may_be_incomplete'] = true;
+            foreach (['planned_posting_rows', 'candidate_budget'] as $key) {
+                if (is_int($payload[$key] ?? null)) {
+                    $result[$key] = $payload[$key];
+                }
+            }
+        }
         if ($include_explain) {
             $result['explain'] = $explain;
         }
@@ -13688,6 +13716,8 @@ LIMIT %d",
             'prefix_min_length',
             'max_query_terms',
             'request_budget_guard',
+            'approximate_top_k',
+            'candidate_budget',
             'post_type',
             'post_types',
             'post_status',
@@ -13737,6 +13767,7 @@ LIMIT %d",
             'max_query_terms' => [1, self::REST_MAX_QUERY_TERMS],
             'prefix_min_length' => [self::PREFIX_MIN_LENGTH_MIN, self::PREFIX_MIN_LENGTH_MAX],
             'snippet_length' => [1, self::SETTINGS_SNIPPET_MAX],
+            'candidate_budget' => [1, 100000],
         ] as $key => [$minimum, $maximum]) {
             if (array_key_exists($key, $normalized)) {
                 $normalized[$key] = self::strict_search_integer($normalized[$key], $key, $minimum, $maximum);
@@ -13828,6 +13859,12 @@ LIMIT %d",
         }
         if (array_key_exists('request_budget_guard', $normalized) && !is_callable($normalized['request_budget_guard'])) {
             throw new InvalidArgumentException('Search request_budget_guard must be callable.');
+        }
+        if (array_key_exists('approximate_top_k', $normalized)) {
+            $normalized['approximate_top_k'] = self::strict_search_switch($normalized['approximate_top_k'], 'approximate_top_k');
+        }
+        if (array_key_exists('candidate_budget', $normalized) && empty($normalized['approximate_top_k'])) {
+            throw new InvalidArgumentException('Search candidate_budget requires approximate_top_k.');
         }
 
         $toggleValues = [];
@@ -24665,6 +24702,36 @@ STRAIGHT_JOIN {$work_table} work_row
         $value = self::bounded_unslash_scalar($value, self::MAX_SEARCH_SWITCH_BYTES);
 
         return self::truthy_admin_value($value);
+    }
+
+    /** Enables candidate-budgeted approximate search only for an explicit REST value. */
+    private static function rest_approximate_requested(mixed $request): bool
+    {
+        $value = self::request_param($request, 'approximate', false);
+        if (!is_scalar($value) || (is_string($value) && strlen($value) > self::MAX_SEARCH_SWITCH_BYTES)) {
+            throw new InvalidArgumentException('REST search approximate must be a bounded scalar value.');
+        }
+        $value = self::bounded_unslash_scalar($value, self::MAX_SEARCH_SWITCH_BYTES);
+
+        return self::truthy_admin_value($value);
+    }
+
+    /** Bound the optional approximate REST candidate budget before search. */
+    private static function rest_candidate_budget(mixed $request): ?int
+    {
+        $value = self::request_param($request, 'candidate_budget', null);
+        if ($value === null) {
+            return null;
+        }
+        if (!is_scalar($value) || (is_string($value) && strlen($value) > self::MAX_SEARCH_NUMERIC_BYTES)) {
+            throw new InvalidArgumentException('REST search candidate_budget must be a bounded numeric scalar.');
+        }
+        $value = self::bounded_unslash_scalar($value, self::MAX_SEARCH_NUMERIC_BYTES);
+        if (!is_numeric($value)) {
+            throw new InvalidArgumentException('REST search candidate_budget must be numeric.');
+        }
+
+        return self::clamp_int($value, 1, 100000);
     }
 
     /**

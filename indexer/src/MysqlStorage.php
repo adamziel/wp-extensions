@@ -2414,6 +2414,10 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         if ($effectivePrefix !== null) {
             $effectivePrefix['doc_freq'] = $surfaceDocFreq;
         }
+        $candidateBudget = is_numeric($options['approximate_candidate_budget'] ?? null)
+            ? max(1, min(100000, (int) $options['approximate_candidate_budget']))
+            : null;
+        $plannedPostingRows = $this->planned_posting_rows($resolvedGroups, $effectivePrefix);
         $rankQuery = $this->build_rank_query(
             $resolvedGroups,
             count($plan['groups']),
@@ -2541,6 +2545,12 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             'previous_cursor' => $previousCursor,
             'query_lang' => WP_FTS_TermNamespace::canonicalize_lang((string) ($options['query_lang'] ?? 'und'), 'und'),
         ];
+        if ($candidateBudget !== null) {
+            $payload['retrieval_mode'] = 'approximate';
+            $payload['results_may_be_incomplete'] = true;
+            $payload['planned_posting_rows'] = $plannedPostingRows;
+            $payload['candidate_budget'] = $candidateBudget;
+        }
         if (!empty($options['explain'])) {
             $recencyStrength = is_numeric($options['recency_boost_strength'] ?? null)
                 ? max(0.0, min(self::MAX_RECENCY_BOOST_STRENGTH, (float) $options['recency_boost_strength']))
@@ -2567,6 +2577,12 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
                     ? array_sum(array_map(static fn(object $row): int => max(0, (int) ($row->canonical_post_bytes ?? 0)), $visibleRows))
                     : 0,
             ];
+            if ($candidateBudget !== null) {
+                $payload['explain']['retrieval_mode'] = 'approximate';
+                $payload['explain']['results_may_be_incomplete'] = true;
+                $payload['explain']['planned_posting_rows'] = $plannedPostingRows;
+                $payload['explain']['candidate_budget'] = $candidateBudget;
+            }
         }
         return $payload;
     }
@@ -2755,7 +2771,7 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
     /** Reject direct-storage input before it can enlarge a plan or binding. */
     private function assert_search_option_bounds(array $options): void
     {
-        foreach (['fast_top_k', 'approximate_top_k', 'exact_top_k', 'exact', 'candidate_cap', 'max_candidates'] as $unsupported) {
+        foreach (['fast_top_k', 'approximate_top_k', 'exact_top_k', 'exact', 'candidate_cap', 'max_candidates', 'candidate_budget'] as $unsupported) {
             if (array_key_exists($unsupported, $options)) {
                 throw new InvalidArgumentException("Relational FTS storage does not support {$unsupported}.");
             }
@@ -2767,7 +2783,7 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
             'include_metadata', 'include_snippets', 'include_canonical_post_row',
             'highlight', 'snippet_length', 'explain', 'recency_boost_strength',
             'recency_boost_half_life_days', 'now_gmt', 'search_ready_incarnation',
-            'search_ready_profile_hash',
+            'search_ready_profile_hash', 'approximate_candidate_budget',
         ], true);
         foreach ($options as $key => $_value) {
             if (!is_string($key) || !isset($allowed[$key])) {
@@ -2842,6 +2858,7 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
         $integerBounds = [
             'page_size' => [1, self::MAX_PAGE_SIZE],
             'limit' => [1, self::MAX_PAGE_SIZE + 1],
+            'approximate_candidate_budget' => [1, 100000],
             'prefix_group_index' => [0, self::MAX_QUERY_GROUPS - 1],
             'prefix_min_length' => [2, 255],
             'snippet_length' => [1, 500],
@@ -2982,6 +2999,9 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
         $rankGateSql = "(SELECT 1 AS rank_ready WHERE {$rankControl['sql']} LIMIT 1) rank_gate";
         $rankGateJoin = $this->is_sqlite_runtime() ? 'CROSS JOIN' : 'STRAIGHT_JOIN';
         $rankGatePredicate = $this->is_sqlite_runtime() ? '' : ' ON rank_gate.rank_ready = 1';
+        $candidateBudget = is_numeric($options['approximate_candidate_budget'] ?? null)
+            ? max(1, min(100000, (int) $options['approximate_candidate_budget']))
+            : null;
         $qRows = [];
         $qRowsByGroup = [];
         foreach ($groups as $groupId => $alternatives) {
@@ -3047,25 +3067,25 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
                 }
                 $probeSql = implode("\nUNION ALL\n", $probeRows);
                 $indexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (post_term_impact)';
-                $rawParts[] = "SELECT c.post_id, q.group_id,
+                $rawParts[] = $this->budgeted_raw_candidate_sql("SELECT c.post_id, q.group_id,
        MAX(CASE WHEN q.term_id = 0 THEN c.group_score ELSE po.impact * q.weight END) AS group_score
 FROM ({$candidate['sql']}) c
 {$orderedCrossJoin} ({$probeSql}) q{$orderedCrossPredicate}
 LEFT JOIN {$this->postingsTable} po{$indexHint}
   ON q.term_id <> 0 AND po.post_id = c.post_id AND po.term_id = q.term_id
 WHERE q.term_id = 0 OR po.term_id IS NOT NULL
-GROUP BY c.post_id, q.group_id";
+GROUP BY c.post_id, q.group_id", $candidateBudget, true);
                 array_push($args, ...$candidate['args']);
             } else {
                 $candidate = $this->candidate_sql($qSql, $anchorGroup, $options, 'exact_anchor');
                 $indexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (post_term_impact)';
                 if ($prefix !== null) {
                     // Exact groups use primary-key probes inside the rare anchor.
-                    $rawParts[] = "SELECT c.post_id, q.group_id, MAX(po.impact * q.weight) AS group_score
+                    $rawParts[] = $this->budgeted_raw_candidate_sql("SELECT c.post_id, q.group_id, MAX(po.impact * q.weight) AS group_score
 FROM ({$candidate['sql']}) c
 {$orderedCrossJoin} ({$qSql}) q{$orderedCrossPredicate}
 {$orderedJoin} {$this->postingsTable} po{$indexHint} ON po.post_id = c.post_id AND po.term_id = q.term_id
-GROUP BY c.post_id, q.group_id";
+GROUP BY c.post_id, q.group_id", $candidateBudget, true);
                     array_push($args, ...$candidate['args']);
 
                     $prefixCandidate = $this->candidate_sql($qSql, $anchorGroup, $options, 'prefix_anchor');
@@ -3089,42 +3109,42 @@ GROUP BY c.post_id, q.group_id";
                             ? ''
                             : ' FORCE INDEX (post_term_impact)';
                         $prefixTermIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (PRIMARY)';
-                        $rawParts[] = "SELECT prefix_candidate.post_id, " . (int) $prefix['group_id'] . " AS group_id,
+                        $rawParts[] = $this->budgeted_raw_candidate_sql("SELECT prefix_candidate.post_id, " . (int) $prefix['group_id'] . " AS group_id,
 MAX({$prefixScore}) AS group_score
 FROM ({$prefixCandidate['sql']}) prefix_candidate
 {$orderedJoin} {$this->postingsTable} ppo{$prefixPostingIndexHint} ON prefix_candidate.post_id = ppo.post_id
 {$orderedJoin} {$this->termsTable} pt{$prefixTermIndexHint} ON pt.term_id = ppo.term_id
 WHERE {$surfacePredicate['sql']}
-GROUP BY prefix_candidate.post_id";
+GROUP BY prefix_candidate.post_id", $candidateBudget, true);
                         array_push($args, ...$prefixCandidate['args'], ...$surfacePredicate['args']);
                     } else {
                         // A genuinely smaller surface range remains the cheaper
                         // exact intersection, including ties at the upper bound.
                         $surfaceRange = $this->surface_range_sql($prefix);
                         $prefixPostingIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (PRIMARY)';
-                        $rawParts[] = "SELECT prefix_candidate.post_id, " . (int) $prefix['group_id'] . " AS group_id,
+                        $rawParts[] = $this->budgeted_raw_candidate_sql("SELECT prefix_candidate.post_id, " . (int) $prefix['group_id'] . " AS group_id,
 MAX({$prefixScore}) AS group_score
 FROM ({$surfaceRange['sql']}) pt
 {$orderedJoin} {$this->postingsTable} ppo{$prefixPostingIndexHint} ON ppo.term_id = pt.term_id
 {$orderedJoin} ({$prefixCandidate['sql']}) prefix_candidate ON prefix_candidate.post_id = ppo.post_id
-GROUP BY prefix_candidate.post_id";
+GROUP BY prefix_candidate.post_id", $candidateBudget, true);
                         array_push($args, ...$surfaceRange['args'], ...$prefixCandidate['args']);
                     }
                 } else {
-                    $rawParts[] = "SELECT c.post_id, q.group_id, MAX(po.impact * q.weight) AS group_score
+                    $rawParts[] = $this->budgeted_raw_candidate_sql("SELECT c.post_id, q.group_id, MAX(po.impact * q.weight) AS group_score
 FROM ({$candidate['sql']}) c
 {$orderedCrossJoin} ({$qSql}) q{$orderedCrossPredicate}
 {$orderedJoin} {$this->postingsTable} po{$indexHint} ON po.post_id = c.post_id AND po.term_id = q.term_id
-GROUP BY c.post_id, q.group_id";
+GROUP BY c.post_id, q.group_id", $candidateBudget, true);
                     array_push($args, ...$candidate['args']);
                 }
             }
         } else {
             if ($qSql !== '') {
-                $rawParts[] = "SELECT po.post_id, q.group_id, po.impact * q.weight AS group_score
+                $rawParts[] = $this->budgeted_raw_candidate_sql("SELECT po.post_id, q.group_id, po.impact * q.weight AS group_score
 FROM {$rankGateSql}
 {$rankGateJoin} ({$qSql}) q{$rankGatePredicate}
-{$orderedJoin} {$this->postingsTable} po ON po.term_id = q.term_id";
+{$orderedJoin} {$this->postingsTable} po ON po.term_id = q.term_id", $candidateBudget, true);
                 array_push($args, ...$rankControl['args']);
             }
             if ($prefix !== null) {
@@ -3134,11 +3154,11 @@ FROM {$rankGateSql}
                     . " / CASE WHEN pt.doc_freq < 1 THEN 1 ELSE pt.doc_freq END AS {$prefixIntegerType}) * "
                     . self::PREFIX_WEIGHT . " / 1000 AS {$prefixIntegerType})";
                 array_push($args, ...$rankControl['args'], ...$surfaceRange['args']);
-                $rawParts[] = "SELECT ppo.post_id, " . (int) $prefix['group_id'] . " AS group_id,
+                $rawParts[] = $this->budgeted_raw_candidate_sql("SELECT ppo.post_id, " . (int) $prefix['group_id'] . " AS group_id,
 {$prefixScore} AS group_score
 FROM {$rankGateSql}
 {$rankGateJoin} ({$surfaceRange['sql']}) pt{$rankGatePredicate}
-{$orderedJoin} {$this->postingsTable} ppo ON ppo.term_id = pt.term_id";
+{$orderedJoin} {$this->postingsTable} ppo ON ppo.term_id = pt.term_id", $candidateBudget, true);
             }
         }
         if ($rawParts === []) {
@@ -3146,6 +3166,9 @@ FROM {$rankGateSql}
         }
         $having = $mode === 'AND' ? 'HAVING COUNT(*) = ' . $groupCount : '';
         $rawSql = implode("\nUNION ALL\n", $rawParts);
+        if (count($rawParts) > 1) {
+            $rawSql = $this->budgeted_raw_candidate_sql($rawSql, $candidateBudget);
+        }
         $rankedSql = "SELECT grouped.post_id, SUM(grouped.group_score) AS score
 FROM (
     SELECT raw.post_id, raw.group_id, MAX(raw.group_score) AS group_score
@@ -3258,6 +3281,40 @@ ORDER BY CASE WHEN limited.doc_id IS NULL THEN 1 ELSE 0 END,
             'prefix_strategy' => $prefixStrategy,
             'scoring_now_gmt' => $scoringNow,
         ];
+    }
+
+    /** Cap one raw exact/prefix candidate stream before aggregate ranking. */
+    private function budgeted_raw_candidate_sql(string $sql, ?int $candidateBudget, bool $parenthesize = false): string
+    {
+        if ($candidateBudget === null) {
+            return $sql;
+        }
+
+        $budget = max(1, min(100000, $candidateBudget));
+
+        $limited = "SELECT budgeted_candidates.post_id, budgeted_candidates.group_id, budgeted_candidates.group_score
+FROM ({$sql}) budgeted_candidates
+LIMIT {$budget}";
+
+        return $parenthesize ? "({$limited})" : $limited;
+    }
+
+    /** Return a dictionary-derived upper bound on ranking posting rows. */
+    private function planned_posting_rows(array $groups, ?array $prefix): int
+    {
+        $rows = 0;
+        foreach ($groups as $alternatives) {
+            foreach ($alternatives as $alternative) {
+                $docFreq = max(0, (int) ($alternative['doc_freq'] ?? 0));
+                $rows = $rows > PHP_INT_MAX - $docFreq ? PHP_INT_MAX : $rows + $docFreq;
+            }
+        }
+        if ($prefix !== null) {
+            $docFreq = max(0, (int) ($prefix['doc_freq'] ?? 0));
+            $rows = $rows > PHP_INT_MAX - $docFreq ? PHP_INT_MAX : $rows + $docFreq;
+        }
+
+        return $rows;
     }
 
     /** @return array{sql:string,args:array<int,mixed>} */
@@ -5245,6 +5302,9 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
             'date_after' => is_scalar($options['date_after'] ?? null) ? (string) $options['date_after'] : null,
             'date_before' => is_scalar($options['date_before'] ?? null) ? (string) $options['date_before'] : null,
             'recency_strength' => $recencyStrength,
+            'approximate_candidate_budget' => is_numeric($options['approximate_candidate_budget'] ?? null)
+                ? max(1, min(100000, (int) $options['approximate_candidate_budget']))
+                : null,
         ];
         if ($recencyStrength > 0.0) {
             $input['recency_half_life'] = is_numeric($options['recency_boost_half_life_days'] ?? null)

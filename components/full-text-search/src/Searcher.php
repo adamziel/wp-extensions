@@ -32,6 +32,7 @@ final class WP_FTS_Searcher
     private const DEFAULT_MAX_QUERY_TERMS = 1024;
     private const DEFAULT_MAX_PREFIX_EXPANSIONS = 256;
     private const DEFAULT_MAX_CANDIDATE_ROWS = 100000;
+    private const SET_ORIENTED_MAX_APPROXIMATE_CANDIDATE_BUDGET = 100000;
     private const MAX_SET_ORIENTED_QUERY_BYTES = 4096;
     private const MAX_SET_ORIENTED_MODE_BYTES = 8;
     private const MAX_SET_ORIENTED_LANGUAGE_BYTES = 64;
@@ -166,6 +167,9 @@ final class WP_FTS_Searcher
      * prefix resolution, visibility, ranking, and hydration. That path always
      * rejects more than 12 logical groups or 12 alternatives in total,
      * regardless of the larger legacy `max_query_terms` default.
+     * `approximate_top_k` may opt that path into a raw candidate stream budget
+     * with `candidate_budget`; approximate payloads expose the active budget
+     * and incomplete-result risk.
      *
      * @param array<string,mixed> $opts
      * @return array<int,array<string,mixed>>|array{total:int,total_is_exact:bool,retrieval_mode:string,results_may_be_incomplete:bool,candidate_cap:?int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}|array{total:null,total_relation:string,query_lang:string,has_more:bool,next_cursor:?string,previous_cursor:?string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
@@ -486,6 +490,8 @@ final class WP_FTS_Searcher
             'recency_now',
             'max_query_terms',
             'request_budget_guard',
+            'approximate_top_k',
+            'candidate_budget',
             '_include_canonical_post_rows',
             '_search_ready_incarnation',
             '_search_ready_profile_hash',
@@ -568,7 +574,7 @@ final class WP_FTS_Searcher
             }
         }
 
-        foreach (['phrase', 'prefix_matching', 'prefix', 'include_metadata', 'include_snippets', 'snippets', '_include_canonical_post_rows', 'highlight', 'explain', 'debug'] as $key) {
+        foreach (['phrase', 'prefix_matching', 'prefix', 'include_metadata', 'include_snippets', 'snippets', '_include_canonical_post_rows', 'highlight', 'explain', 'debug', 'approximate_top_k'] as $key) {
             $this->assert_set_oriented_switch_option($opts, $key);
         }
         foreach ([
@@ -588,6 +594,7 @@ final class WP_FTS_Searcher
             'offset' => [0, 0],
             'limit' => [1, WP_FTS_Set_Oriented_Search_Storage::MAX_PAGE_SIZE],
             'max_query_terms' => [1, WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_ALTERNATIVES],
+            'candidate_budget' => [1, self::SET_ORIENTED_MAX_APPROXIMATE_CANDIDATE_BUDGET],
             'prefix_min_length' => [2, 255],
             'snippet_length' => [1, self::MAX_SET_ORIENTED_SNIPPET_LENGTH],
         ] as $key => [$minimum, $maximum]) {
@@ -664,6 +671,9 @@ final class WP_FTS_Searcher
         }
         if (array_key_exists('request_budget_guard', $opts) && !is_callable($opts['request_budget_guard'])) {
             throw new InvalidArgumentException('Set-oriented request_budget_guard must be callable.');
+        }
+        if (array_key_exists('candidate_budget', $opts) && !$this->truthy_option($opts['approximate_top_k'] ?? false)) {
+            throw new InvalidArgumentException('Set-oriented candidate_budget requires approximate_top_k.');
         }
         // Cursor and filter checks belong before analyzer work. Their helpers
         // are repeated when the storage options are built, but only over the
@@ -955,6 +965,9 @@ final class WP_FTS_Searcher
         }
         if ($recencyBoost['enabled']) {
             $storageOptions['now_gmt'] = $recencyBoost['now_gmt'];
+        }
+        if ($this->truthy_option($opts['approximate_top_k'] ?? false)) {
+            $storageOptions['approximate_candidate_budget'] = (int) ($opts['candidate_budget'] ?? self::DEFAULT_FAST_MODE_CANDIDATE_CAP);
         }
         if ($searchReadyIncarnation !== null) {
             $storageOptions['search_ready_incarnation'] = $searchReadyIncarnation;
@@ -1316,6 +1329,15 @@ final class WP_FTS_Searcher
             'previous_cursor' => $this->set_oriented_cursor_value($page['previous_cursor'] ?? null),
             'results' => $results,
         ];
+        if (($page['retrieval_mode'] ?? null) === 'approximate') {
+            $payload['retrieval_mode'] = 'approximate';
+            $payload['results_may_be_incomplete'] = true;
+            foreach (['planned_posting_rows', 'candidate_budget'] as $key) {
+                if (is_int($page[$key] ?? null)) {
+                    $payload[$key] = $page[$key];
+                }
+            }
+        }
 
         if ($this->explain_requested($opts) && isset($page['explain']) && is_array($page['explain'])) {
             $payload['explain'] = $page['explain'];

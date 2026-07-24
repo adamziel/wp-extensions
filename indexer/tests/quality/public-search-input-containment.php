@@ -1307,7 +1307,7 @@ test_case('quality MySQL compatibility adapters reject explosive inputs before n
         ['query_lang' => 'en', 'post_types' => [str_repeat('p', 65)]]
     ));
     assert_true($filterError instanceof InvalidArgumentException, 'direct storage filters should check bytes before trim');
-    foreach (['fast_top_k', 'approximate_top_k', 'exact_top_k', 'exact', 'candidate_cap', 'max_candidates'] as $legacyRetrievalOption) {
+    foreach (['fast_top_k', 'approximate_top_k', 'exact_top_k', 'exact', 'candidate_cap', 'max_candidates', 'candidate_budget'] as $legacyRetrievalOption) {
         $legacyOptionError = psic_caught(static fn(): array => $storage->search_page(
             [[['key' => WP_FTS_TermNamespace::namespace_term('en', 'term'), 'rank' => 0]]],
             ['query_lang' => 'en', $legacyRetrievalOption => false]
