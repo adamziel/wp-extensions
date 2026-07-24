@@ -1448,6 +1448,8 @@ test_case('quality MySQL set-oriented APIs reject explosive inputs before normal
         ['page_size' => str_repeat('1', 65)],
         ['include_metadata' => str_repeat('y', 17)],
         ['prefix_surface' => ['lang' => 'en', 'term' => str_repeat('t', 256)]],
+        ['approximate_top_k' => true],
+        ['candidate_budget' => 3],
         array_fill(0, 100000, 'unknown'),
     ] as $options) {
         $optionError = psic_caught(static fn(): array => $storage->search_page(

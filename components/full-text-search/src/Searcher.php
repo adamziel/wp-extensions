@@ -22,6 +22,7 @@ final class WP_FTS_Search_Budget_Exceeded extends RuntimeException
  */
 final class WP_FTS_Searcher
 {
+    private const DEFAULT_APPROXIMATE_CANDIDATE_BUDGET = 1000;
     private const MAX_SNIPPET_ANALYSIS_SOURCE_BYTES = 2048;
     private const MAX_SNIPPET_ANALYSIS_OCCURRENCES = 3072;
     private const MAX_SNIPPET_ANALYSIS_LANGUAGES = 2;
@@ -44,9 +45,12 @@ final class WP_FTS_Searcher
      * Search returns `has_more`, cursors, `query_lang`, and `results`. It owns
      * prefix resolution, visibility, ranking, and hydration, and rejects more
      * than 12 logical groups or 12 alternatives in total.
+     * `approximate_top_k` opts into a ranked candidate-set budget with
+     * `candidate_budget`; approximate payloads expose the active budget and
+     * incomplete-result risk.
      *
      * @param array<string,mixed> $opts
-     * @return array{query_lang:string,has_more:bool,next_cursor:?string,previous_cursor:?string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
+     * @return array{query_lang:string,has_more:bool,next_cursor:?string,previous_cursor:?string,results:array<int,array<string,mixed>>,retrieval_mode?:string,results_may_be_incomplete?:bool,planned_posting_rows?:int,candidate_budget?:int,explain?:array<string,mixed>}
      * @throws InvalidArgumentException If `mode` is not `OR` or `AND`.
      * @throws LogicException If the analyzer does not provide a query analyzer.
      * @throws WP_FTS_Search_Budget_Exceeded If a request budget is exhausted.
@@ -211,6 +215,8 @@ final class WP_FTS_Searcher
             'date_before',
             'recency_boost_strength',
             'recency_boost_half_life_days',
+            'approximate_top_k',
+            'candidate_budget',
             '_include_canonical_post_rows',
             '_search_ready_incarnation',
             '_search_ready_profile_hash',
@@ -253,7 +259,7 @@ final class WP_FTS_Searcher
             }
             WP_FTS_TermNamespace::parse_language_tag($opts[$key]);
         }
-        foreach (['prefix_matching', 'include_metadata', 'include_snippets', '_include_canonical_post_rows', 'highlight', 'explain'] as $key) {
+        foreach (['prefix_matching', 'include_metadata', 'include_snippets', '_include_canonical_post_rows', 'highlight', 'explain', 'approximate_top_k'] as $key) {
             $this->assert_set_oriented_switch_option($opts, $key);
         }
 
@@ -261,8 +267,12 @@ final class WP_FTS_Searcher
             'limit' => [1, WP_FTS_Set_Oriented_Search_Storage::MAX_PAGE_SIZE],
             'prefix_min_length' => [WP_FTS_Set_Oriented_Search_Storage::MIN_PREFIX_LENGTH, WP_FTS_Set_Oriented_Search_Storage::MAX_PREFIX_LENGTH],
             'snippet_length' => [WP_FTS_Set_Oriented_Search_Storage::MIN_SNIPPET_LENGTH, WP_FTS_Set_Oriented_Search_Storage::MAX_SNIPPET_LENGTH],
+            'candidate_budget' => [1, WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET],
         ] as $key => [$minimum, $maximum]) {
             $this->assert_set_oriented_integer_option($opts, $key, $minimum, $maximum);
+        }
+        if (array_key_exists('candidate_budget', $opts) && empty($opts['approximate_top_k'])) {
+            throw new InvalidArgumentException('Set-oriented candidate_budget requires approximate_top_k.');
         }
         foreach ([
             'recency_boost_strength' => [0.0, WP_FTS_Set_Oriented_Search_Storage::MAX_RECENCY_BOOST_STRENGTH],
@@ -521,6 +531,9 @@ final class WP_FTS_Searcher
         if ($recencyBoost['enabled']) {
             $storageOptions['now_gmt'] = $recencyBoost['now_gmt'];
         }
+        if (!empty($opts['approximate_top_k'])) {
+            $storageOptions['approximate_candidate_budget'] = $opts['candidate_budget'] ?? self::DEFAULT_APPROXIMATE_CANDIDATE_BUDGET;
+        }
         if ($searchReadyIncarnation !== null) {
             $storageOptions['search_ready_incarnation'] = $searchReadyIncarnation;
         }
@@ -748,6 +761,9 @@ final class WP_FTS_Searcher
     ): array
     {
         $expectedPageKeys = ['results', 'has_more', 'next_cursor', 'previous_cursor'];
+        if (($page['retrieval_mode'] ?? null) === 'approximate') {
+            array_push($expectedPageKeys, 'retrieval_mode', 'results_may_be_incomplete', 'planned_posting_rows', 'candidate_budget');
+        }
         if ($this->explain_requested($opts)) {
             $expectedPageKeys[] = 'explain';
         }
@@ -790,6 +806,18 @@ final class WP_FTS_Searcher
         if ($page['has_more'] !== ($continuationCursor !== null)) {
             throw new LogicException('Relational storage returned contradictory continuation state.');
         }
+        if (($page['retrieval_mode'] ?? null) === 'approximate') {
+            if (
+                $page['results_may_be_incomplete'] !== true
+                || !is_int($page['planned_posting_rows'])
+                || $page['planned_posting_rows'] < 0
+                || !is_int($page['candidate_budget'])
+                || $page['candidate_budget'] < 1
+                || $page['candidate_budget'] > WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET
+            ) {
+                throw new LogicException('Relational storage returned invalid approximate retrieval metadata.');
+            }
+        }
         if ($this->explain_requested($opts)) {
             $this->assert_set_oriented_explain(
                 $page['explain'],
@@ -816,6 +844,12 @@ final class WP_FTS_Searcher
             'previous_cursor' => $previousCursor,
             'results' => $results,
         ];
+        if (($page['retrieval_mode'] ?? null) === 'approximate') {
+            $payload['retrieval_mode'] = 'approximate';
+            $payload['results_may_be_incomplete'] = true;
+            $payload['planned_posting_rows'] = $page['planned_posting_rows'];
+            $payload['candidate_budget'] = $page['candidate_budget'];
+        }
 
         if ($this->explain_requested($opts)) {
             $payload['explain'] = $page['explain'];
@@ -843,6 +877,9 @@ final class WP_FTS_Searcher
             'recency_boost',
             'canonical_page_bytes',
         ];
+        if (($explain['retrieval_mode'] ?? null) === 'approximate') {
+            array_push($expectedKeys, 'retrieval_mode', 'results_may_be_incomplete', 'planned_posting_rows', 'candidate_budget');
+        }
         if (!is_array($explain) || array_keys($explain) !== $expectedKeys) {
             throw new LogicException('Relational storage returned an invalid explain shape.');
         }
@@ -918,6 +955,18 @@ final class WP_FTS_Searcher
             || $explain['canonical_page_bytes'] !== $canonicalPageBytes
         ) {
             throw new LogicException('Relational storage returned invalid explain canonical page bytes.');
+        }
+        if (($explain['retrieval_mode'] ?? null) === 'approximate') {
+            if (
+                $explain['results_may_be_incomplete'] !== true
+                || !is_int($explain['planned_posting_rows'])
+                || $explain['planned_posting_rows'] < 0
+                || !is_int($explain['candidate_budget'])
+                || $explain['candidate_budget'] < 1
+                || $explain['candidate_budget'] > WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET
+            ) {
+                throw new LogicException('Relational storage returned invalid explain approximate retrieval diagnostics.');
+            }
         }
     }
 

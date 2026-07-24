@@ -2295,6 +2295,10 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         if ($effectivePrefix !== null) {
             $effectivePrefix['doc_freq'] = $surfaceDocFreq;
         }
+        $candidateBudget = is_int($options['approximate_candidate_budget'] ?? null)
+            ? max(1, min(WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET, $options['approximate_candidate_budget']))
+            : null;
+        $plannedPostingRows = $this->planned_posting_rows($resolvedGroups, $effectivePrefix);
         $rankQuery = $this->build_rank_query(
             $resolvedGroups,
             count($plan['groups']),
@@ -2435,6 +2439,12 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             'next_cursor' => $nextCursor,
             'previous_cursor' => $previousCursor,
         ];
+        if ($candidateBudget !== null) {
+            $payload['retrieval_mode'] = 'approximate';
+            $payload['results_may_be_incomplete'] = true;
+            $payload['planned_posting_rows'] = $plannedPostingRows;
+            $payload['candidate_budget'] = $candidateBudget;
+        }
         if (!empty($options['explain'])) {
             $recencyStrength = $options['recency_boost_strength'] ?? 0.0;
             $recencyHalfLife = $options['recency_boost_half_life_days'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS;
@@ -2455,6 +2465,12 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
                 ],
                 'canonical_page_bytes' => $canonicalPageBytes,
             ];
+            if ($candidateBudget !== null) {
+                $payload['explain']['retrieval_mode'] = 'approximate';
+                $payload['explain']['results_may_be_incomplete'] = true;
+                $payload['explain']['planned_posting_rows'] = $plannedPostingRows;
+                $payload['explain']['candidate_budget'] = $candidateBudget;
+            }
         }
         return $payload;
     }
@@ -2762,7 +2778,7 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
             'include_metadata', 'include_snippets', 'include_canonical_post_row',
             'explain', 'recency_boost_strength',
             'recency_boost_half_life_days', 'now_gmt', 'search_ready_incarnation',
-            'search_ready_profile_hash',
+            'search_ready_profile_hash', 'approximate_candidate_budget',
         ], true);
         foreach ($options as $key => $_value) {
             if (!is_string($key) || !isset($allowed[$key])) {
@@ -2836,6 +2852,7 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
             'page_size' => [1, self::MAX_PAGE_SIZE],
             'prefix_group_index' => [0, self::MAX_QUERY_GROUPS - 1],
             'prefix_min_length' => [WP_FTS_Set_Oriented_Search_Storage::MIN_PREFIX_LENGTH, WP_FTS_Set_Oriented_Search_Storage::MAX_PREFIX_LENGTH],
+            'approximate_candidate_budget' => [1, WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET],
         ];
         foreach ($integerBounds as $key => [$minimum, $maximum]) {
             if (!array_key_exists($key, $options)) {
@@ -3008,6 +3025,9 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
         $rankGateSql = "(SELECT 1 AS rank_ready WHERE {$rankControl['sql']} LIMIT 1) rank_gate";
         $rankGateJoin = $this->is_sqlite_runtime() ? 'CROSS JOIN' : 'STRAIGHT_JOIN';
         $rankGatePredicate = $this->is_sqlite_runtime() ? '' : ' ON rank_gate.rank_ready = 1';
+        $candidateBudget = is_int($options['approximate_candidate_budget'] ?? null)
+            ? max(1, min(WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET, $options['approximate_candidate_budget']))
+            : null;
         $qRows = [];
         $qRowsByGroup = [];
         foreach ($groups as $groupId => $alternatives) {
@@ -3199,10 +3219,18 @@ FROM ({$surfaceRange['sql']}) prefix_terms";
                 if ($groupBy === '') {
                     $score = $exactScore;
                 }
-                $rankedSql = "SELECT po.post_id, {$score} AS score
+                if ($candidateBudget !== null) {
+                    $candidateScore = "CASE WHEN q.prefix_term = 1 THEN {$prefixScore} ELSE {$exactScore} END";
+                    $rawParts[] = $this->budgeted_raw_candidate_sql("SELECT po.post_id, q.group_id, {$candidateScore} AS group_score
+FROM {$rankGateSql}
+{$rankGateJoin} ({$orQuerySql}) q{$rankGatePredicate}
+{$orderedJoin} {$this->postingsTable} po ON po.term_id = q.term_id", $candidateBudget);
+                } else {
+                    $rankedSql = "SELECT po.post_id, {$score} AS score
 FROM {$rankGateSql}
 {$rankGateJoin} ({$orQuerySql}) q{$rankGatePredicate}
 {$orderedJoin} {$this->postingsTable} po ON po.term_id = q.term_id{$groupBy}";
+                }
                 array_push($args, ...$rankControl['args']);
                 if ($prefix !== null) {
                     array_push($args, ...$surfaceRange['args']);
@@ -3215,6 +3243,7 @@ FROM {$rankGateSql}
         if ($rankedSql === '') {
             $having = $mode === 'AND' ? 'HAVING COUNT(*) = ' . $groupCount : '';
             $rawSql = implode("\nUNION ALL\n", $rawParts);
+            $rawSql = $this->budgeted_raw_candidate_sql($rawSql, $candidateBudget);
             $rankedSql = "SELECT grouped.post_id, SUM(grouped.group_score) AS score
 FROM (
     SELECT raw.post_id, raw.group_id, MAX(raw.group_score) AS group_score
@@ -3326,6 +3355,38 @@ ORDER BY CASE WHEN limited.doc_id IS NULL THEN 1 ELSE 0 END,
             'prefix_strategy' => $prefixStrategy,
             'scoring_now_gmt' => $scoringNow,
         ];
+    }
+
+    /** Cap candidate rows before aggregate ranking. */
+    private function budgeted_raw_candidate_sql(string $sql, ?int $candidateBudget): string
+    {
+        if ($candidateBudget === null) {
+            return $sql;
+        }
+
+        $budget = max(1, min(WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET, $candidateBudget));
+
+        return "SELECT budgeted_candidates.post_id, budgeted_candidates.group_id, budgeted_candidates.group_score
+FROM ({$sql}) budgeted_candidates
+LIMIT {$budget}";
+    }
+
+    /** Return a dictionary-derived upper bound on ranking posting rows. */
+    private function planned_posting_rows(array $groups, ?array $prefix): int
+    {
+        $rows = 0;
+        foreach ($groups as $alternatives) {
+            foreach ($alternatives as $alternative) {
+                $docFreq = max(0, (int) ($alternative['doc_freq'] ?? 0));
+                $rows = $rows > PHP_INT_MAX - $docFreq ? PHP_INT_MAX : $rows + $docFreq;
+            }
+        }
+        if ($prefix !== null) {
+            $docFreq = max(0, (int) ($prefix['doc_freq'] ?? 0));
+            $rows = $rows > PHP_INT_MAX - $docFreq ? PHP_INT_MAX : $rows + $docFreq;
+        }
+
+        return $rows;
     }
 
     /** @return array{sql:string,args:array<int,mixed>} */
@@ -5311,6 +5372,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
             'date_after' => $options['date_after'] ?? null,
             'date_before' => $options['date_before'] ?? null,
             'recency_strength' => $recencyStrength,
+            'approximate_candidate_budget' => $options['approximate_candidate_budget'] ?? null,
         ];
         if ($recencyStrength > 0.0) {
             $input['recency_half_life'] = $options['recency_boost_half_life_days'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS;

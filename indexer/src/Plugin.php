@@ -6978,6 +6978,8 @@ final class WP_FTS_Plugin
                 'cursor' => ['required' => false],
                 'direction' => ['required' => false],
                 'explain' => ['required' => false],
+                'approximate' => ['required' => false],
+                'candidate_budget' => ['required' => false],
             ],
         ]);
     }
@@ -12232,6 +12234,21 @@ LIMIT %d",
                 $search_args['cursor'] = $cursor;
                 $search_args['direction'] = $direction;
             }
+            $approximate = self::rest_approximate_requested($request);
+            $candidateBudget = self::rest_candidate_budget($request);
+            if ($candidateBudget !== null && !$approximate) {
+                return self::rest_error(
+                    'wp_fts_invalid_candidate_budget',
+                    'REST search candidate_budget requires approximate=1.',
+                    400
+                );
+            }
+            if ($approximate) {
+                $search_args['approximate_top_k'] = true;
+                if ($candidateBudget !== null) {
+                    $search_args['candidate_budget'] = $candidateBudget;
+                }
+            }
 
             if (self::rest_explain_requested($request) && self::current_user_can_search_explain()) {
                 return self::search_visible_payload($query, $search_args, true);
@@ -12385,6 +12402,8 @@ LIMIT %d",
             'snippet_length',
             'recency_boost_strength',
             'recency_boost_half_life_days',
+            'approximate_top_k',
+            'candidate_budget',
         ] as $key) {
             if (array_key_exists($key, $opts)) {
                 $search_options[$key] = $opts[$key];
@@ -12423,6 +12442,9 @@ LIMIT %d",
         bool $include_internal_post_rows
     ): void {
         $expectedKeys = ['query_lang', 'has_more', 'next_cursor', 'previous_cursor', 'results'];
+        if (($payload['retrieval_mode'] ?? null) === 'approximate') {
+            array_push($expectedKeys, 'retrieval_mode', 'results_may_be_incomplete', 'planned_posting_rows', 'candidate_budget');
+        }
         if ($include_explain) {
             $expectedKeys[] = 'explain';
         }
@@ -12431,6 +12453,18 @@ LIMIT %d",
         }
         if (!is_bool($payload['has_more'])) {
             throw new LogicException('The component search continuation flag must be a native boolean.');
+        }
+        if (($payload['retrieval_mode'] ?? null) === 'approximate') {
+            if (
+                $payload['results_may_be_incomplete'] !== true
+                || !is_int($payload['planned_posting_rows'])
+                || $payload['planned_posting_rows'] < 0
+                || !is_int($payload['candidate_budget'])
+                || $payload['candidate_budget'] < 1
+                || $payload['candidate_budget'] > WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET
+            ) {
+                throw new LogicException('The component search payload contains invalid approximate retrieval metadata.');
+            }
         }
         foreach (['next_cursor', 'previous_cursor'] as $key) {
             $cursor = $payload[$key];
@@ -12506,20 +12540,35 @@ LIMIT %d",
     /** Require the component's fixed relational diagnostic map. */
     private static function assert_component_search_explain(mixed $explain): void
     {
+        $expectedKeys = [
+            'storage',
+            'logical_group_count',
+            'resolved_alternatives',
+            'anchor_group',
+            'prefix_range',
+            'prefix_strategy',
+            'query_statements',
+            'interactive_total',
+            'recency_boost',
+            'canonical_page_bytes',
+        ];
+        if (($explain['retrieval_mode'] ?? null) === 'approximate') {
+            array_push($expectedKeys, 'retrieval_mode', 'results_may_be_incomplete', 'planned_posting_rows', 'candidate_budget');
+        }
         if (
             !is_array($explain)
-            || array_keys($explain) !== [
-                'storage',
-                'logical_group_count',
-                'resolved_alternatives',
-                'anchor_group',
-                'prefix_range',
-                'prefix_strategy',
-                'query_statements',
-                'interactive_total',
-                'recency_boost',
-                'canonical_page_bytes',
-            ]
+            || array_keys($explain) !== $expectedKeys
+            || !is_int($explain['canonical_page_bytes'])
+            || $explain['canonical_page_bytes'] < 0
+            || $explain['canonical_page_bytes'] > WP_FTS_Set_Oriented_Search_Storage::MAX_SIDECAR_PAGE_BYTES
+            || (($explain['retrieval_mode'] ?? null) === 'approximate' && (
+                $explain['results_may_be_incomplete'] !== true
+                || !is_int($explain['planned_posting_rows'])
+                || $explain['planned_posting_rows'] < 0
+                || !is_int($explain['candidate_budget'])
+                || $explain['candidate_budget'] < 1
+                || $explain['candidate_budget'] > WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET
+            ))
             || $explain['storage'] !== 'set_oriented'
             || !is_int($explain['logical_group_count'])
             || $explain['logical_group_count'] < 0
@@ -12542,9 +12591,6 @@ LIMIT %d",
             || $explain['query_statements'] < 0
             || $explain['query_statements'] > WP_FTS_Set_Oriented_Search_Storage::MAX_QUERY_STATEMENTS
             || $explain['interactive_total'] !== 'unknown'
-            || !is_int($explain['canonical_page_bytes'])
-            || $explain['canonical_page_bytes'] < 0
-            || $explain['canonical_page_bytes'] > WP_FTS_Set_Oriented_Search_Storage::MAX_SIDECAR_PAGE_BYTES
         ) {
             throw new LogicException('The component search explain payload has an invalid shape or value.');
         }
@@ -12675,6 +12721,8 @@ LIMIT %d",
             'snippet_length',
             'recency_boost_strength',
             'recency_boost_half_life_days',
+            'approximate_top_k',
+            'candidate_budget',
         ], true);
         foreach ($opts as $key => $_value) {
             if (!is_string($key)) {
@@ -12701,6 +12749,7 @@ LIMIT %d",
             'limit' => [1, self::MAX_SEARCH_LIMIT],
             'prefix_min_length' => [WP_FTS_Set_Oriented_Search_Storage::MIN_PREFIX_LENGTH, WP_FTS_Set_Oriented_Search_Storage::MAX_PREFIX_LENGTH],
             'snippet_length' => [WP_FTS_Set_Oriented_Search_Storage::MIN_SNIPPET_LENGTH, WP_FTS_Set_Oriented_Search_Storage::MAX_SNIPPET_LENGTH],
+            'candidate_budget' => [1, WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET],
         ] as $key => [$minimum, $maximum]) {
             if (array_key_exists($key, $normalized)) {
                 $normalized[$key] = self::strict_search_integer($normalized[$key], $key, $minimum, $maximum);
@@ -12729,10 +12778,13 @@ LIMIT %d",
             }
         }
 
-        foreach (['include_metadata', 'include_snippets', 'highlight', 'prefix_matching'] as $key) {
+        foreach (['include_metadata', 'include_snippets', 'highlight', 'prefix_matching', 'approximate_top_k'] as $key) {
             if (array_key_exists($key, $normalized)) {
                 $normalized[$key] = self::strict_search_switch($normalized[$key], $key);
             }
+        }
+        if (array_key_exists('candidate_budget', $normalized) && empty($normalized['approximate_top_k'])) {
+            throw new InvalidArgumentException('Search candidate_budget requires approximate_top_k.');
         }
         foreach (['post_types', 'post_statuses'] as $key) {
             if (array_key_exists($key, $normalized)) {
@@ -23326,6 +23378,59 @@ STRAIGHT_JOIN {$work_table} work_row
         }
 
         return $value;
+    }
+
+    /** Enables candidate-budgeted approximate search only for an explicit REST value. */
+    private static function rest_approximate_requested(mixed $request): bool
+    {
+        if (!self::request_has_param($request, 'approximate')) {
+            return false;
+        }
+        $value = self::request_param($request, 'approximate', null);
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value) && ($value === 0 || $value === 1)) {
+            return $value === 1;
+        }
+        if (is_string($value) && strlen($value) <= self::MAX_SEARCH_SWITCH_BYTES) {
+            if (in_array($value, ['1', 'true', 'yes', 'on'], true)) {
+                return true;
+            }
+            if (in_array($value, ['0', 'false', 'no', 'off'], true)) {
+                return false;
+            }
+        }
+
+        throw new InvalidArgumentException('REST search approximate must be an explicit boolean.');
+    }
+
+    /** Bound the optional approximate REST candidate budget before search. */
+    private static function rest_candidate_budget(mixed $request): ?int
+    {
+        if (!self::request_has_param($request, 'candidate_budget')) {
+            return null;
+        }
+        $budget = self::request_param($request, 'candidate_budget', null);
+        if (is_string($budget)) {
+            if (
+                $budget === ''
+                || strlen($budget) > self::MAX_SEARCH_NUMERIC_BYTES
+                || strspn($budget, '0123456789') !== strlen($budget)
+                || (strlen($budget) > 1 && $budget[0] === '0')
+            ) {
+                throw new InvalidArgumentException('REST search candidate_budget must be a canonical unsigned decimal integer.');
+            }
+            $budget = (int) $budget;
+        } elseif (!is_int($budget)) {
+            throw new InvalidArgumentException('REST search candidate_budget must be a canonical unsigned decimal integer.');
+        }
+
+        if ($budget < 1 || $budget > WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET) {
+            throw new InvalidArgumentException('REST search candidate_budget must be from 1 through 100000.');
+        }
+
+        return $budget;
     }
 
     /** Enable bounded explain metadata only for an explicit REST boolean. */
