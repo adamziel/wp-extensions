@@ -18501,11 +18501,12 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
         );
     }
     if (in_array($caseId, ['common_or', 'max_valid_or_prefix', 'prefix_fanout', 'hidden_dirty_head', 'all_packs', 'ambiguous_morphology_or', 'field_impact'], true)) {
-        $visibilityCount = substr_count($rankSql, ' d_f ON ');
+        $visibilityJoin = ' d_f FORCE INDEX (document_presence) ON ';
+        $visibilityCount = substr_count($rankSql, $visibilityJoin);
         $innerExactVisibilityCount = substr_count($rankSql, 'd_exact_match');
         $innerPrefixVisibilityCount = substr_count($rankSql, 'd_prefix_match');
         $rankedPosition = strpos($rankSql, ') ranked');
-        $visibilityPosition = strpos($rankSql, ' d_f ON ');
+        $visibilityPosition = strpos($rankSql, $visibilityJoin);
         $orderPosition = strpos($rankSql, 'ORDER BY scored.score');
         $visibilityOrderValid = $rankedPosition !== false
             && $visibilityPosition !== false

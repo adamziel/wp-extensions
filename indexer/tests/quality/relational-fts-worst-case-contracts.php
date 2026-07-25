@@ -3517,7 +3517,8 @@ test_case('real broad-query evidence rejects repeated inner visibility joins', f
 
     foreach ([
         "'common_or', 'max_valid_or_prefix', 'prefix_fanout'",
-        "substr_count(\$rankSql, ' d_f ON ')",
+        "' d_f FORCE INDEX (document_presence) ON '",
+        'substr_count($rankSql, $visibilityJoin)',
         "substr_count(\$rankSql, 'd_exact_match')",
         "substr_count(\$rankSql, 'd_prefix_match')",
         "{\$caseId}_broad_outer_visibility_shape",
