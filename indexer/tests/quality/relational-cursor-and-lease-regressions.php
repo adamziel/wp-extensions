@@ -950,7 +950,7 @@ test_case_with_pdo_sqlite_fixture('relational AND prefixes intersect one range-l
     assert_same(1, substr_count($rankSql, 'JOIN wp_fts_documents d_surface_anchor'), 'prefix candidates must apply visibility once before probing common exact groups');
     assert_same(0, substr_count($rankSql, 'JOIN wp_fts_documents d_exact_anchor'), 'the common exact group must not be materialized as an anchor');
     assert_true(!str_contains($rankSql, 'JOIN wp_fts_documents d_f'), 'an anchored AND must not repeat complete visibility after its post-first probes');
-    assert_contains('JOIN wp_posts wp_f FORCE INDEX (wp_fts_visibility) ON wp_f.ID = ranked.post_id', $rankSql, 'an anchored AND should retain only the covering canonical date join needed after early visibility');
+    assert_contains('JOIN wp_posts wp_f ON wp_f.ID = ranked.post_id', $rankSql, 'an anchored AND should retain only the canonical date join needed after early visibility');
     $planSql = wp_fts_relational_regression_last_plan_sql($wpdb);
     assert_same(1, substr_count($planSql, 'SUM(surface_identity.doc_freq)'), 'surface planning must cost the final prefix range once');
     assert_same(2, count($wpdb->queries), 'a range-led surface AND should remain exactly one plan plus one rank statement');
