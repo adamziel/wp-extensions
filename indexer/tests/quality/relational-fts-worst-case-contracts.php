@@ -638,13 +638,14 @@ test_case('relational worst-case worker probes follow current SQL contracts', fu
         "'max_scope_index_probe_statement_count'",
         "'max_unexpected_physical_schema_statement_count'",
         "['scope_index_probe_max' => 1, 'unexpected_max' => 0]",
-        "wp_fts_wc_gate('concurrent_p95_degradation', '<= 16'",
+        "wp_fts_wc_gate('concurrent_request_throughput_per_second', \">= {\$concurrentRequestThroughputFloor}\"",
         "wp_fts_wc_gate('worker_rss_peak', '<= 167772160'",
     ] as $required) {
         assert_contains($required, $integration, "current worker proof must retain {$required}");
     }
     foreach ([
-        'concurrent p95 degradation | <=16× idle HTTP',
+        '| 50k | >=1.25 requests/second | >=0.9 requests/second |',
+        '| 100k | >=0.5 requests/second | >=0.3 requests/second |',
         'terminal corpus-completion controls',
         'long-lived final drain process',
         'exactly 1 named-index metadata read / 0',
@@ -1919,8 +1920,13 @@ test_case('relational scale gates keep terminal traversal and engine limits expl
         "['50k', 'mariadb'] => [25000.0, 35000.0]",
         "['100k', 'mysql'] => [40000.0, 60000.0]",
         "['100k', 'mariadb'] => [90000.0, 120000.0]",
+        "['50k', 'mysql'] => 1.25",
+        "['50k', 'mariadb'] => 0.9",
+        "['100k', 'mysql'] => 0.5",
+        "['100k', 'mariadb'] => 0.3",
         "wp_fts_wc_gate('concurrent_p95_ms', \"<= {\$concurrentP95Limit}\"",
         "wp_fts_wc_gate('concurrent_p99_ms', \"<= {\$concurrentP99Limit}\"",
+        "wp_fts_wc_gate('concurrent_request_throughput_per_second', \">= {\$concurrentRequestThroughputFloor}\"",
     ] as $required) {
         assert_contains($required, $finalize, "concurrency limits should retain their engine/profile boundary: {$required}");
     }

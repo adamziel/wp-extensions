@@ -1239,6 +1239,15 @@ constrained runner.
 | 50k | <=10 / <=15 seconds | <=25 / <=35 seconds |
 | 100k | <=40 / <=60 seconds | <=90 / <=120 seconds |
 
+The closed-loop tail ratio against one idle reader remains a diagnostic. It
+can rise when idle search gets faster even if loaded latency falls, so the hard
+latency bounds above are paired with a completed-request-rate floor:
+
+| Profile | MySQL 8.0 minimum throughput | MariaDB 10.11 minimum throughput |
+| --- | ---: | ---: |
+| 50k | >=1.25 requests/second | >=0.9 requests/second |
+| 100k | >=0.5 requests/second | >=0.3 requests/second |
+
 The remaining scale limits are shared by both declared engines:
 
 | Metric | Required value |
@@ -1248,7 +1257,7 @@ The remaining scale limits are shared by both declared engines:
 | concurrent errors, timeouts, wrong result sets | 0 |
 | concurrent typed publication retries | <= logical requests; <=3 per request |
 | concurrent writer deadlock retries / terminal failures | <=8 per writer and <=16 total for the two writers / 0 |
-| concurrent p95 degradation | <=16× idle HTTP |
+| concurrent mixed HTTP throughput | engine/profile floors above |
 | plugin-owned search statements | <=3; impossible AND <=1 |
 | missing-table request on every public adapter | exactly 1 failed plan and 0 rank/hydrate; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 total plugin-owned statements; unhealthy/latch/single-event repair state present before harness restoration |
 | injected plan / rank / hydration database failure | exact ordered plan / plan+rank / plan+rank+hydrate shape with only the final statement failing; no later search or core `LIKE`; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 / <=6 / <=7 total plugin-owned statements; exact capability/Health/cron restoration between requests |
