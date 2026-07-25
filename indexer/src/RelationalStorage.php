@@ -105,6 +105,7 @@ final class WP_FTS_Relational_Storage implements WP_FTS_Set_Oriented_Search_Stor
     public const MAX_EMPTY_TERM_CLEANUP = 1000;
     public const TARGETED_SCOPE_INDEX_NAME = 'wp_fts_term_object';
     public const FILTERED_SCOPE_INDEX_NAME = 'wp_fts_type_status_id';
+    private const DOCUMENT_PRESENCE_INDEX_NAME = 'document_presence';
     private const MAX_SEARCH_SQL_BYTES = 32768;
     // Five thousand UTF-8 characters are at most 20 KiB under utf8mb4.
     private const MAX_METADATA_TEXT_CHARACTERS = 5000;
@@ -220,7 +221,8 @@ primary_lang varbinary(32) NOT NULL DEFAULT 'und',
 content_hash varbinary(40) NOT NULL,
 snippet_text mediumtext NOT NULL,
 indexed_at bigint unsigned NOT NULL DEFAULT 0,
-PRIMARY KEY  (post_id)
+PRIMARY KEY  (post_id),
+KEY document_presence (post_id,indexed_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
             "CREATE TABLE {$this->workTable} (
 job_key varbinary(191) NOT NULL,
@@ -810,7 +812,10 @@ KEY dirty (post_id,kind)
                     'snippet_text' => ['type' => 'mediumtext', 'nullable' => false],
                     'indexed_at' => ['type' => 'bigint unsigned', 'nullable' => false],
                 ],
-                'indexes' => [['name' => 'PRIMARY', 'columns' => ['post_id'], 'unique' => true]],
+                'indexes' => [
+                    ['name' => 'PRIMARY', 'columns' => ['post_id'], 'unique' => true],
+                    ['name' => self::DOCUMENT_PRESENCE_INDEX_NAME, 'columns' => ['post_id', 'indexed_at'], 'unique' => false],
+                ],
             ],
             $this->workTable => [
                 'engine' => 'innodb',
@@ -3483,8 +3488,9 @@ WHERE {$visible['where']}",
         // makes planning fail closed, so this hot path needs only the direct
         // post-generation probe; it must never walk taxonomy relationships for
         // every broad-query candidate.
+        $documentIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (' . self::DOCUMENT_PRESENCE_INDEX_NAME . ')';
         $dirtyIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (dirty)';
-        $joins = "{$orderedJoin} {$this->documentsTable} {$doc} ON {$doc}.post_id = {$postIdExpression}
+        $joins = "{$orderedJoin} {$this->documentsTable} {$doc}{$documentIndexHint} ON {$doc}.post_id = {$postIdExpression}
 {$orderedJoin} {$this->postsTable} {$post} ON {$post}.ID = {$postIdExpression}
 LEFT JOIN {$this->workTable} {$dirty}{$dirtyIndexHint} ON {$dirty}.kind = 'post' AND {$dirty}.post_id = {$postIdExpression}";
         $where = [
@@ -3883,6 +3889,7 @@ VALUES (%s, 'meta', 0, %d, 'meta', 0, 0, '', 0, 0, 0, '', 0, %s, '', 0)",
             "CREATE TABLE {$postings} (term_id INTEGER NOT NULL, post_id INTEGER NOT NULL, impact INTEGER NOT NULL, PRIMARY KEY(term_id,post_id))",
             'CREATE INDEX ' . $index($this->postingsTable, 'post_term') . " ON {$postings}(post_id,term_id)",
             "CREATE TABLE {$documents} (post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL DEFAULT 'und', content_hash BLOB NOT NULL, snippet_text TEXT NOT NULL, indexed_at INTEGER NOT NULL DEFAULT 0)",
+            'CREATE INDEX ' . $index($this->documentsTable, self::DOCUMENT_PRESENCE_INDEX_NAME) . " ON {$documents}(post_id,indexed_at)",
             "CREATE TABLE {$work} (job_key BLOB NOT NULL PRIMARY KEY, kind TEXT NOT NULL, post_id INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'pending', available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT NOT NULL DEFAULT '', claimed_generation INTEGER NOT NULL DEFAULT 0, claim_expires_at INTEGER NOT NULL DEFAULT 0, cursor_post_id INTEGER NOT NULL DEFAULT 0, scope_coverage TEXT NOT NULL DEFAULT '', scope_incarnation BLOB NOT NULL DEFAULT '', scope_subject_type TEXT NOT NULL DEFAULT '', scope_subject_id INTEGER NOT NULL DEFAULT 0, payload TEXT NULL, last_error_code TEXT NOT NULL DEFAULT '', last_error_at INTEGER NOT NULL DEFAULT 0)",
             'CREATE INDEX ' . $index($this->workTable, 'ready') . " ON {$work}(kind,state,available_at,post_id,job_key)",
             'CREATE INDEX ' . $index($this->workTable, 'recoverable') . " ON {$work}(kind,state,claim_expires_at,available_at,post_id,job_key)",

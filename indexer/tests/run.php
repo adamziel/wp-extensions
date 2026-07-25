@@ -1494,7 +1494,7 @@ final class WP_FTS_Test_WPDB
         ],
         'wp_fts_terms' => ['PRIMARY' => ['term_id'], 'term_identity' => ['lang', 'kind', 'term'], 'empty_terms' => ['doc_freq']],
         'wp_fts_postings' => ['PRIMARY' => ['term_id', 'post_id'], 'post_term' => ['post_id', 'term_id']],
-        'wp_fts_documents' => ['PRIMARY' => ['post_id']],
+        'wp_fts_documents' => ['PRIMARY' => ['post_id'], 'document_presence' => ['post_id', 'indexed_at']],
         'wp_fts_work' => ['PRIMARY' => ['job_key'], 'ready' => ['kind', 'state', 'available_at', 'post_id', 'job_key'], 'recoverable' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key'], 'claim_token' => ['claim_token', 'post_id'], 'kind_job' => ['kind', 'job_key'], 'scope_subject' => ['kind', 'scope_coverage', 'scope_subject_type', 'scope_subject_id'], 'dirty' => ['post_id', 'kind']],
     ];
 
@@ -7343,7 +7343,7 @@ final class WP_FTS_Test_WPDB
             [$columns, $indexes] = match ($suffix) {
                 'fts_terms' => [['term_id', 'lang', 'kind', 'term', 'doc_freq'], ['PRIMARY' => ['term_id'], 'term_identity' => ['lang', 'kind', 'term'], 'empty_terms' => ['doc_freq']]],
                 'fts_postings' => [['term_id', 'post_id', 'impact'], ['PRIMARY' => ['term_id', 'post_id'], 'post_term' => ['post_id', 'term_id']]],
-                'fts_documents' => [['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at'], ['PRIMARY' => ['post_id']]],
+                'fts_documents' => [['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at'], ['PRIMARY' => ['post_id'], 'document_presence' => ['post_id', 'indexed_at']]],
                 'fts_work' => [['job_key', 'kind', 'post_id', 'generation', 'state', 'available_at', 'attempts', 'claim_token', 'claimed_generation', 'claim_expires_at', 'cursor_post_id', 'scope_coverage', 'scope_incarnation', 'scope_subject_type', 'scope_subject_id', 'payload', 'last_error_code', 'last_error_at'], ['PRIMARY' => ['job_key'], 'ready' => ['kind', 'state', 'available_at', 'post_id', 'job_key'], 'recoverable' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key'], 'claim_token' => ['claim_token', 'post_id'], 'kind_job' => ['kind', 'job_key'], 'scope_subject' => ['kind', 'scope_coverage', 'scope_subject_type', 'scope_subject_id'], 'dirty' => ['post_id', 'kind']]],
             };
             $this->schemaColumns[$table] = $columns;
@@ -13139,6 +13139,10 @@ test_case('physical schema verification repairs current-version table column and
         $physical = wp_fts_test_storage(false)->verify_schema();
         assert_same(['wp_fts_documents.content_hash'], $physical['missing_columns'] ?? null, 'verification should identify a missing required column');
         assert_same(['wp_fts_documents.PRIMARY(post_id)'], $physical['missing_indexes'] ?? null, 'verification should identify a missing required primary key');
+
+        unset($fake->schemaIndexes['wp_fts_documents']['document_presence']);
+        $physical = wp_fts_test_storage(false)->verify_schema();
+        assert_contains('wp_fts_documents.document_presence(post_id,indexed_at)', implode(',', $physical['missing_indexes'] ?? []), 'verification should identify the missing document presence key');
 
         WP_FTS_Plugin::create_or_repair_schema();
         assert_same(true, wp_fts_test_storage(false)->verify_schema()['valid'] ?? null, 'dedicated maintenance should restore missing columns and indexes');
