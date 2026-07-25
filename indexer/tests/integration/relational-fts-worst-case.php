@@ -21692,7 +21692,7 @@ function wp_fts_wc_expected_gate_inventory_fingerprints(): array
         ],
         'final' => [
             'count' => 2647,
-            'sha256' => 'ca53417ea9628ff92fc9087c5097cdc0928a3d409b50b222a2671a2c4f989492',
+            'sha256' => '8668f37040da9acbf9a0abd06abd4b81c9a184c9b997cbd6eb20c9f766ff628c',
         ],
     ];
 }

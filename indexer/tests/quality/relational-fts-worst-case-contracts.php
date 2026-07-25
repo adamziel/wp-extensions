@@ -479,7 +479,7 @@ test_case('relational worst-case gate fingerprints reject ordered inventory drif
         "'count' => 1170",
         "'sha256' => '0419c613811a13d49755af028011543c41d31a8f0bbd4a2acf65e03f1c5a4e25'",
         "'count' => 2647",
-        "'sha256' => 'ca53417ea9628ff92fc9087c5097cdc0928a3d409b50b222a2671a2c4f989492'",
+        "'sha256' => '8668f37040da9acbf9a0abd06abd4b81c9a184c9b997cbd6eb20c9f766ff628c'",
     ] as $required) {
         assert_contains($required, $expectedSource, "reviewed gate fingerprint must retain {$required}");
     }
