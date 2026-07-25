@@ -819,6 +819,7 @@ test_case('relational visibility never walks taxonomy relationships per ranked c
     $visibility = $visibilitySql->invoke($storage, 'ranked.post_id', 'ranked', []);
     assert_true(!str_contains((string) ($visibility['where'] ?? ''), 'term_relationships'), 'ranked visibility must not inspect taxonomy relationships');
     assert_true(!str_contains((string) ($visibility['joins'] ?? ''), 'term_relationships'), 'ranked visibility joins must remain independent of taxonomy fanout');
+    assert_contains('JOIN wp_posts wp_ranked FORCE INDEX (wp_fts_visibility)', (string) ($visibility['joins'] ?? ''), 'canonical visibility should stay on its ID-first covering index');
     assert_contains('LEFT JOIN wp_fts_work dirty_ranked FORCE INDEX (dirty)', (string) ($visibility['joins'] ?? ''), 'dirty visibility should always probe the post-first work index');
 });
 
@@ -949,7 +950,7 @@ test_case_with_pdo_sqlite_fixture('relational AND prefixes intersect one range-l
     assert_same(1, substr_count($rankSql, 'JOIN wp_fts_documents d_surface_anchor'), 'prefix candidates must apply visibility once before probing common exact groups');
     assert_same(0, substr_count($rankSql, 'JOIN wp_fts_documents d_exact_anchor'), 'the common exact group must not be materialized as an anchor');
     assert_true(!str_contains($rankSql, 'JOIN wp_fts_documents d_f'), 'an anchored AND must not repeat complete visibility after its post-first probes');
-    assert_contains('JOIN wp_posts wp_f ON wp_f.ID = ranked.post_id', $rankSql, 'an anchored AND should retain only the canonical date join needed after early visibility');
+    assert_contains('JOIN wp_posts wp_f FORCE INDEX (wp_fts_visibility) ON wp_f.ID = ranked.post_id', $rankSql, 'an anchored AND should retain only the covering canonical date join needed after early visibility');
     $planSql = wp_fts_relational_regression_last_plan_sql($wpdb);
     assert_same(1, substr_count($planSql, 'SUM(surface_identity.doc_freq)'), 'surface planning must cost the final prefix range once');
     assert_same(2, count($wpdb->queries), 'a range-led surface AND should remain exactly one plan plus one rank statement');
@@ -1094,9 +1095,9 @@ test_case('relational MySQL rank arms pin bounded drivers ahead of postings and 
 
     assert_contains('STRAIGHT_JOIN wp_fts_postings ap ON ap.term_id = aq.term_id', $exactSql, 'the rare dictionary arm must drive anchor postings by term id');
     assert_contains('STRAIGHT_JOIN wp_fts_documents d_exact_anchor FORCE INDEX (document_presence) ON', $exactSql, 'the rare posting candidate must drive its indexed-document probe');
-    assert_contains('STRAIGHT_JOIN wp_posts wp_exact_anchor ON', $exactSql, 'the indexed candidate must drive its canonical visibility probe');
+    assert_contains('STRAIGHT_JOIN wp_posts wp_exact_anchor FORCE INDEX (wp_fts_visibility) ON', $exactSql, 'the indexed candidate must drive its covering canonical visibility probe');
     assert_contains('STRAIGHT_JOIN wp_fts_postings po FORCE INDEX (post_term) ON po.post_id = c.post_id', $exactSql, 'the bounded candidate relation must drive every post-first mandatory-group probe');
-    assert_contains('STRAIGHT_JOIN wp_posts wp_f ON wp_f.ID = ranked.post_id', $exactSql, 'the bounded ranked relation must drive the final canonical date lookup');
+    assert_contains('STRAIGHT_JOIN wp_posts wp_f FORCE INDEX (wp_fts_visibility) ON wp_f.ID = ranked.post_id', $exactSql, 'the bounded ranked relation must drive the final covering canonical date lookup');
 
     $prefix = [
         'group_id' => 2,

@@ -3518,13 +3518,16 @@ test_case('real broad-query evidence rejects repeated inner visibility joins', f
     foreach ([
         "'common_or', 'max_valid_or_prefix', 'prefix_fanout'",
         "' d_f FORCE INDEX (document_presence) ON '",
-        'substr_count($rankSql, $visibilityJoin)',
+        "' wp_f FORCE INDEX (wp_fts_visibility) ON '",
+        'substr_count($rankSql, $documentVisibilityJoin)',
+        'substr_count($rankSql, $postVisibilityJoin)',
         "substr_count(\$rankSql, 'd_exact_match')",
         "substr_count(\$rankSql, 'd_prefix_match')",
         "{\$caseId}_broad_outer_visibility_shape",
         "{\$caseId}_broad_visibility_order",
-        "\$rankedPosition < \$visibilityPosition",
-        "\$visibilityPosition < \$orderPosition",
+        "\$rankedPosition < \$documentVisibilityPosition",
+        "\$documentVisibilityPosition < \$postVisibilityPosition",
+        "\$postVisibilityPosition < \$orderPosition",
     ] as $required) {
         assert_contains($required, $integration, "real broad-query gate should retain final ranking shape: {$required}");
     }
@@ -4214,19 +4217,19 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
     assert_contains('old-posting-frontier|scope-ddl-writer|scope-proof', $runner, 'the populated scope-index DDL phase should retain its 1,800-second external kill');
     assert_same(1, substr_count($runner, 'run_php_phase scope-ddl-writer'), 'the populated scope-index proof should load one persistent lightweight writer process');
     assert_contains('scope_ddl_writer_pid=$!', $runner, 'the populated scope-index proof should supervise its one persistent writer process');
-    assert_contains("'pid' => \$pid", $integration, 'all four populated scope-index writes should identify their one persistent writer process');
+    assert_contains("'pid' => \$pid", $integration, 'all six populated core-index writes should identify their one persistent writer process');
     $scopeWriterDispatch = strpos($integration, "if (\$phase === 'scope-ddl-writer')");
     $wordpressBootstrapDispatch = strpos($integration, 'wp_fts_wc_bootstrap_wordpress();');
     assert_true(is_int($scopeWriterDispatch) && is_int($wordpressBootstrapDispatch) && $scopeWriterDispatch < $wordpressBootstrapDispatch, 'the lightweight DDL writer should run before the WordPress bootstrap branch');
     assert_contains("'wordpress_bootstrapped' => false", $integration, 'all four populated scope-index writes should record the lightweight runtime boundary');
-    assert_contains('4 exact successful canonical writes from 1 persistent lightweight process', $integration, 'the populated scope-index gate should reject extra writer runtimes');
+    assert_contains('6 exact successful canonical writes from 1 persistent lightweight process', $integration, 'the populated core-index gate should reject extra writer runtimes');
     assert_true(!str_contains($runner, 'WP_FTS_WC_DDL_OPERATION='), 'the DDL proof must not load one WordPress runtime per operation');
     assert_true(!str_contains($runner, 'WP_FTS_WC_DDL_ORDINAL=${ordinal}'), 'the DDL proof must not load one WordPress runtime per index and operation');
     foreach ([
-        'resumes an interrupted two-index install without duplicate DDL',
-        "\$fake->failQueryNeedleOccurrence = 2",
+        'resumes an interrupted three-index install without duplicate DDL',
+        "\$fake->failQueryNeedleOccurrence = 3",
         'stops after first DDL when its writer lease is stolen',
-        'lease loss after first CREATE must prevent the second core-table DDL',
+        'lease loss after first CREATE must prevent later core-table DDL',
         'a same-name index collision before ownership or DDL',
     ] as $required) {
         assert_contains($required, $scopeLifecycle, "scope-index lifecycle proof should retain failure contract: {$required}");
@@ -4257,9 +4260,10 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         'public maximum of 50',
         'hydrating a full 50-row page',
         'complete physical relation allowlist is',
-        'The current schema requires two',
+        'The current schema requires three',
         '`wp_fts_term_object(term_taxonomy_id, object_id)`',
         '`wp_fts_type_status_id(post_type, post_status, ID)`',
+        '`wp_fts_visibility(ID, post_type, post_status, post_password, post_date_gmt)`',
         'tables with their real InnoDB definitions',
         '100,001 posts and 300,001 relationships',
         'populated repair proof',

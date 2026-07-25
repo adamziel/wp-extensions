@@ -1946,8 +1946,8 @@ final class WP_FTS_Plugin
             $storage->create_tables();
         }
 
-        // Selective scope expansion is allowed to use only these direct
-        // keysets. Install them during explicit maintenance, never lazily in a
+        // Scope expansion and search visibility rely on these direct core
+        // indexes. Install them during explicit maintenance, never lazily in a
         // request or worker, and persist ownership before the first core-table
         // DDL so an interrupted install remains uninstallable.
         self::ensure_scope_keyset_indexes($storage);
@@ -1971,14 +1971,14 @@ final class WP_FTS_Plugin
         self::set_option(self::SCHEMA_VERSION_OPTION, self::SCHEMA_VERSION);
     }
 
-    /** Persist ownership intent, then install both selective scope indexes. */
+    /** Persist ownership intent, then install every supporting core-table index. */
     private static function ensure_scope_keyset_indexes(WP_FTS_Relational_Storage $storage): void
     {
         $missing = $storage->scope_keyset_indexes_requiring_creation();
         if ($missing !== []) {
             $owned = array_fill_keys(self::scope_index_ownership_keys(), true);
             foreach ($missing as $key) {
-                if (in_array($key, ['targeted', 'filtered'], true)) {
+                if (in_array($key, ['targeted', 'filtered', 'visibility'], true)) {
                     $owned[$key] = true;
                 }
             }
@@ -1993,12 +1993,12 @@ final class WP_FTS_Plugin
     private static function scope_index_ownership_keys(): array
     {
         $raw = self::get_option(self::SCOPE_INDEX_OWNERSHIP_OPTION, []);
-        if (!is_array($raw) || count($raw) > 2) {
+        if (!is_array($raw) || count($raw) > 3) {
             return [];
         }
         $keys = [];
         foreach ($raw as $key) {
-            if (is_string($key) && in_array($key, ['targeted', 'filtered'], true)) {
+            if (is_string($key) && in_array($key, ['targeted', 'filtered', 'visibility'], true)) {
                 $keys[$key] = true;
             }
         }

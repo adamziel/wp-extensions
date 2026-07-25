@@ -105,6 +105,7 @@ final class WP_FTS_Relational_Storage implements WP_FTS_Set_Oriented_Search_Stor
     public const MAX_EMPTY_TERM_CLEANUP = 1000;
     public const TARGETED_SCOPE_INDEX_NAME = 'wp_fts_term_object';
     public const FILTERED_SCOPE_INDEX_NAME = 'wp_fts_type_status_id';
+    public const VISIBILITY_INDEX_NAME = 'wp_fts_visibility';
     private const DOCUMENT_PRESENCE_INDEX_NAME = 'document_presence';
     private const MAX_SEARCH_SQL_BYTES = 32768;
     // Five thousand UTF-8 characters are at most 20 KiB under utf8mb4.
@@ -272,13 +273,14 @@ KEY dirty (post_id,kind)
      */
     public function scope_keyset_indexes_requiring_creation(): array
     {
-        $contracts = $this->scope_keyset_index_contracts();
+        $contracts = $this->supporting_core_index_contracts();
         $requests = [];
         foreach ($contracts as $contract) {
-            $requests[$contract['table']] = [
-                'indexes' => [$contract],
+            $requests[$contract['table']] ??= [
+                'indexes' => [],
                 'inspect_all_indexes' => false,
             ];
+            $requests[$contract['table']]['indexes'][] = $contract;
         }
 
         return $this->scope_keyset_indexes_requiring_creation_from_physical(
@@ -297,7 +299,7 @@ KEY dirty (post_id,kind)
         $missing = [];
         foreach ($contracts as $key => $contract) {
             $tablePhysical = $physical[$contract['table']] ?? $this->empty_physical_schema();
-            $this->assert_scope_keyset_table_physical($contract, $tablePhysical);
+            $this->assert_supporting_core_table_physical($contract, $tablePhysical);
             $named = $this->named_schema_index($tablePhysical['indexes'] ?? [], $contract['name']);
             if ($named === null) {
                 $missing[] = $key;
@@ -305,7 +307,7 @@ KEY dirty (post_id,kind)
             }
             if (!$this->schema_index_matches_exactly($named, $contract)) {
                 throw new RuntimeException(
-                    "The {$contract['table']} index {$contract['name']} conflicts with the FTS keyset contract."
+                    "The {$contract['table']} index {$contract['name']} conflicts with the FTS core-index contract."
                 );
             }
         }
@@ -313,16 +315,16 @@ KEY dirty (post_id,kind)
         return $missing;
     }
 
-    /** Install the two indexes that make selective scope pages direct keysets. */
+    /** Install the core-table indexes required by scope pages and search visibility. */
     public function ensure_scope_keyset_indexes(): void
     {
-        foreach ($this->scope_keyset_index_contracts() as $contract) {
-            $physical = $this->inspect_scope_keyset_table($contract);
+        foreach ($this->supporting_core_index_contracts() as $contract) {
+            $physical = $this->inspect_supporting_core_table($contract);
             $named = $this->named_schema_index($physical['indexes'] ?? [], $contract['name']);
             if ($named !== null) {
                 if (!$this->schema_index_matches_exactly($named, $contract)) {
                     throw new RuntimeException(
-                        "The {$contract['table']} index {$contract['name']} conflicts with the FTS keyset contract."
+                        "The {$contract['table']} index {$contract['name']} conflicts with the FTS core-index contract."
                     );
                 }
                 continue;
@@ -337,10 +339,10 @@ KEY dirty (post_id,kind)
             $this->guard_mutation();
             $this->query(
                 "CREATE INDEX {$name} ON {$table}({$columns})",
-                "add {$contract['key']} FTS scope keyset index"
+                "add {$contract['key']} FTS core-table index"
             );
 
-            $installed = $this->inspect_scope_keyset_table($contract);
+            $installed = $this->inspect_supporting_core_table($contract);
             $actual = $this->named_schema_index($installed['indexes'] ?? [], $contract['name']);
             if ($actual === null || !$this->schema_index_matches_exactly($actual, $contract)) {
                 throw new RuntimeException(
@@ -362,7 +364,7 @@ KEY dirty (post_id,kind)
     public function drop_owned_scope_keyset_indexes(array $ownedKeys): void
     {
         $owned = array_fill_keys(array_filter($ownedKeys, 'is_string'), true);
-        foreach ($this->scope_keyset_index_contracts() as $key => $contract) {
+        foreach ($this->supporting_core_index_contracts() as $key => $contract) {
             if (!isset($owned[$key])) {
                 continue;
             }
@@ -381,13 +383,13 @@ KEY dirty (post_id,kind)
             $name = $this->required_schema_identifier($contract['name']);
             if ($this->is_sqlite_runtime()) {
                 $this->guard_mutation();
-                $this->query("DROP INDEX {$name}", "remove {$key} FTS scope keyset index");
+                $this->query("DROP INDEX {$name}", "remove {$key} FTS core-table index");
                 $this->guard_mutation();
                 continue;
             }
             $table = $this->required_schema_identifier($contract['table']);
             $this->guard_mutation();
-            $this->query("DROP INDEX {$name} ON {$table}", "remove {$key} FTS scope keyset index");
+            $this->query("DROP INDEX {$name} ON {$table}", "remove {$key} FTS core-table index");
             $this->guard_mutation();
         }
     }
@@ -443,32 +445,56 @@ KEY dirty (post_id,kind)
         return $contracts;
     }
 
+    /**
+     * Keep one ownership lifecycle for every plugin-created core-table index.
+     *
+     * The public lifecycle method and option names predate the visibility
+     * index. Reusing them avoids a second ownership record that could drift.
+     *
+     * @return array<string,array{key:string,table:string,name:string,columns:string[],unique:bool}>
+     */
+    private function supporting_core_index_contracts(): array
+    {
+        $contracts = $this->scope_keyset_index_contracts();
+        if (!$this->is_sqlite_runtime()) {
+            $contracts['visibility'] = [
+                'key' => 'visibility',
+                'table' => $this->postsTable,
+                'name' => self::VISIBILITY_INDEX_NAME,
+                'columns' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt'],
+                'unique' => false,
+            ];
+        }
+
+        return $contracts;
+    }
+
     /** @param array{key:string,table:string,name:string,columns:string[],unique:bool} $contract */
-    private function inspect_scope_keyset_table(array $contract): array
+    private function inspect_supporting_core_table(array $contract): array
     {
         $physical = $this->is_sqlite_runtime()
             ? $this->inspect_sqlite_schema($contract['table'], [$contract])
             : $this->inspect_mysql_schema($contract['table']);
-        $this->assert_scope_keyset_table_physical($contract, $physical);
+        $this->assert_supporting_core_table_physical($contract, $physical);
 
         return $physical;
     }
 
     /** @param array{key:string,table:string,name:string,columns:string[],unique:bool} $contract */
-    private function assert_scope_keyset_table_physical(array $contract, array $physical): void
+    private function assert_supporting_core_table_physical(array $contract, array $physical): void
     {
         if (!empty($physical['inspection_error'])) {
             throw new RuntimeException(
-                "The {$contract['table']} metadata required by FTS scope expansion is unavailable."
+                "The {$contract['table']} metadata required by FTS core-table indexes is unavailable."
             );
         }
         if (empty($physical['exists'])) {
-            throw new RuntimeException("The {$contract['table']} table required by FTS scope expansion is missing.");
+            throw new RuntimeException("The {$contract['table']} table required by FTS core-table indexes is missing.");
         }
         foreach ($contract['columns'] as $column) {
             if (!in_array($column, $physical['columns'] ?? [], true)) {
                 throw new RuntimeException(
-                    "The {$contract['table']}.{$column} column required by FTS scope expansion is missing."
+                    "The {$contract['table']}.{$column} column required by FTS core-table indexes is missing."
                 );
             }
         }
@@ -629,7 +655,7 @@ KEY dirty (post_id,kind)
     }
 
     /**
-     * Inspect the four FTS tables and both selective core-table indexes in one
+     * Inspect the four FTS tables and all supporting core-table indexes in one
      * physical snapshot. Explicit diagnostics use this combined boundary so
      * table count cannot multiply metadata statements.
      *
@@ -638,13 +664,14 @@ KEY dirty (post_id,kind)
     public function verify_schema_and_scope_keyset_indexes(): array
     {
         $contracts = $this->schema_contract();
-        $scopeContracts = $this->scope_keyset_index_contracts();
+        $scopeContracts = $this->supporting_core_index_contracts();
         $requests = $this->schema_contract_inspection_requests($contracts);
         foreach ($scopeContracts as $contract) {
-            $requests[$contract['table']] = [
-                'indexes' => [$contract],
+            $requests[$contract['table']] ??= [
+                'indexes' => [],
                 'inspect_all_indexes' => false,
             ];
+            $requests[$contract['table']]['indexes'][] = $contract;
         }
         $snapshot = $this->inspect_schema_snapshot($requests);
         $verification = $this->verify_schema_from_physical($contracts, $snapshot);
@@ -3274,7 +3301,8 @@ GROUP BY grouped.post_id
             // rare anchor before any post-first probes. The ranking statement
             // has one snapshot, so repeating every anti-join here is redundant;
             // only the canonical date row is still needed for ordering.
-            $visibilityJoins = "{$orderedJoin} {$this->postsTable} wp_f ON wp_f.ID = ranked.post_id";
+            $postIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (' . self::VISIBILITY_INDEX_NAME . ')';
+            $visibilityJoins = "{$orderedJoin} {$this->postsTable} wp_f{$postIndexHint} ON wp_f.ID = ranked.post_id";
             $visibilityWhere = '1=1';
         }
         $recencyStrength = $options['recency_boost_strength'] ?? 0.0;
@@ -3489,9 +3517,10 @@ WHERE {$visible['where']}",
         // post-generation probe; it must never walk taxonomy relationships for
         // every broad-query candidate.
         $documentIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (' . self::DOCUMENT_PRESENCE_INDEX_NAME . ')';
+        $postIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (' . self::VISIBILITY_INDEX_NAME . ')';
         $dirtyIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (dirty)';
         $joins = "{$orderedJoin} {$this->documentsTable} {$doc}{$documentIndexHint} ON {$doc}.post_id = {$postIdExpression}
-{$orderedJoin} {$this->postsTable} {$post} ON {$post}.ID = {$postIdExpression}
+{$orderedJoin} {$this->postsTable} {$post}{$postIndexHint} ON {$post}.ID = {$postIdExpression}
 LEFT JOIN {$this->workTable} {$dirty}{$dirtyIndexHint} ON {$dirty}.kind = 'post' AND {$dirty}.post_id = {$postIdExpression}";
         $where = [
             "{$dirty}.job_key IS NULL",

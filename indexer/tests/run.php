@@ -1470,7 +1470,7 @@ final class WP_FTS_Test_WPDB
 
     /** @var array<string,string[]> */
     public array $schemaColumns = [
-        'wp_posts' => ['ID', 'post_type', 'post_status'],
+        'wp_posts' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt'],
         'wp_term_relationships' => ['object_id', 'term_taxonomy_id'],
         'wp_fts_terms' => ['term_id', 'lang', 'kind', 'term', 'doc_freq'],
         'wp_fts_postings' => ['term_id', 'post_id', 'impact'],
@@ -1486,6 +1486,7 @@ final class WP_FTS_Test_WPDB
         'wp_posts' => [
             'PRIMARY' => ['ID'],
             'wp_fts_type_status_id' => ['post_type', 'post_status', 'ID'],
+            'wp_fts_visibility' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt'],
         ],
         'wp_term_relationships' => [
             'PRIMARY' => ['object_id', 'term_taxonomy_id'],
@@ -1974,6 +1975,11 @@ final class WP_FTS_Test_WPDB
                 'table' => $this->posts,
                 'name' => WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME,
                 'columns' => ['post_type', 'post_status', 'ID'],
+            ],
+            'visibility' => [
+                'table' => $this->posts,
+                'name' => WP_FTS_Relational_Storage::VISIBILITY_INDEX_NAME,
+                'columns' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt'],
             ],
         ];
         foreach ($scopeIndexes as $scopeIndex) {
@@ -21824,7 +21830,7 @@ test_case('PHP and REST visibility stay exact inside set-oriented ranking', func
         assert_same(4, count($rankQueries), 'each supported PHP or REST request should execute one relational ranking statement');
         foreach ($rankQueries as $rankQuery) {
             $sql = (string) ($rankQuery['sql'] ?? '');
-            assert_contains('JOIN wp_posts wp_f ON wp_f.ID = ranked.post_id', $sql, 'canonical WordPress visibility should be joined inside ranking');
+            assert_contains('JOIN wp_posts wp_f FORCE INDEX (wp_fts_visibility) ON wp_f.ID = ranked.post_id', $sql, 'canonical WordPress visibility should use its covering index inside ranking');
             assert_contains("wp_f.post_password = ''", $sql, 'password visibility should be checked before LIMIT');
             assert_contains('LEFT JOIN wp_fts_work dirty_f', $sql, 'dirty generations should be excluded inside ranking');
             assert_true(strpos($sql, "wp_f.post_password = ''") < strrpos($sql, 'LIMIT %d'), 'visibility predicates must precede the page LIMIT');

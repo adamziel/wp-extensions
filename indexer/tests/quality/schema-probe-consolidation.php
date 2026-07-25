@@ -11,7 +11,7 @@ test_case('explicit MySQL physical diagnostics use one bounded six-table snapsho
 
     assert_same(true, $verification['valid'] ?? null, 'the complete fake physical contract should pass the combined verifier');
     assert_same(true, $verification['fts_tables_valid'] ?? null, 'combined verification should retain the FTS-table result separately');
-    assert_same(true, $verification['scope_keyset_indexes']['valid'] ?? null, 'combined verification should include both selective core-table indexes');
+    assert_same(true, $verification['scope_keyset_indexes']['valid'] ?? null, 'combined verification should include all three supporting core-table indexes');
     assert_same(2, $fake->num_queries, 'a cold MySQL physical diagnostic should use one capability read and one schema snapshot');
     $snapshots = array_values(array_filter(
         $fake->prepared,
@@ -42,6 +42,9 @@ test_case('set-oriented MySQL snapshot preserves every physical damage check', f
         },
         'scope index order' => static function (WP_FTS_Test_WPDB $fake): void {
             $fake->schemaIndexes['wp_term_relationships'][WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME] = ['object_id', 'term_taxonomy_id'];
+        },
+        'visibility index order' => static function (WP_FTS_Test_WPDB $fake): void {
+            $fake->schemaIndexes['wp_posts'][WP_FTS_Relational_Storage::VISIBILITY_INDEX_NAME] = ['post_type', 'ID', 'post_status', 'post_password', 'post_date_gmt'];
         },
     ];
 
