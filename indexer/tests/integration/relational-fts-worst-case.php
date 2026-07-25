@@ -16389,6 +16389,7 @@ function wp_fts_wc_assert_relational_schema(): array
         ],
         'documents' => [
             'PRIMARY' => ['columns' => ['post_id'], 'unique' => true],
+            'document_presence' => ['columns' => ['post_id', 'indexed_at'], 'unique' => false],
         ],
         'work' => [
             'PRIMARY' => ['columns' => ['job_key'], 'unique' => true],
