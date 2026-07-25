@@ -3512,16 +3512,18 @@ WHERE {$visible['where']}",
         $doc = 'd_' . $suffix;
         $dirty = 'dirty_' . $suffix;
         $orderedJoin = $this->is_sqlite_runtime() ? 'JOIN' : 'STRAIGHT_JOIN';
-        // Visibility runs once per ranked candidate. Any scope reconciliation
-        // makes planning fail closed, so this hot path needs only the direct
-        // post-generation probe; it must never walk taxonomy relationships for
-        // every broad-query candidate.
+        // Visibility runs once per ranked candidate. Reject a known dirty
+        // generation before paying either covering row probe; broad searches
+        // commonly encounter that backlog while a worker catches up. Canonical
+        // visibility then rejects hidden rows before document presence. Any
+        // scope reconciliation makes planning fail closed, so this hot path
+        // must never walk taxonomy relationships for every candidate.
         $documentIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (' . self::DOCUMENT_PRESENCE_INDEX_NAME . ')';
         $postIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (' . self::VISIBILITY_INDEX_NAME . ')';
         $dirtyIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (dirty)';
-        $joins = "{$orderedJoin} {$this->documentsTable} {$doc}{$documentIndexHint} ON {$doc}.post_id = {$postIdExpression}
+        $joins = "LEFT JOIN {$this->workTable} {$dirty}{$dirtyIndexHint} ON {$dirty}.kind = 'post' AND {$dirty}.post_id = {$postIdExpression}
 {$orderedJoin} {$this->postsTable} {$post}{$postIndexHint} ON {$post}.ID = {$postIdExpression}
-LEFT JOIN {$this->workTable} {$dirty}{$dirtyIndexHint} ON {$dirty}.kind = 'post' AND {$dirty}.post_id = {$postIdExpression}";
+{$orderedJoin} {$this->documentsTable} {$doc}{$documentIndexHint} ON {$doc}.post_id = {$postIdExpression}";
         $where = [
             "{$dirty}.job_key IS NULL",
             "{$post}.post_password = ''",

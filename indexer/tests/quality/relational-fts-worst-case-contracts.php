@@ -3525,9 +3525,10 @@ test_case('real broad-query evidence rejects repeated inner visibility joins', f
         "substr_count(\$rankSql, 'd_prefix_match')",
         "{\$caseId}_broad_outer_visibility_shape",
         "{\$caseId}_broad_visibility_order",
-        "\$rankedPosition < \$documentVisibilityPosition",
-        "\$documentVisibilityPosition < \$postVisibilityPosition",
-        "\$postVisibilityPosition < \$orderPosition",
+        "\$rankedPosition < \$dirtyVisibilityPosition",
+        "\$dirtyVisibilityPosition < \$postVisibilityPosition",
+        "\$postVisibilityPosition < \$documentVisibilityPosition",
+        "\$documentVisibilityPosition < \$orderPosition",
     ] as $required) {
         assert_contains($required, $integration, "real broad-query gate should retain final ranking shape: {$required}");
     }

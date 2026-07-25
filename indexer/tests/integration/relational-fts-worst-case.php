@@ -18524,16 +18524,19 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
         $innerExactVisibilityCount = substr_count($rankSql, 'd_exact_match');
         $innerPrefixVisibilityCount = substr_count($rankSql, 'd_prefix_match');
         $rankedPosition = strpos($rankSql, ') ranked');
+        $dirtyVisibilityPosition = strpos($rankSql, ' dirty_f FORCE INDEX (dirty) ON ');
         $documentVisibilityPosition = strpos($rankSql, $documentVisibilityJoin);
         $postVisibilityPosition = strpos($rankSql, $postVisibilityJoin);
         $orderPosition = strpos($rankSql, 'ORDER BY scored.score');
         $visibilityOrderValid = $rankedPosition !== false
+            && $dirtyVisibilityPosition !== false
             && $documentVisibilityPosition !== false
             && $postVisibilityPosition !== false
             && $orderPosition !== false
-            && $rankedPosition < $documentVisibilityPosition
-            && $documentVisibilityPosition < $postVisibilityPosition
-            && $postVisibilityPosition < $orderPosition;
+            && $rankedPosition < $dirtyVisibilityPosition
+            && $dirtyVisibilityPosition < $postVisibilityPosition
+            && $postVisibilityPosition < $documentVisibilityPosition
+            && $documentVisibilityPosition < $orderPosition;
         $gates[] = wp_fts_wc_gate(
             "{$caseId}_broad_outer_visibility_shape",
             ['d_f' => 1, 'wp_f' => 1, 'd_exact_match' => 0, 'd_prefix_match' => 0],
@@ -18543,7 +18546,7 @@ function wp_fts_wc_case_gates(string $caseId, array $case, array $profile): arra
                 && $innerExactVisibilityCount === 0
                 && $innerPrefixVisibilityCount === 0
         );
-        $gates[] = wp_fts_wc_gate("{$caseId}_broad_visibility_order", 'group postings < visibility < ORDER/LIMIT', $visibilityOrderValid, $visibilityOrderValid);
+        $gates[] = wp_fts_wc_gate("{$caseId}_broad_visibility_order", 'group postings < dirty generation < covering visibility < ORDER/LIMIT', $visibilityOrderValid, $visibilityOrderValid);
     }
     return $gates;
 }

@@ -821,6 +821,13 @@ test_case('relational visibility never walks taxonomy relationships per ranked c
     assert_true(!str_contains((string) ($visibility['joins'] ?? ''), 'term_relationships'), 'ranked visibility joins must remain independent of taxonomy fanout');
     assert_contains('JOIN wp_posts wp_ranked FORCE INDEX (wp_fts_visibility)', (string) ($visibility['joins'] ?? ''), 'canonical visibility should stay on its ID-first covering index');
     assert_contains('LEFT JOIN wp_fts_work dirty_ranked FORCE INDEX (dirty)', (string) ($visibility['joins'] ?? ''), 'dirty visibility should always probe the post-first work index');
+    assert_true(
+        strpos((string) ($visibility['joins'] ?? ''), 'dirty_ranked FORCE INDEX (dirty)')
+            < strpos((string) ($visibility['joins'] ?? ''), 'wp_ranked FORCE INDEX (wp_fts_visibility)')
+            && strpos((string) ($visibility['joins'] ?? ''), 'wp_ranked FORCE INDEX (wp_fts_visibility)')
+                < strpos((string) ($visibility['joins'] ?? ''), 'd_ranked FORCE INDEX (document_presence)'),
+        'known dirty and canonically hidden candidates must stop before later covering row probes'
+    );
 });
 
 test_case('relational real Russian ambiguity retains exact lemmas without mbstring', function (): void {
