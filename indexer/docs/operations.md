@@ -48,7 +48,7 @@ repair it, enqueue work, or schedule the queue processor.
 
 On MySQL/MariaDB, explicit physical verification uses one tiny capability read
 and one table-bounded `information_schema` snapshot for all four FTS tables and
-both selective core-table indexes. Including the bounded work-status aggregate,
+all three supporting core-table indexes. Including the bounded work-status aggregate,
 `operator_status(true)` and a support snapshot each execute exactly three plugin
 statements. A healthy diagnose with page hydration executes six: those three,
 then plan, rank, and hydration. SQLite correlates `sqlite_schema` with

@@ -36,6 +36,7 @@ interface WP_FTS_Set_Oriented_Search_Storage
     public const MAX_ALTERNATIVES_PER_GROUP = 12;
     public const MAX_QUERY_ALTERNATIVES = 12;
     public const MAX_PAGE_SIZE = 50;
+    public const MAX_APPROXIMATE_CANDIDATE_BUDGET = 100000;
     public const MAX_METADATA_TITLE_BYTES = 20000;
     public const MAX_SNIPPET_SOURCE_BYTES = 20000;
     public const MAX_SIDECAR_PAGE_BYTES = 4194304;
@@ -80,9 +81,13 @@ interface WP_FTS_Set_Oriented_Search_Storage
      * recency settings, and canonical page bytes. It contains no other fields
      * or per-result diagnostics.
      *
+     * When `approximate_candidate_budget` is present, the page marks the
+     * retrieval as approximate, exposes the active budget, and reports the
+     * dictionary-planned posting rows before the candidate set is capped.
+     *
      * @param array<int,array<int,array{key:string,rank:int}>> $groups
      * @param array<string,mixed> $options Normalized, bounded search options.
-     * @return array{results:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string,previous_cursor:?string,explain?:array<string,mixed>}
+     * @return array{results:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string,previous_cursor:?string,retrieval_mode?:string,results_may_be_incomplete?:bool,planned_posting_rows?:int,candidate_budget?:int,explain?:array<string,mixed>}
      */
     public function search_page(array $groups, array $options): array;
 }

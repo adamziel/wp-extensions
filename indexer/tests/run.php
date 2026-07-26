@@ -1470,7 +1470,7 @@ final class WP_FTS_Test_WPDB
 
     /** @var array<string,string[]> */
     public array $schemaColumns = [
-        'wp_posts' => ['ID', 'post_type', 'post_status'],
+        'wp_posts' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt'],
         'wp_term_relationships' => ['object_id', 'term_taxonomy_id'],
         'wp_fts_terms' => ['term_id', 'lang', 'kind', 'term', 'doc_freq'],
         'wp_fts_postings' => ['term_id', 'post_id', 'impact'],
@@ -1486,6 +1486,7 @@ final class WP_FTS_Test_WPDB
         'wp_posts' => [
             'PRIMARY' => ['ID'],
             'wp_fts_type_status_id' => ['post_type', 'post_status', 'ID'],
+            'wp_fts_visibility' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt'],
         ],
         'wp_term_relationships' => [
             'PRIMARY' => ['object_id', 'term_taxonomy_id'],
@@ -1494,7 +1495,7 @@ final class WP_FTS_Test_WPDB
         ],
         'wp_fts_terms' => ['PRIMARY' => ['term_id'], 'term_identity' => ['lang', 'kind', 'term'], 'empty_terms' => ['doc_freq']],
         'wp_fts_postings' => ['PRIMARY' => ['term_id', 'post_id'], 'post_term' => ['post_id', 'term_id']],
-        'wp_fts_documents' => ['PRIMARY' => ['post_id']],
+        'wp_fts_documents' => ['PRIMARY' => ['post_id'], 'document_presence' => ['post_id', 'indexed_at']],
         'wp_fts_work' => ['PRIMARY' => ['job_key'], 'ready' => ['kind', 'state', 'available_at', 'post_id', 'job_key'], 'recoverable' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key'], 'claim_token' => ['claim_token', 'post_id'], 'kind_job' => ['kind', 'job_key'], 'scope_subject' => ['kind', 'scope_coverage', 'scope_subject_type', 'scope_subject_id'], 'dirty' => ['post_id', 'kind']],
     ];
 
@@ -1974,6 +1975,11 @@ final class WP_FTS_Test_WPDB
                 'table' => $this->posts,
                 'name' => WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME,
                 'columns' => ['post_type', 'post_status', 'ID'],
+            ],
+            'visibility' => [
+                'table' => $this->posts,
+                'name' => WP_FTS_Relational_Storage::VISIBILITY_INDEX_NAME,
+                'columns' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt'],
             ],
         ];
         foreach ($scopeIndexes as $scopeIndex) {
@@ -6863,6 +6869,11 @@ final class WP_FTS_Test_WPDB
                 );
             }
         }
+        $candidateBudget = $this->relational_approximate_candidate_budget($sql);
+        if ($candidateBudget !== null) {
+            ksort($scores, SORT_NUMERIC);
+            $scores = array_slice($scores, 0, $candidateBudget, true);
+        }
 
         $requiredGroups = null;
         $marker = 'HAVING COUNT(*) = ';
@@ -7001,6 +7012,34 @@ final class WP_FTS_Test_WPDB
             $control['canonical_post_bytes'] = 0;
         }
         return [(object) $control];
+    }
+
+    /** Read the test-visible candidate cap from the generated rank SQL. */
+    private function relational_approximate_candidate_budget(string $sql): ?int
+    {
+        if (!str_contains($sql, 'budgeted_candidates')) {
+            return null;
+        }
+        $budget = null;
+        $previousLine = '';
+        foreach (explode("\n", $sql) as $line) {
+            $line = trim($line);
+            if (!str_starts_with($line, 'LIMIT ') || !str_contains($previousLine, 'budgeted_candidates')) {
+                $previousLine = $line;
+                continue;
+            }
+            $value = substr($line, strlen('LIMIT '));
+            $digits = strspn($value, '0123456789');
+            if ($digits === 0) {
+                $previousLine = $line;
+                continue;
+            }
+            $candidate = max(1, (int) substr($value, 0, $digits));
+            $budget = $budget === null ? $candidate : min($budget, $candidate);
+            $previousLine = $line;
+        }
+
+        return $budget;
     }
 
     /** Measures the canonical WordPress columns loaded for one fixture post. */
@@ -7310,7 +7349,7 @@ final class WP_FTS_Test_WPDB
             [$columns, $indexes] = match ($suffix) {
                 'fts_terms' => [['term_id', 'lang', 'kind', 'term', 'doc_freq'], ['PRIMARY' => ['term_id'], 'term_identity' => ['lang', 'kind', 'term'], 'empty_terms' => ['doc_freq']]],
                 'fts_postings' => [['term_id', 'post_id', 'impact'], ['PRIMARY' => ['term_id', 'post_id'], 'post_term' => ['post_id', 'term_id']]],
-                'fts_documents' => [['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at'], ['PRIMARY' => ['post_id']]],
+                'fts_documents' => [['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at'], ['PRIMARY' => ['post_id'], 'document_presence' => ['post_id', 'indexed_at']]],
                 'fts_work' => [['job_key', 'kind', 'post_id', 'generation', 'state', 'available_at', 'attempts', 'claim_token', 'claimed_generation', 'claim_expires_at', 'cursor_post_id', 'scope_coverage', 'scope_incarnation', 'scope_subject_type', 'scope_subject_id', 'payload', 'last_error_code', 'last_error_at'], ['PRIMARY' => ['job_key'], 'ready' => ['kind', 'state', 'available_at', 'post_id', 'job_key'], 'recoverable' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key'], 'claim_token' => ['claim_token', 'post_id'], 'kind_job' => ['kind', 'job_key'], 'scope_subject' => ['kind', 'scope_coverage', 'scope_subject_type', 'scope_subject_id'], 'dirty' => ['post_id', 'kind']]],
             };
             $this->schemaColumns[$table] = $columns;
@@ -13106,6 +13145,10 @@ test_case('physical schema verification repairs current-version table column and
         $physical = wp_fts_test_storage(false)->verify_schema();
         assert_same(['wp_fts_documents.content_hash'], $physical['missing_columns'] ?? null, 'verification should identify a missing required column');
         assert_same(['wp_fts_documents.PRIMARY(post_id)'], $physical['missing_indexes'] ?? null, 'verification should identify a missing required primary key');
+
+        unset($fake->schemaIndexes['wp_fts_documents']['document_presence']);
+        $physical = wp_fts_test_storage(false)->verify_schema();
+        assert_contains('wp_fts_documents.document_presence(post_id,indexed_at)', implode(',', $physical['missing_indexes'] ?? []), 'verification should identify the missing document presence key');
 
         WP_FTS_Plugin::create_or_repair_schema();
         assert_same(true, wp_fts_test_storage(false)->verify_schema()['valid'] ?? null, 'dedicated maintenance should restore missing columns and indexes');
@@ -21603,6 +21646,8 @@ test_case('REST search surface filters private results by capability', function 
         assert_true(is_callable($route['args']['permission_callback'] ?? null), 'REST search route should have a callable permission callback');
         assert_same(true, $route['args']['args']['q']['required'] ?? null, 'REST search should require its one query parameter');
         assert_same(false, $route['args']['args']['explain']['required'] ?? null, 'REST explain parameter should be optional and callback-gated');
+        assert_same(false, $route['args']['args']['approximate']['required'] ?? null, 'REST approximate parameter should be optional and callback-gated');
+        assert_same(false, $route['args']['args']['candidate_budget']['required'] ?? null, 'REST candidate_budget parameter should be optional and callback-gated');
 
         $storage = wp_fts_test_unleased_storage();
         $analyzer = new WP_FTS_Analyzer();
@@ -21735,6 +21780,19 @@ test_case('PHP and REST visibility stay exact inside set-oriented ranking', func
         wp_fts_test_replace_post($storage, $public, ['document_lang' => 'en'], $analyzer);
 
         assert_same([$publicId], array_column(WP_FTS_Plugin::search('deepvisibilityneedle', ['limit' => 1, 'lang' => 'en']), 'doc_id'), 'PHP search should rank the readable corpus instead of stopping after 250 hidden rows');
+        $queryCountBeforeUnsupported = count($fake->queries);
+        $candidateBudgetWithoutApproximateRejected = false;
+        try {
+            WP_FTS_Plugin::search('deepvisibilityneedle', [
+                'limit' => 1,
+                'lang' => 'en',
+                'candidate_budget' => 3,
+            ]);
+        } catch (InvalidArgumentException $error) {
+            $candidateBudgetWithoutApproximateRejected = str_contains($error->getMessage(), 'candidate_budget');
+        }
+        assert_true($candidateBudgetWithoutApproximateRejected, 'candidate_budget should not silently change retrieval unless approximate_top_k is explicit');
+        assert_same($queryCountBeforeUnsupported, count($fake->queries), 'candidate_budget without approximate_top_k should fail before database work');
         $restResponse = WP_FTS_Plugin::rest_search(['q' => 'deepvisibilityneedle', 'limit' => 1, 'lang' => 'en']);
         assert_true(
             is_array($restResponse),
@@ -21772,7 +21830,7 @@ test_case('PHP and REST visibility stay exact inside set-oriented ranking', func
         assert_same(4, count($rankQueries), 'each supported PHP or REST request should execute one relational ranking statement');
         foreach ($rankQueries as $rankQuery) {
             $sql = (string) ($rankQuery['sql'] ?? '');
-            assert_contains('JOIN wp_posts wp_f ON wp_f.ID = ranked.post_id', $sql, 'canonical WordPress visibility should be joined inside ranking');
+            assert_contains('JOIN wp_posts wp_f FORCE INDEX (wp_fts_visibility) ON wp_f.ID = ranked.post_id', $sql, 'canonical WordPress visibility should use its covering index inside ranking');
             assert_contains("wp_f.post_password = ''", $sql, 'password visibility should be checked before LIMIT');
             assert_contains('LEFT JOIN wp_fts_work dirty_f', $sql, 'dirty generations should be excluded inside ranking');
             assert_true(strpos($sql, "wp_f.post_password = ''") < strrpos($sql, 'LIMIT %d'), 'visibility predicates must precede the page LIMIT');
@@ -30397,6 +30455,60 @@ test_case('prefix minimum length enables complete relational prefix ranges', fun
     assert_same(true, $plan['prefix_range'] ?? null, 'explain should prove the indexed surface range is active');
     assert_same('surface_range', $plan['prefix_strategy'] ?? null, 'explain should record one indexed surface range');
     assert_same(2, (int) ($plan['query_statements'] ?? 0), 'prefix search without page hydration should keep the fixed two-statement contract');
+});
+
+test_case('relational approximate search caps candidate rows before aggregate ranking', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $publishedCapability = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION] ?? [];
+    $relationalCapability = [
+        '_search_ready_incarnation' => (string) ($publishedCapability['incarnation'] ?? ''),
+        '_search_ready_profile_hash' => (string) ($publishedCapability['profile_hash'] ?? ''),
+    ];
+    $wpdb = new WP_FTS_Test_WPDB();
+    $storage = new WP_FTS_Relational_Storage($wpdb);
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    for ($postId = 1; $postId <= 6; $postId++) {
+        $text = trim(str_repeat('needle ', $postId === 6 ? 12 : 1));
+        wp_fts_test_replace_document_fields($storage, $analyzer, $postId, [['name' => 'content', 'text' => $text]], ['document_lang' => 'en']);
+    }
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $exact = $searcher->search('needle', [
+        'query_lang' => 'en',
+        'limit' => 1,
+    ] + $relationalCapability);
+    assert_same(6, $exact['results'][0]['doc_id'] ?? null, 'exact relational search should keep the strongest late document');
+
+    $seenSql = [];
+    $wpdb->readQueryObserver = static function (string $sql) use (&$seenSql): void {
+        $seenSql[] = $sql;
+    };
+    $approximate = $searcher->search('needle', [
+        'query_lang' => 'en',
+        'limit' => 1,
+        'explain' => true,
+        'approximate_top_k' => true,
+        'candidate_budget' => 3,
+    ] + $relationalCapability);
+    $rankSql = '';
+    foreach ($seenSql as $sql) {
+        if (str_starts_with($sql, '/* wp_fts:rank */')) {
+            $rankSql = $sql;
+            break;
+        }
+    }
+
+    assert_same('approximate', $approximate['retrieval_mode'] ?? null, 'approximate relational search should expose the retrieval mode');
+    assert_same(true, $approximate['results_may_be_incomplete'] ?? null, 'approximate relational search should expose incomplete-result risk');
+    assert_same(3, $approximate['candidate_budget'] ?? null, 'approximate relational search should expose the active candidate budget');
+    assert_same(6, $approximate['planned_posting_rows'] ?? null, 'approximate relational search should expose the dictionary posting plan');
+    assert_contains('budgeted_candidates', $rankSql, 'rank SQL should place a derived candidate cap before aggregate ranking');
+    assert_contains('LIMIT 3', $rankSql, 'rank SQL should carry the active candidate budget');
+    assert_true(($approximate['results'][0]['doc_id'] ?? null) !== 6, 'candidate budgeting may miss a stronger document outside the capped set');
+    assert_same('approximate', $approximate['explain']['retrieval_mode'] ?? null, 'operator explain should mirror approximate retrieval mode');
 });
 
 test_case('relational backend exposes set-oriented search without constructor I/O', function (): void {

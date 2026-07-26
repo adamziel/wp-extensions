@@ -53,8 +53,9 @@ invariants.
 8. Apply current `wp_posts` type, status, and password visibility and pending
    work exclusion before score ordering and `LIMIT`. Broad OR, single-group,
    and prefix ranking must compact posting arms first, then apply exactly one
-   outer derived-document visibility join before ordering; it may not repeat
-   `d_exact_match` or `d_prefix_match` visibility inside posting arms.
+   outer derived-document visibility join and one covering core-post visibility
+   join before ordering; it may not repeat `d_exact_match` or `d_prefix_match`
+   visibility inside posting arms.
 9. Return at most `page_size + 1` ranking rows and hydrate/snippet at most
    `page_size` rows. Warm latency samples use a 20-row page. The separate
    terminal-oracle boundary exhaustively traverses both exact and prefix forms
@@ -1238,6 +1239,15 @@ constrained runner.
 | 50k | <=10 / <=15 seconds | <=25 / <=35 seconds |
 | 100k | <=40 / <=60 seconds | <=90 / <=120 seconds |
 
+The closed-loop tail ratio against one idle reader remains a diagnostic. It
+can rise when idle search gets faster even if loaded latency falls, so the hard
+latency bounds above are paired with a completed-request-rate floor:
+
+| Profile | MySQL 8.0 minimum throughput | MariaDB 10.11 minimum throughput |
+| --- | ---: | ---: |
+| 50k | >=1.25 requests/second | >=0.9 requests/second |
+| 100k | >=0.5 requests/second | >=0.3 requests/second |
+
 The remaining scale limits are shared by both declared engines:
 
 | Metric | Required value |
@@ -1247,7 +1257,7 @@ The remaining scale limits are shared by both declared engines:
 | concurrent errors, timeouts, wrong result sets | 0 |
 | concurrent typed publication retries | <= logical requests; <=3 per request |
 | concurrent writer deadlock retries / terminal failures | <=8 per writer and <=16 total for the two writers / 0 |
-| concurrent p95 degradation | <=16× idle HTTP |
+| concurrent mixed HTTP throughput | engine/profile floors above |
 | plugin-owned search statements | <=3; impossible AND <=1 |
 | missing-table request on every public adapter | exactly 1 failed plan and 0 rank/hydrate; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 total plugin-owned statements; unhealthy/latch/single-event repair state present before harness restoration |
 | injected plan / rank / hydration database failure | exact ordered plan / plan+rank / plan+rank+hydrate shape with only the final statement failing; no later search or core `LIKE`; exactly 1 readiness revocation and 1 Health latch within 2-4 option/cron controls; <=5 / <=6 / <=7 total plugin-owned statements; exact capability/Health/cron restoration between requests |
@@ -1969,29 +1979,31 @@ within the larger of 2,000 ms and the 10k/20k-completion prefix p99 ceiling for
 that engine/profile lane. This removes taxonomy fanout from search complexity entirely.
 It does not merely budget a relationship probe per candidate.
 
-The current schema requires two plugin-namespaced supporting indexes on
+The current schema requires three plugin-namespaced supporting indexes on
 WordPress's core tables: `wp_fts_term_object(term_taxonomy_id, object_id)` and
-`wp_fts_type_status_id(post_type, post_status, ID)`. The proof reads their exact
-real definitions before substituting any fixture. Creation intent is persisted
-first in the nonautoloaded `wp_fts_scope_index_ownership` option. An exact
-pre-existing namespaced index may be reused without claiming it; a same-name
+`wp_fts_type_status_id(post_type, post_status, ID)` for scope keysets, plus
+`wp_fts_visibility(ID, post_type, post_status, post_password, post_date_gmt)`
+for covering per-candidate visibility reads. The proof reads their exact real
+definitions before substituting any fixture. Creation intent is persisted first
+in the nonautoloaded `wp_fts_scope_index_ownership` option. An exact pre-existing
+namespaced index may be reused without claiming it; a same-name
 different-definition collision fails closed. Uninstall drops only an exact
 index whose ownership was recorded, never a merely similar site-owned index.
 
 The populated repair proof clones WordPress's canonical posts and relationships
-tables with their real InnoDB definitions, removes only the two scope
+tables with their real InnoDB definitions, removes the three plugin-owned
 composites, then populates 100,001 posts and 300,001 relationships while the
 stored schema stays current. It redirects WordPress's canonical core-table
 properties to these clones and executes the production ownership, writer-lease,
-repair, and verification path, not copied DDL. It must issue exactly the two
+repair, and verification path, not copied DDL. It must issue exactly the three
 canonical `CREATE INDEX` statements, persist nonautoloaded ownership before the
-first, keep the schema version unchanged, and verify both definitions.
-Completed Performance Schema events must match both wpdb DDL hashes exactly.
+first, keep the schema version unchanged, and verify all three definitions.
+Completed Performance Schema events must match all three wpdb DDL hashes exactly.
 
-One persistent lightweight core-table writer process synchronizes at both query
-boundaries and reuses its database connection for all four writes without
-bootstrapping a second WordPress runtime. A canonical INSERT and UPDATE
-against each populated core clone
+One persistent lightweight core-table writer process synchronizes at every query
+boundary and reuses its database connection for all six writes without
+bootstrapping a second WordPress runtime. A canonical INSERT and UPDATE during
+each populated core-index build
 must have a server-timer interval that overlaps the corresponding `CREATE INDEX`,
 affect exactly one row, and finish
 within 5,000 ms on both client and server clocks. Their reported Performance
@@ -2001,7 +2013,7 @@ describe a 60-second ceiling without concurrent work.
 
 That populated repair has a 180,000 ms total client ceiling, a 120,000 ms
 per-statement and 180,000 ms aggregate database-server ceiling, at most 64 wpdb
-statements including exactly two DDL statements, and at most 16 MiB additional
+statements including exactly three DDL statements, and at most 16 MiB additional
 PHP and RSS high-water usage. The fixture records actual data/index bytes before
 and after and requires a positive index-byte delta no larger than 128 MiB. The
 exact index-health/readiness/incarnation options, public takeover signature,

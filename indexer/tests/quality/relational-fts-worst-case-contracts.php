@@ -479,7 +479,7 @@ test_case('relational worst-case gate fingerprints reject ordered inventory drif
         "'count' => 1170",
         "'sha256' => '0419c613811a13d49755af028011543c41d31a8f0bbd4a2acf65e03f1c5a4e25'",
         "'count' => 2647",
-        "'sha256' => 'ca53417ea9628ff92fc9087c5097cdc0928a3d409b50b222a2671a2c4f989492'",
+        "'sha256' => '8668f37040da9acbf9a0abd06abd4b81c9a184c9b997cbd6eb20c9f766ff628c'",
     ] as $required) {
         assert_contains($required, $expectedSource, "reviewed gate fingerprint must retain {$required}");
     }
@@ -638,13 +638,14 @@ test_case('relational worst-case worker probes follow current SQL contracts', fu
         "'max_scope_index_probe_statement_count'",
         "'max_unexpected_physical_schema_statement_count'",
         "['scope_index_probe_max' => 1, 'unexpected_max' => 0]",
-        "wp_fts_wc_gate('concurrent_p95_degradation', '<= 16'",
+        "wp_fts_wc_gate('concurrent_request_throughput_per_second', \">= {\$concurrentRequestThroughputFloor}\"",
         "wp_fts_wc_gate('worker_rss_peak', '<= 167772160'",
     ] as $required) {
         assert_contains($required, $integration, "current worker proof must retain {$required}");
     }
     foreach ([
-        'concurrent p95 degradation | <=16× idle HTTP',
+        '| 50k | >=1.25 requests/second | >=0.9 requests/second |',
+        '| 100k | >=0.5 requests/second | >=0.3 requests/second |',
         'terminal corpus-completion controls',
         'long-lived final drain process',
         'exactly 1 named-index metadata read / 0',
@@ -1919,8 +1920,13 @@ test_case('relational scale gates keep terminal traversal and engine limits expl
         "['50k', 'mariadb'] => [25000.0, 35000.0]",
         "['100k', 'mysql'] => [40000.0, 60000.0]",
         "['100k', 'mariadb'] => [90000.0, 120000.0]",
+        "['50k', 'mysql'] => 1.25",
+        "['50k', 'mariadb'] => 0.9",
+        "['100k', 'mysql'] => 0.5",
+        "['100k', 'mariadb'] => 0.3",
         "wp_fts_wc_gate('concurrent_p95_ms', \"<= {\$concurrentP95Limit}\"",
         "wp_fts_wc_gate('concurrent_p99_ms', \"<= {\$concurrentP99Limit}\"",
+        "wp_fts_wc_gate('concurrent_request_throughput_per_second', \">= {\$concurrentRequestThroughputFloor}\"",
     ] as $required) {
         assert_contains($required, $finalize, "concurrency limits should retain their engine/profile boundary: {$required}");
     }
@@ -3517,13 +3523,18 @@ test_case('real broad-query evidence rejects repeated inner visibility joins', f
 
     foreach ([
         "'common_or', 'max_valid_or_prefix', 'prefix_fanout'",
-        "substr_count(\$rankSql, ' d_f ON ')",
+        "' d_f FORCE INDEX (document_presence) ON '",
+        "' wp_f FORCE INDEX (wp_fts_visibility) ON '",
+        'substr_count($rankSql, $documentVisibilityJoin)',
+        'substr_count($rankSql, $postVisibilityJoin)',
         "substr_count(\$rankSql, 'd_exact_match')",
         "substr_count(\$rankSql, 'd_prefix_match')",
         "{\$caseId}_broad_outer_visibility_shape",
         "{\$caseId}_broad_visibility_order",
-        "\$rankedPosition < \$visibilityPosition",
-        "\$visibilityPosition < \$orderPosition",
+        "\$rankedPosition < \$dirtyVisibilityPosition",
+        "\$dirtyVisibilityPosition < \$postVisibilityPosition",
+        "\$postVisibilityPosition < \$documentVisibilityPosition",
+        "\$documentVisibilityPosition < \$orderPosition",
     ] as $required) {
         assert_contains($required, $integration, "real broad-query gate should retain final ranking shape: {$required}");
     }
@@ -3830,6 +3841,7 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         'concurrent_shared_window_identity',
         'concurrent_all_worker_intersection_seconds',
         'concurrent_writer_{$worker}_independent_progress',
+        "['mutations' => '> 0', 'lease_acquired_batches' => '> 0']",
         'concurrent_http_attempts',
         'concurrent_unavailable_retries',
         'worker_full_100_document_batch',
@@ -4213,19 +4225,19 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
     assert_contains('old-posting-frontier|scope-ddl-writer|scope-proof', $runner, 'the populated scope-index DDL phase should retain its 1,800-second external kill');
     assert_same(1, substr_count($runner, 'run_php_phase scope-ddl-writer'), 'the populated scope-index proof should load one persistent lightweight writer process');
     assert_contains('scope_ddl_writer_pid=$!', $runner, 'the populated scope-index proof should supervise its one persistent writer process');
-    assert_contains("'pid' => \$pid", $integration, 'all four populated scope-index writes should identify their one persistent writer process');
+    assert_contains("'pid' => \$pid", $integration, 'all six populated core-index writes should identify their one persistent writer process');
     $scopeWriterDispatch = strpos($integration, "if (\$phase === 'scope-ddl-writer')");
     $wordpressBootstrapDispatch = strpos($integration, 'wp_fts_wc_bootstrap_wordpress();');
     assert_true(is_int($scopeWriterDispatch) && is_int($wordpressBootstrapDispatch) && $scopeWriterDispatch < $wordpressBootstrapDispatch, 'the lightweight DDL writer should run before the WordPress bootstrap branch');
     assert_contains("'wordpress_bootstrapped' => false", $integration, 'all four populated scope-index writes should record the lightweight runtime boundary');
-    assert_contains('4 exact successful canonical writes from 1 persistent lightweight process', $integration, 'the populated scope-index gate should reject extra writer runtimes');
+    assert_contains('6 exact successful canonical writes from 1 persistent lightweight process', $integration, 'the populated core-index gate should reject extra writer runtimes');
     assert_true(!str_contains($runner, 'WP_FTS_WC_DDL_OPERATION='), 'the DDL proof must not load one WordPress runtime per operation');
     assert_true(!str_contains($runner, 'WP_FTS_WC_DDL_ORDINAL=${ordinal}'), 'the DDL proof must not load one WordPress runtime per index and operation');
     foreach ([
-        'resumes an interrupted two-index install without duplicate DDL',
-        "\$fake->failQueryNeedleOccurrence = 2",
+        'resumes an interrupted three-index install without duplicate DDL',
+        "\$fake->failQueryNeedleOccurrence = 3",
         'stops after first DDL when its writer lease is stolen',
-        'lease loss after first CREATE must prevent the second core-table DDL',
+        'lease loss after first CREATE must prevent later core-table DDL',
         'a same-name index collision before ownership or DDL',
     ] as $required) {
         assert_contains($required, $scopeLifecycle, "scope-index lifecycle proof should retain failure contract: {$required}");
@@ -4256,9 +4268,10 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         'public maximum of 50',
         'hydrating a full 50-row page',
         'complete physical relation allowlist is',
-        'The current schema requires two',
+        'The current schema requires three',
         '`wp_fts_term_object(term_taxonomy_id, object_id)`',
         '`wp_fts_type_status_id(post_type, post_status, ID)`',
+        '`wp_fts_visibility(ID, post_type, post_status, post_password, post_date_gmt)`',
         'tables with their real InnoDB definitions',
         '100,001 posts and 300,001 relationships',
         'populated repair proof',

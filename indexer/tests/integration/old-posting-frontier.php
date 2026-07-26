@@ -1389,6 +1389,7 @@ function wp_fts_frontier_schema_evidence(mysqli $db, array $tables): array
         ],
         $documentsTable => [
             'PRIMARY' => ['unique' => true, 'columns' => ['post_id']],
+            'document_presence' => ['unique' => false, 'columns' => ['post_id', 'indexed_at']],
         ],
         $workTable => [
             'PRIMARY' => ['unique' => true, 'columns' => ['job_key']],
@@ -1546,7 +1547,7 @@ PRIMARY KEY (term_id,post_id), KEY post_term (post_id,term_id)
         "CREATE TABLE {$documents} (
 post_id bigint unsigned NOT NULL, primary_lang varbinary(32) NOT NULL DEFAULT 'und',
 content_hash varbinary(40) NOT NULL, snippet_text mediumtext NOT NULL, indexed_at bigint unsigned NOT NULL DEFAULT 0,
-PRIMARY KEY (post_id)
+PRIMARY KEY (post_id), KEY document_presence (post_id,indexed_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
         "CREATE TABLE {$work} (
 job_key varbinary(191) NOT NULL, kind varchar(16) NOT NULL, post_id bigint unsigned NOT NULL DEFAULT 0,

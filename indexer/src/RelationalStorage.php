@@ -105,6 +105,8 @@ final class WP_FTS_Relational_Storage implements WP_FTS_Set_Oriented_Search_Stor
     public const MAX_EMPTY_TERM_CLEANUP = 1000;
     public const TARGETED_SCOPE_INDEX_NAME = 'wp_fts_term_object';
     public const FILTERED_SCOPE_INDEX_NAME = 'wp_fts_type_status_id';
+    public const VISIBILITY_INDEX_NAME = 'wp_fts_visibility';
+    private const DOCUMENT_PRESENCE_INDEX_NAME = 'document_presence';
     private const MAX_SEARCH_SQL_BYTES = 32768;
     // Five thousand UTF-8 characters are at most 20 KiB under utf8mb4.
     private const MAX_METADATA_TEXT_CHARACTERS = 5000;
@@ -220,7 +222,8 @@ primary_lang varbinary(32) NOT NULL DEFAULT 'und',
 content_hash varbinary(40) NOT NULL,
 snippet_text mediumtext NOT NULL,
 indexed_at bigint unsigned NOT NULL DEFAULT 0,
-PRIMARY KEY  (post_id)
+PRIMARY KEY  (post_id),
+KEY document_presence (post_id,indexed_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
             "CREATE TABLE {$this->workTable} (
 job_key varbinary(191) NOT NULL,
@@ -270,13 +273,14 @@ KEY dirty (post_id,kind)
      */
     public function scope_keyset_indexes_requiring_creation(): array
     {
-        $contracts = $this->scope_keyset_index_contracts();
+        $contracts = $this->supporting_core_index_contracts();
         $requests = [];
         foreach ($contracts as $contract) {
-            $requests[$contract['table']] = [
-                'indexes' => [$contract],
+            $requests[$contract['table']] ??= [
+                'indexes' => [],
                 'inspect_all_indexes' => false,
             ];
+            $requests[$contract['table']]['indexes'][] = $contract;
         }
 
         return $this->scope_keyset_indexes_requiring_creation_from_physical(
@@ -295,7 +299,7 @@ KEY dirty (post_id,kind)
         $missing = [];
         foreach ($contracts as $key => $contract) {
             $tablePhysical = $physical[$contract['table']] ?? $this->empty_physical_schema();
-            $this->assert_scope_keyset_table_physical($contract, $tablePhysical);
+            $this->assert_supporting_core_table_physical($contract, $tablePhysical);
             $named = $this->named_schema_index($tablePhysical['indexes'] ?? [], $contract['name']);
             if ($named === null) {
                 $missing[] = $key;
@@ -303,7 +307,7 @@ KEY dirty (post_id,kind)
             }
             if (!$this->schema_index_matches_exactly($named, $contract)) {
                 throw new RuntimeException(
-                    "The {$contract['table']} index {$contract['name']} conflicts with the FTS keyset contract."
+                    "The {$contract['table']} index {$contract['name']} conflicts with the FTS core-index contract."
                 );
             }
         }
@@ -311,16 +315,16 @@ KEY dirty (post_id,kind)
         return $missing;
     }
 
-    /** Install the two indexes that make selective scope pages direct keysets. */
+    /** Install the core-table indexes required by scope pages and search visibility. */
     public function ensure_scope_keyset_indexes(): void
     {
-        foreach ($this->scope_keyset_index_contracts() as $contract) {
-            $physical = $this->inspect_scope_keyset_table($contract);
+        foreach ($this->supporting_core_index_contracts() as $contract) {
+            $physical = $this->inspect_supporting_core_table($contract);
             $named = $this->named_schema_index($physical['indexes'] ?? [], $contract['name']);
             if ($named !== null) {
                 if (!$this->schema_index_matches_exactly($named, $contract)) {
                     throw new RuntimeException(
-                        "The {$contract['table']} index {$contract['name']} conflicts with the FTS keyset contract."
+                        "The {$contract['table']} index {$contract['name']} conflicts with the FTS core-index contract."
                     );
                 }
                 continue;
@@ -335,10 +339,10 @@ KEY dirty (post_id,kind)
             $this->guard_mutation();
             $this->query(
                 "CREATE INDEX {$name} ON {$table}({$columns})",
-                "add {$contract['key']} FTS scope keyset index"
+                "add {$contract['key']} FTS core-table index"
             );
 
-            $installed = $this->inspect_scope_keyset_table($contract);
+            $installed = $this->inspect_supporting_core_table($contract);
             $actual = $this->named_schema_index($installed['indexes'] ?? [], $contract['name']);
             if ($actual === null || !$this->schema_index_matches_exactly($actual, $contract)) {
                 throw new RuntimeException(
@@ -360,7 +364,7 @@ KEY dirty (post_id,kind)
     public function drop_owned_scope_keyset_indexes(array $ownedKeys): void
     {
         $owned = array_fill_keys(array_filter($ownedKeys, 'is_string'), true);
-        foreach ($this->scope_keyset_index_contracts() as $key => $contract) {
+        foreach ($this->supporting_core_index_contracts() as $key => $contract) {
             if (!isset($owned[$key])) {
                 continue;
             }
@@ -379,13 +383,13 @@ KEY dirty (post_id,kind)
             $name = $this->required_schema_identifier($contract['name']);
             if ($this->is_sqlite_runtime()) {
                 $this->guard_mutation();
-                $this->query("DROP INDEX {$name}", "remove {$key} FTS scope keyset index");
+                $this->query("DROP INDEX {$name}", "remove {$key} FTS core-table index");
                 $this->guard_mutation();
                 continue;
             }
             $table = $this->required_schema_identifier($contract['table']);
             $this->guard_mutation();
-            $this->query("DROP INDEX {$name} ON {$table}", "remove {$key} FTS scope keyset index");
+            $this->query("DROP INDEX {$name} ON {$table}", "remove {$key} FTS core-table index");
             $this->guard_mutation();
         }
     }
@@ -441,32 +445,56 @@ KEY dirty (post_id,kind)
         return $contracts;
     }
 
+    /**
+     * Keep one ownership lifecycle for every plugin-created core-table index.
+     *
+     * The public lifecycle method and option names predate the visibility
+     * index. Reusing them avoids a second ownership record that could drift.
+     *
+     * @return array<string,array{key:string,table:string,name:string,columns:string[],unique:bool}>
+     */
+    private function supporting_core_index_contracts(): array
+    {
+        $contracts = $this->scope_keyset_index_contracts();
+        if (!$this->is_sqlite_runtime()) {
+            $contracts['visibility'] = [
+                'key' => 'visibility',
+                'table' => $this->postsTable,
+                'name' => self::VISIBILITY_INDEX_NAME,
+                'columns' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt'],
+                'unique' => false,
+            ];
+        }
+
+        return $contracts;
+    }
+
     /** @param array{key:string,table:string,name:string,columns:string[],unique:bool} $contract */
-    private function inspect_scope_keyset_table(array $contract): array
+    private function inspect_supporting_core_table(array $contract): array
     {
         $physical = $this->is_sqlite_runtime()
             ? $this->inspect_sqlite_schema($contract['table'], [$contract])
             : $this->inspect_mysql_schema($contract['table']);
-        $this->assert_scope_keyset_table_physical($contract, $physical);
+        $this->assert_supporting_core_table_physical($contract, $physical);
 
         return $physical;
     }
 
     /** @param array{key:string,table:string,name:string,columns:string[],unique:bool} $contract */
-    private function assert_scope_keyset_table_physical(array $contract, array $physical): void
+    private function assert_supporting_core_table_physical(array $contract, array $physical): void
     {
         if (!empty($physical['inspection_error'])) {
             throw new RuntimeException(
-                "The {$contract['table']} metadata required by FTS scope expansion is unavailable."
+                "The {$contract['table']} metadata required by FTS core-table indexes is unavailable."
             );
         }
         if (empty($physical['exists'])) {
-            throw new RuntimeException("The {$contract['table']} table required by FTS scope expansion is missing.");
+            throw new RuntimeException("The {$contract['table']} table required by FTS core-table indexes is missing.");
         }
         foreach ($contract['columns'] as $column) {
             if (!in_array($column, $physical['columns'] ?? [], true)) {
                 throw new RuntimeException(
-                    "The {$contract['table']}.{$column} column required by FTS scope expansion is missing."
+                    "The {$contract['table']}.{$column} column required by FTS core-table indexes is missing."
                 );
             }
         }
@@ -627,7 +655,7 @@ KEY dirty (post_id,kind)
     }
 
     /**
-     * Inspect the four FTS tables and both selective core-table indexes in one
+     * Inspect the four FTS tables and all supporting core-table indexes in one
      * physical snapshot. Explicit diagnostics use this combined boundary so
      * table count cannot multiply metadata statements.
      *
@@ -636,13 +664,14 @@ KEY dirty (post_id,kind)
     public function verify_schema_and_scope_keyset_indexes(): array
     {
         $contracts = $this->schema_contract();
-        $scopeContracts = $this->scope_keyset_index_contracts();
+        $scopeContracts = $this->supporting_core_index_contracts();
         $requests = $this->schema_contract_inspection_requests($contracts);
         foreach ($scopeContracts as $contract) {
-            $requests[$contract['table']] = [
-                'indexes' => [$contract],
+            $requests[$contract['table']] ??= [
+                'indexes' => [],
                 'inspect_all_indexes' => false,
             ];
+            $requests[$contract['table']]['indexes'][] = $contract;
         }
         $snapshot = $this->inspect_schema_snapshot($requests);
         $verification = $this->verify_schema_from_physical($contracts, $snapshot);
@@ -810,7 +839,10 @@ KEY dirty (post_id,kind)
                     'snippet_text' => ['type' => 'mediumtext', 'nullable' => false],
                     'indexed_at' => ['type' => 'bigint unsigned', 'nullable' => false],
                 ],
-                'indexes' => [['name' => 'PRIMARY', 'columns' => ['post_id'], 'unique' => true]],
+                'indexes' => [
+                    ['name' => 'PRIMARY', 'columns' => ['post_id'], 'unique' => true],
+                    ['name' => self::DOCUMENT_PRESENCE_INDEX_NAME, 'columns' => ['post_id', 'indexed_at'], 'unique' => false],
+                ],
             ],
             $this->workTable => [
                 'engine' => 'innodb',
@@ -2295,6 +2327,10 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         if ($effectivePrefix !== null) {
             $effectivePrefix['doc_freq'] = $surfaceDocFreq;
         }
+        $candidateBudget = is_int($options['approximate_candidate_budget'] ?? null)
+            ? max(1, min(WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET, $options['approximate_candidate_budget']))
+            : null;
+        $plannedPostingRows = $this->planned_posting_rows($resolvedGroups, $effectivePrefix);
         $rankQuery = $this->build_rank_query(
             $resolvedGroups,
             count($plan['groups']),
@@ -2435,6 +2471,12 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             'next_cursor' => $nextCursor,
             'previous_cursor' => $previousCursor,
         ];
+        if ($candidateBudget !== null) {
+            $payload['retrieval_mode'] = 'approximate';
+            $payload['results_may_be_incomplete'] = true;
+            $payload['planned_posting_rows'] = $plannedPostingRows;
+            $payload['candidate_budget'] = $candidateBudget;
+        }
         if (!empty($options['explain'])) {
             $recencyStrength = $options['recency_boost_strength'] ?? 0.0;
             $recencyHalfLife = $options['recency_boost_half_life_days'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS;
@@ -2455,6 +2497,12 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
                 ],
                 'canonical_page_bytes' => $canonicalPageBytes,
             ];
+            if ($candidateBudget !== null) {
+                $payload['explain']['retrieval_mode'] = 'approximate';
+                $payload['explain']['results_may_be_incomplete'] = true;
+                $payload['explain']['planned_posting_rows'] = $plannedPostingRows;
+                $payload['explain']['candidate_budget'] = $candidateBudget;
+            }
         }
         return $payload;
     }
@@ -2762,7 +2810,7 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
             'include_metadata', 'include_snippets', 'include_canonical_post_row',
             'explain', 'recency_boost_strength',
             'recency_boost_half_life_days', 'now_gmt', 'search_ready_incarnation',
-            'search_ready_profile_hash',
+            'search_ready_profile_hash', 'approximate_candidate_budget',
         ], true);
         foreach ($options as $key => $_value) {
             if (!is_string($key) || !isset($allowed[$key])) {
@@ -2836,6 +2884,7 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
             'page_size' => [1, self::MAX_PAGE_SIZE],
             'prefix_group_index' => [0, self::MAX_QUERY_GROUPS - 1],
             'prefix_min_length' => [WP_FTS_Set_Oriented_Search_Storage::MIN_PREFIX_LENGTH, WP_FTS_Set_Oriented_Search_Storage::MAX_PREFIX_LENGTH],
+            'approximate_candidate_budget' => [1, WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET],
         ];
         foreach ($integerBounds as $key => [$minimum, $maximum]) {
             if (!array_key_exists($key, $options)) {
@@ -3008,6 +3057,9 @@ LEFT JOIN ({$detailSql}) hydrated ON snapshot.snapshot_ready = 1",
         $rankGateSql = "(SELECT 1 AS rank_ready WHERE {$rankControl['sql']} LIMIT 1) rank_gate";
         $rankGateJoin = $this->is_sqlite_runtime() ? 'CROSS JOIN' : 'STRAIGHT_JOIN';
         $rankGatePredicate = $this->is_sqlite_runtime() ? '' : ' ON rank_gate.rank_ready = 1';
+        $candidateBudget = is_int($options['approximate_candidate_budget'] ?? null)
+            ? max(1, min(WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET, $options['approximate_candidate_budget']))
+            : null;
         $qRows = [];
         $qRowsByGroup = [];
         foreach ($groups as $groupId => $alternatives) {
@@ -3199,10 +3251,18 @@ FROM ({$surfaceRange['sql']}) prefix_terms";
                 if ($groupBy === '') {
                     $score = $exactScore;
                 }
-                $rankedSql = "SELECT po.post_id, {$score} AS score
+                if ($candidateBudget !== null) {
+                    $candidateScore = "CASE WHEN q.prefix_term = 1 THEN {$prefixScore} ELSE {$exactScore} END";
+                    $rawParts[] = $this->budgeted_raw_candidate_sql("SELECT po.post_id, q.group_id, {$candidateScore} AS group_score
+FROM {$rankGateSql}
+{$rankGateJoin} ({$orQuerySql}) q{$rankGatePredicate}
+{$orderedJoin} {$this->postingsTable} po ON po.term_id = q.term_id", $candidateBudget);
+                } else {
+                    $rankedSql = "SELECT po.post_id, {$score} AS score
 FROM {$rankGateSql}
 {$rankGateJoin} ({$orQuerySql}) q{$rankGatePredicate}
 {$orderedJoin} {$this->postingsTable} po ON po.term_id = q.term_id{$groupBy}";
+                }
                 array_push($args, ...$rankControl['args']);
                 if ($prefix !== null) {
                     array_push($args, ...$surfaceRange['args']);
@@ -3215,6 +3275,7 @@ FROM {$rankGateSql}
         if ($rankedSql === '') {
             $having = $mode === 'AND' ? 'HAVING COUNT(*) = ' . $groupCount : '';
             $rawSql = implode("\nUNION ALL\n", $rawParts);
+            $rawSql = $this->budgeted_raw_candidate_sql($rawSql, $candidateBudget);
             $rankedSql = "SELECT grouped.post_id, SUM(grouped.group_score) AS score
 FROM (
     SELECT raw.post_id, raw.group_id, MAX(raw.group_score) AS group_score
@@ -3240,7 +3301,8 @@ GROUP BY grouped.post_id
             // rare anchor before any post-first probes. The ranking statement
             // has one snapshot, so repeating every anti-join here is redundant;
             // only the canonical date row is still needed for ordering.
-            $visibilityJoins = "{$orderedJoin} {$this->postsTable} wp_f ON wp_f.ID = ranked.post_id";
+            $postIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (' . self::VISIBILITY_INDEX_NAME . ')';
+            $visibilityJoins = "{$orderedJoin} {$this->postsTable} wp_f{$postIndexHint} ON wp_f.ID = ranked.post_id";
             $visibilityWhere = '1=1';
         }
         $recencyStrength = $options['recency_boost_strength'] ?? 0.0;
@@ -3326,6 +3388,38 @@ ORDER BY CASE WHEN limited.doc_id IS NULL THEN 1 ELSE 0 END,
             'prefix_strategy' => $prefixStrategy,
             'scoring_now_gmt' => $scoringNow,
         ];
+    }
+
+    /** Cap candidate rows before aggregate ranking. */
+    private function budgeted_raw_candidate_sql(string $sql, ?int $candidateBudget): string
+    {
+        if ($candidateBudget === null) {
+            return $sql;
+        }
+
+        $budget = max(1, min(WP_FTS_Set_Oriented_Search_Storage::MAX_APPROXIMATE_CANDIDATE_BUDGET, $candidateBudget));
+
+        return "SELECT budgeted_candidates.post_id, budgeted_candidates.group_id, budgeted_candidates.group_score
+FROM ({$sql}) budgeted_candidates
+LIMIT {$budget}";
+    }
+
+    /** Return a dictionary-derived upper bound on ranking posting rows. */
+    private function planned_posting_rows(array $groups, ?array $prefix): int
+    {
+        $rows = 0;
+        foreach ($groups as $alternatives) {
+            foreach ($alternatives as $alternative) {
+                $docFreq = max(0, (int) ($alternative['doc_freq'] ?? 0));
+                $rows = $rows > PHP_INT_MAX - $docFreq ? PHP_INT_MAX : $rows + $docFreq;
+            }
+        }
+        if ($prefix !== null) {
+            $docFreq = max(0, (int) ($prefix['doc_freq'] ?? 0));
+            $rows = $rows > PHP_INT_MAX - $docFreq ? PHP_INT_MAX : $rows + $docFreq;
+        }
+
+        return $rows;
     }
 
     /** @return array{sql:string,args:array<int,mixed>} */
@@ -3418,14 +3512,18 @@ WHERE {$visible['where']}",
         $doc = 'd_' . $suffix;
         $dirty = 'dirty_' . $suffix;
         $orderedJoin = $this->is_sqlite_runtime() ? 'JOIN' : 'STRAIGHT_JOIN';
-        // Visibility runs once per ranked candidate. Any scope reconciliation
-        // makes planning fail closed, so this hot path needs only the direct
-        // post-generation probe; it must never walk taxonomy relationships for
-        // every broad-query candidate.
+        // Visibility runs once per ranked candidate. Reject a known dirty
+        // generation before paying either covering row probe; broad searches
+        // commonly encounter that backlog while a worker catches up. Canonical
+        // visibility then rejects hidden rows before document presence. Any
+        // scope reconciliation makes planning fail closed, so this hot path
+        // must never walk taxonomy relationships for every candidate.
+        $documentIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (' . self::DOCUMENT_PRESENCE_INDEX_NAME . ')';
+        $postIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (' . self::VISIBILITY_INDEX_NAME . ')';
         $dirtyIndexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (dirty)';
-        $joins = "{$orderedJoin} {$this->documentsTable} {$doc} ON {$doc}.post_id = {$postIdExpression}
-{$orderedJoin} {$this->postsTable} {$post} ON {$post}.ID = {$postIdExpression}
-LEFT JOIN {$this->workTable} {$dirty}{$dirtyIndexHint} ON {$dirty}.kind = 'post' AND {$dirty}.post_id = {$postIdExpression}";
+        $joins = "LEFT JOIN {$this->workTable} {$dirty}{$dirtyIndexHint} ON {$dirty}.kind = 'post' AND {$dirty}.post_id = {$postIdExpression}
+{$orderedJoin} {$this->postsTable} {$post}{$postIndexHint} ON {$post}.ID = {$postIdExpression}
+{$orderedJoin} {$this->documentsTable} {$doc}{$documentIndexHint} ON {$doc}.post_id = {$postIdExpression}";
         $where = [
             "{$dirty}.job_key IS NULL",
             "{$post}.post_password = ''",
@@ -3822,6 +3920,7 @@ VALUES (%s, 'meta', 0, %d, 'meta', 0, 0, '', 0, 0, 0, '', 0, %s, '', 0)",
             "CREATE TABLE {$postings} (term_id INTEGER NOT NULL, post_id INTEGER NOT NULL, impact INTEGER NOT NULL, PRIMARY KEY(term_id,post_id))",
             'CREATE INDEX ' . $index($this->postingsTable, 'post_term') . " ON {$postings}(post_id,term_id)",
             "CREATE TABLE {$documents} (post_id INTEGER PRIMARY KEY, primary_lang BLOB NOT NULL DEFAULT 'und', content_hash BLOB NOT NULL, snippet_text TEXT NOT NULL, indexed_at INTEGER NOT NULL DEFAULT 0)",
+            'CREATE INDEX ' . $index($this->documentsTable, self::DOCUMENT_PRESENCE_INDEX_NAME) . " ON {$documents}(post_id,indexed_at)",
             "CREATE TABLE {$work} (job_key BLOB NOT NULL PRIMARY KEY, kind TEXT NOT NULL, post_id INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'pending', available_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, claim_token TEXT NOT NULL DEFAULT '', claimed_generation INTEGER NOT NULL DEFAULT 0, claim_expires_at INTEGER NOT NULL DEFAULT 0, cursor_post_id INTEGER NOT NULL DEFAULT 0, scope_coverage TEXT NOT NULL DEFAULT '', scope_incarnation BLOB NOT NULL DEFAULT '', scope_subject_type TEXT NOT NULL DEFAULT '', scope_subject_id INTEGER NOT NULL DEFAULT 0, payload TEXT NULL, last_error_code TEXT NOT NULL DEFAULT '', last_error_at INTEGER NOT NULL DEFAULT 0)",
             'CREATE INDEX ' . $index($this->workTable, 'ready') . " ON {$work}(kind,state,available_at,post_id,job_key)",
             'CREATE INDEX ' . $index($this->workTable, 'recoverable') . " ON {$work}(kind,state,claim_expires_at,available_at,post_id,job_key)",
@@ -5311,6 +5410,7 @@ ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(co
             'date_after' => $options['date_after'] ?? null,
             'date_before' => $options['date_before'] ?? null,
             'recency_strength' => $recencyStrength,
+            'approximate_candidate_budget' => $options['approximate_candidate_budget'] ?? null,
         ];
         if ($recencyStrength > 0.0) {
             $input['recency_half_life'] = $options['recency_boost_half_life_days'] ?? WP_FTS_Set_Oriented_Search_Storage::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS;
