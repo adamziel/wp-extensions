@@ -12387,7 +12387,10 @@ function wp_fts_wc_finalize(): array
             && (float) $writer['measured_overlap_seconds'] >= $concurrencySeconds;
         $concurrentGates[] = wp_fts_wc_gate("concurrent_writer_{$worker}_artifact", 'complete PASS writer artifact', [$writer['schema'] ?? null, $writer['status'] ?? null, $writer['phase'] ?? null, $writer['worker'] ?? null, count($rawBatches)], $writerShape);
         $concurrentGates[] = wp_fts_wc_gate("concurrent_writer_{$worker}_overlap_seconds", ">= {$concurrencySeconds}", $writer['measured_overlap_seconds'] ?? null, is_numeric($writer['measured_overlap_seconds'] ?? null) && (float) $writer['measured_overlap_seconds'] >= $concurrencySeconds);
-        $concurrentGates[] = wp_fts_wc_gate("concurrent_writer_{$worker}_independent_progress", ['indexed' => '> 0', 'lease_acquired_batches' => '> 0'], ['indexed' => $writer['indexed'] ?? null, 'lease_acquired_batches' => $writer['lease_acquired_batches'] ?? null], (int) ($writer['indexed'] ?? 0) > 0 && (int) ($writer['lease_acquired_batches'] ?? 0) > 0);
+        // The global lease lets either process drain both disjoint assignments.
+        // Require each process to mutate and acquire the lease; aggregate
+        // indexing progress and per-assignment final parity prove durable work.
+        $concurrentGates[] = wp_fts_wc_gate("concurrent_writer_{$worker}_independent_progress", ['mutations' => '> 0', 'lease_acquired_batches' => '> 0'], ['mutations' => $writer['mutations'] ?? null, 'lease_acquired_batches' => $writer['lease_acquired_batches'] ?? null], (int) ($writer['mutations'] ?? 0) > 0 && (int) ($writer['lease_acquired_batches'] ?? 0) > 0);
         $concurrentGates[] = wp_fts_wc_gate("concurrent_writer_{$worker}_final_index_parity", 20, count($parityRows), count($parityRows) === 20);
     }
 

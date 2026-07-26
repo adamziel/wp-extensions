@@ -3841,6 +3841,7 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
         'concurrent_shared_window_identity',
         'concurrent_all_worker_intersection_seconds',
         'concurrent_writer_{$worker}_independent_progress',
+        "['mutations' => '> 0', 'lease_acquired_batches' => '> 0']",
         'concurrent_http_attempts',
         'concurrent_unavailable_retries',
         'worker_full_100_document_batch',
