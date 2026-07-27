@@ -11152,7 +11152,7 @@ function wp_fts_wc_composed_maximum_worker_path(array &$queueClaimPlans): array
             'Composed-worker existing-frontier setup did not enqueue its maximum document.'
         );
         $setupBatch = wp_fts_wc_instrumented_worker_batch(
-            'worst-case-composed-maximum-existing-frontier',
+            'wc-composed-existing-frontier',
             $queueClaimPlans
         );
         $existingPostingCounts = wp_fts_wc_document_posting_kind_counts($maximumPostId);
@@ -20885,7 +20885,10 @@ function wp_fts_wc_worker_statement_role(string $sql): string
 
     $lower = strtolower($trimmed);
     if (str_contains($lower, 'wp_fts_indexing_lock')) {
-        if (str_starts_with($normalized, 'INSERT IGNORE INTO ')) {
+        if (
+            str_starts_with($normalized, 'INSERT INTO ')
+            && str_contains($lower, 'on duplicate key update option_name = option_name')
+        ) {
             return 'lease_acquire';
         }
         if (str_starts_with($normalized, 'UPDATE ')) {

@@ -2021,7 +2021,13 @@ final class WP_FTS_Test_WPDB
 
         if (
             $this->options !== null
-            && str_starts_with($sql, 'INSERT IGNORE INTO ' . $this->options . ' (option_name,option_value,autoload)')
+            && (
+                str_starts_with($sql, 'INSERT IGNORE INTO ' . $this->options . ' (option_name,option_value,autoload)')
+                || (
+                    str_starts_with($sql, 'INSERT INTO ' . $this->options . ' (option_name,option_value,autoload)')
+                    && str_contains($sql, 'ON DUPLICATE KEY UPDATE option_name = option_name')
+                )
+            )
         ) {
             $options =& wp_fts_test_option_store();
             if (

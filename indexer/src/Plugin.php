@@ -20866,20 +20866,26 @@ WHERE p.ID IN ({$post_placeholders})";
         }
 
         $table = (string) $wpdb->options;
+        // A no-op duplicate update takes the exclusive duplicate-key lock
+        // directly. Ignoring a duplicate first takes a shared gap lock and
+        // then upgrades it for insertion, which lets simultaneous MySQL
+        // contenders deadlock even though only one lease row can win.
         $statement = $may_cross_uninstall_fence
             ? $wpdb->prepare(
-                "INSERT IGNORE INTO {$table} (option_name,option_value,autoload) VALUES (%s,%s,%s)",
+                "INSERT INTO {$table} (option_name,option_value,autoload) VALUES (%s,%s,%s)
+ON DUPLICATE KEY UPDATE option_name = option_name",
                 self::INDEX_LOCK_OPTION,
                 maybe_serialize($payload),
                 'no'
             )
             : $wpdb->prepare(
-                "INSERT IGNORE INTO {$table} (option_name,option_value,autoload)
+                "INSERT INTO {$table} (option_name,option_value,autoload)
 SELECT %s,%s,%s
 WHERE NOT EXISTS (
     SELECT 1 FROM {$table} uninstall_fence
     WHERE uninstall_fence.option_name = %s
-)",
+)
+ON DUPLICATE KEY UPDATE option_name = option_name",
                 self::INDEX_LOCK_OPTION,
                 maybe_serialize($payload),
                 'no',
@@ -20889,7 +20895,18 @@ WHERE NOT EXISTS (
         if ($result === false) {
             throw new RuntimeException('Could not acquire the FTS index writer lease.');
         }
-        if ((int) $result !== 1) {
+        $inserted = (int) $result === 1;
+        if (
+            $inserted
+            && isset($wpdb->dbh)
+            && $wpdb->dbh instanceof mysqli
+            && mysqli_insert_id($wpdb->dbh) <= 0
+        ) {
+            // MYSQLI_CLIENT_FOUND_ROWS reports a no-op duplicate update as one
+            // affected row. Only a real insert receives a new option_id.
+            $inserted = false;
+        }
+        if (!$inserted) {
             if (function_exists('wp_cache_delete')) {
                 wp_cache_delete(self::INDEX_LOCK_OPTION, 'options');
                 wp_cache_delete('notoptions', 'options');

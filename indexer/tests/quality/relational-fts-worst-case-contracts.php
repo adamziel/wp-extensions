@@ -1997,6 +1997,7 @@ test_case('relational worst-case uses the strict search option vocabulary at eac
         "'wc-mixed-' . \$caseId . '-document'" => 'wc-mixed-exhausted-corpus-scope-document',
         "'wc-mixed-' . \$caseId . '-scope'" => 'wc-mixed-exhausted-corpus-scope-scope',
         "'wc-mixed-' . \$caseId . '-cleanup'" => 'wc-mixed-exhausted-corpus-scope-cleanup',
+        "'wc-composed-existing-frontier'" => 'wc-composed-existing-frontier',
         "'wc-composed-cron-later-existing-event'" => 'wc-composed-cron-later-existing-event',
         "'wc-composed-later-event-successor'" => 'wc-composed-later-event-successor',
     ] as $expression => $longestValue) {
@@ -2188,8 +2189,9 @@ AND work_row.generation = claim_driver.generation";
         'expires_at' => 400,
         'renewals' => 0,
     ]);
-    $leaseInsert = "INSERT IGNORE INTO wp_options (option_name,option_value,autoload) SELECT '_wp_fts_index_lock','{$leasePayload}','no'";
+    $leaseInsert = "INSERT INTO wp_options (option_name,option_value,autoload) SELECT '_wp_fts_index_lock','{$leasePayload}','no' ON DUPLICATE KEY UPDATE option_name = option_name";
     assert_same($leasePayload, wp_fts_mutation_proof_writer_lease_insert_payload($leaseInsert, 'wp_options', '_wp_fts_index_lock'), 'the exact acquired lease payload should be recovered');
+    assert_same(null, wp_fts_mutation_proof_writer_lease_insert_payload(str_replace('INSERT INTO', 'INSERT IGNORE INTO', $leaseInsert), 'wp_options', '_wp_fts_index_lock'), 'the lease proof must reject the shared duplicate-key gap-lock path');
     $leaseDelete = "DELETE FROM wp_options WHERE option_name = '_wp_fts_index_lock' AND option_value = '{$leasePayload}'";
     assert_true(wp_fts_mutation_proof_writer_lease_delete_valid($leaseDelete, 'wp_options', '_wp_fts_index_lock', $leasePayload), 'the exact post-COMMIT lease CAS should validate');
     foreach ([
@@ -3983,7 +3985,11 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     $acceptanceSchema = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_assert_relational_schema');
     assert_contains("'content_hash' => ['type' => 'varbinary(40)', 'nullable' => false, 'default' => null, 'extra' => '']", $acceptanceSchema, 'the real schema proof should require the current fixed-width content hash');
     assert_contains("'snippet_text' => ['type' => 'mediumtext', 'nullable' => false, 'default' => null, 'extra' => '']", $acceptanceSchema, 'the real schema proof should require the current non-null snippet transport');
-    assert_contains("INSERT IGNORE INTO {\$table} (option_name,option_value,autoload)", $plugin, 'the uncontended worker lease must remain one atomic option-table statement');
+    $leaseInsert = wp_fts_wc_contract_function_source($plugin, 'insert_index_lock_in_database');
+    assert_contains("INSERT INTO {\$table} (option_name,option_value,autoload)", $leaseInsert, 'the uncontended worker lease must remain one atomic option-table statement');
+    assert_contains('ON DUPLICATE KEY UPDATE option_name = option_name', $leaseInsert, 'lease contention must take the exclusive duplicate-key path without rewriting its owner');
+    assert_contains('mysqli_insert_id($wpdb->dbh) <= 0', $leaseInsert, 'native found-rows connections must distinguish a no-op duplicate from the one real insert winner');
+    assert_true(!str_contains($leaseInsert, 'INSERT IGNORE'), 'lease acquisition must not use the shared duplicate-key gap-lock path');
     assert_contains('WP_FTS_PostContentExtractor::CUSTOM_FIELDS_OPTION => []', $plugin, 'current setup should initialize the bounded custom-field configuration');
     assert_contains("UPDATE `{\$table}` SET autoload = 'yes' WHERE option_name IN", $plugin, 'current setup should autoload every bounded search input before worker and visitor requests');
     $atomicAcknowledgement = wp_fts_wc_contract_function_source($plugin, 'acknowledge_claims_under_index_lock');

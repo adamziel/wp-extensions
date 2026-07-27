@@ -430,15 +430,16 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    within five seconds.
    Each pass takes at most five seconds and stays below the 128 MiB PHP ceiling.
 3. Deactivation retains tables/data. Uninstall removes the four current tables
-   with **one idempotent `DROP TABLE` statement per site** and issues exactly
-   two `DROP INDEX` statements for its recorded, exactly matching core-table
-   indexes; a reused unowned index or a missing/changed owned index is never
-   dropped. Under the shared writer lease, uninstall first persists the exact
-   non-autoloaded scalar fence `1`, then drops owned indexes and tables and
-   deletes every operational option while retaining that fence. An unexpired
-   owner makes that site fail hard with **0 `DROP INDEX`, 0 `DROP TABLE`, and 0
-   option deletions**; an expired owner is atomically replaced before the fence,
-   two owned index drops, and one table drop. The lease remains
+   with **one idempotent `DROP TABLE` statement per site** and, on a healthy
+   installation, exactly three `DROP INDEX` statements for the matching
+   plugin-namespaced core-table indexes. A missing or conflicting definition is
+   never dropped.
+   Under the shared writer lease, uninstall first persists the exact
+   non-autoloaded scalar fence `1`, then drops exact supporting indexes and
+   tables and deletes every operational option while retaining that fence. An
+   unexpired owner makes that site fail hard with **0 `DROP INDEX`, 0 `DROP
+   TABLE`, and 0 option deletions**; an expired owner is atomically replaced
+   before the fence, three supporting-index drops, and one table drop. The lease remains
    owned through schedule and option cleanup, and token-checked release cannot
    delete a successor. Partial DROP failure retains the fence. Preloaded schema,
    worker, foreground, and scheduler callbacks then perform **0 SQL, 0 option

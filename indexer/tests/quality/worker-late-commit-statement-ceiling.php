@@ -170,7 +170,8 @@ test_case('late worker commit failure stays recoverable inside the complete stat
             );
             assert_same(2, count(array_filter(
                 $takeoverQueries,
-                static fn(string $sql): bool => str_starts_with($sql, 'INSERT IGNORE INTO wp_options')
+                static fn(string $sql): bool => str_starts_with($sql, 'INSERT INTO wp_options')
+                    && str_contains($sql, 'ON DUPLICATE KEY UPDATE option_name = option_name')
             )), 'stale option takeover must attempt the contended and replacement lease INSERTs exactly once each');
             assert_same(2, count(array_filter(
                 $takeoverQueries,
@@ -223,13 +224,15 @@ test_case('late worker commit failure stays recoverable inside the complete stat
             assert_same(1, $ordinary['indexed'] ?? null, 'the invocation after standalone takeover must resume document work');
             assert_true(
                 isset($ordinaryQueries[0], $ordinaryQueries[1])
-                    && str_starts_with($ordinaryQueries[0], 'INSERT IGNORE INTO wp_options')
+                    && str_starts_with($ordinaryQueries[0], 'INSERT INTO wp_options')
+                    && str_contains($ordinaryQueries[0], 'ON DUPLICATE KEY UPDATE option_name = option_name')
                     && str_contains($ordinaryQueries[1], '/* wp_fts:claim-batch */'),
                 'the ordinary successor must acquire once and proceed directly to its bounded claim'
             );
             assert_same(1, count(array_filter(
                 $ordinaryQueries,
-                static fn(string $sql): bool => str_starts_with($sql, 'INSERT IGNORE INTO wp_options')
+                static fn(string $sql): bool => str_starts_with($sql, 'INSERT INTO wp_options')
+                    && str_contains($sql, 'ON DUPLICATE KEY UPDATE option_name = option_name')
             )), 'the ordinary successor must perform one uncontended lease acquisition');
             assert_true(
                 count($ordinaryQueries)

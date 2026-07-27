@@ -658,7 +658,10 @@ test_case('lifecycle scheduler capability stale lease race reports the uninstall
     ];
     $insertAttempts = 0;
     $fake->queryObserver = static function (string $sql) use (&$insertAttempts): void {
-        if (!str_starts_with($sql, 'INSERT IGNORE INTO wp_options (option_name,option_value,autoload)')) {
+        if (
+            !str_starts_with($sql, 'INSERT INTO wp_options (option_name,option_value,autoload)')
+            || !str_contains($sql, 'ON DUPLICATE KEY UPDATE option_name = option_name')
+        ) {
             return;
         }
         $insertAttempts++;

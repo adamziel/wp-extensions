@@ -279,7 +279,10 @@ function wp_fts_test_composed_worker_statement_role(string $sql): string
         }
     }
     $lower = strtolower($sql);
-    if (str_starts_with($normalized, 'INSERT IGNORE INTO WP_OPTIONS')) {
+    if (
+        str_starts_with($normalized, 'INSERT INTO WP_OPTIONS')
+        && str_contains($lower, 'on duplicate key update option_name = option_name')
+    ) {
         return 'lease_acquire';
     }
     if (str_starts_with($normalized, 'DELETE FROM WP_OPTIONS')) {

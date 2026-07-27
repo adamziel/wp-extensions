@@ -2120,9 +2120,10 @@ STRAIGHT_JOIN wp_fts_work work_row
         'expires_at' => 400,
         'renewals' => 0,
     ]);
-    $leaseInsert = "INSERT IGNORE INTO wp_options (option_name,option_value,autoload)
+    $leaseInsert = "INSERT INTO wp_options (option_name,option_value,autoload)
 SELECT '_wp_fts_index_lock','{$leasePayload}','no'
-WHERE NOT EXISTS (SELECT 1 FROM wp_options uninstall_fence WHERE uninstall_fence.option_name='_wp_fts_uninstall_fence')";
+WHERE NOT EXISTS (SELECT 1 FROM wp_options uninstall_fence WHERE uninstall_fence.option_name='_wp_fts_uninstall_fence')
+ON DUPLICATE KEY UPDATE option_name = option_name";
     $extractedPayload = wp_fts_mutation_proof_writer_lease_insert_payload(
         $leaseInsert,
         'wp_options',
@@ -2385,31 +2386,32 @@ function wp_fts_mutation_proof_writer_lease_insert_payload(
     if (
         $tokens === null
         || !wp_fts_mutation_proof_sql_tokens_are_single_dml($tokens, 'INSERT')
-        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[1] ?? null, 'IGNORE')
-        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[2] ?? null, 'INTO')
-        || !wp_fts_mutation_proof_sql_identifier_matches($tokens[3] ?? null, $optionsTable)
-        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[4] ?? null, '(')
-        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[5] ?? null, 'OPTION_NAME')
-        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[6] ?? null, ',')
-        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[7] ?? null, 'OPTION_VALUE')
-        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[8] ?? null, ',')
-        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[9] ?? null, 'AUTOLOAD')
-        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[10] ?? null, ')')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[1] ?? null, 'INTO')
+        || !wp_fts_mutation_proof_sql_identifier_matches($tokens[2] ?? null, $optionsTable)
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[3] ?? null, '(')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[4] ?? null, 'OPTION_NAME')
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[5] ?? null, ',')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[6] ?? null, 'OPTION_VALUE')
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[7] ?? null, ',')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[8] ?? null, 'AUTOLOAD')
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[9] ?? null, ')')
     ) {
         return null;
     }
 
     $valueIndex = null;
-    if (wp_fts_mutation_proof_sql_token_is_keyword($tokens[11] ?? null, 'SELECT')) {
-        $valueIndex = 12;
+    if (wp_fts_mutation_proof_sql_token_is_keyword($tokens[10] ?? null, 'SELECT')) {
+        $valueIndex = 11;
     } elseif (
-        wp_fts_mutation_proof_sql_token_is_keyword($tokens[11] ?? null, 'VALUES')
-        && wp_fts_mutation_proof_sql_token_is_symbol($tokens[12] ?? null, '(')
+        wp_fts_mutation_proof_sql_token_is_keyword($tokens[10] ?? null, 'VALUES')
+        && wp_fts_mutation_proof_sql_token_is_symbol($tokens[11] ?? null, '(')
     ) {
-        $valueIndex = 13;
+        $valueIndex = 12;
     }
+    $suffixIndex = count($tokens) - 7;
     if (
         $valueIndex === null
+        || $suffixIndex <= $valueIndex + 4
         || ($tokens[$valueIndex]['type'] ?? null) !== 'string'
         || ($tokens[$valueIndex]['value'] ?? null) !== $optionName
         || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[$valueIndex + 1] ?? null, ',')
@@ -2417,6 +2419,13 @@ function wp_fts_mutation_proof_writer_lease_insert_payload(
         || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[$valueIndex + 3] ?? null, ',')
         || ($tokens[$valueIndex + 4]['type'] ?? null) !== 'string'
         || ($tokens[$valueIndex + 4]['value'] ?? null) !== 'no'
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[$suffixIndex] ?? null, 'ON')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[$suffixIndex + 1] ?? null, 'DUPLICATE')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[$suffixIndex + 2] ?? null, 'KEY')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[$suffixIndex + 3] ?? null, 'UPDATE')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[$suffixIndex + 4] ?? null, 'OPTION_NAME')
+        || !wp_fts_mutation_proof_sql_token_is_symbol($tokens[$suffixIndex + 5] ?? null, '=')
+        || !wp_fts_mutation_proof_sql_token_is_keyword($tokens[$suffixIndex + 6] ?? null, 'OPTION_NAME')
     ) {
         return null;
     }
