@@ -102,7 +102,7 @@ function wp_fts_mysql_proof_run_inside_wordpress(): void
     $tables = wp_fts_mysql_proof_tables($prefix);
     wp_fts_mysql_proof_assert_tables($wpdb, $tables);
     wp_fts_mysql_proof_assert_schema($wpdb, $tables);
-    wp_fts_mysql_proof_assert_same(true, wp_fts_mysql_proof_storage_fixture(false)->verify_schema()['valid'] ?? null, 'production schema verifier should accept the exact current relations.');
+    wp_fts_mysql_proof_assert_same(true, wp_fts_mysql_proof_storage_fixture()->verify_schema()['valid'] ?? null, 'production schema verifier should accept the exact current relations.');
     $tableEngines = wp_fts_mysql_proof_table_engines($wpdb, $tables);
 
     $token = wp_fts_mysql_proof_token();
@@ -644,7 +644,7 @@ function wp_fts_mysql_proof_cleanup(array $postIds): void
                 if ($GLOBALS['wpdb']->query("DELETE FROM {$workTable}") === false) {
                     throw new RuntimeException('Could not clear MySQL proof work rows.');
                 }
-                $storage = wp_fts_mysql_proof_storage_fixture(false);
+                $storage = wp_fts_mysql_proof_storage_fixture();
                 $storage->replace_prepared_documents([], $postIds);
                 $storage->optimize();
 
@@ -1073,10 +1073,10 @@ function wp_fts_mysql_proof_command_string(array $command): string
 }
 
 /** Reach the private production storage factory only from this fixture. */
-function wp_fts_mysql_proof_storage_fixture(bool $ensureSchema = false): WP_FTS_Relational_Storage
+function wp_fts_mysql_proof_storage_fixture(): WP_FTS_Relational_Storage
 {
     $method = new ReflectionMethod(WP_FTS_Plugin::class, 'storage');
     $method->setAccessible(true);
 
-    return $method->invoke(null, $ensureSchema);
+    return $method->invoke(null);
 }

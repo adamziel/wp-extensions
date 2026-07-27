@@ -32,13 +32,13 @@ wp fts status
 wp fts status --format=json
 ```
 
-Normal Health/status trusts the stored schema/readiness state. It does not run
-`SHOW TABLES`, verify indexes, or count the eligible WordPress corpus and whole
-document table. JSON reports `schema_verification=stored` plus bounded pending
-post/scope work counts, whether each count is exact or a lower bound, and the
-active reconciliation cursor. A current-schema status uses one bounded
-aggregate over indexed `fts_work` state; a stale-schema Health render uses zero
-database statements. The explicit support snapshot and
+Normal Health/status trusts stored readiness state. It does not run `SHOW
+TABLES`, verify indexes, or count the eligible WordPress corpus and whole
+document table. JSON reports `schema_status=not_checked` and
+`schema_verification=not_run` plus bounded pending post/scope work counts,
+whether each count is exact or a lower bound, and the active reconciliation
+cursor. Normal status uses one bounded aggregate over indexed `fts_work` state.
+The explicit support snapshot and
 `wp fts diagnose <query>` add bounded physical schema verification and label it
 with `schema_verification=physical`. They retain the same bounded queue and
 reconciliation fields; no operator diagnostic exhaustively counts WordPress
@@ -200,7 +200,7 @@ The relational backend creates four tables under the active WordPress table pref
   ownership for pending indexing work.
 
 Physical verification compares the complete current table contract. Because the
-index is derived, repair replaces an incompatible FTS table rather than trying
+index is derived, repair replaces an invalid current FTS table rather than trying
 to preserve its rows. Creation then uses WordPress `dbDelta()` when available or
 raw `CREATE TABLE` statements otherwise. Database write failures are surfaced
 with the failed operation name so activation, repair, and runtime indexing do
@@ -212,7 +212,9 @@ the deleted site. Deactivation is reversible: it clears scheduled work and
 retains the index. Uninstall is deliberately destructive: for each site it uses
 one idempotent `DROP TABLE IF EXISTS` statement covering the four current tables
 and eight deterministic reset-generation names, then removes operational
-options. The DROP uses the same per-site writer lease as indexing and repair.
+options. Before dropping tables, it removes only exact plugin-namespaced
+supporting core-index definitions; same-name conflicting definitions are left
+untouched. Cleanup uses the same per-site writer lease as indexing and repair.
 If that lease is active, uninstall leaves that site's tables and options
 untouched and fails so the operator can retry after the writer finishes; an
 expired lease is safely taken over. The lease stays owned until table, schedule,
@@ -363,7 +365,7 @@ confirmation it replaces the four current FTS document, posting, dictionary,
 and durable-work relations with an empty generation, then clears pending queue
 state, failed-item recovery metadata, and failure/latest-batch state. It
 preserves WordPress posts, post meta, terms, unrelated options, plugin settings,
-analyzer-pack options, schema version, and the existing `fts_*` table contract.
+analyzer-pack options, and the existing `fts_*` table contract.
 It does not change uninstall behavior; uninstall still removes every current
 and deterministic reset-generation FTS table owned by the plugin.
 
@@ -584,9 +586,11 @@ matching, optional public REST search, result limits, single-plan language routi
 indexed post types. Use the documented options and filters for analyzer pack
 paths and custom field selection.
 
-The Health tab shows schema status, stored and expected schema versions, safe
-indexing lock state, bounded durable scope/post work and its keyset cursor, and
-the latest batch summary. Its lock row distinguishes `None`, `Active`, and
+The normal Health view leaves physical schema status unchecked so opening the
+page adds no metadata probes. The explicit support snapshot and repair action
+verify the exact physical schema. Health also shows safe indexing lock state,
+bounded durable scope/post work and its keyset cursor, and the latest batch
+summary. Its lock row distinguishes `None`, `Active`, and
 `Expired`. Active-lock advice means another writer is running and operators
 should retry shortly or check `wp fts status`; expired-lock advice means the
 stale payload will be replaced automatically by the next indexing writer, while

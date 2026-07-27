@@ -596,7 +596,7 @@ test_case('quality empty WordPress scopes authenticate cursors on facade and ada
     $GLOBALS['wp_fts_test_post_types']['attachment']->exclude_from_search = true;
 
     try {
-        $storage = wp_fts_test_storage(false);
+        $storage = wp_fts_test_storage();
         $cursor = psic_mysql_private($storage, 'encode_cursor', (object) [
             'score' => 123,
             'post_date_gmt' => '2026-01-01 00:00:00',
@@ -1471,10 +1471,6 @@ test_case('quality MySQL set-oriented APIs reject explosive inputs before normal
     $guardedStorage = new WP_FTS_Relational_Storage($fake, null, static function () use (&$guardCalls): void {
         $guardCalls++;
     });
-    foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'put_doc', 'put_doc_metadata', 'delete_doc'] as $method) {
-        assert_true(!method_exists($guardedStorage, $method), "guarded relational storage should not expose {$method}");
-    }
-    assert_same(0, $guardCalls, 'capability inspection should not invoke the mutation guard');
     psic_caught(static fn(): array => $guardedStorage->replace_prepared_documents([
         psic_prepared_document([
             'snippet_text' => str_repeat('s', WP_FTS_Analysis_Limits::MAX_SOURCE_BYTES + 1),

@@ -170,7 +170,8 @@ test_case('late worker commit failure stays recoverable inside the complete stat
             );
             assert_same(2, count(array_filter(
                 $takeoverQueries,
-                static fn(string $sql): bool => str_starts_with($sql, 'INSERT IGNORE INTO wp_options')
+                static fn(string $sql): bool => str_starts_with($sql, 'INSERT INTO wp_options')
+                    && str_contains($sql, 'ON DUPLICATE KEY UPDATE option_name = option_name')
             )), 'stale option takeover must attempt the contended and replacement lease INSERTs exactly once each');
             assert_same(2, count(array_filter(
                 $takeoverQueries,
@@ -223,13 +224,15 @@ test_case('late worker commit failure stays recoverable inside the complete stat
             assert_same(1, $ordinary['indexed'] ?? null, 'the invocation after standalone takeover must resume document work');
             assert_true(
                 isset($ordinaryQueries[0], $ordinaryQueries[1])
-                    && str_starts_with($ordinaryQueries[0], 'INSERT IGNORE INTO wp_options')
+                    && str_starts_with($ordinaryQueries[0], 'INSERT INTO wp_options')
+                    && str_contains($ordinaryQueries[0], 'ON DUPLICATE KEY UPDATE option_name = option_name')
                     && str_contains($ordinaryQueries[1], '/* wp_fts:claim-batch */'),
                 'the ordinary successor must acquire once and proceed directly to its bounded claim'
             );
             assert_same(1, count(array_filter(
                 $ordinaryQueries,
-                static fn(string $sql): bool => str_starts_with($sql, 'INSERT IGNORE INTO wp_options')
+                static fn(string $sql): bool => str_starts_with($sql, 'INSERT INTO wp_options')
+                    && str_contains($sql, 'ON DUPLICATE KEY UPDATE option_name = option_name')
             )), 'the ordinary successor must perform one uncontended lease acquisition');
             assert_true(
                 count($ordinaryQueries)
@@ -335,17 +338,13 @@ function wp_fts_test_run_late_commit_ceiling_scenario(bool $commitApplied): arra
         $GLOBALS['wp_fts_test_posts'][(int) $post->ID] = $post;
     }
     $GLOBALS['wp_fts_test_post_meta'][2]['selected_signal'] = ['dependencyword'];
-    $fake->docs[1] = [
-        'post_id' => 1,
-        'primary_lang' => 'en',
-        'lang' => 'en',
-        'doc_len' => WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS,
-        'content_hash' => 'pre-commit-hash',
-        'snippet_text' => 'pre-commit snippet',
-        'indexed_at' => 1,
-        'is_deleted' => 0,
-    ];
-    $fake->replacementFrontierPostingCounts[1] = WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS;
+    $fake->docs[1] = wp_fts_test_document_row(
+        1,
+        'en',
+        'pre-commit-hash',
+        'pre-commit snippet'
+    );
+    $fake->existingPostingFrontierCounts[1] = WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS;
 
     $queue = new WP_FTS_Index_Queue($fake);
     $queue->enqueue_many(range(1, 6), null, [

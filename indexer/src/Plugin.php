@@ -35,8 +35,6 @@ final class WP_FTS_Search_Unavailable extends RuntimeException
 
 final class WP_FTS_Plugin
 {
-    public const SCHEMA_VERSION = 1;
-    public const SCHEMA_VERSION_OPTION = 'wp_fts_schema_version';
     public const CRON_HOOK = 'wp_fts_process_index_queue';
     public const SCHEMA_REPAIR_CRON_HOOK = 'wp_fts_repair_schema';
     public const SCHEMA_SITE_CRON_HOOK = 'wp_fts_provision_site_schema';
@@ -47,7 +45,6 @@ final class WP_FTS_Plugin
     public const INDEX_HEALTH_OPTION = 'wp_fts_index_health';
     public const READINESS_INCARNATION_OPTION = 'wp_fts_readiness_incarnation';
     public const SEARCH_READY_INCARNATION_OPTION = 'wp_fts_search_ready_incarnation';
-    public const SCOPE_INDEX_OWNERSHIP_OPTION = 'wp_fts_scope_index_ownership';
     public const REST_NAMESPACE = 'wp-fts/v1';
     public const REST_SEARCH_ROUTE = '/search';
     public const ADMIN_PAGE_SLUG = 'wp-fts-settings';
@@ -85,8 +82,9 @@ final class WP_FTS_Plugin
     private const MUTATION_FENCE_SECONDS = 300;
     private const MAX_FOREGROUND_MUTATION_TARGETS = WP_FTS_Index_Queue::MAX_ENQUEUE_POSTS;
     private const GLOBAL_RECONCILIATION_SCOPE_KEY = WP_FTS_Index_Queue::GLOBAL_CORPUS_SCOPE_KEY;
-    // A network cron invocation provisions one blog. Per-site DDL therefore
-    // cannot multiply into hundreds of statements inside one worker callback.
+    // A network cron invocation provisions one blog. Discovery may also return
+    // the already-provisioned current blog, so read at most one extra site ID
+    // without multiplying per-site DDL inside one worker callback.
     private const SCHEMA_SITE_BATCH_SIZE = 1;
     private const UNINSTALL_SITE_BATCH_SIZE = 100;
     private const MAX_INDEX_LOCK_DIAGNOSTIC_SECONDS = 2592000;
@@ -584,10 +582,6 @@ final class WP_FTS_Plugin
             return;
         }
 
-        // WordPress does not rerun activation hooks when plugin files change,
-        // so a missing or stale current-schema marker also needs a runtime
-        // scheduler entry.
-        add_action('init', [self::class, 'maybe_schedule_schema_repair'], 1, 0);
         add_action('pre_post_update', [self::class, 'handle_post_pre_update'], PHP_INT_MAX, 2);
         add_action('wp_after_insert_post', [self::class, 'handle_post_save'], 10, 4);
         add_action('before_delete_post', [self::class, 'handle_post_pre_delete'], PHP_INT_MAX, 2);
@@ -652,7 +646,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Activation creates or repairs tables and records the schema contract version.
+     * Activation creates or repairs the exact current tables.
      */
     public static function activate(bool $network_wide = false): void
     {
@@ -671,9 +665,7 @@ final class WP_FTS_Plugin
                 $restoreUninstallFence = self::uninstall_fence_active();
                 self::clear_uninstall_fence();
                 try {
-                    self::mark_initial_index_pending();
                     self::create_or_repair_schema();
-                    self::enqueue_corpus_scope(self::index_queue(false), ['reason' => 'activation']);
                     unset(self::$foreground_queue_blocked_prefixes[self::current_database_prefix()]);
                     self::abandon_foreground_mutations();
                     // Publish the network capability before releasing the same
@@ -760,7 +752,7 @@ final class WP_FTS_Plugin
                     self::schedule_schema_provisioning(1);
                     return;
                 }
-                if (self::index_queue(false)->corpus_scope_matches(
+                if (self::index_queue()->corpus_scope_matches(
                     self::GLOBAL_RECONCILIATION_SCOPE_KEY,
                     $incarnation,
                     $currentHash
@@ -789,7 +781,7 @@ final class WP_FTS_Plugin
                     self::schedule_schema_provisioning(1);
                     return;
                 }
-                if (self::index_queue(false)->corpus_scope_matches(
+                if (self::index_queue()->corpus_scope_matches(
                     self::GLOBAL_RECONCILIATION_SCOPE_KEY,
                     $incarnation,
                     $currentHash
@@ -866,20 +858,27 @@ final class WP_FTS_Plugin
             // uninstall fence after its originating activation became stale.
             return;
         }
+        $discovery_limit = self::SCHEMA_SITE_BATCH_SIZE + 1;
         try {
-            $sites = self::network_site_ids_after($after_site_id, self::SCHEMA_SITE_BATCH_SIZE);
+            $sites = self::network_site_ids_after($after_site_id, $discovery_limit);
         } catch (Throwable $error) {
             self::schedule_network_schema_batch($after_site_id, $network_activation_token);
             throw $error;
         }
 
         $current_site_id = function_exists('get_current_blog_id') ? (int) get_current_blog_id() : 0;
-        $failure = null;
+        $target_sites = [];
         foreach ($sites as $site_id) {
-            if ($site_id === $current_site_id) {
-                continue;
+            if ($site_id !== $current_site_id) {
+                $target_sites[] = $site_id;
             }
+            if (count($target_sites) === self::SCHEMA_SITE_BATCH_SIZE) {
+                break;
+            }
+        }
 
+        $failure = null;
+        foreach ($target_sites as $site_id) {
             try {
                 self::provision_site_schema($site_id, $network_activation_token);
             } catch (Throwable $error) {
@@ -894,8 +893,11 @@ final class WP_FTS_Plugin
             self::schedule_network_schema_batch($after_site_id, $network_activation_token);
             throw $failure;
         }
-        if (count($sites) === self::SCHEMA_SITE_BATCH_SIZE) {
-            if (!self::schedule_network_schema_batch($sites[count($sites) - 1], $network_activation_token)) {
+        if (count($sites) === $discovery_limit) {
+            $next_after_site_id = $target_sites !== []
+                ? $target_sites[count($target_sites) - 1]
+                : $sites[count($sites) - 1];
+            if (!self::schedule_network_schema_batch($next_after_site_id, $network_activation_token)) {
                 throw new RuntimeException('Could not schedule the next bounded FTS network schema batch.');
             }
             return;
@@ -991,9 +993,7 @@ final class WP_FTS_Plugin
                         $restoreUninstallFence = false;
                     }
                     try {
-                        self::mark_initial_index_pending();
                         self::create_or_repair_schema();
-                        self::enqueue_corpus_scope(self::index_queue(false), ['reason' => 'site_provisioning']);
                         if ($network_activation_token !== '') {
                             unset(self::$foreground_queue_blocked_prefixes[self::current_database_prefix()]);
                             self::abandon_foreground_mutations();
@@ -1029,8 +1029,7 @@ final class WP_FTS_Plugin
      * Network activation starts one last-seen-site-ID repair chain. Each cron event
      * provisions exactly one discovered site and schedules only its
      * successor, so a large network cannot enqueue an unbounded event storm.
-     * New sites continue through wp_initialize_site, and storage(true) remains
-     * a lazy repair boundary if WP-Cron is unavailable.
+     * New sites continue through wp_initialize_site.
      */
     private static function schedule_existing_network_site_schema(string $network_activation_token): void
     {
@@ -1645,7 +1644,6 @@ final class WP_FTS_Plugin
     private static function uninstall_option_names(): array
     {
         return [
-            self::SCHEMA_VERSION_OPTION,
             self::ANALYZER_OPTIONS_OPTION,
             self::SETTINGS_OPTION,
             WP_FTS_PostContentExtractor::CUSTOM_FIELDS_OPTION,
@@ -1654,7 +1652,6 @@ final class WP_FTS_Plugin
             self::READINESS_INCARNATION_OPTION,
             self::SEARCH_READY_INCARNATION_OPTION,
             self::ACTIVATION_REDIRECT_OPTION,
-            self::SCOPE_INDEX_OWNERSHIP_OPTION,
         ];
     }
 
@@ -1703,10 +1700,9 @@ final class WP_FTS_Plugin
                     // every canonical queue writer. The request-local latch also
                     // rejects callbacks that run later in this uninstall request.
                     self::$foreground_queue_blocked_prefixes[$prefix] = true;
-                    // Resolve ownership only after the writer lease. A schema
-                    // repair may have installed and recorded these indexes while
-                    // uninstall was waiting to acquire that same lease.
-                    $storage->drop_owned_scope_keyset_indexes(self::scope_index_ownership_keys());
+                    // Drop only exact plugin-namespaced definitions. A changed
+                    // definition is not safe to treat as this plugin's object.
+                    $storage->drop_supporting_core_indexes();
                     self::execute_lifecycle_query('DROP TABLE IF EXISTS ' . implode(', ', $tables));
                     self::clear_scheduled_queue_processor();
                     self::clear_scheduled_schema_provisioning();
@@ -1884,9 +1880,7 @@ final class WP_FTS_Plugin
         return $cleaned;
     }
 
-    /**
-     * Idempotently create or repair tables and store the current schema version.
-     */
+    /** Idempotently create or repair the exact current tables. */
     public static function create_or_repair_schema(): void
     {
         if (self::$active_index_writer_token !== null) {
@@ -1922,23 +1916,13 @@ final class WP_FTS_Plugin
         // Schema repair is a mutation boundary, so readiness cached before
         // physical damage was discovered cannot authorize the rebuilt index.
         self::$search_takeover_status_cache = [];
-        $storage = self::relational_storage();
-        $stored_version = self::schema_version_from_option(self::get_option(self::SCHEMA_VERSION_OPTION, null));
-        if ($stored_version > self::SCHEMA_VERSION) {
-            throw new RuntimeException("The installed FTS schema version {$stored_version} is newer than this plugin supports.");
-        }
+        $storage = self::storage();
         $physical_before = $storage->verify_schema();
-        // A missing version marker or damaged current schema requires a
-        // complete fail-closed corpus reconciliation. The index is derived
-        // entirely from canonical WordPress content, so repair creates the
-        // current generation directly.
-        $requires_initial_index_recheck = $stored_version !== self::SCHEMA_VERSION
-            || empty($physical_before['valid']);
+        $requires_initial_index_recheck = empty($physical_before['valid']);
         if ($requires_initial_index_recheck) {
             // Publish the fail-closed incarnation before table creation can
             // recreate the work table or expose a partially repaired schema.
-            // The bound corpus row is installed below before the repaired
-            // schema is published as current.
+            // The bound corpus row is installed below before repair returns.
             self::mark_initial_index_pending();
         }
 
@@ -1948,64 +1932,25 @@ final class WP_FTS_Plugin
 
         // Scope expansion and search visibility rely on these direct core
         // indexes. Install them during explicit maintenance, never lazily in a
-        // request or worker, and persist ownership before the first core-table
-        // DDL so an interrupted install remains uninstallable.
-        self::ensure_scope_keyset_indexes($storage);
+        // request or worker.
+        $storage->ensure_supporting_core_indexes();
 
-        $physical = $storage->verify_schema();
+        $physical = $storage->verify_schema_and_supporting_core_indexes();
         if (empty($physical['valid'])) {
             throw new RuntimeException('FTS schema verification failed: ' . self::schema_verification_failure_summary($physical));
         }
 
         self::ensure_request_options_autoloaded();
         if ($requires_initial_index_recheck) {
-            self::enqueue_corpus_scope(self::index_queue(false), [
+            // Publish durable reconciliation only after exact physical
+            // verification. Search readiness remains revoked until this scope
+            // completes and maintenance publishes the matching capability.
+            self::enqueue_corpus_scope(self::index_queue(), [
                 'reason' => 'schema_repair',
             ]);
             self::schedule_queue_processor();
         }
-        // Logical publication is deliberately last. Every preceding failure
-        // leaves readiness pending and a durable corpus fence visible to all
-        // search paths.
         self::assert_index_writer_ownership();
-        self::set_option(self::SCHEMA_VERSION_OPTION, self::SCHEMA_VERSION);
-    }
-
-    /** Persist ownership intent, then install every supporting core-table index. */
-    private static function ensure_scope_keyset_indexes(WP_FTS_Relational_Storage $storage): void
-    {
-        $missing = $storage->scope_keyset_indexes_requiring_creation();
-        if ($missing !== []) {
-            $owned = array_fill_keys(self::scope_index_ownership_keys(), true);
-            foreach ($missing as $key) {
-                if (in_array($key, ['targeted', 'filtered', 'visibility'], true)) {
-                    $owned[$key] = true;
-                }
-            }
-            $keys = array_keys($owned);
-            sort($keys, SORT_STRING);
-            self::set_nonautoloaded_option(self::SCOPE_INDEX_OWNERSHIP_OPTION, $keys);
-        }
-        $storage->ensure_scope_keyset_indexes();
-    }
-
-    /** @return string[] */
-    private static function scope_index_ownership_keys(): array
-    {
-        $raw = self::get_option(self::SCOPE_INDEX_OWNERSHIP_OPTION, []);
-        if (!is_array($raw) || count($raw) > 3) {
-            return [];
-        }
-        $keys = [];
-        foreach ($raw as $key) {
-            if (is_string($key) && in_array($key, ['targeted', 'filtered', 'visibility'], true)) {
-                $keys[$key] = true;
-            }
-        }
-        $keys = array_keys($keys);
-        sort($keys, SORT_STRING);
-
-        return $keys;
     }
 
     /** Keep normal search state in WordPress's one bounded alloptions preload. */
@@ -2046,7 +1991,6 @@ final class WP_FTS_Plugin
             throw new RuntimeException('Could not initialize the autoloaded FTS request options.');
         }
         $names = [
-            self::SCHEMA_VERSION_OPTION,
             self::INDEX_HEALTH_OPTION,
             self::READINESS_INCARNATION_OPTION,
             self::SEARCH_READY_INCARNATION_OPTION,
@@ -2105,31 +2049,25 @@ final class WP_FTS_Plugin
                 $parts[] = $key . '=' . implode(',', array_slice($values, 0, 12));
             }
         }
+        $supporting = is_array($physical['supporting_core_indexes'] ?? null)
+            ? $physical['supporting_core_indexes']
+            : [];
+        if (!empty($supporting['missing']) && is_array($supporting['missing'])) {
+            $parts[] = 'missing_supporting_core_indexes='
+                . implode(',', array_slice($supporting['missing'], 0, 12));
+        }
+        if (is_scalar($supporting['error'] ?? null) && (string) $supporting['error'] !== '') {
+            $parts[] = 'supporting_core_indexes_error=' . (string) $supporting['error'];
+        }
 
         return $parts !== [] ? implode('; ', $parts) : 'unknown physical schema mismatch';
     }
 
     /**
-     * Repair schema only when the stored version is missing or stale.
-     */
-    public static function maybe_schedule_schema_repair(): void
-    {
-        if (self::option_matches_schema_version(self::get_option(self::SCHEMA_VERSION_OPTION, null))) {
-            return;
-        }
-
-        // Visitor, save, and search requests never inspect or mutate physical
-        // schema. Repair is activation/CLI/background maintenance work; until
-        // it completes every search surface stays on canonical WordPress.
-        self::schedule_schema_provisioning();
-    }
-
-    /**
      * Repair the current schema only from the dedicated maintenance event.
      *
-     * A failed repair leaves the saved version stale, so every search
-     * surface remains on WordPress and the event is retried without throwing
-     * into visitor traffic.
+     * A failed repair keeps search readiness revoked and retries without
+     * throwing into visitor traffic.
      */
     public static function run_scheduled_schema_repair(): void
     {
@@ -2147,7 +2085,7 @@ final class WP_FTS_Plugin
             self::$active_index_writer_token = $token;
             self::$active_index_writer_prefix = self::current_database_prefix();
             self::create_or_repair_schema();
-            self::storage(false)->cleanup_empty_terms();
+            self::storage()->cleanup_empty_terms();
             self::clear_stale_global_visibility_fence_signal();
             if (self::finalize_initial_index_readiness_in_maintenance()) {
                 self::clear_verified_search_runtime_failure();
@@ -2160,7 +2098,7 @@ final class WP_FTS_Plugin
                 || !self::readiness_completion_matches($health)
                 || !empty($health['global_visibility_fence_active'])
             ) {
-                $queue = self::index_queue(false);
+                $queue = self::index_queue();
                 if (!$queue->has_work() && !self::readiness_completion_matches($health)) {
                     // An interrupted maintenance event may have repaired the
                     // current schema without leaving either a completed
@@ -2219,7 +2157,7 @@ final class WP_FTS_Plugin
         if (empty($state['global_visibility_fence_active'])) {
             return true;
         }
-        if (self::index_queue(false)->global_visibility_scope_exists()) {
+        if (self::index_queue()->global_visibility_scope_exists()) {
             return false;
         }
 
@@ -2238,16 +2176,6 @@ final class WP_FTS_Plugin
             self::MAX_INDEX_FAILURE_ERROR_BYTES
         );
         self::set_option(self::INDEX_HEALTH_OPTION, $state);
-    }
-
-    /** Build the production backend, optionally scheduling stale-schema repair. */
-    private static function storage(bool $ensure_schema = false): WP_FTS_Relational_Storage
-    {
-        if ($ensure_schema) {
-            self::maybe_schedule_schema_repair();
-        }
-
-        return self::relational_storage();
     }
 
     /**
@@ -3015,7 +2943,7 @@ final class WP_FTS_Plugin
         return self::run_index_writer_with_lock(
             'wp-cli-optimize',
             static function (): void {
-                self::storage(false)->optimize();
+                self::storage()->optimize();
             }
         );
     }
@@ -3147,7 +3075,9 @@ final class WP_FTS_Plugin
      */
     public static function operator_status(bool $verify_physical_schema = false): array
     {
-        $schema = $verify_physical_schema ? self::schema_status() : self::stored_schema_status();
+        $schema = $verify_physical_schema
+            ? self::schema_status()
+            : ['status' => 'not_checked', 'physical' => []];
         $takeover = self::search_takeover_status(false);
         $health = self::search_health();
         $lock = self::index_lock_status();
@@ -3161,9 +3091,7 @@ final class WP_FTS_Plugin
 
         return [
             'schema_status' => $schema['status'],
-            'schema_version' => $schema['stored_version'],
-            'expected_schema_version' => $schema['expected_version'],
-            'schema_verification' => $verify_physical_schema ? 'physical' : 'stored',
+            'schema_verification' => $verify_physical_schema ? 'physical' : 'not_run',
             'storage_backend' => self::index_storage_backend_label(),
             'search_takeover_ready' => (bool) $takeover['ready'],
             'search_takeover_reason' => (string) $takeover['reason'],
@@ -3506,8 +3434,6 @@ final class WP_FTS_Plugin
             ],
             'schema' => [
                 'status' => is_scalar($operator['schema_status'] ?? null) ? (string) $operator['schema_status'] : 'unknown',
-                'stored_version' => max(0, (int) ($operator['schema_version'] ?? 0)),
-                'expected_version' => max(0, (int) ($operator['expected_schema_version'] ?? 0)),
             ],
         ];
     }
@@ -4307,7 +4233,7 @@ final class WP_FTS_Plugin
     /**
      * Idempotently repair schema and return the resulting schema state.
      *
-     * @return array{status:string,stored_version:int,expected_version:int,skipped_locked:bool,lock_active:bool}
+     * @return array{status:string,physical:array<string,mixed>,skipped_locked:bool,lock_active:bool}
      */
     public static function repair_schema(): array
     {
@@ -4324,13 +4250,15 @@ final class WP_FTS_Plugin
             ]
         );
         if (empty($locked['acquired'])) {
-            return array_merge(self::stored_schema_status(), [
+            return [
+                'status' => 'not_checked',
+                'physical' => [],
                 'skipped_locked' => true,
                 'lock_active' => true,
-            ]);
+            ];
         }
 
-        $schema = is_array($locked['result'] ?? null) ? $locked['result'] : self::stored_schema_status();
+        $schema = is_array($locked['result'] ?? null) ? $locked['result'] : self::schema_status();
         $schema['skipped_locked'] = false;
         $schema['lock_active'] = false;
 
@@ -4340,9 +4268,9 @@ final class WP_FTS_Plugin
     /**
      * Clear derived FTS index data and runtime indexing state.
      *
-     * WordPress posts, plugin settings, analyzer options, and schema version are
-     * preserved. One complete scope repopulates the new generation in bounded
-     * background batches without an operator having to reconstruct coverage.
+     * WordPress posts, plugin settings, and analyzer options are preserved. One
+     * complete scope repopulates the new generation in bounded background
+     * batches without an operator having to reconstruct coverage.
      *
      * @return array<string,mixed>
      */
@@ -4354,17 +4282,14 @@ final class WP_FTS_Plugin
         // interrupted, canonical WordPress search remains authoritative until
         // an operator retries reset or completes a fresh reconciliation.
         self::mark_initial_index_pending();
-        self::maybe_schedule_schema_repair();
-        $reset = self::storage(false)->reset_index();
+        $reset = self::storage()->reset_index();
 
         self::clear_scheduled_queue_processor();
         self::reset_index_health_state();
-        self::enqueue_corpus_scope(self::index_queue(false), ['reason' => 'reset']);
+        self::enqueue_corpus_scope(self::index_queue(), ['reason' => 'reset']);
         if (!self::schedule_queue_processor()) {
             throw new RuntimeException('The reset reconciliation scope is durable, but its queue processor could not be scheduled.');
         }
-
-        $schema = self::stored_schema_status();
 
         return [
             'status' => 'reset',
@@ -4373,9 +4298,6 @@ final class WP_FTS_Plugin
                 ? (string) $reset['reset_strategy']
                 : 'unknown',
             'reconciliation_queued' => true,
-            'schema_status' => $schema['status'],
-            'schema_version' => $schema['stored_version'],
-            'expected_schema_version' => $schema['expected_version'],
             'storage_backend' => self::index_storage_backend_label(),
             'last_batch_failures_cleared' => max(0, (int) ($health_before['last_batch_failures'] ?? 0)),
             'failure_recovery_records_cleared' => count(self::sanitize_failure_recovery_records($health_before['failure_history'] ?? [])),
@@ -4389,16 +4311,13 @@ final class WP_FTS_Plugin
     /**
      * Return schema status without repairing or indexing.
      *
-     * @return array{status:string,stored_version:int,expected_version:int}
+     * @return array{status:string,physical:array<string,mixed>}
      */
     public static function schema_status(): array
     {
-        $raw = self::get_option(self::SCHEMA_VERSION_OPTION, null);
-        $stored_version = self::schema_version_from_option($raw);
         global $wpdb;
         if (isset($wpdb) && is_object($wpdb)) {
-            $storage = self::relational_storage();
-            $physical = $storage->verify_schema_and_scope_keyset_indexes();
+            $physical = self::storage()->verify_schema_and_supporting_core_indexes();
         } else {
             $physical = [
                 'valid' => false,
@@ -4410,49 +4329,22 @@ final class WP_FTS_Plugin
                 'missing_indexes' => [],
                 'unexpected_indexes' => [],
                 'fts_tables_valid' => false,
-                'scope_keyset_indexes' => ['valid' => false, 'missing' => [], 'error' => 'Database unavailable.'],
+                'supporting_core_indexes' => ['valid' => false, 'missing' => [], 'error' => 'Database unavailable.'],
             ];
         }
-        $status = 'stale';
-        if (self::option_matches_schema_version($raw) && !empty($physical['valid'])) {
-            $status = 'current';
-        } elseif (self::option_matches_schema_version($raw) && isset($physical['available']) && !$physical['available']) {
+        if (empty($physical['available'])) {
             $status = 'unavailable';
-        } elseif (self::option_matches_schema_version($raw)) {
-            $status = 'damaged';
-        } elseif ($raw === null || $raw === false || $raw === '') {
+        } elseif (!empty($physical['valid'])) {
+            $status = 'current';
+        } elseif (count(is_array($physical['missing_tables'] ?? null) ? $physical['missing_tables'] : []) === 4) {
             $status = 'missing';
+        } else {
+            $status = 'damaged';
         }
+
         return [
             'status' => $status,
-            'stored_version' => $stored_version,
-            'expected_version' => self::SCHEMA_VERSION,
             'physical' => $physical,
-        ];
-    }
-
-    /**
-     * Return the stored schema contract without physical table inspection.
-     *
-     * Ordinary Health and status views use this option-only path. Missing-table
-     * reads already fail closed and schedule maintenance; repeated SHOW probes
-     * belong only to explicit diagnose and repair operations.
-     *
-     * @return array{status:string,stored_version:int,expected_version:int,physical:array<string,mixed>}
-     */
-    private static function stored_schema_status(): array
-    {
-        $raw = self::get_option(self::SCHEMA_VERSION_OPTION, null);
-        $stored_version = self::schema_version_from_option($raw);
-        $status = self::option_matches_schema_version($raw)
-            ? 'current'
-            : (($raw === null || $raw === false || $raw === '') ? 'missing' : 'stale');
-
-        return [
-            'status' => $status,
-            'stored_version' => $stored_version,
-            'expected_version' => self::SCHEMA_VERSION,
-            'physical' => [],
         ];
     }
 
@@ -4460,7 +4352,7 @@ final class WP_FTS_Plugin
      * Report whether FTS may replace a WordPress search query in this request.
      *
      * Normal readiness is deliberately logical and option-only. Physical
-     * verification belongs to activation, repair, and Health; a
+     * verification belongs to activation, repair, and explicit diagnostics; a
      * missing/damaged table encountered during search trips the existing
      * fail-closed boundary and marks FTS unhealthy without adding dozens of
      * schema statements to every ordinary request.
@@ -4469,7 +4361,7 @@ final class WP_FTS_Plugin
      *                                   before an actual search. Read-only
      *                                   operator surfaces pass false so merely
      *                                   viewing status cannot enqueue work.
-     * @return array{ready:bool,reason:string,ready_incarnation:string,initial_index_status:string,initial_index_started_at:string,initial_index_completed_at:string,schema_status:string,physical_schema_checked:bool,physical_schema_usable:bool}
+     * @return array{ready:bool,reason:string,ready_incarnation:string,ready_profile_hash:string,initial_index_status:string,initial_index_started_at:string,initial_index_completed_at:string}
      */
     public static function search_takeover_status(bool $detect_profile_drift = true): array
     {
@@ -4481,8 +4373,6 @@ final class WP_FTS_Plugin
         }
 
         try {
-            $schema_option = self::get_option(self::SCHEMA_VERSION_OPTION, null);
-            $schema_current = self::option_matches_schema_version($schema_option);
             $desired_incarnation = self::readiness_incarnation();
             $ready_incarnation = self::search_ready_incarnation();
             $ready_profile = self::search_ready_profile_hash();
@@ -4495,25 +4385,17 @@ final class WP_FTS_Plugin
             );
             $status = [
                 'ready' => false,
-                'reason' => 'schema_not_current',
+                'reason' => 'initial_index_pending',
                 'ready_incarnation' => '',
                 'ready_profile_hash' => '',
                 'initial_index_status' => $initial_status,
                 'initial_index_started_at' => self::sanitize_index_timestamp($health['initial_index_started_at'] ?? ''),
                 'initial_index_completed_at' => self::sanitize_index_timestamp($health['initial_index_completed_at'] ?? ''),
-                'schema_status' => $schema_current ? 'current' : 'stale',
-                'physical_schema_checked' => false,
-                'physical_schema_usable' => false,
             ];
-
-            if (!$schema_current) {
-                self::$search_takeover_status_cache[$cache_key] = $status;
-                return $status;
-            }
 
             if ($detect_profile_drift) {
                 // A real search validates the live analyzer before judging an
-                // stored capability tuple. Otherwise malformed profile
+                // stored capability tuple. Otherwise a malformed profile
                 // provenance could return early and never enqueue its rebuild.
                 self::detect_index_profile_drift();
                 $detect_profile_drift = false;
@@ -4597,9 +4479,6 @@ final class WP_FTS_Plugin
                 'initial_index_status' => self::INITIAL_INDEX_STATUS_PENDING,
                 'initial_index_started_at' => '',
                 'initial_index_completed_at' => '',
-                'schema_status' => 'unknown',
-                'physical_schema_checked' => false,
-                'physical_schema_usable' => false,
             ];
             self::$search_takeover_status_cache[$cache_key] = $status;
 
@@ -6644,7 +6523,7 @@ final class WP_FTS_Plugin
         self::render_debug_row('Queue', self::index_batch_queue_summary($diagnostics));
         self::render_debug_row('Backfill', self::index_batch_backfill_summary($diagnostics));
         self::render_debug_row('Lock', self::index_batch_lock_summary($diagnostics));
-        self::render_debug_row('Schema and storage', self::index_batch_schema_storage_summary($diagnostics));
+        self::render_debug_row('Storage', self::index_batch_storage_summary($diagnostics));
         self::render_debug_row('Retry or reschedule', self::index_batch_reschedule_summary($diagnostics));
         self::render_debug_row('Stop reason', self::index_batch_stop_summary($diagnostics));
         self::render_debug_row('Error', self::index_batch_error_summary($diagnostics));
@@ -7295,7 +7174,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array{status:string,stored_version:int,expected_version:int,skipped_locked?:bool,lock_active?:bool} $schema
+     * @param array{status:string,skipped_locked?:bool,lock_active?:bool} $schema
      * @return array{0:string,1:string}
      */
     private static function schema_repair_notice(array $schema): array
@@ -7309,10 +7188,7 @@ final class WP_FTS_Plugin
 
         return [
             'success',
-            sprintf(
-                'Schema tables repaired. Current schema version: %d.',
-                max(0, (int) ($schema['stored_version'] ?? 0))
-            ),
+            'Schema tables verified and repaired.',
         ];
     }
 
@@ -7542,7 +7418,6 @@ final class WP_FTS_Plugin
         $settings = self::settings();
         $known_provider_advisory = self::known_search_provider_advisory($settings);
         $health = self::search_health();
-        $schema = self::stored_schema_status();
         $takeover = self::search_takeover_status(false);
         $lock = self::index_lock_status();
         $pending_count = max(0, (int) ($health['pending_queue_count'] ?? 0));
@@ -7568,9 +7443,7 @@ final class WP_FTS_Plugin
 
         echo '<h3>Status summary</h3>';
         echo '<table class="widefat striped wp-fts-health-table"><tbody>';
-        self::render_health_status_row('Schema status', self::schema_status_label((string) $schema['status']));
-        self::render_health_status_row('Stored schema version', (string) max(0, (int) $schema['stored_version']));
-        self::render_health_status_row('Expected schema version', (string) max(0, (int) $schema['expected_version']));
+        self::render_health_status_row('Schema status', self::schema_status_label('not_checked'));
         self::render_health_status_row('Search replacement readiness', self::search_takeover_status_label($takeover));
         self::render_health_status_row('Indexing lock', self::lock_state_summary($lock));
         self::render_health_status_row('Lock mode', self::lock_mode_summary($lock));
@@ -7673,7 +7546,7 @@ final class WP_FTS_Plugin
         self::render_health_support_snapshot_controls();
 
         echo '<h3>Schema controls</h3>';
-        echo '<p class="wp-fts-health-copy">Repair FTS tables and the stored schema version without indexing content.</p>';
+        echo '<p class="wp-fts-health-copy">Verify and repair the exact current FTS tables without indexing content.</p>';
         echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_HEALTH_TAB)) . '">';
         self::render_health_nonce_field();
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HEALTH_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION) . '">';
@@ -7742,7 +7615,7 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Batch queue state', self::index_batch_queue_summary($diagnostics));
         self::render_health_status_row('Batch backfill state', self::index_batch_backfill_summary($diagnostics));
         self::render_health_status_row('Batch lock state', self::index_batch_lock_summary($diagnostics));
-        self::render_health_status_row('Batch schema and storage', self::index_batch_schema_storage_summary($diagnostics));
+        self::render_health_status_row('Batch storage', self::index_batch_storage_summary($diagnostics));
         self::render_health_status_row('Batch retry or reschedule', self::index_batch_reschedule_summary($diagnostics));
         self::render_health_status_row('Batch stop reason', self::index_batch_stop_summary($diagnostics));
         self::render_health_status_row('Batch error', self::index_batch_error_summary($diagnostics));
@@ -7755,7 +7628,7 @@ final class WP_FTS_Plugin
             'damaged' => 'Damaged',
             'unavailable' => 'Unavailable',
             'missing' => 'Missing',
-            'stale' => 'Stale',
+            'not_checked' => 'Not checked in normal Health view',
             default => 'Unknown',
         };
     }
@@ -7768,8 +7641,9 @@ final class WP_FTS_Plugin
         return match ((string) ($status['reason'] ?? '')) {
             'ready' => 'Ready; FTS may replace configured WordPress searches',
             'initial_index_pending' => 'Waiting for the initial index; WordPress search remains active',
-            'schema_not_current' => 'Waiting for current schema; WordPress search remains active',
-            'physical_schema_unusable' => 'Index tables are unavailable; WordPress search remains active',
+            'index_reconciling_or_unhealthy' => 'Index recovery is pending; WordPress search remains active',
+            'search_ready_capability_missing',
+            'search_ready_capability_stale' => 'Waiting for search readiness publication; WordPress search remains active',
             default => 'Readiness check unavailable; WordPress search remains active',
         };
     }
@@ -8271,20 +8145,11 @@ final class WP_FTS_Plugin
     /**
      * @param array<string,mixed> $diagnostics
      */
-    private static function index_batch_schema_storage_summary(array $diagnostics): string
+    private static function index_batch_storage_summary(array $diagnostics): string
     {
-        $status = self::schema_status_label((string) ($diagnostics['schema_status'] ?? ''));
-        $stored = max(0, (int) ($diagnostics['schema_version'] ?? 0));
-        $expected = max(0, (int) ($diagnostics['expected_schema_version'] ?? 0));
         $storage = self::debug_truncate_text((string) ($diagnostics['storage_backend'] ?? ''), 80);
 
-        return sprintf(
-            '%s (%d/%d); storage %s',
-            $status,
-            $stored,
-            $expected,
-            $storage !== '' ? $storage : 'not recorded'
-        );
+        return $storage !== '' ? $storage : 'not recorded';
     }
 
     /**
@@ -10198,35 +10063,25 @@ final class WP_FTS_Plugin
         self::assert_runtime_analyzer_options_can_enable($options);
 
         $previousProfile = self::current_index_profile();
-        $schemaCurrent = self::option_matches_schema_version(
-            self::get_option(self::SCHEMA_VERSION_OPTION, null)
+        $pendingIncarnation = self::mark_initial_index_pending(
+            true,
+            self::sanitize_index_profile_hash($previousProfile['hash'] ?? '')
         );
-        $pendingIncarnation = '';
-        if ($schemaCurrent) {
-            $pendingIncarnation = self::mark_initial_index_pending(
-                true,
-                self::sanitize_index_profile_hash($previousProfile['hash'] ?? '')
-            );
-        }
         try {
             self::set_option(self::ANALYZER_OPTIONS_OPTION, $options);
         } catch (Throwable $error) {
-            if ($pendingIncarnation !== '') {
-                self::schedule_schema_provisioning(1);
-            }
+            self::schedule_schema_provisioning(1);
             throw $error;
         }
-        if ($schemaCurrent) {
-            $currentProfile = self::current_index_profile();
-            $reasons = self::index_profile_change_reasons($previousProfile, $currentProfile);
-            if ($reasons !== []) {
-                self::enqueue_index_profile_reconciliation($reasons, $previousProfile, $currentProfile);
-            } else {
-                self::enqueue_scope_reconciliation('index-profile', [
-                    'reason' => 'runtime_lemma_pack_option_verified',
-                    'profile_hash' => self::sanitize_index_profile_hash($currentProfile['hash'] ?? ''),
-                ], true, '', 0, $pendingIncarnation);
-            }
+        $currentProfile = self::current_index_profile();
+        $reasons = self::index_profile_change_reasons($previousProfile, $currentProfile);
+        if ($reasons !== []) {
+            self::enqueue_index_profile_reconciliation($reasons, $previousProfile, $currentProfile);
+        } else {
+            self::enqueue_scope_reconciliation('index-profile', [
+                'reason' => 'runtime_lemma_pack_option_verified',
+                'profile_hash' => self::sanitize_index_profile_hash($currentProfile['hash'] ?? ''),
+            ], true, '', 0, $pendingIncarnation);
         }
 
         return $options;
@@ -12416,7 +12271,7 @@ LIMIT %d",
             $search_options['_include_canonical_post_rows'] = true;
         }
 
-        $searcher = new WP_FTS_Searcher(self::storage(false), self::runtime_analyzer());
+        $searcher = new WP_FTS_Searcher(self::storage(), self::runtime_analyzer());
         try {
             $payload = $searcher->search($query, $search_options);
             self::assert_normalized_search_payload(
@@ -12680,7 +12535,7 @@ LIMIT %d",
             return;
         }
         $work = self::durable_work_status();
-        if ($work['scope_count'] > 0) {
+        if ($work['counts_capped'] || $work['scope_count'] > 0) {
             return;
         }
 
@@ -12889,7 +12744,7 @@ LIMIT %d",
         if (!isset($opts['cursor'])) {
             return;
         }
-        self::storage(false)->assert_search_cursor_authenticity((string) $opts['cursor']);
+        self::storage()->assert_search_cursor_authenticity((string) $opts['cursor']);
     }
 
     /**
@@ -16870,23 +16725,10 @@ LIMIT %d",
         return is_scalar($hook) ? (string) $hook : '';
     }
 
-    /** Resolve the current durable queue only after the logical schema is ready. */
+    /** Resolve the current durable queue under the shared lifecycle guard. */
     private static function foreground_index_queue(): WP_FTS_Index_Queue
     {
-        $queue = self::foreground_capability_queue();
-        if (!self::option_matches_schema_version(self::get_option(self::SCHEMA_VERSION_OPTION, null))) {
-            // Schema absence is exceptional, so its indexed fence probe does
-            // not tax a normal canonical write. It prevents a request that
-            // resumes after completed uninstall from recreating cron work.
-            if (self::uninstall_fence_active()) {
-                self::$foreground_queue_blocked_prefixes[self::current_database_prefix()] = true;
-                throw new RuntimeException('FTS foreground queue writes are blocked by the uninstall fence.');
-            }
-            self::schedule_schema_provisioning();
-            throw new RuntimeException('FTS schema maintenance is pending.');
-        }
-
-        return $queue;
+        return self::foreground_capability_queue();
     }
 
     /** Acquire a direct/operator queue only after checking the durable fence. */
@@ -16896,10 +16738,6 @@ LIMIT %d",
         if (self::uninstall_fence_active()) {
             self::$foreground_queue_blocked_prefixes[self::current_database_prefix()] = true;
             throw new RuntimeException('FTS reindexing is blocked until the plugin is explicitly activated again.');
-        }
-        if (!self::option_matches_schema_version(self::get_option(self::SCHEMA_VERSION_OPTION, null))) {
-            self::schedule_schema_provisioning();
-            throw new RuntimeException('FTS schema maintenance must complete before reindexing.');
         }
 
         return $queue;
@@ -16937,7 +16775,7 @@ LIMIT %d",
             self::$foreground_queue_writes_disabled = true;
             throw new RuntimeException('FTS foreground queue writes are blocked by the uninstall fence.');
         }
-        $queue = self::index_queue(false);
+        $queue = self::index_queue();
         if (!self::ensure_foreground_owner_guard($queue)) {
             throw new RuntimeException('The FTS foreground owner guard is unavailable.');
         }
@@ -17225,7 +17063,7 @@ LIMIT %d",
         }
 
         try {
-            self::index_queue(false)->enqueue_scope(
+            self::index_queue()->enqueue_scope(
                 self::GLOBAL_RECONCILIATION_SCOPE_KEY,
                 [
                     'reason' => 'foreground_queue_failure',
@@ -17239,40 +17077,39 @@ LIMIT %d",
             );
             self::schedule_queue_processor(1);
         } catch (Throwable) {
-            // The schema watchdog reasserts the corpus generation after the
-            // work table becomes writable again.
+            // Scheduled repair reasserts the corpus generation after the work
+            // table becomes writable again.
         }
     }
 
     /** Count durable post and scope work without loading the rows. */
     private static function pending_queue_count(): int
     {
-        if (!self::option_matches_schema_version(self::get_option(self::SCHEMA_VERSION_OPTION, null))) {
+        try {
+            return self::index_queue()->count();
+        } catch (Throwable) {
             return 0;
         }
-
-        return self::index_queue(false)->count();
     }
 
     /** @return array{post_count:int,scope_count:int,scope_cursor_post_id:?int,post_count_relation:string,scope_count_relation:string,counts_capped:bool} */
     private static function durable_work_status(): array
     {
-        $empty = [
+        $unavailable = [
             'post_count' => 0,
             'scope_count' => 0,
-            'scope_cursor_post_id' => 0,
-            'post_count_relation' => 'exact',
-            'scope_count_relation' => 'exact',
-            'counts_capped' => false,
+            'scope_cursor_post_id' => null,
+            'post_count_relation' => 'at_least',
+            'scope_count_relation' => 'at_least',
+            'counts_capped' => true,
         ];
         try {
-            if (!self::option_matches_schema_version(self::get_option(self::SCHEMA_VERSION_OPTION, null))) {
-                return $empty;
-            }
-
-            return self::index_queue(false)->status();
+            return self::index_queue()->status();
         } catch (Throwable) {
-            return $empty;
+            // A failed bounded read proves no exact zero. Keep operator
+            // surfaces available while forcing readiness completion to treat
+            // the durable work state as unknown.
+            return $unavailable;
         }
     }
 
@@ -17350,12 +17187,6 @@ LIMIT %d",
                 // takeover statements to the next maximum writer transaction.
                 self::remember_index_batch_stop($summary, 'stale_writer_lease_recovered');
             } else {
-                if (!self::option_matches_schema_version(self::get_option(self::SCHEMA_VERSION_OPTION, null))) {
-                    self::schedule_schema_provisioning();
-                    self::remember_index_batch_systemic_backoff($summary, 'schema_maintenance');
-                    throw new RuntimeException('FTS schema maintenance must complete before indexing.');
-                }
-
                 self::process_relational_work_batch(
                     min(100, max(1, $batch_size)),
                     $summary,
@@ -17488,7 +17319,7 @@ LIMIT %d",
         ?float $deadline = null
     ): void
     {
-        $queue = self::index_queue(false);
+        $queue = self::index_queue();
         try {
             $work = $queue->claim_batch(
                 $limit,
@@ -17510,7 +17341,7 @@ LIMIT %d",
             self::latch_foreground_owner_guard_unavailable();
         }
         if ($work === []) {
-            $cleaned = self::storage(false)->cleanup_empty_terms();
+            $cleaned = self::storage()->cleanup_empty_terms();
             $summary['empty_terms_cleaned'] = max(0, (int) ($summary['empty_terms_cleaned'] ?? 0))
                 + max(0, $cleaned);
             if ($cleaned >= WP_FTS_Relational_Storage::MAX_EMPTY_TERM_CLEANUP) {
@@ -17844,7 +17675,7 @@ LIMIT %d",
                 // frontier observed under this writer lease. Pay the same one
                 // bounded cleanup page an empty claim would pay, without
                 // scheduling an otherwise empty follow-up worker invocation.
-                $cleaned = self::storage(false)->cleanup_empty_terms();
+                $cleaned = self::storage()->cleanup_empty_terms();
                 $summary['empty_terms_cleaned'] = max(0, (int) ($summary['empty_terms_cleaned'] ?? 0))
                     + max(0, $cleaned);
                 if ($cleaned >= WP_FTS_Relational_Storage::MAX_EMPTY_TERM_CLEANUP) {
@@ -17989,7 +17820,7 @@ LIMIT %d",
             $summary['has_more'] = true;
             throw $error;
         }
-        $storage = self::storage(false);
+        $storage = self::storage();
         $existing_hashes = [];
         foreach ($posts as $post_id => $post) {
             if (isset($post->fts_existing_hash) && is_scalar($post->fts_existing_hash)) {
@@ -18180,7 +18011,7 @@ LIMIT %d",
         }
 
         // Validate every storage boundary in one pure-PHP pass before the sole
-        // old-posting frontier read. Otherwise a batch of independently poison
+        // existing-posting frontier read. Otherwise a batch of independently poison
         // analyzer/filter outputs could reject one document per retry and turn
         // one worker invocation into one SELECT per claimed post.
         $partition = $storage->partition_prepared_documents($prepared);
@@ -18306,7 +18137,7 @@ LIMIT %d",
                 }
                 // Measure only documents that actually need replacement.
                 // Unchanged and source-deferred lower ids cannot consume the
-                // old-posting frontier or starve a later changed document.
+                // existing-posting frontier or starve a later changed document.
                 // Earlier PHP bounds make a writer split an invariant failure,
                 // not a reason to repeat this frontier query in the same run.
                 $replacement_plan = $storage->plan_prepared_replacement($new_posting_counts);
@@ -18341,7 +18172,7 @@ LIMIT %d",
                     $successful_claims = array_values($successful_claims);
                     if (count($mapped_deferred_post_ids) !== count($deferred_post_ids)) {
                         throw new RuntimeException(
-                            'Could not map every bounded FTS posting frontier document back to its owned queue claim.'
+                            'Could not map every bounded FTS existing-posting frontier document back to its owned queue claim.'
                         );
                     }
                     self::remember_index_batch_stop($summary, 'posting_mutation_cap');
@@ -18371,8 +18202,8 @@ LIMIT %d",
                 );
             }
             // Replacement deletes zero-frequency terms only from this batch's
-            // measured old-posting frontier. Historical debt belongs to the
-            // queue-empty/explicit maintenance pass; charging every changed
+            // measured existing-posting frontier. Unrelated empty-term debt belongs
+            // to the queue-empty/explicit maintenance pass; charging every changed
             // batch another dictionary DELETE would add server load without
             // strengthening the generation acknowledgement below.
             if (
@@ -18589,7 +18420,7 @@ LIMIT %d",
             // fail-closed. Together with the selector, every selective page
             // remains a fixed two-statement workflow on every supported
             // database.
-            $index_hint = self::relational_storage()->validated_filtered_scope_index_hint();
+            $index_hint = self::storage()->validated_filtered_scope_index_hint();
             $sqlite = self::database_adapter_is_sqlite($wpdb);
             $branches = [];
             $args = [];
@@ -18638,7 +18469,7 @@ LIMIT %d",
             && $term_taxonomy_id > 0
         ) {
             $relationships = (string) ($wpdb->term_relationships ?? ((string) ($wpdb->prefix ?? '') . 'term_relationships'));
-            $index_hint = self::relational_storage()->validated_targeted_scope_index_hint();
+            $index_hint = self::storage()->validated_targeted_scope_index_hint();
             $rows = $wpdb->get_results($wpdb->prepare(
                 "/* wp_fts:targeted-scope-page */
 SELECT scope_rel.object_id AS post_id, 1 AS should_process
@@ -19952,9 +19783,6 @@ WHERE p.ID IN ({$post_placeholders})";
             'lock_before' => [],
             'lock_after' => [],
             'lock_prevented_work' => false,
-            'schema_status' => '',
-            'schema_version' => 0,
-            'expected_schema_version' => 0,
             'storage_backend' => '',
             'error_class' => '',
             'error_message' => '',
@@ -20032,7 +19860,6 @@ WHERE p.ID IN ({$post_placeholders})";
      */
     private static function initialize_index_batch_summary(array &$summary, array $opts, float $started): void
     {
-        $stored_schema_version = self::schema_version_from_option(self::get_option(self::SCHEMA_VERSION_OPTION, null));
         $summary['source'] = self::index_batch_source($summary['mode'] ?? 'manual', $opts);
         $summary['started_at'] = self::current_gmt_datetime();
         // Queue depth belongs to explicit operator diagnostics. Counting the
@@ -20043,9 +19870,6 @@ WHERE p.ID IN ({$post_placeholders})";
         // options table before and after every successful worker would add two
         // statements that cannot affect the batch.
         $summary['lock_before'] = [];
-        $summary['schema_status'] = $stored_schema_version === self::SCHEMA_VERSION ? 'current' : 'maintenance_pending';
-        $summary['schema_version'] = $stored_schema_version;
-        $summary['expected_schema_version'] = self::SCHEMA_VERSION;
         $summary['storage_backend'] = self::index_storage_backend_label();
         $summary['elapsed_ms'] = max(0.0, (microtime(true) - $started) * 1000.0);
     }
@@ -21042,20 +20866,26 @@ WHERE p.ID IN ({$post_placeholders})";
         }
 
         $table = (string) $wpdb->options;
+        // A no-op duplicate update takes the exclusive duplicate-key lock
+        // directly. Ignoring a duplicate first takes a shared gap lock and
+        // then upgrades it for insertion, which lets simultaneous MySQL
+        // contenders deadlock even though only one lease row can win.
         $statement = $may_cross_uninstall_fence
             ? $wpdb->prepare(
-                "INSERT IGNORE INTO {$table} (option_name,option_value,autoload) VALUES (%s,%s,%s)",
+                "INSERT INTO {$table} (option_name,option_value,autoload) VALUES (%s,%s,%s)
+ON DUPLICATE KEY UPDATE option_name = option_name",
                 self::INDEX_LOCK_OPTION,
                 maybe_serialize($payload),
                 'no'
             )
             : $wpdb->prepare(
-                "INSERT IGNORE INTO {$table} (option_name,option_value,autoload)
+                "INSERT INTO {$table} (option_name,option_value,autoload)
 SELECT %s,%s,%s
 WHERE NOT EXISTS (
     SELECT 1 FROM {$table} uninstall_fence
     WHERE uninstall_fence.option_name = %s
-)",
+)
+ON DUPLICATE KEY UPDATE option_name = option_name",
                 self::INDEX_LOCK_OPTION,
                 maybe_serialize($payload),
                 'no',
@@ -21065,7 +20895,18 @@ WHERE NOT EXISTS (
         if ($result === false) {
             throw new RuntimeException('Could not acquire the FTS index writer lease.');
         }
-        if ((int) $result !== 1) {
+        $inserted = (int) $result === 1;
+        if (
+            $inserted
+            && isset($wpdb->dbh)
+            && $wpdb->dbh instanceof mysqli
+            && mysqli_insert_id($wpdb->dbh) <= 0
+        ) {
+            // MYSQLI_CLIENT_FOUND_ROWS reports a no-op duplicate update as one
+            // affected row. Only a real insert receives a new option_id.
+            $inserted = false;
+        }
+        if (!$inserted) {
             if (function_exists('wp_cache_delete')) {
                 wp_cache_delete(self::INDEX_LOCK_OPTION, 'options');
                 wp_cache_delete('notoptions', 'options');
@@ -21205,7 +21046,7 @@ STRAIGHT_JOIN {$work_table} work_row
             if ($uses_storage_transaction) {
                 $storage->advance_epoch_before_capability_retirement();
             } else {
-                self::index_queue(false)->advance_search_epoch();
+                self::index_queue()->advance_search_epoch();
             }
             if ($uses_storage_transaction) {
                 // The exact option lease remains owned through COMMIT. This is
@@ -21722,10 +21563,7 @@ STRAIGHT_JOIN {$work_table} work_row
         ) {
             return false;
         }
-        if (!self::option_matches_schema_version(self::get_option(self::SCHEMA_VERSION_OPTION, null))) {
-            return false;
-        }
-        $queue = self::index_queue(false);
+        $queue = self::index_queue();
         if ($queue->has_work()) {
             return false;
         }
@@ -21746,7 +21584,7 @@ STRAIGHT_JOIN {$work_table} work_row
             self::schedule_queue_processor(1);
             return false;
         }
-        $physical = self::storage(false)->verify_schema();
+        $physical = self::storage()->verify_schema_and_supporting_core_indexes();
         if (empty($physical['valid'])) {
             throw new RuntimeException('FTS readiness finalization found an invalid physical schema.');
         }
@@ -22200,9 +22038,6 @@ STRAIGHT_JOIN {$work_table} work_row
             'lock_prevented_work' => $summary['lock_prevented_work'] ?? false,
             'lock_at_start' => $summary['lock_before'] ?? [],
             'lock_at_end' => $summary['lock_after'] ?? [],
-            'schema_status' => $summary['schema_status'] ?? '',
-            'schema_version' => $summary['schema_version'] ?? 0,
-            'expected_schema_version' => $summary['expected_schema_version'] ?? 0,
             'storage_backend' => $summary['storage_backend'] ?? '',
             'error_class' => $summary['error_class'] ?? '',
             'error_message' => $summary['error_message'] ?? '',
@@ -22270,9 +22105,6 @@ STRAIGHT_JOIN {$work_table} work_row
             'lock_prevented_work' => (bool) ($raw['lock_prevented_work'] ?? false),
             'lock_at_start' => self::sanitize_index_lock_diagnostics($raw['lock_at_start'] ?? []),
             'lock_at_end' => self::sanitize_index_lock_diagnostics($raw['lock_at_end'] ?? []),
-            'schema_status' => self::sanitize_index_diagnostic_text($raw['schema_status'] ?? '', 40, false),
-            'schema_version' => max(0, (int) ($raw['schema_version'] ?? 0)),
-            'expected_schema_version' => max(0, (int) ($raw['expected_schema_version'] ?? 0)),
             'storage_backend' => self::sanitize_index_diagnostic_text($raw['storage_backend'] ?? '', 80, false),
             'error_class' => self::sanitize_index_diagnostic_text($raw['error_class'] ?? '', self::MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES, false),
             'error_message' => self::sanitize_index_diagnostic_text($raw['error_message'] ?? '', self::MAX_INDEX_FAILURE_ERROR_BYTES),
@@ -22379,16 +22211,12 @@ STRAIGHT_JOIN {$work_table} work_row
     /**
      * Build the durable queue against the active WordPress database connection.
      */
-    private static function index_queue(bool $ensure_schema = false): WP_FTS_Index_Queue
+    private static function index_queue(): WP_FTS_Index_Queue
     {
         global $wpdb;
 
         if (!isset($wpdb) || !is_object($wpdb)) {
             throw new RuntimeException('Pure PHP FTS requires the WordPress $wpdb global.');
-        }
-
-        if ($ensure_schema) {
-            self::maybe_schedule_schema_repair();
         }
 
         return new WP_FTS_Index_Queue($wpdb);
@@ -22421,7 +22249,7 @@ STRAIGHT_JOIN {$work_table} work_row
     /**
      * Build a storage backend against the active WordPress database connection.
      */
-    private static function relational_storage(): WP_FTS_Relational_Storage
+    private static function storage(): WP_FTS_Relational_Storage
     {
         global $wpdb;
 
@@ -22690,7 +22518,7 @@ STRAIGHT_JOIN {$work_table} work_row
     private static function schedule_next_available_queue_processor(bool $writer_lease_owned = false): bool
     {
         try {
-            $queue = self::index_queue(false);
+            $queue = self::index_queue();
             $next = $queue->next_available_at();
             if ($queue->foreground_owner_guard_probe_state() === 'unavailable') {
                 self::latch_foreground_owner_guard_unavailable();
@@ -22789,7 +22617,6 @@ STRAIGHT_JOIN {$work_table} work_row
         // request. Keeping them in alloptions avoids cold primary-key reads on
         // hosts without a persistent object cache.
         $request_readiness_option = in_array($name, [
-            self::SCHEMA_VERSION_OPTION,
             self::INDEX_HEALTH_OPTION,
             self::READINESS_INCARNATION_OPTION,
             self::SEARCH_READY_INCARNATION_OPTION,
@@ -22808,55 +22635,11 @@ STRAIGHT_JOIN {$work_table} work_row
             self::reset_request_caches();
         } elseif (in_array($name, [
             self::INDEX_HEALTH_OPTION,
-            self::SCHEMA_VERSION_OPTION,
             self::READINESS_INCARNATION_OPTION,
             self::SEARCH_READY_INCARNATION_OPTION,
         ], true)) {
             self::$search_takeover_status_cache = [];
         }
-    }
-
-    /** Persist maintenance-only state without adding another hot option read. */
-    private static function set_nonautoloaded_option(string $name, mixed $value): void
-    {
-        if (!function_exists('update_option')) {
-            throw new RuntimeException("WordPress cannot persist {$name}.");
-        }
-        $updated = update_option($name, $value, false);
-        if (!$updated && self::get_option($name, null) != $value) {
-            throw new RuntimeException("Could not update {$name}.");
-        }
-    }
-
-    /**
-     * Compare stored WordPress option values without assuming integer storage.
-     */
-    private static function option_matches_schema_version(mixed $value): bool
-    {
-        return self::schema_version_option_value($value) === self::SCHEMA_VERSION;
-    }
-
-    private static function schema_version_from_option(mixed $value): int
-    {
-        return self::schema_version_option_value($value) ?? 0;
-    }
-
-    private static function schema_version_option_value(mixed $value): ?int
-    {
-        if (is_int($value)) {
-            return $value >= 0 ? $value : null;
-        }
-        if (
-            !is_string($value)
-            || $value === ''
-            || ($value !== '0' && $value[0] === '0')
-            || strspn($value, '0123456789') !== strlen($value)
-        ) {
-            return null;
-        }
-        $version = (int) $value;
-
-        return $version >= 0 && (string) $version === $value ? $version : null;
     }
 
     /**

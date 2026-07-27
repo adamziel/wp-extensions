@@ -181,8 +181,9 @@ submission.
 Run the disposable WordPress release smoke only against a throwaway WordPress
 site. It installs and activates a direct-install ZIP, checks operator status,
 repairs schema without indexing content, creates one generated post fixture,
-runs one bounded indexing batch, verifies `wp fts search --format=json`, and
-then deletes only that generated fixture.
+drains activation reconciliation through bounded indexing passes, verifies
+the completed generation through the scheduled maintenance verifier, runs
+`wp fts search --format=json`, and then deletes only that generated fixture.
 
 The command exits with `SKIP:` and status 0 when WP-CLI or `WP_FTS_WP_PATH` is
 not configured, when `WP_FTS_WP_PATH` is not an installed WordPress root, or

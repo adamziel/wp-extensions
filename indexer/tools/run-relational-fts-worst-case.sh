@@ -410,11 +410,11 @@ foreach($lines as $line){
     if(!$valid){$malformed=true;}
     $checkpoints[]=$checkpoint;
 }
-$expectedLabels=["pre-corpus","post-frontier","post-reindex"];
+$expectedLabels=["pre-corpus","post-existing-posting-frontier","post-reindex"];
 foreach(["common_or","max_valid_or_prefix","rare_anchor_and","prefix_fanout"] as $case){
     for($sample=0;$sample<10;$sample++){$expectedLabels[]="pre-cold-restart-{$case}-{$sample}";}
 }
-$expectedLabels[]="pre-scope-restart";
+$expectedLabels[]="pre-supporting-core-index-restart";
 $expectedLabels[]="final-workload";
 $actualLabels=array_column($checkpoints,"checkpoint");
 $database=is_array($resources["database"]??null)?$resources["database"]:[];
@@ -828,7 +828,7 @@ TEST_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/relational-fts-worst-case.
 CONCURRENT_READER_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/relational-fts-concurrent-reader.php"
 MUTATION_PROOF_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/mutation-fence-concurrency.php"
 ISOLATED_BOUNDARIES_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/relational-fts-isolated-boundaries.php"
-OLD_POSTING_FRONTIER_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/old-posting-frontier.php"
+EXISTING_POSTING_FRONTIER_SCRIPT="${SOURCE_ROOT}/indexer/tests/integration/existing-posting-frontier.php"
 SOURCE_SHA="$(git -C "${SOURCE_ROOT}" rev-parse HEAD)"
 if (( WORKTREE_CREATED == 1 )) && [[ -n "$(git -C "${SOURCE_ROOT}" status --porcelain --untracked-files=all)" ]]; then
     SOURCE_DIRTY=1
@@ -853,8 +853,8 @@ if [[ ! -f "${ISOLATED_BOUNDARIES_SCRIPT}" ]]; then
     echo "BLOCKED: missing isolated boundary proof: ${ISOLATED_BOUNDARIES_SCRIPT}" >&2
     exit 1
 fi
-if [[ ! -f "${OLD_POSTING_FRONTIER_SCRIPT}" ]]; then
-    echo "BLOCKED: missing old-posting frontier proof: ${OLD_POSTING_FRONTIER_SCRIPT}" >&2
+if [[ ! -f "${EXISTING_POSTING_FRONTIER_SCRIPT}" ]]; then
+    echo "BLOCKED: missing existing-posting frontier proof: ${EXISTING_POSTING_FRONTIER_SCRIPT}" >&2
     exit 1
 fi
 initialize_and_attest_jieba_source \
@@ -864,7 +864,7 @@ TEST_SCRIPT_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${TEST_SCRIP
 CONCURRENT_READER_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${CONCURRENT_READER_SCRIPT}")"
 MUTATION_PROOF_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${MUTATION_PROOF_SCRIPT}")"
 ISOLATED_BOUNDARIES_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${ISOLATED_BOUNDARIES_SCRIPT}")"
-OLD_POSTING_FRONTIER_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${OLD_POSTING_FRONTIER_SCRIPT}")"
+EXISTING_POSTING_FRONTIER_SHA256="$(php -r 'echo hash_file("sha256", $argv[1]);' "${EXISTING_POSTING_FRONTIER_SCRIPT}")"
 
 timed_host package-primary-build 1800 php "${SOURCE_ROOT}/indexer/tools/build-release-zip.php" \
     --plugin-src="${SOURCE_ROOT}/indexer" \
@@ -1115,7 +1115,7 @@ ${DB_ENV}
       - ${CONCURRENT_READER_SCRIPT}:/proof/relational-fts-concurrent-reader.php:ro
       - ${MUTATION_PROOF_SCRIPT}:/proof/mutation-fence-concurrency.php:ro
       - ${ISOLATED_BOUNDARIES_SCRIPT}:/proof/relational-fts-isolated-boundaries.php:ro
-      - ${OLD_POSTING_FRONTIER_SCRIPT}:/proof/old-posting-frontier.php:ro
+      - ${EXISTING_POSTING_FRONTIER_SCRIPT}:/proof/existing-posting-frontier.php:ro
       - ${EVIDENCE_DIR}:/evidence
       - ${PHP_INI}:/usr/local/etc/php/conf.d/zzz-wp-fts-worst-case.ini:ro
       - ${APACHE_MPM_CONF}:/etc/apache2/mods-available/mpm_prefork.conf:ro
@@ -1142,7 +1142,7 @@ ${DB_ENV}
       - ${CONCURRENT_READER_SCRIPT}:/proof/relational-fts-concurrent-reader.php:ro
       - ${MUTATION_PROOF_SCRIPT}:/proof/mutation-fence-concurrency.php:ro
       - ${ISOLATED_BOUNDARIES_SCRIPT}:/proof/relational-fts-isolated-boundaries.php:ro
-      - ${OLD_POSTING_FRONTIER_SCRIPT}:/proof/old-posting-frontier.php:ro
+      - ${EXISTING_POSTING_FRONTIER_SCRIPT}:/proof/existing-posting-frontier.php:ro
       - ${EVIDENCE_DIR}:/evidence
       - ${PHP_INI}:/usr/local/etc/php/conf.d/zzz-wp-fts-worst-case.ini:ro
     entrypoint: ["wp"]
@@ -1163,7 +1163,7 @@ phase_timeout_seconds() {
             fi
             ;;
         setup|indexing-prepare|initial-index-drain|reindex-drain|drain) printf '7200\n' ;;
-        cold-prepare|dependency-lob|max-valid-seed|max-valid-setup|max-valid-search|search-memory-sample|writer-aggregate|old-posting-frontier|scope-ddl-writer|scope-proof) printf '1800\n' ;;
+        cold-prepare|dependency-lob|max-valid-seed|max-valid-setup|max-valid-search|search-memory-sample|writer-aggregate|existing-posting-frontier|supporting-core-index-ddl-writer|scope-proof) printf '1800\n' ;;
         concurrent-reader|concurrent-writer) printf '%s\n' "$((CONCURRENCY_SECONDS + 180))" ;;
         *) printf '600\n' ;;
     esac
@@ -1563,13 +1563,13 @@ $wordpressPreCorpusValid = $wordpressPreCorpusMemory["cgroup_version"] === ($wor
 if (!$wordpressPreCorpusValid) {
     $gates[] = "WordPress pre-corpus cgroup memory must stay within 512 MiB without a limit or OOM event";
 }
-$databaseMemoryCheckpointLabels = ["pre-corpus", "post-frontier", "post-reindex"];
+$databaseMemoryCheckpointLabels = ["pre-corpus", "post-existing-posting-frontier", "post-reindex"];
 foreach (["common_or", "max_valid_or_prefix", "rare_anchor_and", "prefix_fanout"] as $case) {
     for ($sample = 0; $sample < 10; $sample++) {
         $databaseMemoryCheckpointLabels[] = "pre-cold-restart-{$case}-{$sample}";
     }
 }
-$databaseMemoryCheckpointLabels[] = "pre-scope-restart";
+$databaseMemoryCheckpointLabels[] = "pre-supporting-core-index-restart";
 $databaseMemoryCheckpointLabels[] = "final-workload";
 $packageReproducibility = json_decode((string) file_get_contents($argv[31]), true, 512, JSON_THROW_ON_ERROR);
 $data = [
@@ -1641,7 +1641,7 @@ $data = [
  "harness_sha256" => $argv[22],
  "mutation_proof_sha256" => $argv[23],
  "isolated_boundaries_sha256" => $argv[24],
- "old_posting_frontier_sha256" => $argv[27],
+ "existing_posting_frontier_sha256" => $argv[27],
  "package_reproducibility" => $packageReproducibility,
  "io_profile" => [
      "mode" => "host-provided-unthrottled",
@@ -1666,7 +1666,7 @@ if ($gates !== []) {
   "${WP_LIMITS}" "${WP_DIGEST}" "${WP_IMAGE_ID}" "${WORDPRESS_IMAGE}" "${WP_IMAGE}" "${WP_EFFECTIVE_CGROUP}" \
   "${WPCLI_DIGEST}" "${WPCLI_IMAGE_ID}" "${WPCLI_IMAGE}" "${WPCLI_RUN_IMAGE}" "${WPCLI_EFFECTIVE_CGROUP}" \
   "${PROFILE}" "${DOCUMENTS}" "${ENGINE}" "${TEST_SCRIPT_SHA256}" "${MUTATION_PROOF_SHA256}" "${ISOLATED_BOUNDARIES_SHA256}" "${ALLOW_DIRTY}" "${EVIDENCE_DIR}/resources.json" \
-  "${OLD_POSTING_FRONTIER_SHA256}" "${DB_RUNNING_IMAGE_ID}" "${WP_RUNNING_IMAGE_ID}" "${WPCLI_RUNNING_IMAGE_ID}" \
+  "${EXISTING_POSTING_FRONTIER_SHA256}" "${DB_RUNNING_IMAGE_ID}" "${WP_RUNNING_IMAGE_ID}" "${WPCLI_RUNNING_IMAGE_ID}" \
   "${EVIDENCE_DIR}/package-reproducibility.json" "${RUNNER_OS:-local}" "${RUNNER_ARCH:-unknown}" "${ImageOS:-unknown}" "${ImageVersion:-unknown}" \
   "${DB_PRE_CORPUS_MEMORY}" "${DB_PRE_CORPUS_PEAK_LIMIT_BYTES}" "${WP_PRE_CORPUS_MEMORY}" "${WP_CONTAINER}"
 
@@ -1844,22 +1844,22 @@ if(($e["schema"]??null)!=="relational-fts-isolated-boundaries-v1"||($e["status"]
 ' "${artifact}" "${log}"
 }
 
-run_old_posting_frontier() {
-    local artifact="${EVIDENCE_DIR}/old-posting-frontier.json"
+run_existing_posting_frontier() {
+    local artifact="${EVIDENCE_DIR}/existing-posting-frontier.json"
     rm -f "${artifact}"
-    timed_compose old-posting-frontier 360 exec -T \
+    timed_compose existing-posting-frontier 360 exec -T \
       -e WP_FTS_FRONTIER_HOST=db \
       -e WP_FTS_FRONTIER_PORT=3306 \
       -e WP_FTS_FRONTIER_USER=wpfts \
       -e WP_FTS_FRONTIER_PASSWORD=wpfts_dev_only \
       -e WP_FTS_FRONTIER_DATABASE=wpfts \
       -e WP_FTS_FRONTIER_PLUGIN_PATH=/var/www/html/wp-content/plugins/indexer \
-      -e "WP_FTS_FRONTIER_HARNESS_SHA256=${OLD_POSTING_FRONTIER_SHA256}" \
+      -e "WP_FTS_FRONTIER_HARNESS_SHA256=${EXISTING_POSTING_FRONTIER_SHA256}" \
       -e "WP_FTS_FRONTIER_SOURCE_SHA=${SOURCE_SHA}" \
       -e "WP_FTS_FRONTIER_ZIP_SHA256=${ZIP_SHA256}" \
       -e "WP_FTS_FRONTIER_ENGINE=${ENGINE}" \
       wordpress timeout -s KILL 300 php -d memory_limit=128M \
-      /proof/old-posting-frontier.php > "${artifact}"
+      /proof/existing-posting-frontier.php > "${artifact}"
 }
 
 wait_for_database() {
@@ -1973,16 +1973,16 @@ if(file_put_contents($temporary,$json,LOCK_EX)!==strlen($json)||!rename($tempora
     '
 }
 
-# Exercise the maximum replacement frontier before the production corpus owns
+# Exercise the maximum existing-posting frontier before the production corpus owns
 # the database cache, then retain that cgroup segment before the required cold
 # restart. This keeps the two independent maximum-width workloads from sharing
 # one server lifetime while preserving the hard 1 GiB limit for each.
 set_run_stage "storage-frontier"
-run_old_posting_frontier
-capture_database_memory_checkpoint post-frontier
-timed_compose post-frontier-database-restart 300 restart db >/dev/null
+run_existing_posting_frontier
+capture_database_memory_checkpoint post-existing-posting-frontier
+timed_compose existing-posting-frontier-database-restart 300 restart db >/dev/null
 wait_for_database
-configure_performance_schema_consumers post-frontier-performance-schema-enable
+configure_performance_schema_consumers existing-posting-frontier-performance-schema-enable
 
 set_run_stage "current-corpus-and-initial-index"
 record_installed_tree_binding post-install
@@ -2238,27 +2238,27 @@ fi
 # populated DDL proof with a cold 256 MiB buffer pool. Without this boundary,
 # cache left by the search fanout can make the same 1 GiB lane fail or pass
 # according to page-reclaim timing rather than the indexed write contract.
-capture_database_memory_checkpoint pre-scope-restart
-timed_compose scope-database-restart 300 restart db >/dev/null
+capture_database_memory_checkpoint pre-supporting-core-index-restart
+timed_compose supporting-core-index-database-restart 300 restart db >/dev/null
 wait_for_database
-configure_performance_schema_consumers scope-performance-schema-enable
+configure_performance_schema_consumers supporting-core-index-performance-schema-enable
 
-rm -f "${EVIDENCE_DIR}"/scope-ddl-{start,release}-*.json \
-      "${EVIDENCE_DIR}"/scope-ddl-{ready,writer}-*.json
-# One lightweight process stays alive for both operations and both indexes.
-# It skips a duplicate WordPress bootstrap so the four measured core-table
+rm -f "${EVIDENCE_DIR}"/supporting-core-index-ddl-{start,release}-*.json \
+      "${EVIDENCE_DIR}"/supporting-core-index-ddl-{ready,writer}-*.json
+# One lightweight process stays alive for both operations across all three indexes.
+# It skips a duplicate WordPress bootstrap so the six measured core-table
 # writes cannot breach the 512 MiB container contract before reaching MariaDB.
-run_php_phase scope-ddl-writer \
-  > "${EVIDENCE_DIR}/scope-ddl-writer.log" 2>&1 &
-scope_ddl_writer_pid=$!
+run_php_phase supporting-core-index-ddl-writer \
+  > "${EVIDENCE_DIR}/supporting-core-index-ddl-writer.log" 2>&1 &
+supporting_core_index_ddl_writer_pid=$!
 if ! run_php_phase scope-proof > "${EVIDENCE_DIR}/scope-proof.log"; then
-    kill "${scope_ddl_writer_pid}" >/dev/null 2>&1 || true
-    wait "${scope_ddl_writer_pid}" 2>/dev/null || true
-    echo "FAIL: populated scope-index proof failed while concurrent core-table writers were active." >&2
+    kill "${supporting_core_index_ddl_writer_pid}" >/dev/null 2>&1 || true
+    wait "${supporting_core_index_ddl_writer_pid}" 2>/dev/null || true
+    echo "FAIL: populated supporting-core-index proof failed while concurrent core-table writers were active." >&2
     exit 1
 fi
-if ! wait "${scope_ddl_writer_pid}"; then
-    echo "FAIL: the concurrent scope-index DDL writer failed." >&2
+if ! wait "${supporting_core_index_ddl_writer_pid}"; then
+    echo "FAIL: the concurrent supporting-core-index DDL writer failed." >&2
     exit 1
 fi
 run_php_phase drain > "${EVIDENCE_DIR}/drain.log"

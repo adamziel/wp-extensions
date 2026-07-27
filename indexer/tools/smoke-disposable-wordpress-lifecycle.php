@@ -43,7 +43,6 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
         'reset_old_fts_work' => ['base_suffix' => 'fts_work', 'role' => 'old'],
     ];
     private const OPERATIONAL_OPTIONS = [
-        'wp_fts_schema_version',
         'wp_fts_analyzer_options',
         'wp_fts_settings',
         'wp_fts_index_custom_fields',
@@ -52,7 +51,6 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
         'wp_fts_readiness_incarnation',
         'wp_fts_search_ready_incarnation',
         'wp_fts_activation_redirect',
-        'wp_fts_scope_index_ownership',
     ];
 
     /** @var callable(array<int,string>, array<string,string>): array{exit:int,stdout:string,stderr:string} */
@@ -251,7 +249,7 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
                 $report
             );
             $afterActivation = $this->inspect_site('after_activation', $baseCommand, $createdPostIds, $report);
-            $this->assert_schema_current($statusAfterActivation, 'status after activation');
+            $this->assert_schema_not_checked($statusAfterActivation, 'status after activation');
             $this->assert_all_tables_exist($afterActivation, 'activation should create all FTS tables');
             $this->assert_fts_rows_zero($afterActivation, 'activation should not index pre-existing content');
             $this->assert_tracked_post_unchanged($beforeActivation, $afterActivation, $preExistingPostId, 'activation should not mutate pre-existing content');
@@ -310,7 +308,7 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
             );
             $afterRepair = $this->inspect_site('after_repair', $baseCommand, $createdPostIds, $report);
             $this->assert_schema_current($repair, 'repair schema');
-            $this->assert_schema_current($statusAfterRepair, 'status after repair');
+            $this->assert_schema_not_checked($statusAfterRepair, 'status after repair');
             $this->assert_all_tables_exist($afterRepair, 'repair should recreate missing FTS tables');
             $this->assert_fts_rows_zero($afterRepair, 'repair should not index pre-existing content');
             $this->assert_tracked_post_unchanged($beforeActivation, $afterRepair, $preExistingPostId, 'repair should not mutate pre-existing content');
@@ -903,10 +901,22 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
     private function assert_schema_current(array $payload, string $label): void
     {
         $schemaStatus = (string) ($payload['schema_status'] ?? $payload['status'] ?? '');
-        $schemaVersion = (int) ($payload['schema_version'] ?? $payload['stored_version'] ?? 0);
-        $expectedVersion = (int) ($payload['expected_schema_version'] ?? $payload['expected_version'] ?? 0);
-        if (!in_array($schemaStatus, ['current', 'ok'], true) || $schemaVersion < 1 || ($expectedVersion > 0 && $schemaVersion !== $expectedVersion)) {
+        if (!in_array($schemaStatus, ['current', 'ok'], true)) {
             throw new RuntimeException("Unexpected schema state for {$label}.");
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     */
+    private function assert_schema_not_checked(array $payload, string $label): void
+    {
+        if (
+            ($payload['schema_status'] ?? null) !== 'not_checked'
+            || ($payload['schema_verification'] ?? null) !== 'not_run'
+            || ($payload['physical_schema_checked'] ?? null) !== false
+        ) {
+            throw new RuntimeException("Unexpected schema probe state for {$label}.");
         }
     }
 
@@ -1233,9 +1243,6 @@ foreach (\$option_names as \$option_name) {
         'scalar_value' => \$value !== \$missing && is_scalar(\$value) ? (string) \$value : null,
         'value_bytes' => \$value !== \$missing && is_scalar(\$value) ? strlen((string) \$value) : null,
     ];
-    if (\$option_name === 'wp_fts_schema_version' && \$value !== \$missing) {
-        \$entry['schema_version'] = is_scalar(\$value) ? (int) \$value : 0;
-    }
     if (\$option_name === \$fence_option) {
         \$option_rows = \$wpdb->get_results(
             \$wpdb->prepare(

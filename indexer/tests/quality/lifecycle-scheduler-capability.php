@@ -122,7 +122,7 @@ function wp_fts_lifecycle_scheduler_assert_writer_blocked(
 
     try {
         WP_FTS_Plugin::uninstall();
-        assert_same(WP_FTS_Plugin::SCHEMA_VERSION_OPTION, $observed['option'] ?? null, "{$label}: injection must run after DROP and cron clearing");
+        assert_same(WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION, $observed['option'] ?? null, "{$label}: injection must run after DROP and cron clearing");
         assert_same([], $observed['queries'] ?? null, "{$label}: an uninstall-owned capability must permit zero later SQL");
         assert_same(0, $observed['schedules'] ?? null, "{$label}: an uninstall-owned capability must permit zero later cron events");
         assert_same(0, $observed['adds'] ?? null, "{$label}: a blocked writer must add zero options");
@@ -344,7 +344,7 @@ test_case('lifecycle scheduler capability foreground callback inside uninstall c
 
     try {
         WP_FTS_Plugin::uninstall();
-        assert_same(WP_FTS_Plugin::SCHEMA_VERSION_OPTION, $observed['option'] ?? null, 'the adversarial foreground callback must run after DROP while uninstall still owns both capabilities');
+        assert_same(WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION, $observed['option'] ?? null, 'the adversarial foreground callback must run after DROP while uninstall still owns both capabilities');
         assert_same([], $observed['queries'] ?? null, 'the callback must execute zero queue or diagnostic SQL while uninstall owns the exclusive guard');
         assert_same(0, $observed['schedules'] ?? null, 'the callback must schedule zero queue or schema events while uninstall owns the exclusive guard');
         assert_same(0, $observed['updates'] ?? null, 'the callback must recreate zero health options while uninstall owns the exclusive guard');
@@ -475,8 +475,6 @@ test_case('lifecycle scheduler capability direct writers retain their normal sta
 test_case('lifecycle scheduler capability tokenized queue writer allowlist cannot drift', function (): void {
     $inspection = wp_fts_lifecycle_scheduler_queue_mutation_map();
     $expected = [
-        'activate' => ['enqueue_corpus_scope'],
-        'provision_site_schema' => ['enqueue_corpus_scope'],
         'maybe_schedule_initial_index_readiness' => ['enqueue_scope'],
         'create_or_repair_schema_under_lock' => ['enqueue_corpus_scope'],
         'run_scheduled_schema_repair' => ['enqueue_corpus_scope'],
@@ -660,7 +658,10 @@ test_case('lifecycle scheduler capability stale lease race reports the uninstall
     ];
     $insertAttempts = 0;
     $fake->queryObserver = static function (string $sql) use (&$insertAttempts): void {
-        if (!str_starts_with($sql, 'INSERT IGNORE INTO wp_options (option_name,option_value,autoload)')) {
+        if (
+            !str_starts_with($sql, 'INSERT INTO wp_options (option_name,option_value,autoload)')
+            || !str_contains($sql, 'ON DUPLICATE KEY UPDATE option_name = option_name')
+        ) {
             return;
         }
         $insertAttempts++;

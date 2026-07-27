@@ -762,6 +762,16 @@ test_case('provider compatibility certification smoke and documentation are disc
         $smokeSource,
         'provider compatibility smoke WP-CLI eval should invoke the inside smoke runner'
     );
+    assert_contains(
+        'detect_index_profile_drift',
+        $smokeSource,
+        'provider compatibility smoke should reconcile the exact source profile before exercising provider precedence'
+    );
+    assert_contains(
+        'run_scheduled_schema_repair',
+        $smokeSource,
+        'provider compatibility smoke should publish readiness only through physical maintenance verification'
+    );
 
     $result = wp_fts_provider_certification_run_process(
         [PHP_BINARY, $root . '/tools/smoke-search-provider-compatibility.php'],

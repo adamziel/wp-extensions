@@ -189,8 +189,8 @@ Global/tag-only history queries or filters limited to `wp_posts`/FTS tables do
 not prove a request's query count.
 
 A separate cold-request artifact requires the exact current schema and all
-seven bounded request inputs in WordPress's autoload set: schema version,
-health, desired readiness, search-ready capability, settings, analyzer
+six bounded request inputs in WordPress's autoload set: health, desired
+readiness, search-ready capability, settings, analyzer
 overrides, and indexed custom fields. The proof primes `alloptions`, performs
 real direct-SQL CAS writes for health and search-ready capability, and requires
 the replacement and restored values to be immediately visible through
@@ -384,10 +384,10 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    measured separately from that single data statement.
    Replacement cost includes rows already stored, not only the newly analyzed
    map. With **7** existing documents carrying **8,192 disjoint postings
-   each**—4,096 lexical and 4,096 surface rows—there are **57,344** old rows.
+   each**—4,096 lexical and 4,096 surface rows—there are **57,344** existing rows.
    One post-first covering-index query scans at most **50,001** rows inside a
    derived table and returns at most seven per-post aggregates. A separate
-   100,000-posting lower-key decoy forces the measured `old_posting` access to
+   100,000-posting lower-key decoy forces the measured `existing_posting` access to
    be a covering `range` on `post_term`, rather than letting a whole-index
    scan look cheap. Performance Schema may account for both inner and outer
    query blocks, but must report at most **100,008 rows examined**, seven rows
@@ -430,15 +430,16 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    within five seconds.
    Each pass takes at most five seconds and stays below the 128 MiB PHP ceiling.
 3. Deactivation retains tables/data. Uninstall removes the four current tables
-   with **one idempotent `DROP TABLE` statement per site** and issues exactly
-   two `DROP INDEX` statements for its recorded, exactly matching core-table
-   indexes; a reused unowned index or a missing/changed owned index is never
-   dropped. Under the shared writer lease, uninstall first persists the exact
-   non-autoloaded scalar fence `1`, then drops owned indexes and tables and
-   deletes every operational option while retaining that fence. An unexpired
-   owner makes that site fail hard with **0 `DROP INDEX`, 0 `DROP TABLE`, and 0
-   option deletions**; an expired owner is atomically replaced before the fence,
-   two owned index drops, and one table drop. The lease remains
+   with **one idempotent `DROP TABLE` statement per site** and, on a healthy
+   installation, exactly three `DROP INDEX` statements for the matching
+   plugin-namespaced core-table indexes. A missing or conflicting definition is
+   never dropped.
+   Under the shared writer lease, uninstall first persists the exact
+   non-autoloaded scalar fence `1`, then drops exact supporting indexes and
+   tables and deletes every operational option while retaining that fence. An
+   unexpired owner makes that site fail hard with **0 `DROP INDEX`, 0 `DROP
+   TABLE`, and 0 option deletions**; an expired owner is atomically replaced
+   before the fence, three supporting-index drops, and one table drop. The lease remains
    owned through schedule and option cleanup, and token-checked release cannot
    delete a successor. Partial DROP failure retains the fence. Preloaded schema,
    worker, foreground, and scheduler callbacks then perform **0 SQL, 0 option
@@ -495,9 +496,9 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    **0 uninstall-fence probes, 0 plugin SQL, 0 option mutations, and 0
    schedules**; the direct non-autoloaded fence probe exists only at an actual
    writer, schema, foreground-persistence, or scheduling boundary.
-   A stale-schema Health render executes **0 SQL** and current-schema status
-   executes **1 bounded durable-work aggregate** in the contract adapter. It
-   executes no `SHOW`, `information_schema`, or corpus/document-table count.
+   Normal Health/status executes **1 bounded durable-work aggregate** in the
+   contract adapter. It executes no `SHOW`, `information_schema`, or
+   corpus/document-table count.
    Only explicit diagnose/support-snapshot paths set
    `schema_verification=physical`; they retain the bounded queue and
    reconciliation fields. No operator status path exhaustively counts posts or
@@ -507,7 +508,8 @@ row/page beyond a hard limit. Easy one-row happy paths are not acceptance.
    On MySQL and MariaDB, a cold explicit operator status or support snapshot is
    exactly **3 plugin statements**: one tiny
    `information_schema.STATISTICS` capability-column read, one table-bounded
-   UNION snapshot covering all four FTS tables plus both owned scope indexes,
+   UNION snapshot covering all four FTS tables plus all three supporting core
+   indexes,
    and one bounded `fts_work` status aggregate. A healthy diagnose with a
    hydrated search page is exactly **6** after adding plan/rank/hydrate; a
    nonhydrating diagnose is at most **5**. The corresponding SQLite physical
@@ -567,7 +569,7 @@ under normal PHP and `php -n`.
 ```sh
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='schema repair performs zero' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='optimize' php indexer/tests/run.php
-WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='old-posting prefix' php indexer/tests/run.php
+WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='existing-posting prefix' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='relational replacement plans are opaque' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='100000-post source shape' php indexer/tests/run.php
 WP_FTS_MIN_CHECKS=1 WP_FTS_TEST_FILTER='uninstall' php indexer/tests/run.php
@@ -848,7 +850,7 @@ in one writer-locked transaction; replaying its cursor must issue exactly one
 plan statement, zero rank/hydrate statements, and raise a cursor error.
 Finally it converts the real `fts_work` table to MyISAM, requires verification
 to report that exact engine mismatch, and runs production `create_tables()`
-under the shared writer lock. Repair must drop the incompatible table exactly
+under the shared writer lock. Repair must drop the invalid current table exactly
 once and restore the exact current InnoDB schema. Production does not preserve or
 copy rows from a physically invalid work table. A separate Plugin-level proof
 requires schema repair to replace that unknowable state with exactly one
@@ -1038,10 +1040,11 @@ structured-inconsistent raw probe fails acceptance.
 schema because its own fields did not change.
 
 The runner also records database usage, cumulative peak, limit events, OOM
-events, and OOM kills after the isolated maximum replacement frontier, after
+events, and OOM kills after the isolated maximum existing-posting frontier, after
 the forced rebuild, immediately before all 40 planned cold-cache database
 restarts (four cases × ten samples), before the cold restart that isolates the
-populated scope-index DDL proof, and once after the final measured workload.
+populated supporting-core-index DDL proof, and once after the final measured
+workload.
 Each restart boundary has a preceding checkpoint so later workloads do not
 inherit process and page-cache pressure from earlier write-heavy work without
 first retaining that segment's cumulative counters.
@@ -1174,7 +1177,7 @@ The ten-page maximum-valid front-end traversal likewise uses its complete fresh
 process lifetime, records the raw before/after values, and is self-hashed and
 source-bound. Its two complete 1.9-MiB rows require at most 24 MiB PHP/RSS
 growth while retaining the same 128-MiB absolute caps. Long-lived
-dependency-LOB and populated scope-index-repair
+dependency-LOB and populated supporting-core-index-repair
 measurements cannot reset Linux high water, so they deliberately use the same
 conservative `VmHWM`-after minus `VmRSS`-before attribution plus the positive
 128 MiB absolute ceiling.
@@ -1577,7 +1580,7 @@ direct backlog; a permanently post-first or permanently scope-first policy
 cannot pass by testing the two paths separately.
 
 The fair-turn proof is followed by a stronger composition, not a collection of
-independent maxima. One real document replaces an old 4,096-lexical plus
+independent maxima. One real document replaces an existing 4,096-lexical plus
 4,096-surface frontier with a disjoint frontier of the same size. Five more
 documents each contain a valid 1.9 MiB canonical source, so the six-post source
 aggregate exceeds 8 MiB. The batch also has one selected dependency value, one
@@ -1585,7 +1588,7 @@ unmarked filtered scope, and a prior `content_failure` on the maximum document.
 The claim/source-snapshot query must therefore decline the aggregate transport;
 exactly one conditional source query may then hydrate the complete prefix that
 fits the fixed byte budget. Exactly one dependency-measurement query, one
-dependency-value query, and one old-posting frontier query follow. The writer
+dependency-value query, and one existing-posting frontier query follow. The writer
 admits the maximum document, defers all five suffix documents, and combines the
 scope-turn publication with suffix release in one set update.
 
@@ -1661,7 +1664,7 @@ posting, or term rows. This transaction executes on every required real
 MySQL/MariaDB lane and remains under the 128 MiB PHP/RSS ceiling.
 
 SQLite's hexadecimal BLOB literals are intentionally not allowed to turn that
-same logical update into multiple dictionary writes. Before the old-posting
+same logical update into multiple dictionary writes. Before the existing-posting
 frontier read or `BEGIN`, one linear pure-PHP pass accounts for every literal,
 tuple separator, ordinal, and document-frequency digit. A single document that
 cannot fit one dictionary UPSERT and one resolver is a permanent
@@ -1681,7 +1684,7 @@ their complete clauses and row graphs. This is a SQLite adapter transport
 boundary, not a weakening of the required real MySQL/MariaDB maximum-width
 proof.
 
-The independent `tests/integration/old-posting-frontier.php` proof addresses
+The independent `tests/integration/existing-posting-frontier.php` proof addresses
 the inverse adversary: a new batch may be tiny while the rows it replaces are
 large. It creates 57,344 real disjoint dictionary/posting rows, drains them
 through the production planner/writer under a 128 MiB PHP limit, verifies the
@@ -1879,7 +1882,7 @@ total, at most 15 data statements, exactly two ordered lease controls
 (acquire, release), and exactly `START TRANSACTION` then `COMMIT`.
 The one-existing-document, `batch_size=100` short-batch proof currently has 18
 ordered roles: lease acquire, claim update, claim/source snapshot, dependency
-measurement, dependency values, replacement frontier, transaction start,
+measurement, dependency values, existing-posting frontier, transaction start,
 dictionary increment, dictionary decrement, bounded delete,
 prepared-term resolution, posting replacement, document replacement, epoch
 advance, generation/token acknowledgement, commit, bounded empty-term cleanup,
@@ -1984,20 +1987,17 @@ WordPress's core tables: `wp_fts_term_object(term_taxonomy_id, object_id)` and
 `wp_fts_type_status_id(post_type, post_status, ID)` for scope keysets, plus
 `wp_fts_visibility(ID, post_type, post_status, post_password, post_date_gmt)`
 for covering per-candidate visibility reads. The proof reads their exact real
-definitions before substituting any fixture. Creation intent is persisted first
-in the nonautoloaded `wp_fts_scope_index_ownership` option. An exact pre-existing
-namespaced index may be reused without claiming it; a same-name
-different-definition collision fails closed. Uninstall drops only an exact
-index whose ownership was recorded, never a merely similar site-owned index.
+definitions before substituting any fixture. Exact namespaced definitions are
+plugin-owned; a same-name different-definition collision fails closed.
+Uninstall drops exact matches and leaves conflicting definitions untouched.
 
 The populated repair proof clones WordPress's canonical posts and relationships
 tables with their real InnoDB definitions, removes the three plugin-owned
-composites, then populates 100,001 posts and 300,001 relationships while the
-stored schema stays current. It redirects WordPress's canonical core-table
-properties to these clones and executes the production ownership, writer-lease,
+composites, then populates 100,001 posts and 300,001 relationships. It redirects
+WordPress's canonical core-table properties to these clones and executes the
+production writer-lease,
 repair, and verification path, not copied DDL. It must issue exactly the three
-canonical `CREATE INDEX` statements, persist nonautoloaded ownership before the
-first, keep the schema version unchanged, and verify all three definitions.
+canonical `CREATE INDEX` statements and verify all three definitions.
 Completed Performance Schema events must match all three wpdb DDL hashes exactly.
 
 One persistent lightweight core-table writer process synchronizes at every query
@@ -2017,8 +2017,7 @@ statements including exactly three DDL statements, and at most 16 MiB additional
 PHP and RSS high-water usage. The fixture records actual data/index bytes before
 and after and requires a positive index-byte delta no larger than 128 MiB. The
 exact index-health/readiness/incarnation options, public takeover signature,
-grouped durable-work cardinality, and schema version must be unchanged; only
-the already-persisted index ownership may change. The real phase runs under a
+and grouped durable-work cardinality must be unchanged. The real phase runs under a
 1,800-second external kill, so a hung DDL or process OOM cannot masquerade as a
 missing report.
 
@@ -2286,7 +2285,7 @@ ordered gate IDs, gate count, and gate-list hash. The finalizer authenticates
 the preliminary self-hash and this inventory before it consumes any PASS gate,
 then requires the exact gate sequence rather than a subset. Critical mutation
 publication/deletion, runtime, adapter, HTTP attribution, search-shape,
-scope-index-repair, schema, reindex, pack, and recovery gates remain an
+supporting-core-index-repair, schema, reindex, pack, and recovery gates remain an
 independent required set, so deleting one gate and recomputing both the report
 and inventory hashes still fails. Deleting a section or case likewise fails.
 
@@ -2307,8 +2306,9 @@ Each required lane performs the same fail-closed sequence:
    initial current index, and verify the exact eligible-document count and empty
    work queue. Prove the mutation fence, then derive matching web and WP-CLI
    runtime profiles. Invalidate every derived row, force and time a complete
-   current-version rebuild, and prove every invalidated row was rewritten.
-4. Verify exact four-table columns/indexes, populated current-schema repair,
+   complete rebuild, and prove every invalidated row was rewritten.
+4. Verify exact four-table columns/indexes, populated supporting-core-index
+   repair,
    per-site semantics, document-frequency consistency, and current request
    behavior before the search and failure boundaries run.
 5. Exercise exhaustive oracle pagination, every adapter against the independent
@@ -2382,9 +2382,9 @@ Each required lane performs the same fail-closed sequence:
    window, and prove a >=60-second all-worker intersection plus independent
    progress and final-state parity for both writers. Then traverse the complete
    100,000-member targeted fixture, maximum 32-lane filtered fixture, and
-   100,000-row corpus gap. Before those reads, run the actual current-schema repair
+   100,000-row corpus gap. Before those reads, run the actual supporting-core-index repair
    against populated 100,001-post/300,001-relationship canonical InnoDB clones
-   while one persistent lightweight writer process performs four synchronized
+   while one persistent lightweight writer process performs six synchronized
    INSERT/UPDATE operations to measure write overlap and blocking. Retain
    exact DDL timing,
    attribution, storage, memory, publication,

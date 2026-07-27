@@ -38,9 +38,9 @@ suite remains dependency-light.
 The real harness creates generated temporary FTS tables, exercises `dbDelta()`
 creation, binary `VARBINARY` terms and row postings through
 `$wpdb->prepare()`, MySQL commit/rollback behavior, a simulated activation
-schema-version write for the current baseline, and a real `wp fts reindex`
+path that verifies the exact physical schema, and a real `wp fts reindex`
 process using `--require=tests/integration/wpcli-require.php`. It deletes its
-temporary post, option, and generated FTS tables in a cleanup block.
+temporary post and generated FTS tables in a cleanup block.
 
 Run the guarded real WordPress/MySQL production-path proof against a disposable
 site only:

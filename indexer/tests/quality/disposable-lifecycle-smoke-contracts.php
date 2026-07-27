@@ -266,7 +266,6 @@ function wp_fts_lifecycle_contract_inspection_payload(
 
     $options = [];
     foreach ([
-        'wp_fts_schema_version',
         'wp_fts_analyzer_options',
         'wp_fts_settings',
         'wp_fts_index_custom_fields',
@@ -275,11 +274,9 @@ function wp_fts_lifecycle_contract_inspection_payload(
         'wp_fts_readiness_incarnation',
         'wp_fts_search_ready_incarnation',
         'wp_fts_activation_redirect',
-        'wp_fts_scope_index_ownership',
     ] as $option) {
         $options[$option] = [
             'exists' => $optionExists,
-            'schema_version' => $option === 'wp_fts_schema_version' && $optionExists ? 1 : 0,
         ];
     }
     $fenceExists = in_array($phase, [
@@ -594,17 +591,15 @@ test_case('quality disposable lifecycle smoke builds bounded lifecycle WP-CLI co
                 }
                 if (str_contains($joined, "\nfts\nstatus")) {
                     return ['exit' => 0, 'stdout' => wp_fts_lifecycle_contract_json([
-                        'schema_status' => 'current',
-                        'schema_version' => 1,
-                        'expected_schema_version' => 1,
+                        'schema_status' => 'not_checked',
+                        'schema_verification' => 'not_run',
+                        'physical_schema_checked' => false,
                         'pending_queue_count' => 0,
                     ]), 'stderr' => ''];
                 }
                 if (str_contains($joined, "\nfts\nrepair")) {
                     return ['exit' => 0, 'stdout' => wp_fts_lifecycle_contract_json([
                         'schema_status' => 'current',
-                        'schema_version' => 1,
-                        'expected_schema_version' => 1,
                     ]), 'stderr' => ''];
                 }
                 if (str_contains($joined, "\nfts\nprocess-batch")) {

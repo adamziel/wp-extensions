@@ -23,7 +23,7 @@ test_case('maximum mixed worker composition stays inside the complete statement 
         'conditional_source_fallback',
         'dependency_measurement',
         'dependency_values',
-        'replacement_frontier',
+        'existing_posting_frontier',
         'transaction_start',
         'dictionary_increment',
         'dictionary_decrement',
@@ -52,8 +52,8 @@ test_case('maximum mixed worker composition stays inside the complete statement 
         static fn(string $role): bool => $role === 'health_state_cas'
     )), 'resolved diagnostics must not append a health CAS after the maximum transaction');
     assert_true(
-        isset($fake->docs[1]) && ($fake->docs[1]['content_hash'] ?? 'old-hash') !== 'old-hash',
-        'the admitted maximum document must replace its old frontier'
+        isset($fake->docs[1]) && ($fake->docs[1]['content_hash'] ?? 'existing-hash') !== 'existing-hash',
+        'the admitted maximum document must replace its existing frontier'
     );
     assert_true(!isset($fake->queue[1]), 'the admitted maximum generation must be acknowledged atomically');
     for ($postId = 2; $postId <= 6; $postId++) {
@@ -96,7 +96,7 @@ test_case('content failure settles before maximum writer work can compose with i
     assert_same('retry', $fake->queue[1]['state'] ?? null, 'the failing generation must enter retry state');
     assert_same('content_failure', $fake->queue[1]['last_error_code'] ?? null, 'the failing generation must retain its typed error');
     assert_same(1, $fake->queue[1]['attempts'] ?? null, 'the failing generation must increment attempts once');
-    assert_same('old-hash', $fake->docs[2]['content_hash'] ?? null, 'maximum writer publication must not start after a content failure');
+    assert_same('existing-hash', $fake->docs[2]['content_hash'] ?? null, 'maximum writer publication must not start after a content failure');
     foreach (['transaction_start', 'dictionary_increment', 'posting_replacement', 'document_replacement', 'transaction_commit'] as $forbiddenRole) {
         assert_same(0, count(array_filter(
             $roles,
@@ -132,7 +132,6 @@ function wp_fts_test_run_composed_worker_ceiling(bool $injectFailure): array
     $fake->recordReadQueries = true;
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
 
     $tokens = [];
     for ($index = 0; $index < WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS; $index++) {
@@ -159,17 +158,13 @@ function wp_fts_test_run_composed_worker_ceiling(bool $injectFailure): array
         $GLOBALS['wp_fts_test_posts'][(int) $post->ID] = $post;
     }
     $maximumId = (int) $maximum->ID;
-    $fake->docs[$maximumId] = [
-        'post_id' => $maximumId,
-        'primary_lang' => 'en',
-        'lang' => 'en',
-        'doc_len' => WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS,
-        'content_hash' => 'old-hash',
-        'snippet_text' => 'old',
-        'indexed_at' => 1,
-        'is_deleted' => 0,
-    ];
-    $fake->replacementFrontierPostingCounts[$maximumId] = WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS;
+    $fake->docs[$maximumId] = wp_fts_test_document_row(
+        $maximumId,
+        'en',
+        'existing-hash',
+        'existing'
+    );
+    $fake->existingPostingFrontierCounts[$maximumId] = WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS;
     $selectedDependencyRows = 0;
     $payload = ['index_options' => ['document_lang' => 'en']];
     if (!$injectFailure) {
@@ -267,7 +262,7 @@ function wp_fts_test_composed_worker_statement_role(string $sql): string
         'wp_fts:claim-batch' => 'claim_batch',
         'wp_fts:dependency_measurement' => 'dependency_measurement',
         'wp_fts:dependency_values' => 'dependency_values',
-        'wp_fts:replacement-frontier' => 'replacement_frontier',
+        'wp_fts:existing-posting-frontier' => 'existing_posting_frontier',
         'wp_fts:dictionary-increment' => 'dictionary_increment',
         'wp_fts:dictionary-decrement' => 'dictionary_decrement',
         'wp_fts:bounded-index-delete' => 'bounded_index_delete',
@@ -284,7 +279,10 @@ function wp_fts_test_composed_worker_statement_role(string $sql): string
         }
     }
     $lower = strtolower($sql);
-    if (str_starts_with($normalized, 'INSERT IGNORE INTO WP_OPTIONS')) {
+    if (
+        str_starts_with($normalized, 'INSERT INTO WP_OPTIONS')
+        && str_contains($lower, 'on duplicate key update option_name = option_name')
+    ) {
         return 'lease_acquire';
     }
     if (str_starts_with($normalized, 'DELETE FROM WP_OPTIONS')) {

@@ -541,8 +541,6 @@ final class WP_FTS_WPCLI_Command
         $schema = WP_FTS_Plugin::repair_schema();
         $this->output_assoc([
             'schema_status' => $schema['status'],
-            'schema_version' => $schema['stored_version'],
-            'expected_schema_version' => $schema['expected_version'],
             'skipped_locked' => !empty($schema['skipped_locked']),
             'lock_active' => !empty($schema['lock_active']),
             'message' => !empty($schema['skipped_locked'])

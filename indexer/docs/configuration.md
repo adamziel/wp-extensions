@@ -10,7 +10,7 @@ routing. WordPress runtime indexing, REST/admin
 search, the PHP plugin search helper, and WP-CLI use
 `WP_FTS_Plugin::runtime_analyzer()`. Analyzer-pack paths are still configured
 through the `wp_fts_analyzer_options` option or filter, operational internals
-such as schema version and pending queue state are managed by the plugin, and
+such as readiness and pending queue state are managed by the plugin, and
 selected custom fields can be supplied through an option or filters. More
 advanced configuration is available to PHP callers that instantiate
 `WP_FTS_Analyzer`, `WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or
