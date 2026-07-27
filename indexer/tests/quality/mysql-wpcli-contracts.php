@@ -69,7 +69,6 @@ namespace {
     /** Establish the schema-ready precondition shared by isolated reindex cases. */
     function wp_fts_quality_prepare_reindex(): void
     {
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
         WP_FTS_Plugin::reset_request_caches();
     }
 
@@ -108,19 +107,6 @@ namespace {
                 unset($GLOBALS['wpdb']);
             }
         }
-    }
-
-    /**
-     * @return array{lang:string,doc_len:int,content_hash:?string,is_deleted:int}
-     */
-    function wp_fts_quality_doc_row(string $lang, int $length, ?string $hash = null, int $deleted = 0): array
-    {
-        return [
-            'lang' => $lang,
-            'doc_len' => $length,
-            'content_hash' => $hash ?? sha1($lang . ':' . $length),
-            'is_deleted' => $deleted,
-        ];
     }
 
     /** Mirror the production bounded term-frequency impact in fixture expectations. */
@@ -452,11 +438,6 @@ namespace {
         assert_same(2, (int) $wpdb->dbh->query('SELECT COUNT(*) FROM wp_fts_terms')->fetchColumn(), 'one token should persist exactly one lexical and one normalized-surface dictionary row');
         assert_same([0, 1], array_map('intval', $wpdb->dbh->query('SELECT kind FROM wp_fts_terms ORDER BY kind')->fetchAll(PDO::FETCH_COLUMN)), 'typed identities must remain distinct without materializing every proper prefix');
 
-        $queriesBefore = count($wpdb->queries);
-        foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'get_terms', 'get_postings', 'all_terms', 'all_doc_ids'] as $method) {
-            assert_true(!method_exists($storage, $method), "relational storage should not expose {$method}");
-        }
-        assert_same($queriesBefore, count($wpdb->queries), 'capability inspection must not execute SQL');
     });
 
     test_case('quality relational documents retain bounded identity without component statistics', function (): void {
@@ -494,11 +475,8 @@ namespace {
         }
 
         $putSql = wp_fts_quality_last_prepared_like($wpdb, 'INSERT INTO wp_fts_documents');
+        assert_contains('INSERT INTO wp_fts_documents (post_id,primary_lang,content_hash,snippet_text,indexed_at)', $putSql['sql'], 'the bounded writer should use the exact current document projection');
         assert_contains('ON DUPLICATE KEY UPDATE primary_lang=VALUES(primary_lang),content_hash=VALUES(content_hash)', $putSql['sql'], 'the bounded writer should upsert the current identity row');
-        assert_true(!str_contains($putSql['sql'], 'doc_len'), 'the bounded writer should not write a document length');
-        foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'get_doc_lengths', 'get_meta', 'add_meta'] as $method) {
-            assert_true(!method_exists($storage, $method), "relational storage should not expose {$method}");
-        }
 
         $storage->replace_prepared_documents([], [201]);
         assert_true(!isset($wpdb->docs[201]), 'physical deletion should not retain a tombstone document');
@@ -1201,7 +1179,6 @@ namespace {
             'deleted_term_relationships',
             'edit_terms',
             'edited_term',
-            'init',
             'init',
             'loop_end',
             'loop_start',

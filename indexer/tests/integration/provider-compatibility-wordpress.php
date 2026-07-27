@@ -15,6 +15,7 @@ const WP_FTS_PROVIDER_COMPATIBILITY_INSIDE_ENV = 'WP_FTS_PROVIDER_COMPATIBILITY_
 const WP_FTS_PROVIDER_COMPATIBILITY_MARKER_FILE = '.wp-fts-provider-compatibility-smoke';
 const WP_FTS_PROVIDER_COMPATIBILITY_WP_CLI_ENV = 'WP_FTS_WP_CLI';
 const WP_FTS_PROVIDER_COMPATIBILITY_WP_PATH_ENV = 'WP_FTS_WP_PATH';
+const WP_FTS_PROVIDER_COMPATIBILITY_MAX_INDEX_BATCHES = 32;
 
 try {
     if (realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === __FILE__) {
@@ -105,9 +106,38 @@ function wp_fts_provider_compatibility_wordpress_inside(): void
 
     try {
         WP_FTS_Plugin::repair_schema();
+        WP_FTS_Plugin::detect_index_profile_drift();
         $postId = wp_fts_provider_compatibility_wordpress_create_fixture_post();
         WP_FTS_Plugin::handle_post_save($postId, get_post($postId), true);
-        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
+        WP_FTS_Plugin::flush_relationship_mutations();
+        WP_FTS_Plugin::flush_post_meta_mutations();
+        WP_FTS_Plugin::flush_foreground_bulk_mutations();
+        $queueDrained = false;
+        $summary = [];
+        for ($batch = 0; $batch < WP_FTS_PROVIDER_COMPATIBILITY_MAX_INDEX_BATCHES; $batch++) {
+            $summary = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
+            if (empty($summary['has_more'])) {
+                $queueDrained = true;
+                break;
+            }
+        }
+        if (!$queueDrained) {
+            $stopReason = is_scalar($summary['stop_reason'] ?? null) ? (string) $summary['stop_reason'] : '';
+            throw new RuntimeException(
+                'Provider compatibility setup did not drain within the bounded batch ceiling'
+                . '; committed=' . max(0, (int) ($summary['committed'] ?? 0))
+                . '; deferred=' . max(0, (int) ($summary['deferred'] ?? 0))
+                . '; failures=' . max(0, (int) ($summary['last_batch_failures'] ?? 0))
+                . '; stop_reason=' . $stopReason
+                . '.'
+            );
+        }
+        WP_FTS_Plugin::run_scheduled_schema_repair();
+        $takeover = WP_FTS_Plugin::search_takeover_status(false);
+        if (empty($takeover['ready'])) {
+            $reason = is_scalar($takeover['reason'] ?? null) ? (string) $takeover['reason'] : 'unknown';
+            throw new RuntimeException("Provider compatibility setup did not publish search readiness: {$reason}.");
+        }
 
         $matrix = wp_fts_provider_compatibility_wordpress_run_matrix($postId);
         $failed = array_values(array_filter(
@@ -178,10 +208,6 @@ function wp_fts_provider_compatibility_wordpress_create_fixture_post(): int
     $postId = (int) $postId;
     if ($postId <= 0) {
         throw new RuntimeException('Could not create provider compatibility fixture post.');
-    }
-
-    if (function_exists('update_post_meta')) {
-        update_post_meta($postId, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
     }
 
     return $postId;

@@ -970,7 +970,6 @@ test_case('generation-aware queue backs off every claim when the shared dependen
     $oldWpdb = $wpdb ?? null;
     $wpdb = new WP_FTS_Test_WPDB();
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $GLOBALS['wp_fts_test_posts'][46] = wp_fts_test_backfill_post(46, 'post', 'publish', 'Shared preload failure');
     wp_fts_test_seed_queue($wpdb, [46]);
     $wpdb->failReadQueryPrefix = 'SELECT bounded.post_order, bounded.row_order, bounded.source_kind,';
@@ -1034,7 +1033,6 @@ test_case('generation-aware queue uninstall surfaces destructive table cleanup f
     $oldWpdb = $wpdb ?? null;
     $wpdb = new WP_FTS_Test_WPDB();
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     wp_fts_test_seed_queue($wpdb, [54]);
     $wpdb->failQueryPrefix = 'DROP TABLE IF EXISTS ';
     $scheduleCallsBefore = count($GLOBALS['wp_fts_test_schedule_calls']);
@@ -1049,7 +1047,6 @@ test_case('generation-aware queue uninstall surfaces destructive table cleanup f
 
         assert_true($thrown instanceof RuntimeException, 'a current install should surface a destructive table cleanup failure');
         assert_same([54], array_keys($wpdb->queue), 'failed table cleanup should leave durable work visible for a retry');
-        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'failed table cleanup should not delete schema state and report success');
         assert_same(WP_FTS_Plugin::UNINSTALL_FENCE_VALUE, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::UNINSTALL_FENCE_OPTION] ?? null, 'failed table cleanup should retain the exact fail-closed uninstall fence');
         assert_same($scheduleCallsBefore, count($GLOBALS['wp_fts_test_schedule_calls']), 'failed table cleanup should not schedule repair through the retained fence');
     } finally {
@@ -1064,17 +1061,28 @@ test_case('generation-aware queue uninstall uses idempotent table removal for a 
     $wpdb = new WP_FTS_Test_WPDB();
     $wpdb->queueTableExists = false;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
 
     try {
         WP_FTS_Plugin::uninstall();
 
-        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'a partial install without a queue table should still remove its schema state');
         assert_same(WP_FTS_Plugin::UNINSTALL_FENCE_VALUE, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::UNINSTALL_FENCE_OPTION] ?? null, 'partial-install cleanup should retain only its lifecycle fence');
-        assert_same([], $wpdb->prepared, 'DROP TABLE IF EXISTS should not require a metadata probe for a partial install');
-        assert_same(1, count($wpdb->queries), 'partial-install uninstall should remain one database statement');
-        assert_true(str_starts_with($wpdb->queries[0] ?? '', 'DROP TABLE IF EXISTS '), 'partial-install uninstall should use idempotent table removal');
-        assert_contains('wp_fts_work', $wpdb->queries[0] ?? '', 'partial-install uninstall should include the durable work table');
+        $physicalSnapshots = array_values(array_filter(
+            $wpdb->prepared,
+            static fn(array $prepared): bool => str_starts_with((string) ($prepared['sql'] ?? ''), '/* wp_fts:physical-schema-snapshot */')
+        ));
+        assert_same(1, count($physicalSnapshots), 'partial-install cleanup should inspect all supporting core indexes in one bounded physical snapshot');
+        $supportingIndexDrops = array_values(array_filter(
+            $wpdb->queries,
+            static fn(string $sql): bool => str_starts_with($sql, 'DROP INDEX `wp_fts_')
+        ));
+        $tableDrops = array_values(array_filter(
+            $wpdb->queries,
+            static fn(string $sql): bool => str_starts_with($sql, 'DROP TABLE IF EXISTS ')
+        ));
+        assert_same(3, count($supportingIndexDrops), 'partial-install cleanup should remove all exact supporting core indexes');
+        assert_same(1, count($tableDrops), 'partial-install cleanup should remove all current and reset tables in one statement');
+        assert_same(4, count($wpdb->queries), 'partial-install uninstall should stay at three exact index drops and one table drop');
+        assert_contains('wp_fts_work', $tableDrops[0] ?? '', 'partial-install uninstall should include the durable work table');
     } finally {
         $wpdb = $oldWpdb;
     }

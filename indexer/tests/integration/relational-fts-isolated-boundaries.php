@@ -387,7 +387,7 @@ function wp_fts_ib_preflight(): array
     }
 
     // Constructing the public relational backend is deliberately schema-I/O free.
-    $storage = wp_fts_ib_storage_fixture(false);
+    $storage = wp_fts_ib_storage_fixture();
     wp_fts_ib_assert($storage instanceof WP_FTS_Relational_Storage, 'The plugin did not construct the relational storage backend.');
 
     return [
@@ -1632,10 +1632,10 @@ function wp_fts_ib_canonical_value(mixed $value): mixed
 }
 
 /** Reach the private production storage factory only from this fixture. */
-function wp_fts_ib_storage_fixture(bool $ensureSchema = false): WP_FTS_Relational_Storage
+function wp_fts_ib_storage_fixture(): WP_FTS_Relational_Storage
 {
     $method = new ReflectionMethod(WP_FTS_Plugin::class, 'storage');
     $method->setAccessible(true);
 
-    return $method->invoke(null, $ensureSchema);
+    return $method->invoke(null);
 }

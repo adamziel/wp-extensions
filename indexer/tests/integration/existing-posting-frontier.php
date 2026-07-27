@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * Destructive real-MySQL/MariaDB proof for the old-posting transaction frontier.
+ * Destructive real-MySQL/MariaDB proof for the existing-posting transaction frontier.
  *
  * Required environment:
  *   WP_FTS_FRONTIER_HOST, WP_FTS_FRONTIER_PORT, WP_FTS_FRONTIER_USER,
@@ -14,7 +14,7 @@ declare(strict_types=1);
 $expectedHarnessSha = wp_fts_frontier_env('WP_FTS_FRONTIER_HARNESS_SHA256');
 $actualHarnessSha = hash_file('sha256', __FILE__);
 if (!is_string($actualHarnessSha) || !hash_equals($expectedHarnessSha, $actualHarnessSha)) {
-    throw new RuntimeException('The old-posting frontier harness hash does not match the mounted source.');
+    throw new RuntimeException('The existing-posting frontier harness hash does not match the mounted source.');
 }
 $sourceSha = wp_fts_frontier_env('WP_FTS_FRONTIER_SOURCE_SHA');
 $zipSha = wp_fts_frontier_env('WP_FTS_FRONTIER_ZIP_SHA256');
@@ -37,7 +37,7 @@ if (is_string($pluginPath) && trim($pluginPath) !== '') {
 }
 
 if (!extension_loaded('mysqli')) {
-    throw new RuntimeException('The old-posting frontier proof requires mysqli.');
+    throw new RuntimeException('The existing-posting frontier proof requires mysqli.');
 }
 
 $host = wp_fts_frontier_env('WP_FTS_FRONTIER_HOST');
@@ -63,7 +63,7 @@ wp_fts_frontier_assert($surfaceTermCountPerPost === 4096, 'The normalized-surfac
 wp_fts_frontier_assert($termCountPerPost === WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS, 'The document posting frontier is not the lexical-plus-surface envelope.');
 wp_fts_frontier_assert(WP_FTS_Relational_Storage::MAX_BATCH_TERMS === 8192, 'The batch dictionary frontier drifted from 8,192 identities.');
 wp_fts_frontier_assert(WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS === 50000, 'The batch mutation frontier drifted from 50,000 postings.');
-wp_fts_frontier_assert(WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS + 1 === 50001, 'The old-posting read frontier drifted from the exact 50,001-row limit-plus-one bound.');
+wp_fts_frontier_assert(WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS + 1 === 50001, 'The existing-posting read frontier drifted from the exact 50,001-row limit-plus-one bound.');
 wp_fts_frontier_assert(WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS + WP_FTS_Relational_Storage::MAX_BATCH_DOCUMENTS === 50100, 'The combined delete materialization barrier drifted from 50,100 rows.');
 $targetPostingCount = count($postIds) * $termCountPerPost;
 $decoyPostingCount = 100000;
@@ -115,7 +115,7 @@ try {
     $expectedPostings = $targetPostingCount;
     wp_fts_frontier_assert(
         (int) $db->get_var("SELECT COUNT(*) FROM {$postingsTable}") === $expectedPostings + $decoyPostingCount,
-        'The 7 x 8,192 old-posting fixture is incomplete.'
+        'The 7 x 8,192 existing-posting fixture is incomplete.'
     );
     wp_fts_frontier_assert(
         (int) $db->get_var("SELECT COUNT(*) FROM {$termsTable}") === $expectedPostings + 1,
@@ -132,7 +132,7 @@ try {
     wp_fts_frontier_assert($targetKindCounts === [
         0 => count($postIds) * $lexicalTermCountPerPost,
         1 => count($postIds) * $surfaceTermCountPerPost,
-    ], 'The old-posting fixture does not contain the exact lexical and normalized-surface split.');
+    ], 'The existing-posting fixture does not contain the exact lexical and normalized-surface split.');
 
     // A separate exact-bound pass proves that the decrement is cheap even when
     // every affected term survives. This catches dictionary plans that happen
@@ -187,18 +187,18 @@ try {
     wp_fts_frontier_assert(count($sharedPlanStatements) === 1, 'The survivor pass must use exactly one frontier statement.');
     wp_fts_frontier_assert($sharedPlan->admitted_post_ids === $sharedTargetPostIds, 'The survivor pass did not admit its exact six-document prefix.');
     wp_fts_frontier_assert($sharedPlan->deferred_post_ids === [], 'The survivor pass unexpectedly deferred bounded work.');
-    wp_fts_frontier_assert($sharedPlan->scanned_old_postings === 49152, 'The survivor pass did not scan its exact 49,152 old postings.');
+    wp_fts_frontier_assert($sharedPlan->scanned_existing_postings === 49152, 'The survivor pass did not scan its exact 49,152 existing postings.');
     wp_fts_frontier_assert((int) ($sharedPlanStatements[0]['row_count'] ?? -1) === 6, 'The survivor frontier did not return exactly six per-document aggregates.');
-    wp_fts_frontier_assert($sharedPlan->posting_mutations === $sharedTermCount, 'The survivor pass measured the wrong old-posting count.');
+    wp_fts_frontier_assert($sharedPlan->posting_mutations === $sharedTermCount, 'The survivor pass measured the wrong existing-posting count.');
     $beforeSharedWrite = $db->statement_marker();
     $sharedResult = $storage->replace_prepared_documents([], $sharedTargetPostIds, $sharedPlan);
     $sharedWriteEvidence = wp_fts_frontier_write_evidence($db->statements_since($beforeSharedWrite));
-    wp_fts_frontier_assert((int) ($sharedResult['old_postings'] ?? -1) === $sharedTermCount, 'The survivor pass consumed the wrong posting frontier.');
+    wp_fts_frontier_assert((int) ($sharedResult['retired_postings'] ?? -1) === $sharedTermCount, 'The survivor pass consumed the wrong posting frontier.');
     $sharedPass = [
         'admitted_documents' => count($sharedTargetPostIds),
         'deferred_documents' => 0,
         'frontier_rows_returned' => (int) ($sharedPlanStatements[0]['row_count'] ?? -1),
-        'frontier_rows_scanned' => $sharedPlan->scanned_old_postings,
+        'frontier_rows_scanned' => $sharedPlan->scanned_existing_postings,
         'posting_mutations' => $sharedPlan->posting_mutations,
         'frontier_statement_count' => count($sharedPlanStatements),
         'expected_decrement_rows_affected' => $sharedTermCount,
@@ -275,14 +275,14 @@ try {
         wp_fts_frontier_assert($plan->posting_mutations <= WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS, 'A pass exceeded the posting mutation ceiling.');
         wp_fts_frontier_assert($plan->admitted_post_ids !== [], 'A valid 8,192-row document must always make progress.');
         wp_fts_frontier_assert(
-            (int) ($result['old_postings'] ?? -1) === count($plan->admitted_post_ids) * $termCountPerPost,
-            'Storage did not consume the exact measured old-posting count.'
+            (int) ($result['retired_postings'] ?? -1) === count($plan->admitted_post_ids) * $termCountPerPost,
+            'Storage did not consume the exact measured existing-posting count.'
         );
         $passes[] = [
             'admitted_documents' => count($plan->admitted_post_ids),
             'deferred_documents' => count($plan->deferred_post_ids),
             'frontier_rows_returned' => (int) ($planStatements[0]['row_count'] ?? -1),
-            'frontier_rows_scanned' => $plan->scanned_old_postings,
+            'frontier_rows_scanned' => $plan->scanned_existing_postings,
             'posting_mutations' => $plan->posting_mutations,
             'frontier_statement_count' => count($planStatements),
             'expected_decrement_rows_affected' => $plan->posting_mutations,
@@ -371,7 +371,7 @@ try {
         "SELECT COUNT(*) FROM {$termsTable} WHERE term_id <= {$targetPostingCount}"
         . " OR (term_id = {$decoyTermId} AND doc_freq <> {$decoyPostingCount})"
     );
-    wp_fts_frontier_assert($remainingPostings === 0, 'Eventually draining every admitted document prefix left old postings behind.');
+    wp_fts_frontier_assert($remainingPostings === 0, 'Eventually draining every admitted document prefix left existing postings behind.');
     wp_fts_frontier_assert($remainingDocuments === 0, 'Eventually draining every admitted document prefix left derived documents behind.');
     wp_fts_frontier_assert($remainingTerms === 0, 'Eventually draining every admitted document prefix left retired dictionary rows behind.');
     wp_fts_frontier_assert($preservedDecoyPostings === $decoyPostingCount, 'The frontier transaction changed unrelated postings.');
@@ -399,13 +399,13 @@ try {
             && ($pass['frontier_rows_returned'] ?? null) === $expectedFrontierRows
             && ($pass['frontier_rows_scanned'] ?? null) === $expectedScannedRows
             && ($pass['posting_mutations'] ?? null) === $expectedPostingMutations,
-            "Old-posting pass {$offset} did not retain its exact frontier shape."
+            "Existing-posting pass {$offset} did not retain its exact frontier shape."
         );
     }
     wp_fts_frontier_assert(max(array_column($passes, 'frontier_rows_returned')) <= 7, 'The aggregate frontier returned more than seven per-post rows.');
     wp_fts_frontier_assert(
         max(array_column($passes, 'frontier_rows_scanned')) === WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS + 1,
-        'The old-posting scan did not exercise the exact limit-plus-one frontier.'
+        'The existing-posting scan did not exercise the exact limit-plus-one frontier.'
     );
     wp_fts_frontier_assert(max(array_column($passes, 'posting_mutations')) === 49152, 'The complete admitted prefix did not expose its exact posting mutation count.');
     wp_fts_frontier_assert(array_values(array_unique(array_column($passes, 'frontier_statement_count'))) === [1], 'A pass used more than one frontier statement.');
@@ -606,7 +606,7 @@ try {
         );
     wp_fts_frontier_assert($actualEngine === $expectedEngine, 'The frontier proof ran against the wrong database family.');
     $evidence = [
-        'schema' => 'relational-old-posting-frontier-v2',
+        'schema' => 'relational-existing-posting-frontier-v2',
         'status' => 'PASS',
         'source_sha' => $sourceSha,
         'zip_sha256' => $zipSha,
@@ -621,7 +621,7 @@ try {
             'lexical_terms' => $targetKindCounts[0],
             'surface_terms' => $targetKindCounts[1],
             'disjoint_terms' => $expectedPostings,
-            'old_postings' => $expectedPostings,
+            'existing_postings' => $expectedPostings,
             'plan_decoy_postings' => $decoyPostingCount,
             'seed_ms' => $seedMs,
         ],
@@ -697,7 +697,6 @@ try {
             'php_allocation_delta_bytes' => $resetPhpDeltaBytes,
             'php_peak_bytes' => $resetPhpPeakBytes,
             'linux_vmhwm_bytes' => $resetLinuxVmHwmBytes,
-            'schema_version' => 1,
             'schema_verification' => $schemaVerification,
             'physical_schema' => $schemaEvidence,
             'post_reset' => $postReset,
@@ -735,7 +734,7 @@ try {
         'verified_absent' => $dropFailures === [] && $remainingFixtureTables === [],
     ];
     if (!$cleanupEvidence['verified_absent']) {
-        $cleanupError = new RuntimeException('The old-posting frontier fixture tables were not completely removed.');
+        $cleanupError = new RuntimeException('The existing-posting frontier fixture tables were not completely removed.');
     }
     $mysqli->close();
 }
@@ -910,7 +909,7 @@ function wp_fts_frontier_write_evidence(array $statements): array
     wp_fts_frontier_assert(
         count(array_filter(
             $statements,
-            static fn(array $statement): bool => str_contains($statement['sql'], 'wp_fts:replacement-frontier')
+            static fn(array $statement): bool => str_contains($statement['sql'], 'wp_fts:existing-posting-frontier')
         )) === 0,
         'A carried plan must prevent a second frontier scan.'
     );
@@ -937,7 +936,7 @@ function wp_fts_frontier_write_evidence(array $statements): array
     wp_fts_frontier_assert(($deleteStatement['method'] ?? null) === 'query', 'The bounded index DELETE must be one data statement.');
     wp_fts_frontier_assert(str_contains($deleteSql, 'LIMIT 50100'), 'The bounded index DELETE lost its 50,100-row materialization barrier.');
     wp_fts_frontier_assert(str_contains($deleteSql, 'candidate_posting FORCE INDEX (post_term)'), 'The bounded index DELETE lost its post-first driver.');
-    foreach (['old_posting', 'retired_term', 'retired_document'] as $targetAlias) {
+    foreach (['existing_posting', 'retired_term', 'retired_document'] as $targetAlias) {
         wp_fts_frontier_assert(
             str_contains($deleteSql, "{$targetAlias} FORCE INDEX (PRIMARY)"),
             "The {$targetAlias} DELETE target lost its primary-key lookup."
@@ -976,21 +975,21 @@ function wp_fts_frontier_explain(mysqli $db, string $sql): array
 
     $access = [];
     wp_fts_frontier_collect_table_access($decoded, '$', $access);
-    $oldPostingAccess = array_values(array_filter(
+    $existingPostingAccess = array_values(array_filter(
         $access,
-        static fn(array $table): bool => ($table['table_name'] ?? null) === 'old_posting'
+        static fn(array $table): bool => ($table['table_name'] ?? null) === 'existing_posting'
     ));
-    wp_fts_frontier_assert(count($oldPostingAccess) === 1, 'The frontier EXPLAIN must contain exactly one old_posting access.');
-    $oldAccess = $oldPostingAccess[0];
-    wp_fts_frontier_assert(($oldAccess['access_type'] ?? null) === 'range', 'The old-posting frontier must use range access, not a table/index scan.');
-    wp_fts_frontier_assert(($oldAccess['key'] ?? null) === 'post_term', 'The old-posting frontier did not select post_term.');
-    wp_fts_frontier_assert(($oldAccess['using_index'] ?? null) === true, 'The old-posting frontier access is not covering.');
+    wp_fts_frontier_assert(count($existingPostingAccess) === 1, 'The frontier EXPLAIN must contain exactly one existing_posting access.');
+    $existingAccess = $existingPostingAccess[0];
+    wp_fts_frontier_assert(($existingAccess['access_type'] ?? null) === 'range', 'The existing-posting frontier must use range access, not a table/index scan.');
+    wp_fts_frontier_assert(($existingAccess['key'] ?? null) === 'post_term', 'The existing-posting frontier did not select post_term.');
+    wp_fts_frontier_assert(($existingAccess['using_index'] ?? null) === true, 'The existing-posting frontier access is not covering.');
 
     $queryBlocks = [];
     wp_fts_frontier_collect_query_blocks($decoded, 0, $queryBlocks);
     $innerCandidates = array_values(array_filter(
         $queryBlocks,
-        static fn(array $candidate): bool => wp_fts_frontier_node_contains_table($candidate['block'], 'old_posting')
+        static fn(array $candidate): bool => wp_fts_frontier_node_contains_table($candidate['block'], 'existing_posting')
     ));
     usort($innerCandidates, static fn(array $left, array $right): int => $right['depth'] <=> $left['depth']);
     $innerBlock = $innerCandidates[0]['block'] ?? null;
@@ -1004,7 +1003,7 @@ function wp_fts_frontier_explain(mysqli $db, string $sql): array
         'sha256' => hash('sha256', $raw),
         'raw_json' => $raw,
         'table_access' => $access,
-        'old_posting_access' => $oldAccess,
+        'existing_posting_access' => $existingAccess,
         'inner_query_block_sha256' => hash(
             'sha256',
             json_encode($innerBlock, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)
@@ -1022,7 +1021,7 @@ function wp_fts_frontier_performance_events(mysqli $db, int $connectionId): arra
 FROM performance_schema.events_statements_history_long events
 INNER JOIN performance_schema.threads threads ON threads.thread_id = events.thread_id
 WHERE threads.processlist_id = {$connectionId}
-  AND events.sql_text LIKE '/* wp\\_fts:replacement-frontier */%' ESCAPE '\\\\'
+  AND events.sql_text LIKE '/* wp\\_fts:existing-posting-frontier */%' ESCAPE '\\\\'
 ORDER BY event_id ASC";
     $result = $db->query($sql);
     if (!$result instanceof mysqli_result) {
@@ -1522,7 +1521,7 @@ function wp_fts_frontier_linux_vmhwm_bytes(): int
     return 0;
 }
 
-/** Install the exact four-table contract used by the old-posting proof. */
+/** Install the exact four-table contract used by the existing-posting proof. */
 function wp_fts_frontier_create_schema(
     WP_FTS_Frontier_WPDB $db,
     string $terms,
@@ -1595,7 +1594,7 @@ function wp_fts_frontier_env(string $name): string
 {
     $value = getenv($name);
     if (!is_string($value) || trim($value) === '') {
-        throw new RuntimeException("{$name} is required for the old-posting frontier proof.");
+        throw new RuntimeException("{$name} is required for the existing-posting frontier proof.");
     }
     return $value;
 }

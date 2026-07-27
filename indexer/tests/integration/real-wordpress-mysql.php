@@ -11,8 +11,6 @@ declare(strict_types=1);
  * suite.
  */
 
-const WP_FTS_REAL_INTEGRATION_SCHEMA_VERSION = 'simulated-1';
-
 try {
     exit(wp_fts_real_integration_main());
 } catch (Throwable $e) {
@@ -78,7 +76,6 @@ function wp_fts_real_integration_run_inside_wordpress(): void
 
     $token = wp_fts_real_integration_token();
     $prefix = 'wp_fts_it_' . $token . '_';
-    $optionName = 'wp_fts_it_schema_version_' . $token;
     $postIds = [];
 
     try {
@@ -86,7 +83,7 @@ function wp_fts_real_integration_run_inside_wordpress(): void
         wp_fts_real_integration_db_delta_repair($wpdb, $prefix);
         wp_fts_real_integration_binary_round_trips($wpdb, $prefix);
         wp_fts_real_integration_transactions($wpdb, $prefix);
-        wp_fts_real_integration_schema_version_path($wpdb, $prefix, $optionName);
+        wp_fts_real_integration_current_schema_path($wpdb, $prefix);
         $postIds = wp_fts_real_integration_wp_cli_process($wpdb, $prefix, $token);
 
         echo "PASS: real WordPress/MySQL integration checks completed for prefix {$prefix}\n";
@@ -96,20 +93,17 @@ function wp_fts_real_integration_run_inside_wordpress(): void
                 wp_delete_post($postId, true);
             }
         }
-        if (function_exists('delete_option')) {
-            delete_option($optionName);
-        }
         wp_fts_real_integration_drop_tables($wpdb, $prefix);
     }
 }
 
-/** Prove dbDelta replaces an incompatible derived table with the exact schema. */
+/** Prove dbDelta replaces an invalid current derived table with the exact schema. */
 function wp_fts_real_integration_db_delta_repair(object $wpdb, string $prefix): void
 {
     $tables = wp_fts_real_integration_tables($prefix);
     $terms = wp_fts_real_integration_identifier($tables['terms']);
 
-    // Seed an incompatible derived table. Current schema repair must
+    // Seed an invalid current derived table. Current schema repair must
     // replace it rather than leave a half-converted dictionary in service.
     wp_fts_real_integration_query($wpdb, "CREATE TABLE `{$terms}` (
 term varbinary(255) NOT NULL,
@@ -129,7 +123,7 @@ PRIMARY KEY  (term)
     wp_fts_real_integration_assert_schema($wpdb, $tables);
     wp_fts_real_integration_assert_same(true, $storage->verify_schema()['valid'] ?? null, 'physical current schema should satisfy the production verifier.');
 
-    echo "ok dbDelta replaced an incompatible index with the exact four-table current schema\n";
+    echo "ok dbDelta replaced an invalid index with the exact four-table current schema\n";
 }
 
 /** Round-trip binary term identities and maximum prepared posting payloads. */
@@ -192,9 +186,7 @@ function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix
     wp_fts_real_integration_assert_same([
         1001 => wp_fts_real_integration_impact(2),
         1005 => wp_fts_real_integration_impact(7),
-    ], $codecRow['postings'], 'encoded compatibility writes should become quantized relational posting rows.');
-
-    wp_fts_real_integration_assert_point_reads_absent($storage, $wpdb);
+    ], $codecRow['postings'], 'encoded term writes should become quantized relational posting rows.');
 
     echo "ok binary dictionary identities and bounded prepared posting writes round trip\n";
 }
@@ -241,27 +233,20 @@ function wp_fts_real_integration_transactions(object $wpdb, string $prefix): voi
     echo "ok MySQL transaction commit and rollback behavior verified\n";
 }
 
-function wp_fts_real_integration_schema_version_path(object $wpdb, string $prefix, string $optionName): void
+function wp_fts_real_integration_current_schema_path(object $wpdb, string $prefix): void
 {
     $storage = new WP_FTS_Relational_Storage($wpdb, $prefix);
     $storage->create_tables();
-
-    if (!function_exists('update_option') || !function_exists('get_option')) {
-        throw new RuntimeException('WordPress options API is unavailable for schema-version simulation.');
-    }
-
-    update_option($optionName, WP_FTS_REAL_INTEGRATION_SCHEMA_VERSION, false);
-    wp_fts_real_integration_assert_same(
-        WP_FTS_REAL_INTEGRATION_SCHEMA_VERSION,
-        get_option($optionName),
-        'simulated activation path should persist a schema version option.'
+    wp_fts_real_integration_assert(
+        !empty($storage->verify_schema()['valid']),
+        'current schema creation should verify the exact physical contract.'
     );
 
     foreach (wp_fts_real_integration_tables($prefix) as $table) {
         wp_fts_real_integration_assert_table_exists($wpdb, $table);
     }
 
-    echo "ok activation/schema-version path simulated for current baseline\n";
+    echo "ok current physical schema path verified\n";
 }
 
 /**
@@ -545,16 +530,6 @@ function wp_fts_real_integration_term_state(object $wpdb, string $prefix, string
     }
 
     return ['df' => (int) $termRow->doc_freq, 'postings' => $result];
-}
-
-/** Require point and posting-list readers to be absent from relational storage. */
-function wp_fts_real_integration_assert_point_reads_absent(WP_FTS_Relational_Storage $storage, object $wpdb): void
-{
-    $queriesBefore = (int) ($wpdb->num_queries ?? 0);
-    foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'get_terms', 'get_postings', 'get_capped_postings', 'get_budgeted_postings'] as $method) {
-        wp_fts_real_integration_assert(!method_exists($storage, $method), "relational storage should not expose {$method}.");
-    }
-    wp_fts_real_integration_assert_same($queriesBefore, (int) ($wpdb->num_queries ?? 0), 'relational capability inspection should not run SQL.');
 }
 
 /** Reproduce the bounded integer impact expected from the production writer. */

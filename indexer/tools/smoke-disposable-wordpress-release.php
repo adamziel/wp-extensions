@@ -19,6 +19,7 @@ final class WP_FTS_DisposableReleaseSmokeRunner
     public const WP_URL_ENV = 'WP_FTS_WP_URL';
 
     private const INDEX_BATCH_SIZE = 1;
+    private const MAX_INDEX_BATCHES = 64;
     private const INDEX_TIME_BUDGET = '5';
     private const REPORT_SCHEMA = 'wp-fts-disposable-release-smoke-v1';
     private const OUTPUT_EXCERPT_BYTES = 900;
@@ -245,15 +246,38 @@ final class WP_FTS_DisposableReleaseSmokeRunner
             }
             $report['fixture_post_id'] = $postId;
 
-            $indexing = $this->require_json_success(
-                'process bounded index batch',
-                array_merge($baseCommand, [
-                    'fts',
-                    'process-batch',
-                    '--batch_size=' . self::INDEX_BATCH_SIZE,
-                    '--time_budget=' . self::INDEX_TIME_BUDGET,
-                    '--format=json',
-                ]),
+            $indexing = [
+                'batches' => 0,
+                'indexed' => 0,
+                'queue_processed' => 0,
+                'last_batch' => [],
+            ];
+            for ($batchNumber = 1; $batchNumber <= self::MAX_INDEX_BATCHES; $batchNumber++) {
+                $batch = $this->require_json_success(
+                    "process bounded index batch {$batchNumber}",
+                    array_merge($baseCommand, [
+                        'fts',
+                        'process-batch',
+                        '--batch_size=' . self::INDEX_BATCH_SIZE,
+                        '--time_budget=' . self::INDEX_TIME_BUDGET,
+                        '--format=json',
+                    ]),
+                    $report
+                );
+                $indexing['batches'] = $batchNumber;
+                $indexing['indexed'] += max(0, (int) ($batch['indexed'] ?? 0));
+                $indexing['queue_processed'] += max(0, (int) ($batch['queue_processed'] ?? 0));
+                $indexing['last_batch'] = $batch;
+                if (empty($batch['has_more'])) {
+                    break;
+                }
+            }
+            if (!empty($indexing['last_batch']['has_more'])) {
+                throw new RuntimeException('Disposable indexing did not drain within the bounded batch ceiling.');
+            }
+            $this->require_success(
+                'verify readiness after reconciliation',
+                array_merge($baseCommand, ['cron', 'event', 'run', 'wp_fts_repair_schema']),
                 $report
             );
             $search = $this->require_json_success(
@@ -290,6 +314,9 @@ final class WP_FTS_DisposableReleaseSmokeRunner
                 'before_repair' => $this->compact_payload($statusBefore),
                 'repair' => $this->compact_payload($repair),
                 'after_repair' => $this->compact_payload($statusAfterRepair),
+                'readiness_after_reconciliation' => [
+                    'maintenance_event' => 'wp_fts_repair_schema',
+                ],
                 'after_search' => $this->compact_payload($statusAfter),
             ];
             $report['indexing_evidence'] = $this->compact_payload($indexing);

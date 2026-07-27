@@ -241,11 +241,6 @@ test_case('quality real mysql harness source tracks exact four-table current sch
         assert_contains($table, $proof, "real MySQL proof should mention {$table}");
     }
 
-    foreach (['fts_docs', 'fts_doc_lengths', 'fts_docmeta', 'fts_meta', 'fts_queue'] as $removedTable) {
-        assert_true(!str_contains($script, $removedTable), "real integration harness should not mention removed {$removedTable}");
-        assert_true(!str_contains($proof, $removedTable), "real MySQL proof should not mention removed {$removedTable}");
-    }
-
     foreach ([
         "['term_id', 'lang', 'kind', 'term', 'doc_freq']",
         "['term_id', 'post_id', 'impact']",
@@ -260,12 +255,6 @@ test_case('quality real mysql harness source tracks exact four-table current sch
         assert_contains($contract, $proof, "real MySQL proof should assert schema contract {$contract}");
     }
 
-    assert_contains(
-        "['get_doc', 'get_doc_metadata', 'terms_for_doc', 'get_terms', 'get_postings', 'get_capped_postings', 'get_budgeted_postings']",
-        $script,
-        'real integration harness should inspect every removed point and posting-list reader'
-    );
-    assert_contains('!method_exists($storage, $method)', $script, 'real integration harness should require removed readers to be absent');
     assert_contains('wp_fts_real_integration_term_state', $script, 'real integration harness should inspect one exact relational term through a bounded test helper');
     assert_contains('WP_FTS_MYSQL_PROOF_ALLOW_DISPOSABLE', $proof, 'real MySQL proof should require disposable-site opt-in');
 });

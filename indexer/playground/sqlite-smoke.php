@@ -109,7 +109,7 @@ function wp_fts_playground_index_post(WP_FTS_Indexer $indexer, string $title, st
         $post,
         WP_FTS_Plugin::prepare_post_index_options($post, $indexOptions)
     );
-    wp_fts_playground_storage_fixture(false)->replace_prepared_documents([$prepared]);
+    wp_fts_playground_storage_fixture()->replace_prepared_documents([$prepared]);
 
     return $postId;
 }
@@ -335,7 +335,7 @@ function wp_fts_playground_assert_wpcli_reindex_effect(): void
     sort($ids, SORT_NUMERIC);
     wp_fts_playground_assert(count($ids) === 2, 'WP-CLI fixture post IDs were not persisted', ['ids' => $ids]);
 
-    $searcher = new WP_FTS_Searcher(wp_fts_playground_storage_fixture(true), new WP_FTS_Analyzer(['default_lang' => 'en']));
+    $searcher = new WP_FTS_Searcher(wp_fts_playground_storage_fixture(), new WP_FTS_Analyzer(['default_lang' => 'en']));
     $page = $searcher->search(WP_FTS_PLAYGROUND_CLI_QUERY, ['query_lang' => 'en', 'limit' => 10]);
     $actual = array_map('intval', array_column($page['results'], 'doc_id'));
     sort($actual, SORT_NUMERIC);
@@ -372,7 +372,7 @@ function wp_fts_playground_run_setup_smoke(): void
     update_option(WP_FTS_Plugin::SETTINGS_OPTION, $settings, false);
 
     $sqliteEvidence = wp_fts_playground_sqlite_evidence();
-    $storage = wp_fts_playground_storage_fixture(true);
+    $storage = wp_fts_playground_storage_fixture();
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
     $indexer = new WP_FTS_Indexer($analyzer, new WP_FTS_PostContentExtractor());
     $searcher = new WP_FTS_Searcher($storage, $analyzer);
@@ -470,10 +470,10 @@ if ($mode === 'setup') {
 }
 
 /** Reach the private production storage factory only from this fixture. */
-function wp_fts_playground_storage_fixture(bool $ensureSchema = false): WP_FTS_Relational_Storage
+function wp_fts_playground_storage_fixture(): WP_FTS_Relational_Storage
 {
     $method = new ReflectionMethod(WP_FTS_Plugin::class, 'storage');
     $method->setAccessible(true);
 
-    return $method->invoke(null, $ensureSchema);
+    return $method->invoke(null);
 }

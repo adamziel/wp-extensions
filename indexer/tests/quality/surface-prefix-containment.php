@@ -429,16 +429,6 @@ test_case('surface bounds and cursors are bytewise and tied to the current index
     assert_true(!hash_equals($firstFingerprint, $secondFingerprint), 'cursor authentication must bind the exact normalized typed surface');
 });
 
-test_case('point collection APIs are absent', function (): void {
-    $wpdb = new WP_FTS_Test_WPDB();
-    $storage = new WP_FTS_Relational_Storage($wpdb);
-    foreach (['get_doc', 'get_doc_metadata', 'terms_for_doc', 'terms_for_docs', 'put_term', 'delete_term', 'get_meta', 'all_terms', 'all_doc_ids'] as $method) {
-        assert_true(!method_exists($storage, $method), "relational storage should not expose {$method}");
-    }
-    assert_same([], $wpdb->queries, 'capability inspection must not execute SQL');
-    assert_same([], $wpdb->prepared, 'capability inspection must not prepare SQL');
-});
-
 test_case('bounded batch delete preflights a maximum posting frontier before opening its transaction', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
     $wpdb->docs[77] = [
@@ -446,7 +436,7 @@ test_case('bounded batch delete preflights a maximum posting frontier before ope
         'primary_lang' => 'en',
         'content_hash' => 'maximum-frontier',
     ];
-    $wpdb->replacementFrontierPostingCounts[77] = WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS;
+    $wpdb->existingPostingFrontierCounts[77] = WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS;
 
     $events = [];
     $wpdb->readQueryObserver = static function (string $sql) use (&$events): void {
@@ -458,19 +448,19 @@ test_case('bounded batch delete preflights a maximum posting frontier before ope
 
     $storage = new WP_FTS_Relational_Storage($wpdb);
     $result = $storage->replace_prepared_documents([], [77]);
-    assert_same(1, $result['deleted'] ?? null, 'the bounded delete path must accept an old document at the complete 8,192-posting frontier');
+    assert_same(1, $result['deleted'] ?? null, 'the bounded delete path must accept an existing document at the complete 8,192-posting frontier');
 
     $frontierOffset = null;
     $transactionOffset = null;
     foreach ($events as $offset => $event) {
-        if ($frontierOffset === null && str_contains($event, 'wp_fts:replacement-frontier')) {
+        if ($frontierOffset === null && str_contains($event, 'wp_fts:existing-posting-frontier')) {
             $frontierOffset = $offset;
         }
         if ($transactionOffset === null && $event === 'write:START TRANSACTION') {
             $transactionOffset = $offset;
         }
     }
-    assert_true(is_int($frontierOffset), 'delete must issue the bounded replacement-frontier preflight');
+    assert_true(is_int($frontierOffset), 'delete must issue the bounded existing-posting-frontier preflight');
     assert_true(is_int($transactionOffset), 'delete must still protect its mutations with a transaction');
-    assert_true($frontierOffset < $transactionOffset, 'the maximum old-posting frontier must be rejected or accepted before START TRANSACTION');
+    assert_true($frontierOffset < $transactionOffset, 'the maximum existing-posting frontier must be rejected or accepted before START TRANSACTION');
 });

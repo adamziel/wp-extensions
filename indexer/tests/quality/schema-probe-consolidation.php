@@ -7,11 +7,11 @@ test_case('explicit MySQL physical diagnostics use one bounded six-table snapsho
     $fake->num_queries = 0;
     $fake->prepared = [];
 
-    $verification = $storage->verify_schema_and_scope_keyset_indexes();
+    $verification = $storage->verify_schema_and_supporting_core_indexes();
 
     assert_same(true, $verification['valid'] ?? null, 'the complete fake physical contract should pass the combined verifier');
     assert_same(true, $verification['fts_tables_valid'] ?? null, 'combined verification should retain the FTS-table result separately');
-    assert_same(true, $verification['scope_keyset_indexes']['valid'] ?? null, 'combined verification should include all three supporting core-table indexes');
+    assert_same(true, $verification['supporting_core_indexes']['valid'] ?? null, 'combined verification should include all three supporting core-table indexes');
     assert_same(2, $fake->num_queries, 'a cold MySQL physical diagnostic should use one capability read and one schema snapshot');
     $snapshots = array_values(array_filter(
         $fake->prepared,
@@ -52,7 +52,7 @@ test_case('set-oriented MySQL snapshot preserves every physical damage check', f
         $fake = new WP_FTS_Test_WPDB();
         $damage($fake);
         $fake->num_queries = 0;
-        $verification = (new WP_FTS_Relational_Storage($fake))->verify_schema_and_scope_keyset_indexes();
+        $verification = (new WP_FTS_Relational_Storage($fake))->verify_schema_and_supporting_core_indexes();
         assert_same(false, $verification['valid'] ?? null, "{$name} damage should fail the exact combined contract");
         assert_same(2, $fake->num_queries, "{$name} detection should remain two fixed metadata statements");
     }
@@ -69,15 +69,15 @@ test_case('failed physical metadata reads report unavailable instead of missing 
     wp_fts_test_mark_search_takeover_ready();
     WP_FTS_Plugin::reset_request_caches();
     try {
-        $verification = (new WP_FTS_Relational_Storage($fake))->verify_schema_and_scope_keyset_indexes();
+        $verification = (new WP_FTS_Relational_Storage($fake))->verify_schema_and_supporting_core_indexes();
         assert_same(false, $verification['valid'] ?? null, 'a denied metadata snapshot must fail closed');
         assert_same(false, $verification['available'] ?? null, 'a denied metadata snapshot must be explicitly unavailable');
         assert_same([], $verification['missing_tables'] ?? null, 'an unavailable snapshot must not invent missing physical tables');
-        assert_contains('unavailable', (string) ($verification['scope_keyset_indexes']['error'] ?? ''), 'scope verification should distinguish unavailable metadata from a missing index');
+        assert_contains('unavailable', (string) ($verification['supporting_core_indexes']['error'] ?? ''), 'supporting-index verification should distinguish unavailable metadata from a missing index');
 
         WP_FTS_Plugin::reset_request_caches();
         $status = WP_FTS_Plugin::schema_status();
-        assert_same('unavailable', $status['status'] ?? null, 'current logical schema plus denied metadata should retain the public unavailable state');
+        assert_same('unavailable', $status['status'] ?? null, 'denied physical metadata should report the unavailable state');
     } finally {
         $wpdb = $oldWpdb;
         WP_FTS_Plugin::reset_request_caches();
@@ -87,7 +87,7 @@ test_case('failed physical metadata reads report unavailable instead of missing 
 test_case('failed MySQL capability metadata reads fail closed before the snapshot', function (): void {
     $fake = new WP_FTS_Test_WPDB();
     $fake->failReadQueryPrefix = '/* wp_fts:physical-schema-capabilities */';
-    $verification = (new WP_FTS_Relational_Storage($fake))->verify_schema_and_scope_keyset_indexes();
+    $verification = (new WP_FTS_Relational_Storage($fake))->verify_schema_and_supporting_core_indexes();
 
     assert_same(false, $verification['valid'] ?? null, 'denied capability metadata must not silently skip visibility or expression checks');
     assert_same(false, $verification['available'] ?? null, 'denied capability metadata must make physical verification unavailable');
@@ -150,7 +150,7 @@ test_case_with_pdo_sqlite_fixture('SQLite physical diagnostics inspect six table
     $storage = new WP_FTS_Relational_Storage($wpdb);
     $wpdb->queries = [];
 
-    $verification = $storage->verify_schema_and_scope_keyset_indexes();
+    $verification = $storage->verify_schema_and_supporting_core_indexes();
     assert_same(true, $verification['valid'] ?? null, 'the complete SQLite Playground contract should pass the combined verifier');
     $snapshots = array_values(array_filter(
         $wpdb->queries,
@@ -160,7 +160,7 @@ test_case_with_pdo_sqlite_fixture('SQLite physical diagnostics inspect six table
 
     assert_true($wpdb->query('CREATE INDEX wp_fts_unexpected_damage ON wp_fts_postings(impact)') !== false, 'the SQLite fixture should add one unexpected physical index');
     $wpdb->queries = [];
-    $damaged = $storage->verify_schema_and_scope_keyset_indexes();
+    $damaged = $storage->verify_schema_and_supporting_core_indexes();
     assert_same(false, $damaged['valid'] ?? null, 'the consolidated SQLite snapshot must still reject an extra physical index');
     assert_true(in_array('wp_fts_postings.<unexpected>(<uninspected>)', $damaged['unexpected_indexes'] ?? [], true), 'SQLite should report one bounded unexpected-index sentinel');
     assert_same(1, count(array_filter(

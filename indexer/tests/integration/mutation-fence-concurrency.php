@@ -1672,7 +1672,7 @@ function wp_fts_mutation_proof_production_worker_cas(): array
     wp_fts_mutation_proof_assert(method_exists('WP_FTS_Index_Queue', 'is_post_job_key'), 'The installed queue lacks canonical post identity validation.');
 
     WP_FTS_Plugin::create_or_repair_schema();
-    $schema = wp_fts_mutation_proof_storage_fixture(false)->verify_schema();
+    $schema = wp_fts_mutation_proof_storage_fixture()->verify_schema();
     wp_fts_mutation_proof_assert(($schema['valid'] ?? null) === true, 'The production-worker proof requires the exact current relational schema.');
 
     $workTable = (string) $wpdb->prefix . 'fts_work';
@@ -2930,10 +2930,10 @@ function wp_fts_mutation_proof_capture_wordpress_queries(callable $operation): a
 }
 
 /** Reach the private production storage factory only from this fixture. */
-function wp_fts_mutation_proof_storage_fixture(bool $ensureSchema = false): WP_FTS_Relational_Storage
+function wp_fts_mutation_proof_storage_fixture(): WP_FTS_Relational_Storage
 {
     $method = new ReflectionMethod(WP_FTS_Plugin::class, 'storage');
     $method->setAccessible(true);
 
-    return $method->invoke(null, $ensureSchema);
+    return $method->invoke(null);
 }

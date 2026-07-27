@@ -17,8 +17,8 @@ caveats operators need to account for.
   front-end and wp-admin Posts search replacement, result output defaults, and
   single-plan language routing, plus the public REST opt-in. Analyzer pack paths and custom
   field indexing remain
-  option/filter configuration, and operational state such as schema version and
-  pending queue state is managed internally.
+  option/filter configuration, and operational readiness and pending queue
+  state are managed internally.
 - Runtime saves are processed through a bounded database-backed queue. Saves
   atomically advance a post generation, workers lease exact generations, and
   failed work retries with bounded backoff. This keeps hook work small and

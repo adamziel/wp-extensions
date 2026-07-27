@@ -155,7 +155,7 @@ test_case('lemma TSV compiler accepts only its exact string and count option sha
     assert_same(
         null,
         wp_fts_lpic_private($importer, 'assert_option_keys', array_fill_keys($allowedKeys, true)),
-        'the generic importer should accept every current option key and no compatibility aliases'
+        'the generic importer should accept exactly the documented current option keys'
     );
     foreach ([['unknown' => true], [0 => 'source']] as $options) {
         $error = null;

@@ -65,8 +65,8 @@ const WP_FTS_WC_WORK_TYPE_POST = 'post';
 
 try {
     $phase = wp_fts_wc_required_env('WP_FTS_WC_PHASE');
-    if ($phase === 'scope-ddl-writer') {
-        $result = wp_fts_wc_scope_ddl_writer();
+    if ($phase === 'supporting-core-index-ddl-writer') {
+        $result = wp_fts_wc_supporting_core_index_ddl_writer();
     } else {
         wp_fts_wc_bootstrap_wordpress();
         $result = match ($phase) {
@@ -309,7 +309,7 @@ VALUES " . implode(',', $rows),
 }
 
 /**
- * Force the timed current-version reindex to rebuild every derived document.
+ * Force the timed complete reindex to rebuild every derived document.
  *
  * The initial clean-install index has already produced current hashes, so
  * merely enqueueing the corpus would benchmark the unchanged fast path. The complete
@@ -927,7 +927,6 @@ function wp_fts_wc_cold_ready_request(): array
     $optionNames = wp_fts_wc_cold_request_option_names();
     $optionRows = wp_fts_wc_cold_option_rows($optionNames);
     wp_fts_wc_assert(count($optionRows) === count($optionNames), 'Cold-request proof requires every current request option.');
-    $schemaVersion = (int) maybe_unserialize((string) $optionRows[WP_FTS_Plugin::SCHEMA_VERSION_OPTION]['option_value']);
     $acceptedProfile = wp_fts_wc_current_index_profile_hash();
     $takeover = WP_FTS_Plugin::search_takeover_status(false);
     $autoloadValues = function_exists('wp_autoload_values_to_autoload')
@@ -958,7 +957,6 @@ function wp_fts_wc_cold_ready_request(): array
         $freshConnections = count(array_unique($caseThreads)) === count($cases)
             && count(array_filter($caseThreads, static fn(int $thread): bool => $thread <= 0)) === 0;
         $freshWebRequests = true;
-        $currentSchemaRequests = true;
         $externalObjectCaches = [];
         $directOptionEvents = [];
         $networkTokenEvents = [];
@@ -978,8 +976,6 @@ function wp_fts_wc_cold_ready_request(): array
                 && (int) ($attribution['first_connection_event_id'] ?? 0) > 0
                 && (int) ($attribution['first_connection_event_id'] ?? PHP_INT_MAX) <= (int) ($attribution['tagged_start_event_id'] ?? 0)
                 && (int) ($attribution['tagged_start_event_id'] ?? PHP_INT_MAX) <= (int) ($attribution['end_event_id'] ?? 0);
-            $currentSchemaRequests = $currentSchemaRequests
-                && ($response['schema_version'] ?? null) === WP_FTS_Plugin::SCHEMA_VERSION;
             $externalObjectCaches[$caseId] = $response['external_object_cache'] ?? null;
             foreach (is_array($case['direct_option_events'] ?? null) ? $case['direct_option_events'] : [] as $event) {
                 $directOptionEvents[] = ['case' => $caseId, 'event' => $event];
@@ -994,8 +990,6 @@ function wp_fts_wc_cold_ready_request(): array
         $nonhydrateShape = $cases['nonhydrate']['statement_shape'] ?? null;
         $hydratedShape = $cases['hydrated']['statement_shape'] ?? null;
         $gates = [
-            wp_fts_wc_gate('cold_ready_current_schema_option', WP_FTS_Plugin::SCHEMA_VERSION, $schemaVersion, $schemaVersion === WP_FTS_Plugin::SCHEMA_VERSION),
-            wp_fts_wc_gate('cold_ready_current_schema_requests', true, $currentSchemaRequests, $currentSchemaRequests),
             wp_fts_wc_gate('cold_ready_request_autoloaded_options', ['names' => $optionNames, 'autoload_values' => $autoloadValues], ['names' => array_keys($optionRows), 'autoload' => $autoloadActual], $autoloaded && array_keys($optionRows) === $optionNames),
             wp_fts_wc_gate('cold_ready_cas_index_health_alloptions_visibility', true, $cas['index_health'] ?? null, ($cas['index_health'] ?? null) === true),
             wp_fts_wc_gate('cold_ready_cas_search_capability_alloptions_visibility', true, $cas['search_capability'] ?? null, ($cas['search_capability'] ?? null) === true),
@@ -1017,9 +1011,7 @@ function wp_fts_wc_cold_ready_request(): array
             'source_sha' => wp_fts_wc_required_env('WP_FTS_SOURCE_SHA'),
             'zip_sha256' => wp_fts_wc_required_env('WP_FTS_ZIP_SHA256'),
             'option_names' => $optionNames,
-            'current_schema' => [
-                'stored_version' => $schemaVersion,
-                'expected_version' => WP_FTS_Plugin::SCHEMA_VERSION,
+            'request_options' => [
                 'rows' => wp_fts_wc_cold_option_row_evidence($optionRows),
             ],
             'cas' => $cas,
@@ -1046,7 +1038,6 @@ function wp_fts_wc_cold_ready_request(): array
 function wp_fts_wc_cold_request_option_names(): array
 {
     return [
-        WP_FTS_Plugin::SCHEMA_VERSION_OPTION,
         WP_FTS_Plugin::INDEX_HEALTH_OPTION,
         WP_FTS_Plugin::READINESS_INCARNATION_OPTION,
         WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION,
@@ -1060,8 +1051,6 @@ function wp_fts_wc_cold_request_option_names(): array
 function wp_fts_wc_cold_ready_gate_ids(): array
 {
     return [
-        'cold_ready_current_schema_option',
-        'cold_ready_current_schema_requests',
         'cold_ready_request_autoloaded_options',
         'cold_ready_cas_index_health_alloptions_visibility',
         'cold_ready_cas_search_capability_alloptions_visibility',
@@ -1397,7 +1386,7 @@ function wp_fts_wc_validate(): array
     ];
     $corpusFrequencyEvidence = wp_fts_wc_adversarial_frequency_proof($manifest);
     $surfaceStorageEvidence = wp_fts_wc_surface_storage_proof($manifest, $postRebuildPostingKinds);
-    $storage = wp_fts_wc_storage_fixture(false);
+    $storage = wp_fts_wc_storage_fixture();
     if (!interface_exists('WP_FTS_Set_Oriented_Search_Storage') || !($storage instanceof WP_FTS_Set_Oriented_Search_Storage)) {
         throw new RuntimeException('The relational storage does not implement WP_FTS_Set_Oriented_Search_Storage. This is a hard backend dependency, not a skipped proof.');
     }
@@ -4034,7 +4023,7 @@ function wp_fts_wc_search_memory_sample(): array
     }
     $searchOptions = wp_fts_wc_search_ready_options($definition['options']);
     $processIdentity = wp_fts_wc_process_identity();
-    $storage = wp_fts_wc_storage_fixture(false);
+    $storage = wp_fts_wc_storage_fixture();
     if (!interface_exists('WP_FTS_Set_Oriented_Search_Storage') || !($storage instanceof WP_FTS_Set_Oriented_Search_Storage)) {
         throw new RuntimeException('Authoritative search-memory evidence requires the production set-oriented backend.');
     }
@@ -5857,7 +5846,7 @@ function wp_fts_wc_claim_index_options_preload_proof(int $postId): array
         }
     };
     $queue = new WP_FTS_Index_Queue($wpdb);
-    $storage = wp_fts_wc_storage_fixture(false);
+    $storage = wp_fts_wc_storage_fixture();
     wp_fts_wc_assert(
         $storage instanceof WP_FTS_Set_Oriented_Search_Storage,
         'Per-claim index-options proof requires production set-oriented storage.'
@@ -5990,7 +5979,7 @@ ORDER BY p.post_id",
         'claim_source_snapshot',
         'dependency_measurement',
         'dependency_values',
-        'replacement_frontier',
+        'existing_posting_frontier',
         'transaction_start',
         'dictionary_increment',
         'dictionary_decrement',
@@ -6555,7 +6544,7 @@ ORDER BY ID ASC LIMIT 40",
     $writerIds = [array_slice($hiddenIds, 0, 20), array_slice($hiddenIds, 20, 20)];
 
     $definitions = wp_fts_wc_case_definitions($manifest);
-    $storage = wp_fts_wc_storage_fixture(false);
+    $storage = wp_fts_wc_storage_fixture();
     wp_fts_wc_assert(interface_exists('WP_FTS_Set_Oriented_Search_Storage') && $storage instanceof WP_FTS_Set_Oriented_Search_Storage, 'Concurrency oracle requires the production set-oriented storage.');
     $oracleSearcher = new WP_FTS_Searcher($storage, new WP_FTS_Analyzer(WP_FTS_Plugin::runtime_analyzer_options()));
     $cases = [];
@@ -6769,7 +6758,7 @@ function wp_fts_wc_cold_sample(): array
         wp_fts_wc_gate("cold_{$caseId}_{$sample}_eviction_plan", true, $conditioningScan['full_relation_scan'], $conditioningScan['full_relation_scan']),
     ];
     wp_fts_wc_assert(wp_fts_wc_gates_pass($conditioningGates), 'Cold sample was not conditioned by the complete twice-buffer-pool scan.');
-    $storage = wp_fts_wc_storage_fixture(false);
+    $storage = wp_fts_wc_storage_fixture();
     if (!interface_exists('WP_FTS_Set_Oriented_Search_Storage') || !($storage instanceof WP_FTS_Set_Oriented_Search_Storage)) {
         throw new RuntimeException('Cold sample requires the production set-oriented backend.');
     }
@@ -8296,7 +8285,7 @@ function wp_fts_wc_measure_sparse_provider_branch(
  * WordPress's canonical relationship columns and all three relevant indexes;
  * MyISAM is used only to make a zero-access negative proof practical. Its seed
  * time, bytes, and engine are not production performance claims. The populated
- * current-schema repair/concurrent-write proof separately exercises canonical InnoDB.
+ * supporting-core-index repair/concurrent-write proof separately exercises canonical InnoDB.
  *
  * @param array<string,mixed> $manifest
  * @return array<string,mixed>
@@ -8410,9 +8399,9 @@ ORDER BY dense_object.n ASC,dense_term.n ASC"
             'last_object_rows' => wp_fts_wc_checked_count($wpdb->prepare("SELECT COUNT(*) FROM `{$relationships}` WHERE object_id=%d", $objectBase + $expectedObjects), 'dense last object rows'),
         ];
         $fixtureIndexes = [
-            'PRIMARY' => wp_fts_wc_scope_index_columns($relationships, 'PRIMARY'),
-            'term_taxonomy_id' => wp_fts_wc_scope_index_columns($relationships, 'term_taxonomy_id'),
-            'wp_fts_term_object' => wp_fts_wc_scope_index_columns($relationships, 'wp_fts_term_object'),
+            'PRIMARY' => wp_fts_wc_index_definition($relationships, 'PRIMARY'),
+            'term_taxonomy_id' => wp_fts_wc_index_definition($relationships, 'term_taxonomy_id'),
+            'wp_fts_term_object' => wp_fts_wc_index_definition($relationships, 'wp_fts_term_object'),
         ];
         $fixtureStorage = array_change_key_case($wpdb->get_row($wpdb->prepare(
             'SELECT engine,data_length,index_length FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=%s',
@@ -8724,7 +8713,7 @@ function wp_fts_wc_visibility_index_probe(array $manifest, string $work): array
             $backlogEnd
         ), 'visibility-index dirty backlog');
 
-        $storage = wp_fts_wc_storage_fixture(false);
+        $storage = wp_fts_wc_storage_fixture();
         wp_fts_wc_assert($storage instanceof WP_FTS_Relational_Storage, 'Visibility-index proof requires the relational storage backend.');
         $readVisibility = Closure::bind(
             function (string $postIdExpression, string $suffix, array $options): array {
@@ -8886,15 +8875,11 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
     $eligibleTypes = $configuredTypes();
     wp_fts_wc_assert(is_array($eligibleTypes) && $eligibleTypes !== [], 'The scope proof requires one configured searchable post type.');
     $eligibleType = (string) reset($eligibleTypes);
-    $realScopeIndexes = [
-        'targeted' => wp_fts_wc_scope_index_columns($originalRelationships, WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME),
-        'filtered' => wp_fts_wc_scope_index_columns($originalPosts, WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME),
-        'visibility' => wp_fts_wc_scope_index_columns($originalPosts, WP_FTS_Relational_Storage::VISIBILITY_INDEX_NAME),
+    $realSupportingIndexes = [
+        'targeted' => wp_fts_wc_index_definition($originalRelationships, WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME),
+        'filtered' => wp_fts_wc_index_definition($originalPosts, WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME),
+        'visibility' => wp_fts_wc_index_definition($originalPosts, WP_FTS_Relational_Storage::VISIBILITY_INDEX_NAME),
     ];
-    $ownershipRows = wp_fts_wc_cold_option_rows([WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION]);
-    $ownershipKeys = get_option(WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION, []);
-    $ownershipKeys = is_array($ownershipKeys) ? array_values(array_filter($ownershipKeys, 'is_string')) : [];
-    sort($ownershipKeys, SORT_STRING);
     $dropFixture = static function () use ($wpdb, $posts, $relationships): void {
         foreach ([$relationships, $posts] as $table) {
             wp_fts_wc_assert(
@@ -8950,8 +8935,8 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
         $seedDuration = wp_fts_wc_elapsed_ms($seedStarted);
 
         WP_FTS_Plugin::reset_request_caches();
-        $takeoverBeforeRepair = wp_fts_wc_scope_takeover_signature(WP_FTS_Plugin::search_takeover_status(false));
-        $indexRepair = wp_fts_wc_populated_scope_index_repair($takeoverBeforeRepair);
+        $takeoverBeforeRepair = wp_fts_wc_supporting_core_index_repair_takeover_signature(WP_FTS_Plugin::search_takeover_status(false));
+        $indexRepair = wp_fts_wc_populated_supporting_core_index_repair($takeoverBeforeRepair);
 
         $engines = $wpdb->get_results($wpdb->prepare(
             'SELECT table_name,engine FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN (%s,%s) ORDER BY table_name',
@@ -8966,9 +8951,9 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
             $engineMap[(string) ($row['table_name'] ?? '')] = strtoupper((string) ($row['engine'] ?? ''));
         }
         $fixtureIndexes = [
-            'targeted' => wp_fts_wc_scope_index_columns($relationships, WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME),
-            'filtered' => wp_fts_wc_scope_index_columns($posts, WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME),
-            'single_column_taxonomy' => wp_fts_wc_scope_index_columns($relationships, 'term_taxonomy_id'),
+            'targeted' => wp_fts_wc_index_definition($relationships, WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME),
+            'filtered' => wp_fts_wc_index_definition($posts, WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME),
+            'single_column_taxonomy' => wp_fts_wc_index_definition($relationships, 'term_taxonomy_id'),
         ];
 
         $fixtureCounts = [
@@ -9146,14 +9131,8 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
         $overflowRejected = ($overflowResult['class'] ?? null) === RuntimeException::class
             && str_contains((string) ($overflowResult['message'] ?? ''), '32-lane query contract');
 
-        $ownershipRow = $ownershipRows[WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION] ?? null;
-        $ownershipAutoload = is_array($ownershipRow) ? (string) ($ownershipRow['autoload'] ?? '') : '';
-        $autoloadValues = function_exists('wp_autoload_values_to_autoload')
-            ? array_map('strval', wp_autoload_values_to_autoload())
-            : ['yes'];
         $gates = [
-            wp_fts_wc_gate('scope_expansion_real_keyset_indexes', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID'], 'visibility' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt']], $realScopeIndexes, ($realScopeIndexes['targeted']['columns'] ?? null) === ['term_taxonomy_id', 'object_id'] && ($realScopeIndexes['targeted']['unique'] ?? null) === false && ($realScopeIndexes['filtered']['columns'] ?? null) === ['post_type', 'post_status', 'ID'] && ($realScopeIndexes['filtered']['unique'] ?? null) === false && ($realScopeIndexes['visibility']['columns'] ?? null) === ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt'] && ($realScopeIndexes['visibility']['unique'] ?? null) === false),
-            wp_fts_wc_gate('scope_expansion_index_ownership', ['keys' => ['filtered', 'targeted', 'visibility'], 'autoload' => 'nonautoload'], ['keys' => $ownershipKeys, 'autoload' => $ownershipAutoload], $ownershipKeys === ['filtered', 'targeted', 'visibility'] && $ownershipRow !== null && !in_array($ownershipAutoload, $autoloadValues, true)),
+            wp_fts_wc_gate('scope_expansion_supporting_core_indexes', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID'], 'visibility' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt']], $realSupportingIndexes, ($realSupportingIndexes['targeted']['columns'] ?? null) === ['term_taxonomy_id', 'object_id'] && ($realSupportingIndexes['targeted']['unique'] ?? null) === false && ($realSupportingIndexes['filtered']['columns'] ?? null) === ['post_type', 'post_status', 'ID'] && ($realSupportingIndexes['filtered']['unique'] ?? null) === false && ($realSupportingIndexes['visibility']['columns'] ?? null) === ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt'] && ($realSupportingIndexes['visibility']['unique'] ?? null) === false),
             wp_fts_wc_gate('scope_expansion_myisam_fixture_engine', ['MyISAM', 'MyISAM'], array_values($engineMap), count($engineMap) === 2 && count(array_filter($engineMap, static fn(string $engine): bool => $engine !== 'MYISAM')) === 0),
             wp_fts_wc_gate('scope_expansion_fixture_composite_indexes', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID']], $fixtureIndexes, ($fixtureIndexes['targeted']['columns'] ?? null) === ['term_taxonomy_id', 'object_id'] && ($fixtureIndexes['targeted']['unique'] ?? null) === false && ($fixtureIndexes['filtered']['columns'] ?? null) === ['post_type', 'post_status', 'ID'] && ($fixtureIndexes['filtered']['unique'] ?? null) === false),
             wp_fts_wc_gate('scope_expansion_noncovering_decoy_index', ['term_taxonomy_id'], $fixtureIndexes['single_column_taxonomy'] ?? null, ($fixtureIndexes['single_column_taxonomy']['columns'] ?? null) === ['term_taxonomy_id']),
@@ -9175,8 +9154,7 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
                 'posts_table' => $posts,
                 'relationships_table' => $relationships,
                 'engines' => $engineMap,
-                'real_scope_indexes' => $realScopeIndexes,
-                'scope_index_ownership' => ['keys' => $ownershipKeys, 'autoload' => $ownershipAutoload],
+                'real_supporting_core_indexes' => $realSupportingIndexes,
                 'fixture_indexes' => $fixtureIndexes,
                 'counts' => $fixtureCounts,
                 'cursor' => $cursor,
@@ -9189,7 +9167,7 @@ function wp_fts_wc_targeted_scope_expansion_proof(): array
                 'initial_seed_statements' => $postSeedStatements + $relationshipSeedStatements,
                 'dense_filtered_seed_statements' => $denseFiltered['statements'],
                 'initial_seed_duration_ms' => $seedDuration,
-                'populated_scope_index_repair' => $indexRepair['evidence'],
+                'populated_supporting_core_index_repair' => $indexRepair['evidence'],
             ],
             'targeted' => $targeted['evidence'],
             'filtered' => $filtered['evidence'],
@@ -9356,15 +9334,15 @@ function wp_fts_wc_seed_filtered_scope_lanes(string $table, int $firstPostId): a
 }
 
 /**
- * Repair missing current-schema scope indexes on populated InnoDB clones of
+ * Repair missing supporting core indexes on populated InnoDB clones of
  * WordPress's canonical core tables. Redirecting the canonical wpdb properties
- * here exercises the production ownership, DDL, writer lease, and verification
- * path rather than a copied query.
+ * here exercises the production DDL, writer lease, and verification path rather
+ * than a copied query.
  *
  * @param array<string,mixed> $takeoverBefore
  * @return array{evidence:array<string,mixed>,gates:array<int,array<string,mixed>>}
  */
-function wp_fts_wc_populated_scope_index_repair(array $takeoverBefore): array
+function wp_fts_wc_populated_supporting_core_index_repair(array $takeoverBefore): array
 {
     global $wpdb;
 
@@ -9373,16 +9351,13 @@ function wp_fts_wc_populated_scope_index_repair(array $takeoverBefore): array
     $sequence = wp_fts_wc_identifier((string) $wpdb->prefix . 'fts_wc_repair_sequence');
     $originalPosts = wp_fts_wc_identifier((string) ($wpdb->posts ?? ((string) $wpdb->prefix . 'posts')));
     $originalRelationships = wp_fts_wc_identifier((string) ($wpdb->term_relationships ?? ((string) $wpdb->prefix . 'term_relationships')));
-    $schemaOption = WP_FTS_Plugin::SCHEMA_VERSION_OPTION;
-    $ownershipOption = WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION;
-    $originalOwnership = get_option($ownershipOption, []);
-    $readinessBefore = wp_fts_wc_scope_repair_readiness_options();
-    $workBefore = wp_fts_wc_scope_repair_work_signature();
+    $readinessBefore = wp_fts_wc_supporting_core_index_repair_readiness_options();
+    $workBefore = wp_fts_wc_supporting_core_index_repair_work_signature();
     $dropFixture = static function () use ($wpdb, $posts, $relationships, $sequence): void {
         foreach ([$relationships, $posts, $sequence] as $table) {
             wp_fts_wc_assert(
                 $wpdb->query("DROP TABLE IF EXISTS `{$table}`") !== false,
-                "Could not drop populated scope-index fixture table {$table}."
+                "Could not drop populated supporting-index fixture table {$table}."
             );
         }
     };
@@ -9400,7 +9375,7 @@ function wp_fts_wc_populated_scope_index_repair(array $takeoverBefore): array
         );
         wp_fts_wc_assert(
             $wpdb->query("DROP INDEX `" . WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME . "` ON `{$posts}`") !== false,
-            'Could not stage the cloned posts table without its current scope index.'
+            'Could not stage the cloned posts table without its current supporting index.'
         );
         wp_fts_wc_assert(
             $wpdb->query("DROP INDEX `" . WP_FTS_Relational_Storage::VISIBILITY_INDEX_NAME . "` ON `{$posts}`") !== false,
@@ -9408,13 +9383,13 @@ function wp_fts_wc_populated_scope_index_repair(array $takeoverBefore): array
         );
         wp_fts_wc_assert(
             $wpdb->query("DROP INDEX `" . WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME . "` ON `{$relationships}`") !== false,
-            'Could not stage the cloned relationships table without its current scope index.'
+            'Could not stage the cloned relationships table without its current supporting index.'
         );
         wp_fts_wc_assert(
             $wpdb->query("CREATE TABLE `{$sequence}` (n bigint unsigned NOT NULL, PRIMARY KEY (n)) ENGINE=InnoDB") !== false,
-            'Could not create the populated scope-index sequence fixture.'
+            'Could not create the populated supporting-index sequence fixture.'
         );
-        wp_fts_wc_assert($wpdb->query("INSERT INTO `{$sequence}` (n) VALUES (1)") === 1, 'Could not seed the scope-index sequence.');
+        wp_fts_wc_assert($wpdb->query("INSERT INTO `{$sequence}` (n) VALUES (1)") === 1, 'Could not seed the supporting-index sequence.');
         $sequenceRows = 1;
         $sequenceStatements = 1;
         while ($sequenceRows < 300001) {
@@ -9422,14 +9397,14 @@ function wp_fts_wc_populated_scope_index_repair(array $takeoverBefore): array
             $inserted = $wpdb->query(
                 "INSERT INTO `{$sequence}` (n) SELECT n+{$sequenceRows} FROM `{$sequence}` ORDER BY n ASC LIMIT {$copy}"
             );
-            wp_fts_wc_assert($inserted === $copy, 'Could not double the complete scope-index sequence.');
+            wp_fts_wc_assert($inserted === $copy, 'Could not double the complete supporting-index sequence.');
             $sequenceRows += $copy;
             $sequenceStatements++;
         }
         $postColumns = 'ID,post_author,post_date,post_date_gmt,post_content,post_title,post_excerpt,post_status,comment_status,ping_status,post_password,post_name,to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,guid,menu_order,post_type,post_mime_type,comment_count';
         $insertedPosts = $wpdb->query(
             "INSERT INTO `{$posts}` ({$postColumns})
-SELECT n,1,'2020-01-01 00:00:00','2020-01-01 00:00:00','scope repair body',CONCAT('Scope repair ',n),'','publish','closed','closed','',CONCAT('scope-repair-',n),'','','2020-01-01 00:00:00','2020-01-01 00:00:00','',0,CONCAT('https://example.invalid/?p=',n),0,'post','',0
+SELECT n,1,'2020-01-01 00:00:00','2020-01-01 00:00:00','supporting core index repair body',CONCAT('Supporting core index repair ',n),'','publish','closed','closed','',CONCAT('supporting-core-index-repair-',n),'','','2020-01-01 00:00:00','2020-01-01 00:00:00','',0,CONCAT('https://example.invalid/?p=',n),0,'post','',0
 FROM `{$sequence}`
 WHERE n<=100001"
         );
@@ -9455,32 +9430,22 @@ WHERE n<=300001"
             $engineMap[(string) ($row['TABLE_NAME'] ?? '')] = strtoupper((string) ($row['ENGINE'] ?? ''));
         }
         $cardinality = [
-            'posts' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$posts}`", 'populated scope-index repair posts'),
-            'relationships' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$relationships}`", 'populated scope-index repair relationships'),
+            'posts' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$posts}`", 'populated supporting-index repair posts'),
+            'relationships' => wp_fts_wc_checked_count("SELECT COUNT(*) FROM `{$relationships}`", 'populated supporting-index repair relationships'),
         ];
         $beforeIndexes = [
-            'targeted' => wp_fts_wc_scope_index_columns($relationships, WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME),
-            'filtered' => wp_fts_wc_scope_index_columns($posts, WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME),
-            'visibility' => wp_fts_wc_scope_index_columns($posts, WP_FTS_Relational_Storage::VISIBILITY_INDEX_NAME),
+            'targeted' => wp_fts_wc_index_definition($relationships, WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME),
+            'filtered' => wp_fts_wc_index_definition($posts, WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME),
+            'visibility' => wp_fts_wc_index_definition($posts, WP_FTS_Relational_Storage::VISIBILITY_INDEX_NAME),
         ];
-        $beforeBytes = wp_fts_wc_scope_fixture_bytes($posts, $relationships);
+        $beforeBytes = wp_fts_wc_supporting_core_index_fixture_bytes($posts, $relationships);
 
-        wp_fts_wc_assert(
-            (int) get_option($schemaOption, 0) === WP_FTS_Plugin::SCHEMA_VERSION,
-            'The populated scope-index repair requires the current schema version.'
-        );
-        wp_fts_wc_assert(
-            update_option($ownershipOption, [], false) || get_option($ownershipOption, null) === [],
-            'Could not clear scope-index ownership before the populated current-schema repair.'
-        );
         WP_FTS_Plugin::reset_request_caches();
-        $stagedSchema = (int) get_option($schemaOption, 0);
-        $stagedOwnershipRows = wp_fts_wc_cold_option_rows([$ownershipOption]);
 
         $threadId = (int) $wpdb->get_var(
             'SELECT THREAD_ID FROM performance_schema.threads WHERE PROCESSLIST_ID = CONNECTION_ID()'
         );
-        wp_fts_wc_assert($threadId > 0, 'Could not map the populated scope-index repair to Performance Schema.');
+        wp_fts_wc_assert($threadId > 0, 'Could not map the populated supporting-core-index repair to Performance Schema.');
         $beforeEvent = (int) $wpdb->get_var($wpdb->prepare(
             'SELECT COALESCE(MAX(EVENT_ID),0) FROM performance_schema.events_statements_history_long WHERE THREAD_ID=%d',
             $threadId
@@ -9497,8 +9462,8 @@ WHERE n<=300001"
             }
             $ordinal = $position + 1;
             $directory = wp_fts_wc_evidence_dir();
-            wp_fts_wc_write_json($directory . "/scope-ddl-start-{$ordinal}.json", [
-                'schema' => 'relational-fts-scope-ddl-start-v1',
+            wp_fts_wc_write_json($directory . "/supporting-core-index-ddl-start-{$ordinal}.json", [
+                'schema' => 'relational-fts-supporting-core-index-ddl-start-v1',
                 'ordinal' => $ordinal,
                 'sql_sha256' => hash('sha256', $sql),
                 'tables' => ['posts' => $posts, 'relationships' => $relationships],
@@ -9506,13 +9471,13 @@ WHERE n<=300001"
             ]);
             foreach (['insert', 'update'] as $operation) {
                 wp_fts_wc_wait_for_json_file(
-                    $directory . "/scope-ddl-ready-{$ordinal}-{$operation}.json",
+                    $directory . "/supporting-core-index-ddl-ready-{$ordinal}-{$operation}.json",
                     60.0,
-                    "scope DDL {$ordinal} {$operation} writer readiness"
+                    "supporting core index DDL {$ordinal} {$operation} writer readiness"
                 );
             }
-            wp_fts_wc_write_json($directory . "/scope-ddl-release-{$ordinal}.json", [
-                'schema' => 'relational-fts-scope-ddl-release-v1',
+            wp_fts_wc_write_json($directory . "/supporting-core-index-ddl-release-{$ordinal}.json", [
+                'schema' => 'relational-fts-supporting-core-index-ddl-release-v1',
                 'ordinal' => $ordinal,
                 'published_monotonic_ns' => hrtime(true),
             ]);
@@ -9529,7 +9494,7 @@ WHERE n<=300001"
         try {
             $recorded = wp_fts_wc_record_queries(static function (): void {
                 $result = WP_FTS_Plugin::repair_schema();
-                wp_fts_wc_assert(empty($result['skipped_locked']), 'Current-schema repair unexpectedly lost its writer lease.');
+                wp_fts_wc_assert(empty($result['skipped_locked']), 'Supporting-core-index repair unexpectedly lost its writer lease.');
             });
         } finally {
             remove_filter('query', $coordinationFilter, PHP_INT_MIN);
@@ -9554,24 +9519,6 @@ WHERE n<=300001"
             $queries,
             static fn(string $sql): bool => str_starts_with(strtoupper(ltrim($sql)), 'CREATE INDEX ')
         ));
-        $ddlPositions = [];
-        $ownershipMutationPositions = [];
-        foreach ($queries as $position => $sql) {
-            if (in_array($sql, $ddl, true)) {
-                $ddlPositions[] = $position;
-            }
-            $normalized = strtoupper(ltrim($sql));
-            $optionMutation = str_starts_with($normalized, 'INSERT ')
-                || str_starts_with($normalized, 'UPDATE ')
-                || str_starts_with($normalized, 'REPLACE ');
-            if (!$optionMutation) {
-                continue;
-            }
-            if (str_contains($sql, $ownershipOption)) {
-                $ownershipMutationPositions[] = $position;
-            }
-        }
-
         $events = $wpdb->get_results($wpdb->prepare(
             'SELECT EVENT_ID,SQL_TEXT,TIMER_START,TIMER_END,TIMER_WAIT,LOCK_TIME,ROWS_EXAMINED,ROWS_SENT,CREATED_TMP_DISK_TABLES,SORT_MERGE_PASSES,NO_INDEX_USED,NO_GOOD_INDEX_USED FROM performance_schema.events_statements_history_long WHERE THREAD_ID=%d AND EVENT_ID>%d ORDER BY EVENT_ID',
             $threadId,
@@ -9597,7 +9544,7 @@ WHERE n<=300001"
             $ddlEventsByHash[hash('sha256', (string) ($event['SQL_TEXT'] ?? ''))] = $event;
         }
 
-        $scopeWriterRecords = [];
+        $supportingCoreWriterRecords = [];
         $writerValid = true;
         $writerOverlap = true;
         $writerClientDurations = [];
@@ -9608,9 +9555,9 @@ WHERE n<=300001"
             $ddlHash = hash('sha256', $expectedDdl[$ordinal - 1]);
             $ddlEvent = $ddlEventsByHash[$ddlHash] ?? [];
             foreach (['insert', 'update'] as $operation) {
-                $path = wp_fts_wc_evidence_dir() . "/scope-ddl-writer-{$ordinal}-{$operation}.json";
-                $writer = wp_fts_wc_wait_for_json_file($path, 60.0, "scope DDL {$ordinal} {$operation} writer result");
-                $expectedWrite = wp_fts_wc_scope_ddl_writer_statement($ordinal, $operation, $posts, $relationships);
+                $path = wp_fts_wc_evidence_dir() . "/supporting-core-index-ddl-writer-{$ordinal}-{$operation}.json";
+                $writer = wp_fts_wc_wait_for_json_file($path, 60.0, "supporting core index DDL {$ordinal} {$operation} writer result");
+                $expectedWrite = wp_fts_wc_supporting_core_index_ddl_writer_statement($ordinal, $operation, $posts, $relationships);
                 $writeEvent = is_array($writer['performance_schema_event'] ?? null)
                     ? $writer['performance_schema_event']
                     : [];
@@ -9618,7 +9565,7 @@ WHERE n<=300001"
                     && $writeEvent !== []
                     && (int) ($ddlEvent['TIMER_START'] ?? PHP_INT_MAX) < (int) ($writeEvent['TIMER_END'] ?? 0)
                     && (int) ($writeEvent['TIMER_START'] ?? PHP_INT_MAX) < (int) ($ddlEvent['TIMER_END'] ?? 0);
-                $valid = ($writer['schema'] ?? null) === 'relational-fts-scope-ddl-writer-v1'
+                $valid = ($writer['schema'] ?? null) === 'relational-fts-supporting-core-index-ddl-writer-v1'
                     && ($writer['status'] ?? null) === 'PASS'
                     && ($writer['ordinal'] ?? null) === $ordinal
                     && ($writer['operation'] ?? null) === $operation
@@ -9634,7 +9581,7 @@ WHERE n<=300001"
                 $writerServerDurations[] = (float) ($writer['server_duration_ms'] ?? INF);
                 $writerLockDurations[] = (float) ($writer['server_lock_ms'] ?? INF);
                 $writer['overlapped_ddl'] = $overlap;
-                $scopeWriterRecords[(string) $ordinal][$operation] = $writer;
+                $supportingCoreWriterRecords[(string) $ordinal][$operation] = $writer;
             }
         }
         $maxWriterClientDuration = max($writerClientDurations ?: [INF]);
@@ -9642,36 +9589,17 @@ WHERE n<=300001"
         $maxWriterLockDuration = max($writerLockDurations ?: [INF]);
         $distinctWriterPids = array_values(array_unique($writerPids));
 
-        $afterBytes = wp_fts_wc_scope_fixture_bytes($posts, $relationships);
+        $afterBytes = wp_fts_wc_supporting_core_index_fixture_bytes($posts, $relationships);
         $afterIndexes = [
-            'targeted' => wp_fts_wc_scope_index_columns($relationships, WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME),
-            'filtered' => wp_fts_wc_scope_index_columns($posts, WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME),
-            'visibility' => wp_fts_wc_scope_index_columns($posts, WP_FTS_Relational_Storage::VISIBILITY_INDEX_NAME),
+            'targeted' => wp_fts_wc_index_definition($relationships, WP_FTS_Relational_Storage::TARGETED_SCOPE_INDEX_NAME),
+            'filtered' => wp_fts_wc_index_definition($posts, WP_FTS_Relational_Storage::FILTERED_SCOPE_INDEX_NAME),
+            'visibility' => wp_fts_wc_index_definition($posts, WP_FTS_Relational_Storage::VISIBILITY_INDEX_NAME),
         ];
         $indexBytesDelta = $afterBytes['index_bytes'] - $beforeBytes['index_bytes'];
-        $readinessAfter = wp_fts_wc_scope_repair_readiness_options();
-        $workAfter = wp_fts_wc_scope_repair_work_signature();
+        $readinessAfter = wp_fts_wc_supporting_core_index_repair_readiness_options();
+        $workAfter = wp_fts_wc_supporting_core_index_repair_work_signature();
         WP_FTS_Plugin::reset_request_caches();
-        $takeoverAfter = wp_fts_wc_scope_takeover_signature(WP_FTS_Plugin::search_takeover_status(false));
-        $afterSchema = (int) get_option($schemaOption, 0);
-        $afterOwnershipRows = wp_fts_wc_cold_option_rows([$ownershipOption]);
-        $afterOwnership = get_option($ownershipOption, []);
-        $afterOwnership = is_array($afterOwnership)
-            ? array_values(array_filter($afterOwnership, 'is_string'))
-            : [];
-        sort($afterOwnership, SORT_STRING);
-        $autoloadValues = function_exists('wp_autoload_values_to_autoload')
-            ? array_map('strval', wp_autoload_values_to_autoload())
-            : ['yes'];
-        $ownershipRow = $afterOwnershipRows[$ownershipOption] ?? null;
-        $ownershipAutoload = is_array($ownershipRow) ? (string) ($ownershipRow['autoload'] ?? '') : '';
-        $stagedOwnershipRow = $stagedOwnershipRows[$ownershipOption] ?? null;
-        $stagedOwnershipAutoload = is_array($stagedOwnershipRow)
-            ? (string) ($stagedOwnershipRow['autoload'] ?? '')
-            : '';
-        $ownershipBeforeDdl = count($ddlPositions) === 3
-            && $ownershipMutationPositions !== []
-            && min($ownershipMutationPositions) < min($ddlPositions);
+        $takeoverAfter = wp_fts_wc_supporting_core_index_repair_takeover_signature(WP_FTS_Plugin::search_takeover_status(false));
         $exactIndexes = ($afterIndexes['targeted']['columns'] ?? null) === ['term_taxonomy_id', 'object_id']
             && ($afterIndexes['targeted']['unique'] ?? null) === false
             && ($afterIndexes['filtered']['columns'] ?? null) === ['post_type', 'post_status', 'ID']
@@ -9682,38 +9610,33 @@ WHERE n<=300001"
             && count(array_filter($engineMap, static fn(string $engine): bool => $engine !== 'INNODB')) === 0;
 
         $gates = [
-            wp_fts_wc_gate('scope_index_repair_innodb_core_clones', ['InnoDB', 'InnoDB'], array_values($engineMap), $exactEngines),
-            wp_fts_wc_gate('scope_index_repair_fixture_cardinality', ['posts' => 100001, 'relationships' => 300001], $cardinality, $cardinality === ['posts' => 100001, 'relationships' => 300001]),
-            wp_fts_wc_gate('scope_index_repair_missing_indexes', ['schema' => WP_FTS_Plugin::SCHEMA_VERSION, 'targeted' => [], 'filtered' => [], 'visibility' => []], ['schema' => $stagedSchema, 'targeted' => $beforeIndexes['targeted']['columns'], 'filtered' => $beforeIndexes['filtered']['columns'], 'visibility' => $beforeIndexes['visibility']['columns']], $stagedSchema === WP_FTS_Plugin::SCHEMA_VERSION && $beforeIndexes['targeted']['columns'] === [] && $beforeIndexes['filtered']['columns'] === [] && $beforeIndexes['visibility']['columns'] === []),
-            wp_fts_wc_gate('scope_index_repair_exact_ddl', $expectedDdl, $physicalStatements, $ddl === $expectedDdl && $physicalStatements === $expectedDdl),
-            wp_fts_wc_gate('scope_index_repair_ownership_before_ddl', 'nonautoloaded [filtered,targeted,visibility] mutation before first CREATE', ['staged_autoload' => $stagedOwnershipAutoload, 'positions' => $ownershipMutationPositions, 'ddl_positions' => $ddlPositions, 'after' => $afterOwnership], $stagedOwnershipRow !== null && !in_array($stagedOwnershipAutoload, $autoloadValues, true) && $ownershipBeforeDdl && $afterOwnership === ['filtered', 'targeted', 'visibility']),
-            wp_fts_wc_gate('scope_index_repair_schema_version_stable', WP_FTS_Plugin::SCHEMA_VERSION, $afterSchema, $afterSchema === WP_FTS_Plugin::SCHEMA_VERSION),
-            wp_fts_wc_gate('scope_index_repair_performance_schema_attribution', $queryHashes, $eventHashes, count($ddlEvents) === 3 && $eventHashes === $queryHashes),
-            wp_fts_wc_gate('scope_index_repair_wall_duration_ms', '<= 180000', $wallDuration, $wallDuration <= 180000.0),
-            wp_fts_wc_gate('scope_index_repair_server_duration_ms', ['max_ms' => '<= 120000', 'total_ms' => '<= 180000'], ['max_ms' => $maxServerDuration, 'total_ms' => $totalServerDuration], count($ddlEvents) === 3 && $maxServerDuration <= 120000.0 && $totalServerDuration <= 180000.0),
-            wp_fts_wc_gate('scope_index_repair_concurrent_writes', '6 exact successful canonical writes from 1 persistent lightweight process', $scopeWriterRecords, $writerValid && count($writerClientDurations) === 6 && count($distinctWriterPids) === 1),
-            wp_fts_wc_gate('scope_index_repair_write_overlap', 'every INSERT/UPDATE server interval overlaps its CREATE INDEX', $scopeWriterRecords, $writerValid && $writerOverlap),
-            wp_fts_wc_gate('scope_index_repair_write_duration_ms', ['client_max' => '<= 5000', 'server_max' => '<= 5000'], ['client_max' => $maxWriterClientDuration, 'server_max' => $maxWriterServerDuration, 'lock_max' => $maxWriterLockDuration], $writerValid && $maxWriterClientDuration <= 5000.0 && $maxWriterServerDuration <= 5000.0),
-            wp_fts_wc_gate('scope_index_repair_storage_delta', '0 < index byte delta <= 134217728', ['before' => $beforeBytes, 'after' => $afterBytes, 'index_bytes_delta' => $indexBytesDelta], $indexBytesDelta > 0 && $indexBytesDelta <= 134217728),
-            wp_fts_wc_gate('scope_index_repair_memory', ['php_peak_delta' => '<= 16777216', 'php_peak' => '0 < lifetime peak <= 134217728', 'rss_peak_delta' => '<= 16777216 using VmHWM-after minus VmRSS-before', 'rss_peak' => '0 < VmHWM <= 134217728'], ['php_peak_delta' => $phpPeakDelta, 'php_peak' => $phpPeakBytes, 'rss_peak_delta' => $rssPeakDelta, 'rss_peak' => $rssPeakAfter], $phpUsageBefore > 0 && $phpPeakDelta === max(0, $phpPhasePeakAfter - $phpUsageBefore) && $phpPeakDelta <= 16777216 && $phpPeakBytes === max($phpLifetimePeakBeforeReset, $phpPhasePeakAfter) && $phpPeakBytes > 0 && $phpPeakBytes <= 134217728 && $rssBefore > 0 && $rssPeakDelta === max(0, $rssPeakAfter - $rssBefore) && $rssPeakDelta <= 16777216 && $rssPeakAfter > 0 && $rssPeakAfter <= 134217728),
-            wp_fts_wc_gate('scope_index_repair_query_count', '<= 64 total; exactly 3 DDL', ['total' => count($queries), 'ddl' => count($ddl)], count($queries) <= 64 && count($ddl) === 3),
-            wp_fts_wc_gate('scope_index_repair_exact_definitions', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID'], 'visibility' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt']], $afterIndexes, $exactIndexes),
-            wp_fts_wc_gate('scope_index_repair_readiness_preserved', ['options' => $readinessBefore, 'takeover' => $takeoverBefore], ['options' => $readinessAfter, 'takeover' => $takeoverAfter], $readinessAfter === $readinessBefore && $takeoverAfter === $takeoverBefore),
-            wp_fts_wc_gate('scope_index_repair_work_preserved', $workBefore, $workAfter, $workAfter === $workBefore),
-            wp_fts_wc_gate('scope_index_repair_ownership_nonautoloaded', 'nonautoloaded', $ownershipAutoload, $ownershipRow !== null && !in_array($ownershipAutoload, $autoloadValues, true)),
+            wp_fts_wc_gate('supporting_core_index_repair_innodb_core_clones', ['InnoDB', 'InnoDB'], array_values($engineMap), $exactEngines),
+            wp_fts_wc_gate('supporting_core_index_repair_fixture_cardinality', ['posts' => 100001, 'relationships' => 300001], $cardinality, $cardinality === ['posts' => 100001, 'relationships' => 300001]),
+            wp_fts_wc_gate('supporting_core_index_repair_missing_indexes', ['targeted' => [], 'filtered' => [], 'visibility' => []], ['targeted' => $beforeIndexes['targeted']['columns'], 'filtered' => $beforeIndexes['filtered']['columns'], 'visibility' => $beforeIndexes['visibility']['columns']], $beforeIndexes['targeted']['columns'] === [] && $beforeIndexes['filtered']['columns'] === [] && $beforeIndexes['visibility']['columns'] === []),
+            wp_fts_wc_gate('supporting_core_index_repair_exact_ddl', $expectedDdl, $physicalStatements, $ddl === $expectedDdl && $physicalStatements === $expectedDdl),
+            wp_fts_wc_gate('supporting_core_index_repair_performance_schema_attribution', $queryHashes, $eventHashes, count($ddlEvents) === 3 && $eventHashes === $queryHashes),
+            wp_fts_wc_gate('supporting_core_index_repair_wall_duration_ms', '<= 180000', $wallDuration, $wallDuration <= 180000.0),
+            wp_fts_wc_gate('supporting_core_index_repair_server_duration_ms', ['max_ms' => '<= 120000', 'total_ms' => '<= 180000'], ['max_ms' => $maxServerDuration, 'total_ms' => $totalServerDuration], count($ddlEvents) === 3 && $maxServerDuration <= 120000.0 && $totalServerDuration <= 180000.0),
+            wp_fts_wc_gate('supporting_core_index_repair_concurrent_writes', '6 exact successful canonical writes from 1 persistent lightweight process', $supportingCoreWriterRecords, $writerValid && count($writerClientDurations) === 6 && count($distinctWriterPids) === 1),
+            wp_fts_wc_gate('supporting_core_index_repair_write_overlap', 'every INSERT/UPDATE server interval overlaps its CREATE INDEX', $supportingCoreWriterRecords, $writerValid && $writerOverlap),
+            wp_fts_wc_gate('supporting_core_index_repair_write_duration_ms', ['client_max' => '<= 5000', 'server_max' => '<= 5000'], ['client_max' => $maxWriterClientDuration, 'server_max' => $maxWriterServerDuration, 'lock_max' => $maxWriterLockDuration], $writerValid && $maxWriterClientDuration <= 5000.0 && $maxWriterServerDuration <= 5000.0),
+            wp_fts_wc_gate('supporting_core_index_repair_storage_delta', '0 < index byte delta <= 134217728', ['before' => $beforeBytes, 'after' => $afterBytes, 'index_bytes_delta' => $indexBytesDelta], $indexBytesDelta > 0 && $indexBytesDelta <= 134217728),
+            wp_fts_wc_gate('supporting_core_index_repair_memory', ['php_peak_delta' => '<= 16777216', 'php_peak' => '0 < lifetime peak <= 134217728', 'rss_peak_delta' => '<= 16777216 using VmHWM-after minus VmRSS-before', 'rss_peak' => '0 < VmHWM <= 134217728'], ['php_peak_delta' => $phpPeakDelta, 'php_peak' => $phpPeakBytes, 'rss_peak_delta' => $rssPeakDelta, 'rss_peak' => $rssPeakAfter], $phpUsageBefore > 0 && $phpPeakDelta === max(0, $phpPhasePeakAfter - $phpUsageBefore) && $phpPeakDelta <= 16777216 && $phpPeakBytes === max($phpLifetimePeakBeforeReset, $phpPhasePeakAfter) && $phpPeakBytes > 0 && $phpPeakBytes <= 134217728 && $rssBefore > 0 && $rssPeakDelta === max(0, $rssPeakAfter - $rssBefore) && $rssPeakDelta <= 16777216 && $rssPeakAfter > 0 && $rssPeakAfter <= 134217728),
+            wp_fts_wc_gate('supporting_core_index_repair_query_count', '<= 64 total; exactly 3 DDL', ['total' => count($queries), 'ddl' => count($ddl)], count($queries) <= 64 && count($ddl) === 3),
+            wp_fts_wc_gate('supporting_core_index_repair_exact_definitions', ['targeted' => ['term_taxonomy_id', 'object_id'], 'filtered' => ['post_type', 'post_status', 'ID'], 'visibility' => ['ID', 'post_type', 'post_status', 'post_password', 'post_date_gmt']], $afterIndexes, $exactIndexes),
+            wp_fts_wc_gate('supporting_core_index_repair_readiness_preserved', ['options' => $readinessBefore, 'takeover' => $takeoverBefore], ['options' => $readinessAfter, 'takeover' => $takeoverAfter], $readinessAfter === $readinessBefore && $takeoverAfter === $takeoverBefore),
+            wp_fts_wc_gate('supporting_core_index_repair_work_preserved', $workBefore, $workAfter, $workAfter === $workBefore),
         ];
         $result = [
             'evidence' => [
-                'schema' => 'relational-fts-populated-scope-index-repair-v1',
+                'schema' => 'relational-fts-populated-supporting-core-index-repair-v1',
                 'engines' => $engineMap,
                 'cardinality' => $cardinality,
                 'sequence_rows' => $sequenceRows,
                 'sequence_seed_statements' => $sequenceStatements,
-                'schema_version_before' => $stagedSchema,
-                'schema_version_after' => $afterSchema,
                 'wall_duration_ms' => $wallDuration,
                 'server_duration_ms' => ['per_ddl' => $serverDurations, 'max' => $maxServerDuration, 'total' => $totalServerDuration],
-                'concurrent_writes' => $scopeWriterRecords,
+                'concurrent_writes' => $supportingCoreWriterRecords,
                 'concurrent_write_duration_ms' => ['client_max' => $maxWriterClientDuration, 'server_max' => $maxWriterServerDuration, 'lock_max' => $maxWriterLockDuration],
                 'query_count' => count($queries),
                 'ddl_count' => count($ddl),
@@ -9722,9 +9645,6 @@ WHERE n<=300001"
                 'performance_schema_sql_sha256' => $eventHashes,
                 'performance_schema_events' => $ddlEvents,
                 'concurrent_writer_pids' => $distinctWriterPids,
-                'ownership_mutation_positions' => $ownershipMutationPositions,
-                'ddl_positions' => $ddlPositions,
-                                'scope_index_ownership' => ['keys' => $afterOwnership, 'autoload' => $ownershipAutoload],
                 'indexes_before' => $beforeIndexes,
                 'indexes_after' => $afterIndexes,
                 'storage_before' => $beforeBytes,
@@ -9751,17 +9671,14 @@ WHERE n<=300001"
     } finally {
         $wpdb->posts = $originalPosts;
         $wpdb->term_relationships = $originalRelationships;
-        if (get_option($ownershipOption, []) !== $originalOwnership) {
-            update_option($ownershipOption, $originalOwnership, false);
-        }
         WP_FTS_Plugin::reset_request_caches();
         $dropFixture();
     }
 
-    wp_fts_wc_assert(is_array($result), 'The populated current-schema scope-index repair did not produce a result.');
+    wp_fts_wc_assert(is_array($result), 'The populated supporting-core-index repair did not produce a result.');
     if (!wp_fts_wc_gates_pass($result['gates'])) {
         throw new RuntimeException(
-            'Populated current-schema scope-index repair failed: '
+            'Populated supporting-core-index repair failed: '
             . implode(', ', wp_fts_wc_gate_failures($result['gates']))
         );
     }
@@ -9771,17 +9688,17 @@ WHERE n<=300001"
 
 /**
  * Issue canonical core-table writes on a separate lightweight connection while
- * a populated current-schema CREATE INDEX is active. One PHP process covers
+ * a populated supporting-core-index CREATE INDEX is active. One PHP process covers
  * both operations and all three indexes without loading a second WordPress
  * runtime; Performance Schema timer intervals prove overlap.
  *
  * @return array<string,mixed>
  */
-function wp_fts_wc_scope_ddl_writer(): array
+function wp_fts_wc_supporting_core_index_ddl_writer(): array
 {
     wp_fts_wc_assert_disposable_guard();
-    wp_fts_wc_assert(!defined('ABSPATH') && !function_exists('get_option'), 'The lightweight scope DDL writer must run before WordPress bootstrap.');
-    wp_fts_wc_assert(class_exists(mysqli::class), 'The lightweight scope DDL writer requires mysqli.');
+    wp_fts_wc_assert(!defined('ABSPATH') && !function_exists('get_option'), 'The lightweight supporting core index DDL writer must run before WordPress bootstrap.');
+    wp_fts_wc_assert(class_exists(mysqli::class), 'The lightweight supporting core index DDL writer requires mysqli.');
     $databaseHost = wp_fts_wc_required_env('WORDPRESS_DB_HOST');
     $databasePort = 3306;
     $portSeparator = strrpos($databaseHost, ':');
@@ -9792,12 +9709,12 @@ function wp_fts_wc_scope_ddl_writer(): array
                 && strspn($port, '0123456789') === strlen($port)
                 && (int) $port > 0
                 && (int) $port <= 65535,
-            'The lightweight scope DDL writer received an invalid database port.'
+            'The lightweight supporting core index DDL writer received an invalid database port.'
         );
         $databasePort = (int) $port;
         $databaseHost = substr($databaseHost, 0, $portSeparator);
     }
-    wp_fts_wc_assert($databaseHost !== '', 'The lightweight scope DDL writer received an empty database host.');
+    wp_fts_wc_assert($databaseHost !== '', 'The lightweight supporting core index DDL writer received an empty database host.');
     mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
     $database = new mysqli(
         $databaseHost,
@@ -9812,31 +9729,31 @@ function wp_fts_wc_scope_ddl_writer(): array
     $totalDuration = 0.0;
     $tables = null;
     $pid = (int) getmypid();
-    wp_fts_wc_assert($pid > 0, 'Could not identify the persistent scope DDL writer process.');
+    wp_fts_wc_assert($pid > 0, 'Could not identify the persistent supporting core index DDL writer process.');
     $threadResult = $database->query(
         'SELECT THREAD_ID FROM performance_schema.threads WHERE PROCESSLIST_ID = CONNECTION_ID()'
     );
     $threadRow = $threadResult->fetch_assoc();
     $threadResult->free();
     $threadId = is_array($threadRow) ? (int) ($threadRow['THREAD_ID'] ?? 0) : 0;
-    wp_fts_wc_assert($threadId > 0, 'Could not map the scope DDL writer to Performance Schema.');
+    wp_fts_wc_assert($threadId > 0, 'Could not map the supporting core index DDL writer to Performance Schema.');
     foreach ([1, 2, 3] as $ordinal) {
         $start = wp_fts_wc_wait_for_json_file(
-            $directory . "/scope-ddl-start-{$ordinal}.json",
+            $directory . "/supporting-core-index-ddl-start-{$ordinal}.json",
             1200.0,
-            "scope DDL {$ordinal} start"
+            "supporting core index DDL {$ordinal} start"
         );
         wp_fts_wc_assert(
-            ($start['schema'] ?? null) === 'relational-fts-scope-ddl-start-v1'
+            ($start['schema'] ?? null) === 'relational-fts-supporting-core-index-ddl-start-v1'
                 && ($start['ordinal'] ?? null) === $ordinal,
-            'Scope DDL writer received a malformed start capability.'
+            'Supporting core index DDL writer received a malformed start capability.'
         );
         $startTables = is_array($start['tables'] ?? null) ? $start['tables'] : [];
         wp_fts_wc_assert(
             array_keys($startTables) === ['posts', 'relationships']
                 && is_string($startTables['posts'])
                 && is_string($startTables['relationships']),
-            'Scope DDL writer start capability omitted its exact core-table names.'
+            'Supporting core index DDL writer start capability omitted its exact core-table names.'
         );
         $currentTables = [
             'posts' => wp_fts_wc_identifier((string) $startTables['posts']),
@@ -9845,10 +9762,10 @@ function wp_fts_wc_scope_ddl_writer(): array
         if ($tables === null) {
             $tables = $currentTables;
         }
-        wp_fts_wc_assert($currentTables === $tables, 'Scope DDL writer core-table names changed between index builds.');
+        wp_fts_wc_assert($currentTables === $tables, 'Supporting core index DDL writer core-table names changed between index builds.');
         foreach (['insert', 'update'] as $operation) {
-            wp_fts_wc_write_json($directory . "/scope-ddl-ready-{$ordinal}-{$operation}.json", [
-                'schema' => 'relational-fts-scope-ddl-ready-v1',
+            wp_fts_wc_write_json($directory . "/supporting-core-index-ddl-ready-{$ordinal}-{$operation}.json", [
+                'schema' => 'relational-fts-supporting-core-index-ddl-ready-v1',
                 'ordinal' => $ordinal,
                 'operation' => $operation,
                 'pid' => $pid,
@@ -9856,14 +9773,14 @@ function wp_fts_wc_scope_ddl_writer(): array
             ]);
         }
         $release = wp_fts_wc_wait_for_json_file(
-            $directory . "/scope-ddl-release-{$ordinal}.json",
+            $directory . "/supporting-core-index-ddl-release-{$ordinal}.json",
             120.0,
-            "scope DDL {$ordinal} release"
+            "supporting core index DDL {$ordinal} release"
         );
         wp_fts_wc_assert(
-            ($release['schema'] ?? null) === 'relational-fts-scope-ddl-release-v1'
+            ($release['schema'] ?? null) === 'relational-fts-supporting-core-index-ddl-release-v1'
                 && ($release['ordinal'] ?? null) === $ordinal,
-            'Scope DDL writer received a malformed release capability.'
+            'Supporting core index DDL writer received a malformed release capability.'
         );
         // Let the repair worker leave its query filter and enter mysqli_query() first.
         // Both writes still start while a 100k/300k InnoDB index build is active;
@@ -9871,7 +9788,7 @@ function wp_fts_wc_scope_ddl_writer(): array
         usleep(2000);
 
         foreach (['insert', 'update'] as $operation) {
-            $sql = wp_fts_wc_scope_ddl_writer_statement(
+            $sql = wp_fts_wc_supporting_core_index_ddl_writer_statement(
                 $ordinal,
                 $operation,
                 $tables['posts'],
@@ -9905,9 +9822,9 @@ function wp_fts_wc_scope_ddl_writer(): array
                 : max(0.0, (float) ($event['LOCK_TIME'] ?? 0) / 1000000000.0);
             $passed = $affected === 1 && count($events) === 1;
             $result = [
-                'schema' => 'relational-fts-scope-ddl-writer-v1',
+                'schema' => 'relational-fts-supporting-core-index-ddl-writer-v1',
                 'status' => $passed ? 'PASS' : 'FAIL',
-                'phase' => 'scope-ddl-writer',
+                'phase' => 'supporting-core-index-ddl-writer',
                 'pid' => $pid,
                 'wordpress_bootstrapped' => false,
                 'ordinal' => $ordinal,
@@ -9922,9 +9839,9 @@ function wp_fts_wc_scope_ddl_writer(): array
                     : hash('sha256', (string) ($event['SQL_TEXT'] ?? '')),
                 'performance_schema_event' => $event,
             ];
-            wp_fts_wc_write_json($directory . "/scope-ddl-writer-{$ordinal}-{$operation}.json", $result);
+            wp_fts_wc_write_json($directory . "/supporting-core-index-ddl-writer-{$ordinal}-{$operation}.json", $result);
             if (!$passed) {
-                throw new RuntimeException("Concurrent scope DDL {$operation} writer failed for index {$ordinal}.");
+                throw new RuntimeException("Concurrent supporting core index DDL {$operation} writer failed for index {$ordinal}.");
             }
             $results[(string) $ordinal][$operation] = $result;
             $totalDuration += $clientDuration;
@@ -9934,7 +9851,7 @@ function wp_fts_wc_scope_ddl_writer(): array
 
     return [
         'status' => 'PASS',
-        'phase' => 'scope-ddl-writer',
+        'phase' => 'supporting-core-index-ddl-writer',
         'pid' => $pid,
         'wordpress_bootstrapped' => false,
         'php_peak_bytes' => memory_get_peak_usage(true),
@@ -9945,7 +9862,7 @@ function wp_fts_wc_scope_ddl_writer(): array
 }
 
 /** Select the deterministic concurrent DDL writer operation for one ordinal. */
-function wp_fts_wc_scope_ddl_writer_statement(
+function wp_fts_wc_supporting_core_index_ddl_writer_statement(
     int $ordinal,
     string $operation,
     string $posts,
@@ -9963,7 +9880,7 @@ function wp_fts_wc_scope_ddl_writer_statement(
     $columns = 'ID,post_author,post_date,post_date_gmt,post_content,post_title,post_excerpt,post_status,comment_status,ping_status,post_password,post_name,to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,guid,menu_order,post_type,post_mime_type,comment_count';
 
     return "INSERT INTO `{$posts}` ({$columns})
-SELECT {$postId},post_author,post_date,post_date_gmt,post_content,'Concurrent scope repair insert',post_excerpt,post_status,comment_status,ping_status,post_password,'concurrent-scope-repair-insert-{$ordinal}',to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,'https://example.invalid/?p={$postId}',menu_order,post_type,post_mime_type,comment_count
+SELECT {$postId},post_author,post_date,post_date_gmt,post_content,'Concurrent supporting core index repair insert',post_excerpt,post_status,comment_status,ping_status,post_password,'concurrent-supporting-core-index-repair-insert-{$ordinal}',to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,'https://example.invalid/?p={$postId}',menu_order,post_type,post_mime_type,comment_count
 FROM `{$posts}` WHERE ID=1";
 }
 
@@ -9982,18 +9899,17 @@ function wp_fts_wc_wait_for_json_file(string $path, float $timeoutSeconds, strin
 }
 
 /** @return array<string,mixed> */
-function wp_fts_wc_scope_takeover_signature(array $status): array
+function wp_fts_wc_supporting_core_index_repair_takeover_signature(array $status): array
 {
     $signature = [];
     foreach ([
         'ready',
         'reason',
         'ready_incarnation',
+        'ready_profile_hash',
         'initial_index_status',
         'initial_index_started_at',
         'initial_index_completed_at',
-        'schema_status',
-        'physical_schema_usable',
     ] as $key) {
         $signature[$key] = $status[$key] ?? null;
     }
@@ -10002,7 +9918,7 @@ function wp_fts_wc_scope_takeover_signature(array $status): array
 }
 
 /** @return array<string,mixed> */
-function wp_fts_wc_scope_repair_readiness_options(): array
+function wp_fts_wc_supporting_core_index_repair_readiness_options(): array
 {
     return [
         'health' => get_option(WP_FTS_Plugin::INDEX_HEALTH_OPTION, null),
@@ -10012,7 +9928,7 @@ function wp_fts_wc_scope_repair_readiness_options(): array
 }
 
 /** @return array{total:int,groups:array<int,array{kind:string,state:string,rows:int}>} */
-function wp_fts_wc_scope_repair_work_signature(): array
+function wp_fts_wc_supporting_core_index_repair_work_signature(): array
 {
     global $wpdb;
 
@@ -10021,7 +9937,7 @@ function wp_fts_wc_scope_repair_work_signature(): array
         "SELECT kind,state,COUNT(*) AS row_count FROM `{$work}` GROUP BY kind,state ORDER BY kind,state",
         ARRAY_A
     );
-    wp_fts_wc_assert(is_array($rows), 'Could not inspect durable work during the populated scope-index repair.');
+    wp_fts_wc_assert(is_array($rows), 'Could not inspect durable work during the populated supporting-core-index repair.');
     $groups = array_map(
         static fn(array $row): array => [
             'kind' => (string) ($row['kind'] ?? ''),
@@ -10040,13 +9956,13 @@ function wp_fts_wc_scope_repair_work_signature(): array
 /**
  * @return array{tables:array<string,array{data_bytes:int,index_bytes:int,total_bytes:int}>,data_bytes:int,index_bytes:int,total_bytes:int}
  */
-function wp_fts_wc_scope_fixture_bytes(string $posts, string $relationships): array
+function wp_fts_wc_supporting_core_index_fixture_bytes(string $posts, string $relationships): array
 {
     global $wpdb;
 
     wp_fts_wc_assert(
         $wpdb->query("ANALYZE TABLE `{$posts}`, `{$relationships}`") !== false,
-        'Could not analyze both populated scope-index tables for byte accounting.'
+        'Could not analyze both populated supporting-core-index tables for byte accounting.'
     );
     $rows = $wpdb->get_results($wpdb->prepare(
         'SELECT TABLE_NAME,DATA_LENGTH,INDEX_LENGTH FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (%s,%s) ORDER BY TABLE_NAME',
@@ -10067,7 +9983,7 @@ function wp_fts_wc_scope_fixture_bytes(string $posts, string $relationships): ar
         $dataBytes += $data;
         $indexBytes += $index;
     }
-    wp_fts_wc_assert(count($tables) === 2, 'Could not account for both populated scope-index tables.');
+    wp_fts_wc_assert(count($tables) === 2, 'Could not account for both populated supporting-core-index tables.');
 
     return [
         'tables' => $tables,
@@ -10078,7 +9994,7 @@ function wp_fts_wc_scope_fixture_bytes(string $posts, string $relationships): ar
 }
 
 /** @return array{name:string,columns:string[],unique:bool,rows:array<int,array<string,mixed>>} */
-function wp_fts_wc_scope_index_columns(string $table, string $indexName): array
+function wp_fts_wc_index_definition(string $table, string $indexName): array
 {
     global $wpdb;
 
@@ -11233,14 +11149,14 @@ function wp_fts_wc_composed_maximum_worker_path(array &$queueClaimPlans): array
         $queue = new WP_FTS_Index_Queue($wpdb);
         wp_fts_wc_assert(
             $queue->enqueue_many([$maximumPostId], null, ['index_options' => ['document_lang' => 'en']]) === 1,
-            'Composed-worker old-frontier setup did not enqueue its maximum document.'
+            'Composed-worker existing-frontier setup did not enqueue its maximum document.'
         );
         $setupBatch = wp_fts_wc_instrumented_worker_batch(
-            'worst-case-composed-maximum-old-frontier',
+            'worst-case-composed-maximum-existing-frontier',
             $queueClaimPlans
         );
-        $oldPostingCounts = wp_fts_wc_document_posting_kind_counts($maximumPostId);
-        $oldHashes = wp_fts_wc_document_hashes($documents, [$maximumPostId]);
+        $existingPostingCounts = wp_fts_wc_document_posting_kind_counts($maximumPostId);
+        $existingHashes = wp_fts_wc_document_hashes($documents, [$maximumPostId]);
         $setupPassed = (int) ($setupBatch['indexed'] ?? -1) === 1
             && (int) ($setupBatch['analyzed'] ?? -1) === 1
             && (int) ($setupBatch['failures'] ?? -1) === 0
@@ -11248,8 +11164,8 @@ function wp_fts_wc_composed_maximum_worker_path(array &$queueClaimPlans): array
             && (int) ($setupBatch['bounded_data_statement_count'] ?? PHP_INT_MAX) <= 15
             && (int) ($setupBatch['unclassified_statement_count'] ?? -1) === 0
             && ($setupBatch['statement_roles_ordered'] ?? false) === true
-            && $oldPostingCounts === ['lexical' => 4096, 'surface' => 4096, 'total' => 8192]
-            && count($oldHashes) === 1;
+            && $existingPostingCounts === ['lexical' => 4096, 'surface' => 4096, 'total' => 8192]
+            && count($existingHashes) === 1;
 
         $mutated = $wpdb->update(
             $wpdb->posts,
@@ -11518,7 +11434,7 @@ WHERE job_key=%s AND kind='post' AND post_id=%d AND state='ready'",
             'conditional_source_fallback',
             'dependency_measurement',
             'dependency_values',
-            'replacement_frontier',
+            'existing_posting_frontier',
             'dictionary_increment',
             'dictionary_decrement',
             'bounded_index_delete',
@@ -11608,8 +11524,8 @@ WHERE job_key=%s AND kind='post' AND post_id=%d AND state='ready'",
             && is_int($laterEventBefore)
             && is_int($laterEventAfter)
             && $laterEventAfter < $laterEventBefore;
-        $hashChanged = isset($oldHashes[$maximumPostId], $newHashes[$maximumPostId])
-            && !hash_equals($oldHashes[$maximumPostId], $newHashes[$maximumPostId]);
+        $hashChanged = isset($existingHashes[$maximumPostId], $newHashes[$maximumPostId])
+            && !hash_equals($existingHashes[$maximumPostId], $newHashes[$maximumPostId]);
         $laterEventHashChanged = isset($newHashes[$maximumPostId], $laterEventHashes[$maximumPostId])
             && !hash_equals($newHashes[$maximumPostId], $laterEventHashes[$maximumPostId]);
         $pathFailures = array_sum(array_column($pathBatches, 'failures'));
@@ -11661,10 +11577,10 @@ WHERE job_key=%s AND kind='post' AND post_id=%d AND state='ready'",
                 'selected_dependency_rows' => $selectedDependencyRows,
                 'work_rows_before' => $workRowsBefore,
                 'recovery_conditioned_rows' => $recoveryConditioned,
-                'old_posting_counts' => $oldPostingCounts,
+                'existing_posting_counts' => $existingPostingCounts,
                 'new_posting_counts' => $newPostingCounts,
                 'later_event_posting_counts' => $laterEventPostingCounts,
-                'old_hash_sha256' => wp_fts_wc_canonical_hash($oldHashes),
+                'existing_hash_sha256' => wp_fts_wc_canonical_hash($existingHashes),
                 'new_hash_sha256' => wp_fts_wc_canonical_hash($newHashes),
                 'hash_changed' => $hashChanged,
                 'later_event_hash_sha256' => wp_fts_wc_canonical_hash($laterEventHashes),
@@ -12563,7 +12479,7 @@ function wp_fts_wc_finalize(): array
         wp_fts_wc_gate('worker_mixed_exhausted_continuous_arrival', ['queued' => 100, 'work_rows' => 101, 'deferred' => 100, 'documents_ready' => 100], ['queued' => $mixedExhausted['continuous_arrival']['queued'] ?? null, 'work_rows' => $mixedExhausted['work_rows_before_scope_turn'] ?? null, 'deferred' => $mixedExhaustedScopeTurn['deferred'] ?? null, 'documents_ready' => $mixedExhausted['post_rows_after_scope_turn'] ?? null], (int) ($mixedExhausted['continuous_arrival']['queued'] ?? -1) === 100 && (int) ($mixedExhausted['work_rows_before_scope_turn'] ?? -1) === 101 && (int) ($mixedExhaustedScopeTurn['deferred'] ?? -1) === 100 && (int) ($mixedExhausted['post_rows_after_scope_turn'] ?? -1) === 100),
         wp_fts_wc_gate('worker_mixed_exhausted_scope_completion', ['indexed' => 0, 'scope_completed_global' => true, 'scope_row' => null, 'total_statements' => '<= 20'], ['indexed' => $mixedExhaustedScopeTurn['indexed'] ?? null, 'scope_completed_global' => $mixedExhaustedScopeTurn['scope_completed_global'] ?? null, 'scope_row' => $mixedExhausted['scope_after_scope_turn'] ?? null, 'total_statements' => $mixedExhaustedScopeTurn['total_statement_count'] ?? null], (int) ($mixedExhaustedScopeTurn['indexed'] ?? -1) === 0 && ($mixedExhaustedScopeTurn['scope_completed'] ?? false) === true && ($mixedExhaustedScopeTurn['scope_completed_global'] ?? false) === true && array_key_exists('scope_after_scope_turn', $mixedExhausted) && $mixedExhausted['scope_after_scope_turn'] === null && (int) ($mixedExhaustedScopeTurn['total_statement_count'] ?? PHP_INT_MAX) <= 20 && in_array('post_batch_release', is_array($mixedExhaustedScopeTurn['statement_roles'] ?? null) ? $mixedExhaustedScopeTurn['statement_roles'] : [], true) && in_array('scope_acknowledgement', is_array($mixedExhaustedScopeTurn['statement_roles'] ?? null) ? $mixedExhaustedScopeTurn['statement_roles'] : [], true)),
         wp_fts_wc_gate('worker_composed_maximum_artifact', 'PASS complete composed lifecycle', [$composedMaximumWorker['status'] ?? null, count(is_array($composedMaximumWorker['path_batches'] ?? null) ? $composedMaximumWorker['path_batches'] : [])], ($composedMaximumWorker['status'] ?? null) === 'PASS' && is_array($composedMaximumWorker['path_batches'] ?? null) && $composedMaximumWorker['path_batches'] !== []),
-        wp_fts_wc_gate('worker_composed_maximum_fixture', ['posts' => 6, 'tokens' => 4096, 'old/new/later' => ['lexical' => 4096, 'surface' => 4096, 'total' => 8192], 'dependency_rows' => 1, 'recovery_rows' => [1, 1]], ['posts' => $composedFixture['post_count'] ?? null, 'tokens' => $composedFixture['maximum_source_distinct_tokens'] ?? null, 'old' => $composedFixture['old_posting_counts'] ?? null, 'new' => $composedFixture['new_posting_counts'] ?? null, 'later' => $composedFixture['later_event_posting_counts'] ?? null, 'dependency_rows' => $composedFixture['selected_dependency_rows'] ?? null, 'recovery_rows' => [$composedFixture['recovery_conditioned_rows'] ?? null, $composedFixture['later_event_recovery_conditioned_rows'] ?? null]], (int) ($composedFixture['post_count'] ?? -1) === 6 && (int) ($composedFixture['maximum_source_distinct_tokens'] ?? -1) === 4096 && ($composedFixture['old_posting_counts'] ?? null) === ['lexical' => 4096, 'surface' => 4096, 'total' => 8192] && ($composedFixture['new_posting_counts'] ?? null) === ['lexical' => 4096, 'surface' => 4096, 'total' => 8192] && ($composedFixture['later_event_posting_counts'] ?? null) === ['lexical' => 4096, 'surface' => 4096, 'total' => 8192] && (int) ($composedFixture['selected_dependency_rows'] ?? -1) === 1 && (int) ($composedFixture['recovery_conditioned_rows'] ?? -1) === 1 && (int) ($composedFixture['later_event_recovery_conditioned_rows'] ?? -1) === 1 && ($composedFixture['hash_changed'] ?? false) === true && ($composedFixture['later_event_hash_changed'] ?? false) === true),
+        wp_fts_wc_gate('worker_composed_maximum_fixture', ['posts' => 6, 'tokens' => 4096, 'existing/new/later' => ['lexical' => 4096, 'surface' => 4096, 'total' => 8192], 'dependency_rows' => 1, 'recovery_rows' => [1, 1]], ['posts' => $composedFixture['post_count'] ?? null, 'tokens' => $composedFixture['maximum_source_distinct_tokens'] ?? null, 'existing' => $composedFixture['existing_posting_counts'] ?? null, 'new' => $composedFixture['new_posting_counts'] ?? null, 'later' => $composedFixture['later_event_posting_counts'] ?? null, 'dependency_rows' => $composedFixture['selected_dependency_rows'] ?? null, 'recovery_rows' => [$composedFixture['recovery_conditioned_rows'] ?? null, $composedFixture['later_event_recovery_conditioned_rows'] ?? null]], (int) ($composedFixture['post_count'] ?? -1) === 6 && (int) ($composedFixture['maximum_source_distinct_tokens'] ?? -1) === 4096 && ($composedFixture['existing_posting_counts'] ?? null) === ['lexical' => 4096, 'surface' => 4096, 'total' => 8192] && ($composedFixture['new_posting_counts'] ?? null) === ['lexical' => 4096, 'surface' => 4096, 'total' => 8192] && ($composedFixture['later_event_posting_counts'] ?? null) === ['lexical' => 4096, 'surface' => 4096, 'total' => 8192] && (int) ($composedFixture['selected_dependency_rows'] ?? -1) === 1 && (int) ($composedFixture['recovery_conditioned_rows'] ?? -1) === 1 && (int) ($composedFixture['later_event_recovery_conditioned_rows'] ?? -1) === 1 && ($composedFixture['hash_changed'] ?? false) === true && ($composedFixture['later_event_hash_changed'] ?? false) === true),
         wp_fts_wc_gate('worker_composed_source_overflow', ['aggregate' => '> 8388608', 'each_near_limit' => 1900000], ['aggregate' => $composedFixture['aggregate_source_bytes'] ?? null, 'limit' => $composedFixture['source_snapshot_limit_bytes'] ?? null, 'each_near_limit' => $composedFixture['near_limit_source_bytes_each'] ?? null], (int) ($composedFixture['aggregate_source_bytes'] ?? 0) > (int) ($composedFixture['source_snapshot_limit_bytes'] ?? PHP_INT_MAX) && (int) ($composedFixture['source_snapshot_limit_bytes'] ?? -1) === WP_FTS_Index_Queue::MAX_SOURCE_SNAPSHOT_BYTES && (int) ($composedFixture['near_limit_source_bytes_each'] ?? -1) === 1900000),
         wp_fts_wc_gate('worker_composed_cron_no_event', ['event_absent' => true, 'mode' => 'cron_without_preexisting_event', 'successor_scheduled' => true, 'cron_writes' => 1, 'data' => 15, 'total' => '<= 20'], ['event_absent' => $composedCron['event_absent_before_callback'] ?? null, 'mode' => $composedFirstBatch['worker_mode'] ?? null, 'successor_scheduled' => $composedCron['successor_scheduled'] ?? null, 'roles' => $composedFirstBatch['statement_roles'] ?? null, 'data' => $composedFirstBatch['bounded_data_statement_count'] ?? null, 'total' => $composedFirstBatch['total_statement_count'] ?? null], ($composedCron['event_absent_before_callback'] ?? false) === true && ($composedFirstBatch['worker_mode'] ?? null) === 'cron_without_preexisting_event' && ($composedCron['successor_scheduled'] ?? false) === true && count(array_filter(is_array($composedFirstBatch['statement_roles'] ?? null) ? $composedFirstBatch['statement_roles'] : [], static fn(string $role): bool => $role === 'cron_schedule_write')) === 1 && (int) ($composedFirstBatch['scheduling_control_statement_count'] ?? -1) === 1 && (int) ($composedFirstBatch['bounded_data_statement_count'] ?? -1) === 15 && (int) ($composedFirstBatch['total_statement_count'] ?? PHP_INT_MAX) <= 20),
         wp_fts_wc_gate('worker_composed_cron_later_event', ['mode' => 'cron_with_later_existing_event', 'brought_forward' => true, 'cron_writes' => 1, 'data' => 15, 'total' => '<= 20'], ['mode' => $composedLaterEventBatch['worker_mode'] ?? null, 'before' => $composedCron['later_event_timestamp_before_callback'] ?? null, 'after' => $composedCron['later_event_timestamp_after_callback'] ?? null, 'brought_forward' => $composedCron['later_event_brought_forward'] ?? null, 'roles' => $composedLaterEventBatch['statement_roles'] ?? null, 'data' => $composedLaterEventBatch['bounded_data_statement_count'] ?? null, 'total' => $composedLaterEventBatch['total_statement_count'] ?? null], ($composedLaterEventBatch['worker_mode'] ?? null) === 'cron_with_later_existing_event' && ($composedCron['later_event_scheduled'] ?? false) === true && ($composedCron['later_event_brought_forward'] ?? false) === true && count(array_filter(is_array($composedLaterEventBatch['statement_roles'] ?? null) ? $composedLaterEventBatch['statement_roles'] : [], static fn(string $role): bool => $role === 'cron_schedule_write')) === 1 && (int) ($composedLaterEventBatch['scheduling_control_statement_count'] ?? -1) === 1 && (int) ($composedLaterEventBatch['bounded_data_statement_count'] ?? -1) === 15 && (int) ($composedLaterEventBatch['total_statement_count'] ?? PHP_INT_MAX) <= 20),
@@ -12607,7 +12523,7 @@ function wp_fts_wc_finalize(): array
     $transactionCrash = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/transaction-crash.json');
     $wpcliCursor = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/wpcli-cursor.json');
     $writerAggregate = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/writer-aggregate.json');
-    $oldPostingFrontier = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/old-posting-frontier.json');
+    $existingPostingFrontier = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/existing-posting-frontier.json');
     $maxValidSeed = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/max-valid-seed.json');
     $maxValidSetup = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/max-valid-setup.json');
     $maxValidSearch = wp_fts_wc_read_json(wp_fts_wc_evidence_dir() . '/max-valid-search.json');
@@ -12698,33 +12614,29 @@ function wp_fts_wc_finalize(): array
             'taxonomy_scope_search_server_attribution',
             'taxonomy_scope_search_explain_statement_shape',
             'taxonomy_scope_search_explain_indexed',
-            'scope_expansion_real_keyset_indexes',
-            'scope_expansion_index_ownership',
+            'scope_expansion_supporting_core_indexes',
             'scope_expansion_myisam_fixture_engine',
             'scope_expansion_fixture_composite_indexes',
             'scope_expansion_noncovering_decoy_index',
             'scope_expansion_sparse_gap_rows',
             'scope_expansion_unrelated_relationships',
             'scope_expansion_same_target_backlog',
-            'scope_index_repair_innodb_core_clones',
-            'scope_index_repair_fixture_cardinality',
-            'scope_index_repair_missing_indexes',
-            'scope_index_repair_exact_ddl',
-            'scope_index_repair_ownership_before_ddl',
-            'scope_index_repair_schema_version_stable',
-            'scope_index_repair_performance_schema_attribution',
-            'scope_index_repair_wall_duration_ms',
-            'scope_index_repair_server_duration_ms',
-            'scope_index_repair_concurrent_writes',
-            'scope_index_repair_write_overlap',
-            'scope_index_repair_write_duration_ms',
-            'scope_index_repair_storage_delta',
-            'scope_index_repair_memory',
-            'scope_index_repair_query_count',
-            'scope_index_repair_exact_definitions',
-            'scope_index_repair_readiness_preserved',
-            'scope_index_repair_work_preserved',
-            'scope_index_repair_ownership_nonautoloaded',
+            'supporting_core_index_repair_innodb_core_clones',
+            'supporting_core_index_repair_fixture_cardinality',
+            'supporting_core_index_repair_missing_indexes',
+            'supporting_core_index_repair_exact_ddl',
+            'supporting_core_index_repair_performance_schema_attribution',
+            'supporting_core_index_repair_wall_duration_ms',
+            'supporting_core_index_repair_server_duration_ms',
+            'supporting_core_index_repair_concurrent_writes',
+            'supporting_core_index_repair_write_overlap',
+            'supporting_core_index_repair_write_duration_ms',
+            'supporting_core_index_repair_storage_delta',
+            'supporting_core_index_repair_memory',
+            'supporting_core_index_repair_query_count',
+            'supporting_core_index_repair_exact_definitions',
+            'supporting_core_index_repair_readiness_preserved',
+            'supporting_core_index_repair_work_preserved',
             'targeted_scope_expansion_result_progression',
             'targeted_scope_expansion_one_statement_per_page',
             'targeted_scope_expansion_sql_shape',
@@ -13156,8 +13068,8 @@ function wp_fts_wc_finalize(): array
         wp_fts_wc_gate('writer_aggregate_php_peak', '<= 134217728', (int) ($writerAggregate['php_peak_bytes'] ?? PHP_INT_MAX), (int) ($writerAggregate['php_peak_bytes'] ?? PHP_INT_MAX) <= 134217728),
         wp_fts_wc_gate('writer_aggregate_rss_peak', '<= 134217728', (int) ($writerAggregate['rss_peak_bytes'] ?? PHP_INT_MAX), (int) ($writerAggregate['rss_peak_bytes'] ?? PHP_INT_MAX) <= 134217728)
     );
-    $frontierFixture = is_array($oldPostingFrontier['fixture'] ?? null) ? $oldPostingFrontier['fixture'] : [];
-    $frontierExecution = is_array($oldPostingFrontier['execution'] ?? null) ? $oldPostingFrontier['execution'] : [];
+    $frontierFixture = is_array($existingPostingFrontier['fixture'] ?? null) ? $existingPostingFrontier['fixture'] : [];
+    $frontierExecution = is_array($existingPostingFrontier['execution'] ?? null) ? $existingPostingFrontier['execution'] : [];
     $frontierPasses = is_array($frontierExecution['pass_details'] ?? null)
         ? array_values($frontierExecution['pass_details'])
         : [];
@@ -13242,25 +13154,25 @@ function wp_fts_wc_finalize(): array
             && (float) $pass['elapsed_ms'] >= 0.0
             && (float) $pass['elapsed_ms'] <= 5000.0;
     }
-    $expectedFrontierHarness = (string) ($externalEvidence['resources']['old_posting_frontier_sha256'] ?? '');
-    $frontierShared = is_array($oldPostingFrontier['shared_survivor'] ?? null)
-        ? $oldPostingFrontier['shared_survivor']
+    $expectedFrontierHarness = (string) ($externalEvidence['resources']['existing_posting_frontier_sha256'] ?? '');
+    $frontierShared = is_array($existingPostingFrontier['shared_survivor'] ?? null)
+        ? $existingPostingFrontier['shared_survivor']
         : [];
     $frontierSharedFixture = is_array($frontierShared['fixture'] ?? null) ? $frontierShared['fixture'] : [];
     $frontierSharedPass = is_array($frontierShared['pass'] ?? null) ? $frontierShared['pass'] : [];
     $frontierSharedState = is_array($frontierShared['state'] ?? null) ? $frontierShared['state'] : [];
-    $frontierEventual = is_array($oldPostingFrontier['eventual_state'] ?? null)
-        ? $oldPostingFrontier['eventual_state']
+    $frontierEventual = is_array($existingPostingFrontier['eventual_state'] ?? null)
+        ? $existingPostingFrontier['eventual_state']
         : [];
-    $frontierPlan = is_array($oldPostingFrontier['plan'] ?? null) ? $oldPostingFrontier['plan'] : [];
-    $frontierPlanAccess = is_array($frontierPlan['old_posting_access'] ?? null)
-        ? $frontierPlan['old_posting_access']
+    $frontierPlan = is_array($existingPostingFrontier['plan'] ?? null) ? $existingPostingFrontier['plan'] : [];
+    $frontierPlanAccess = is_array($frontierPlan['existing_posting_access'] ?? null)
+        ? $frontierPlan['existing_posting_access']
         : [];
-    $frontierCleanup = is_array($oldPostingFrontier['fixture_cleanup'] ?? null)
-        ? $oldPostingFrontier['fixture_cleanup']
+    $frontierCleanup = is_array($existingPostingFrontier['fixture_cleanup'] ?? null)
+        ? $existingPostingFrontier['fixture_cleanup']
         : [];
-    $frontierReset = is_array($oldPostingFrontier['reset'] ?? null)
-        ? $oldPostingFrontier['reset']
+    $frontierReset = is_array($existingPostingFrontier['reset'] ?? null)
+        ? $existingPostingFrontier['reset']
         : [];
     $frontierResetFixture = is_array($frontierReset['fixture'] ?? null)
         ? $frontierReset['fixture']
@@ -13382,34 +13294,34 @@ function wp_fts_wc_finalize(): array
     array_push(
         $drainGates,
         wp_fts_wc_gate(
-            'old_posting_frontier_artifact',
+            'existing_posting_frontier_artifact',
             'source-bound complete PASS 7 x 8192 frontier proof',
             [
-                $oldPostingFrontier['schema'] ?? null,
-                $oldPostingFrontier['status'] ?? null,
-                $oldPostingFrontier['source_sha'] ?? null,
-                $oldPostingFrontier['zip_sha256'] ?? null,
-                $oldPostingFrontier['engine'] ?? null,
-                $oldPostingFrontier['harness_sha256'] ?? null,
+                $existingPostingFrontier['schema'] ?? null,
+                $existingPostingFrontier['status'] ?? null,
+                $existingPostingFrontier['source_sha'] ?? null,
+                $existingPostingFrontier['zip_sha256'] ?? null,
+                $existingPostingFrontier['engine'] ?? null,
+                $existingPostingFrontier['harness_sha256'] ?? null,
             ],
-            ($oldPostingFrontier['schema'] ?? null) === 'relational-old-posting-frontier-v2'
-                && ($oldPostingFrontier['status'] ?? null) === 'PASS'
-                && ($oldPostingFrontier['source_sha'] ?? null) === wp_fts_wc_required_env('WP_FTS_SOURCE_SHA')
-                && ($oldPostingFrontier['zip_sha256'] ?? null) === wp_fts_wc_required_env('WP_FTS_ZIP_SHA256')
-                && ($oldPostingFrontier['engine'] ?? null) === wp_fts_wc_required_env('WP_FTS_WC_ENGINE')
+            ($existingPostingFrontier['schema'] ?? null) === 'relational-existing-posting-frontier-v2'
+                && ($existingPostingFrontier['status'] ?? null) === 'PASS'
+                && ($existingPostingFrontier['source_sha'] ?? null) === wp_fts_wc_required_env('WP_FTS_SOURCE_SHA')
+                && ($existingPostingFrontier['zip_sha256'] ?? null) === wp_fts_wc_required_env('WP_FTS_ZIP_SHA256')
+                && ($existingPostingFrontier['engine'] ?? null) === wp_fts_wc_required_env('WP_FTS_WC_ENGINE')
                 && wp_fts_wc_is_lowercase_sha256($expectedFrontierHarness)
-                && ($oldPostingFrontier['harness_sha256'] ?? null) === $expectedFrontierHarness
-                && is_string($oldPostingFrontier['database'] ?? null)
-                && trim((string) ($oldPostingFrontier['database'] ?? '')) !== ''
+                && ($existingPostingFrontier['harness_sha256'] ?? null) === $expectedFrontierHarness
+                && is_string($existingPostingFrontier['database'] ?? null)
+                && trim((string) ($existingPostingFrontier['database'] ?? '')) !== ''
         ),
-        wp_fts_wc_gate('old_posting_frontier_documents', 7, (int) ($frontierFixture['documents'] ?? 0), (int) ($frontierFixture['documents'] ?? 0) === 7),
-        wp_fts_wc_gate('old_posting_frontier_per_document', 8192, (int) ($frontierFixture['postings_per_document'] ?? 0), (int) ($frontierFixture['postings_per_document'] ?? 0) === 8192),
-        wp_fts_wc_gate('old_posting_frontier_per_document_kinds', [4096, 4096], [(int) ($frontierFixture['lexical_postings_per_document'] ?? 0), (int) ($frontierFixture['surface_postings_per_document'] ?? 0)], (int) ($frontierFixture['lexical_postings_per_document'] ?? 0) === 4096 && (int) ($frontierFixture['surface_postings_per_document'] ?? 0) === 4096),
-        wp_fts_wc_gate('old_posting_frontier_disjoint_terms', 57344, (int) ($frontierFixture['disjoint_terms'] ?? 0), (int) ($frontierFixture['disjoint_terms'] ?? 0) === 57344 && (int) ($frontierFixture['lexical_terms'] ?? 0) === 28672 && (int) ($frontierFixture['surface_terms'] ?? 0) === 28672),
-        wp_fts_wc_gate('old_posting_frontier_old_rows', 57344, (int) ($frontierFixture['old_postings'] ?? 0), (int) ($frontierFixture['old_postings'] ?? 0) === 57344),
-        wp_fts_wc_gate('old_posting_frontier_plan_decoy_rows', 100000, (int) ($frontierFixture['plan_decoy_postings'] ?? 0), (int) ($frontierFixture['plan_decoy_postings'] ?? 0) === 100000),
+        wp_fts_wc_gate('existing_posting_frontier_documents', 7, (int) ($frontierFixture['documents'] ?? 0), (int) ($frontierFixture['documents'] ?? 0) === 7),
+        wp_fts_wc_gate('existing_posting_frontier_per_document', 8192, (int) ($frontierFixture['postings_per_document'] ?? 0), (int) ($frontierFixture['postings_per_document'] ?? 0) === 8192),
+        wp_fts_wc_gate('existing_posting_frontier_per_document_kinds', [4096, 4096], [(int) ($frontierFixture['lexical_postings_per_document'] ?? 0), (int) ($frontierFixture['surface_postings_per_document'] ?? 0)], (int) ($frontierFixture['lexical_postings_per_document'] ?? 0) === 4096 && (int) ($frontierFixture['surface_postings_per_document'] ?? 0) === 4096),
+        wp_fts_wc_gate('existing_posting_frontier_disjoint_terms', 57344, (int) ($frontierFixture['disjoint_terms'] ?? 0), (int) ($frontierFixture['disjoint_terms'] ?? 0) === 57344 && (int) ($frontierFixture['lexical_terms'] ?? 0) === 28672 && (int) ($frontierFixture['surface_terms'] ?? 0) === 28672),
+        wp_fts_wc_gate('existing_posting_frontier_existing_rows', 57344, (int) ($frontierFixture['existing_postings'] ?? 0), (int) ($frontierFixture['existing_postings'] ?? 0) === 57344),
+        wp_fts_wc_gate('existing_posting_frontier_plan_decoy_rows', 100000, (int) ($frontierFixture['plan_decoy_postings'] ?? 0), (int) ($frontierFixture['plan_decoy_postings'] ?? 0) === 100000),
         wp_fts_wc_gate(
-            'old_posting_survivor_fixture',
+            'existing_posting_survivor_fixture',
             [6, 6, 49152, 24576, 24576, 98304, 2],
             [
                 $frontierSharedFixture['target_documents'] ?? null,
@@ -13431,7 +13343,7 @@ function wp_fts_wc_finalize(): array
                 && (float) $frontierSharedFixture['seed_ms'] >= 0.0
         ),
         wp_fts_wc_gate(
-            'old_posting_survivor_decrement',
+            'existing_posting_survivor_decrement',
             'one 49152-term df=2 to df=1 pass under every hard bound',
             $frontierSharedPass,
             ($frontierSharedPass['posting_mutations'] ?? null) === 49152
@@ -13455,7 +13367,7 @@ function wp_fts_wc_finalize(): array
                 && (float) $frontierSharedPass['elapsed_ms'] <= 5000.0
         ),
         wp_fts_wc_gate(
-            'old_posting_survivor_state',
+            'existing_posting_survivor_state',
             [0, 49152, 0, 6, 49152, 0],
             array_values($frontierSharedState),
             $frontierSharedState === [
@@ -13467,14 +13379,14 @@ function wp_fts_wc_finalize(): array
                 'bad_document_frequencies' => 0,
             ]
         ),
-        wp_fts_wc_gate('old_posting_frontier_passes', 2, (int) ($frontierExecution['passes'] ?? -1), (int) ($frontierExecution['passes'] ?? -1) === 2),
-        wp_fts_wc_gate('old_posting_frontier_pass_shapes', 'one six-document prefix and one single-document prefix', count($frontierPasses), $frontierPassesValid),
-        wp_fts_wc_gate('old_posting_frontier_scan_rows', 50001, (int) ($frontierExecution['max_frontier_rows_scanned'] ?? -1), (int) ($frontierExecution['max_frontier_rows_scanned'] ?? -1) === 50001),
-        wp_fts_wc_gate('old_posting_frontier_aggregate_rows', '<= 7', (int) ($frontierExecution['max_frontier_rows_returned'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_frontier_rows_returned'] ?? PHP_INT_MAX) <= 7),
-        wp_fts_wc_gate('old_posting_frontier_mutations', 49152, (int) ($frontierExecution['max_posting_mutations'] ?? -1), (int) ($frontierExecution['max_posting_mutations'] ?? -1) === 49152),
-        wp_fts_wc_gate('old_posting_frontier_query_count', [1], $frontierExecution['frontier_statements_per_pass'] ?? null, ($frontierExecution['frontier_statements_per_pass'] ?? null) === [1]),
+        wp_fts_wc_gate('existing_posting_frontier_passes', 2, (int) ($frontierExecution['passes'] ?? -1), (int) ($frontierExecution['passes'] ?? -1) === 2),
+        wp_fts_wc_gate('existing_posting_frontier_pass_shapes', 'one six-document prefix and one single-document prefix', count($frontierPasses), $frontierPassesValid),
+        wp_fts_wc_gate('existing_posting_frontier_scan_rows', 50001, (int) ($frontierExecution['max_frontier_rows_scanned'] ?? -1), (int) ($frontierExecution['max_frontier_rows_scanned'] ?? -1) === 50001),
+        wp_fts_wc_gate('existing_posting_frontier_aggregate_rows', '<= 7', (int) ($frontierExecution['max_frontier_rows_returned'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_frontier_rows_returned'] ?? PHP_INT_MAX) <= 7),
+        wp_fts_wc_gate('existing_posting_frontier_mutations', 49152, (int) ($frontierExecution['max_posting_mutations'] ?? -1), (int) ($frontierExecution['max_posting_mutations'] ?? -1) === 49152),
+        wp_fts_wc_gate('existing_posting_frontier_query_count', [1], $frontierExecution['frontier_statements_per_pass'] ?? null, ($frontierExecution['frontier_statements_per_pass'] ?? null) === [1]),
         wp_fts_wc_gate(
-            'old_posting_frontier_transaction_order',
+            'existing_posting_frontier_transaction_order',
             [
                 ['begin', 'dictionary_decrement', 'bounded_index_delete', 'search_epoch_advance', 'commit'],
                 ['query', 'query', 'query', 'query', 'query'],
@@ -13486,46 +13398,46 @@ function wp_fts_wc_finalize(): array
             ($frontierExecution['transaction_statement_ids'] ?? null) === ['begin', 'dictionary_decrement', 'bounded_index_delete', 'search_epoch_advance', 'commit']
                 && ($frontierExecution['transaction_statement_methods'] ?? null) === ['query', 'query', 'query', 'query', 'query']
         ),
-        wp_fts_wc_gate('old_posting_frontier_decrement_query_count', [1], $frontierExecution['decrement_statements_per_pass'] ?? null, ($frontierExecution['decrement_statements_per_pass'] ?? null) === [1]),
-        wp_fts_wc_gate('old_posting_frontier_decrement_statement_bytes', '<= 4096', (int) ($frontierExecution['max_decrement_sql_bytes'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_decrement_sql_bytes'] ?? PHP_INT_MAX) <= 4096),
-        wp_fts_wc_gate('old_posting_frontier_decrement_elapsed_ms', '<= 5000', (float) ($frontierExecution['max_decrement_elapsed_ms'] ?? INF), (float) ($frontierExecution['max_decrement_elapsed_ms'] ?? INF) <= 5000.0),
-        wp_fts_wc_gate('old_posting_frontier_decrement_server_rows_examined', '<= 250000', (int) ($frontierExecution['max_decrement_server_rows_examined'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_decrement_server_rows_examined'] ?? PHP_INT_MAX) <= 250000),
-        wp_fts_wc_gate('old_posting_frontier_decrement_server_rows_affected', 49152, (int) ($frontierExecution['max_decrement_server_rows_affected'] ?? -1), (int) ($frontierExecution['max_decrement_server_rows_affected'] ?? -1) === 49152),
-        wp_fts_wc_gate('old_posting_frontier_decrement_disk_temp_tables', 0, $frontierExecution['max_decrement_created_tmp_disk_tables'] ?? null, ($frontierExecution['max_decrement_created_tmp_disk_tables'] ?? null) === 0),
-        wp_fts_wc_gate('old_posting_frontier_decrement_sort_merge_passes', '<= 1', $frontierExecution['max_decrement_sort_merge_passes'] ?? null, is_int($frontierExecution['max_decrement_sort_merge_passes'] ?? null) && $frontierExecution['max_decrement_sort_merge_passes'] <= 1),
-        wp_fts_wc_gate('old_posting_frontier_decrement_server_ms', '<= 5000', (float) ($frontierExecution['max_decrement_server_duration_ms'] ?? INF), (float) ($frontierExecution['max_decrement_server_duration_ms'] ?? INF) <= 5000.0),
-        wp_fts_wc_gate('old_posting_frontier_delete_query_count', [1], $frontierExecution['delete_statements_per_pass'] ?? null, ($frontierExecution['delete_statements_per_pass'] ?? null) === [1]),
-        wp_fts_wc_gate('old_posting_frontier_delete_statement_bytes', '<= 4096', (int) ($frontierExecution['max_delete_sql_bytes'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_delete_sql_bytes'] ?? PHP_INT_MAX) <= 4096),
-        wp_fts_wc_gate('old_posting_frontier_delete_elapsed_ms', '<= 5000', (float) ($frontierExecution['max_delete_elapsed_ms'] ?? INF), (float) ($frontierExecution['max_delete_elapsed_ms'] ?? INF) <= 5000.0),
-        wp_fts_wc_gate('old_posting_frontier_delete_server_rows_examined', '<= 300000', (int) ($frontierExecution['max_delete_server_rows_examined'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_delete_server_rows_examined'] ?? PHP_INT_MAX) <= 300000),
-        wp_fts_wc_gate('old_posting_frontier_delete_server_rows_affected', 98310, (int) ($frontierExecution['max_delete_server_rows_affected'] ?? -1), (int) ($frontierExecution['max_delete_server_rows_affected'] ?? -1) === 98310),
-        wp_fts_wc_gate('old_posting_frontier_delete_disk_temp_tables', 0, $frontierExecution['max_delete_created_tmp_disk_tables'] ?? null, ($frontierExecution['max_delete_created_tmp_disk_tables'] ?? null) === 0),
-        wp_fts_wc_gate('old_posting_frontier_delete_sort_merge_passes', '<= 2', $frontierExecution['max_delete_sort_merge_passes'] ?? null, is_int($frontierExecution['max_delete_sort_merge_passes'] ?? null) && $frontierExecution['max_delete_sort_merge_passes'] <= 2),
-        wp_fts_wc_gate('old_posting_frontier_delete_server_ms', '<= 5000', (float) ($frontierExecution['max_delete_server_duration_ms'] ?? INF), (float) ($frontierExecution['max_delete_server_duration_ms'] ?? INF) <= 5000.0),
-        wp_fts_wc_gate('old_posting_frontier_transaction_statements', 5, (int) ($frontierExecution['max_transaction_statements'] ?? -1), (int) ($frontierExecution['max_transaction_statements'] ?? -1) === 5),
-        wp_fts_wc_gate('old_posting_frontier_pass_ms', '<= 5000', (float) ($frontierExecution['max_pass_ms'] ?? INF), (float) ($frontierExecution['max_pass_ms'] ?? INF) <= 5000.0),
-        wp_fts_wc_gate('old_posting_frontier_server_rows_examined', '<= 100016', (int) ($frontierExecution['max_server_rows_examined'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_server_rows_examined'] ?? PHP_INT_MAX) <= 100016),
-        wp_fts_wc_gate('old_posting_frontier_server_rows_sent', '<= 7', (int) ($frontierExecution['max_server_rows_sent'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_server_rows_sent'] ?? PHP_INT_MAX) <= 7),
-        wp_fts_wc_gate('old_posting_frontier_disk_temp_tables', 0, $frontierExecution['max_created_tmp_disk_tables'] ?? null, ($frontierExecution['max_created_tmp_disk_tables'] ?? null) === 0),
-        wp_fts_wc_gate('old_posting_frontier_sort_merge_passes', 0, $frontierExecution['max_sort_merge_passes'] ?? null, ($frontierExecution['max_sort_merge_passes'] ?? null) === 0),
-        wp_fts_wc_gate('old_posting_frontier_server_ms', '<= 5000', (float) ($frontierExecution['max_server_duration_ms'] ?? INF), (float) ($frontierExecution['max_server_duration_ms'] ?? INF) <= 5000.0),
-        wp_fts_wc_gate('old_posting_frontier_remaining_postings', 0, $frontierEventual['remaining_postings'] ?? null, ($frontierEventual['remaining_postings'] ?? null) === 0),
-        wp_fts_wc_gate('old_posting_frontier_remaining_documents', 0, $frontierEventual['remaining_documents'] ?? null, ($frontierEventual['remaining_documents'] ?? null) === 0),
-        wp_fts_wc_gate('old_posting_frontier_remaining_terms', 0, $frontierEventual['remaining_terms'] ?? null, ($frontierEventual['remaining_terms'] ?? null) === 0),
-        wp_fts_wc_gate('old_posting_frontier_preserved_decoy_postings', 100000, $frontierEventual['preserved_decoy_postings'] ?? null, ($frontierEventual['preserved_decoy_postings'] ?? null) === 100000),
-        wp_fts_wc_gate('old_posting_frontier_preserved_decoy_terms', 1, $frontierEventual['preserved_decoy_terms'] ?? null, ($frontierEventual['preserved_decoy_terms'] ?? null) === 1),
-        wp_fts_wc_gate('old_posting_frontier_bad_doc_freqs', 0, $frontierEventual['bad_document_frequencies'] ?? null, ($frontierEventual['bad_document_frequencies'] ?? null) === 0),
+        wp_fts_wc_gate('existing_posting_frontier_decrement_query_count', [1], $frontierExecution['decrement_statements_per_pass'] ?? null, ($frontierExecution['decrement_statements_per_pass'] ?? null) === [1]),
+        wp_fts_wc_gate('existing_posting_frontier_decrement_statement_bytes', '<= 4096', (int) ($frontierExecution['max_decrement_sql_bytes'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_decrement_sql_bytes'] ?? PHP_INT_MAX) <= 4096),
+        wp_fts_wc_gate('existing_posting_frontier_decrement_elapsed_ms', '<= 5000', (float) ($frontierExecution['max_decrement_elapsed_ms'] ?? INF), (float) ($frontierExecution['max_decrement_elapsed_ms'] ?? INF) <= 5000.0),
+        wp_fts_wc_gate('existing_posting_frontier_decrement_server_rows_examined', '<= 250000', (int) ($frontierExecution['max_decrement_server_rows_examined'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_decrement_server_rows_examined'] ?? PHP_INT_MAX) <= 250000),
+        wp_fts_wc_gate('existing_posting_frontier_decrement_server_rows_affected', 49152, (int) ($frontierExecution['max_decrement_server_rows_affected'] ?? -1), (int) ($frontierExecution['max_decrement_server_rows_affected'] ?? -1) === 49152),
+        wp_fts_wc_gate('existing_posting_frontier_decrement_disk_temp_tables', 0, $frontierExecution['max_decrement_created_tmp_disk_tables'] ?? null, ($frontierExecution['max_decrement_created_tmp_disk_tables'] ?? null) === 0),
+        wp_fts_wc_gate('existing_posting_frontier_decrement_sort_merge_passes', '<= 1', $frontierExecution['max_decrement_sort_merge_passes'] ?? null, is_int($frontierExecution['max_decrement_sort_merge_passes'] ?? null) && $frontierExecution['max_decrement_sort_merge_passes'] <= 1),
+        wp_fts_wc_gate('existing_posting_frontier_decrement_server_ms', '<= 5000', (float) ($frontierExecution['max_decrement_server_duration_ms'] ?? INF), (float) ($frontierExecution['max_decrement_server_duration_ms'] ?? INF) <= 5000.0),
+        wp_fts_wc_gate('existing_posting_frontier_delete_query_count', [1], $frontierExecution['delete_statements_per_pass'] ?? null, ($frontierExecution['delete_statements_per_pass'] ?? null) === [1]),
+        wp_fts_wc_gate('existing_posting_frontier_delete_statement_bytes', '<= 4096', (int) ($frontierExecution['max_delete_sql_bytes'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_delete_sql_bytes'] ?? PHP_INT_MAX) <= 4096),
+        wp_fts_wc_gate('existing_posting_frontier_delete_elapsed_ms', '<= 5000', (float) ($frontierExecution['max_delete_elapsed_ms'] ?? INF), (float) ($frontierExecution['max_delete_elapsed_ms'] ?? INF) <= 5000.0),
+        wp_fts_wc_gate('existing_posting_frontier_delete_server_rows_examined', '<= 300000', (int) ($frontierExecution['max_delete_server_rows_examined'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_delete_server_rows_examined'] ?? PHP_INT_MAX) <= 300000),
+        wp_fts_wc_gate('existing_posting_frontier_delete_server_rows_affected', 98310, (int) ($frontierExecution['max_delete_server_rows_affected'] ?? -1), (int) ($frontierExecution['max_delete_server_rows_affected'] ?? -1) === 98310),
+        wp_fts_wc_gate('existing_posting_frontier_delete_disk_temp_tables', 0, $frontierExecution['max_delete_created_tmp_disk_tables'] ?? null, ($frontierExecution['max_delete_created_tmp_disk_tables'] ?? null) === 0),
+        wp_fts_wc_gate('existing_posting_frontier_delete_sort_merge_passes', '<= 2', $frontierExecution['max_delete_sort_merge_passes'] ?? null, is_int($frontierExecution['max_delete_sort_merge_passes'] ?? null) && $frontierExecution['max_delete_sort_merge_passes'] <= 2),
+        wp_fts_wc_gate('existing_posting_frontier_delete_server_ms', '<= 5000', (float) ($frontierExecution['max_delete_server_duration_ms'] ?? INF), (float) ($frontierExecution['max_delete_server_duration_ms'] ?? INF) <= 5000.0),
+        wp_fts_wc_gate('existing_posting_frontier_transaction_statements', 5, (int) ($frontierExecution['max_transaction_statements'] ?? -1), (int) ($frontierExecution['max_transaction_statements'] ?? -1) === 5),
+        wp_fts_wc_gate('existing_posting_frontier_pass_ms', '<= 5000', (float) ($frontierExecution['max_pass_ms'] ?? INF), (float) ($frontierExecution['max_pass_ms'] ?? INF) <= 5000.0),
+        wp_fts_wc_gate('existing_posting_frontier_server_rows_examined', '<= 100016', (int) ($frontierExecution['max_server_rows_examined'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_server_rows_examined'] ?? PHP_INT_MAX) <= 100016),
+        wp_fts_wc_gate('existing_posting_frontier_server_rows_sent', '<= 7', (int) ($frontierExecution['max_server_rows_sent'] ?? PHP_INT_MAX), (int) ($frontierExecution['max_server_rows_sent'] ?? PHP_INT_MAX) <= 7),
+        wp_fts_wc_gate('existing_posting_frontier_disk_temp_tables', 0, $frontierExecution['max_created_tmp_disk_tables'] ?? null, ($frontierExecution['max_created_tmp_disk_tables'] ?? null) === 0),
+        wp_fts_wc_gate('existing_posting_frontier_sort_merge_passes', 0, $frontierExecution['max_sort_merge_passes'] ?? null, ($frontierExecution['max_sort_merge_passes'] ?? null) === 0),
+        wp_fts_wc_gate('existing_posting_frontier_server_ms', '<= 5000', (float) ($frontierExecution['max_server_duration_ms'] ?? INF), (float) ($frontierExecution['max_server_duration_ms'] ?? INF) <= 5000.0),
+        wp_fts_wc_gate('existing_posting_frontier_remaining_postings', 0, $frontierEventual['remaining_postings'] ?? null, ($frontierEventual['remaining_postings'] ?? null) === 0),
+        wp_fts_wc_gate('existing_posting_frontier_remaining_documents', 0, $frontierEventual['remaining_documents'] ?? null, ($frontierEventual['remaining_documents'] ?? null) === 0),
+        wp_fts_wc_gate('existing_posting_frontier_remaining_terms', 0, $frontierEventual['remaining_terms'] ?? null, ($frontierEventual['remaining_terms'] ?? null) === 0),
+        wp_fts_wc_gate('existing_posting_frontier_preserved_decoy_postings', 100000, $frontierEventual['preserved_decoy_postings'] ?? null, ($frontierEventual['preserved_decoy_postings'] ?? null) === 100000),
+        wp_fts_wc_gate('existing_posting_frontier_preserved_decoy_terms', 1, $frontierEventual['preserved_decoy_terms'] ?? null, ($frontierEventual['preserved_decoy_terms'] ?? null) === 1),
+        wp_fts_wc_gate('existing_posting_frontier_bad_doc_freqs', 0, $frontierEventual['bad_document_frequencies'] ?? null, ($frontierEventual['bad_document_frequencies'] ?? null) === 0),
         wp_fts_wc_gate(
-            'old_posting_frontier_covering_index',
+            'existing_posting_frontier_covering_index',
             ['range', 'post_term', true],
             [$frontierPlanAccess['access_type'] ?? null, $frontierPlanAccess['key'] ?? null, $frontierPlanAccess['using_index'] ?? null],
             ($frontierPlanAccess['access_type'] ?? null) === 'range'
                 && ($frontierPlanAccess['key'] ?? null) === 'post_term'
                 && ($frontierPlanAccess['using_index'] ?? null) === true
         ),
-        wp_fts_wc_gate('old_posting_frontier_inner_plan', ['filesort' => false, 'temporary_table' => false], ['filesort' => $frontierPlan['inner_uses_filesort'] ?? null, 'temporary_table' => $frontierPlan['inner_uses_temporary_table'] ?? null], ($frontierPlan['inner_uses_filesort'] ?? null) === false && ($frontierPlan['inner_uses_temporary_table'] ?? null) === false),
+        wp_fts_wc_gate('existing_posting_frontier_inner_plan', ['filesort' => false, 'temporary_table' => false], ['filesort' => $frontierPlan['inner_uses_filesort'] ?? null, 'temporary_table' => $frontierPlan['inner_uses_temporary_table'] ?? null], ($frontierPlan['inner_uses_filesort'] ?? null) === false && ($frontierPlan['inner_uses_temporary_table'] ?? null) === false),
         wp_fts_wc_gate(
-            'old_posting_frontier_plan_hash',
+            'existing_posting_frontier_plan_hash',
             'raw JSON and inner block bound to lowercase sha256',
             [$frontierPlan['sha256'] ?? null, $frontierPlan['inner_query_block_sha256'] ?? null],
             wp_fts_wc_is_lowercase_sha256($frontierPlan['sha256'] ?? null)
@@ -13534,7 +13446,7 @@ function wp_fts_wc_finalize(): array
                 && hash_equals(hash('sha256', (string) $frontierPlan['raw_json']), (string) ($frontierPlan['sha256'] ?? ''))
         ),
         wp_fts_wc_gate(
-            'old_posting_frontier_cleanup',
+            'existing_posting_frontier_cleanup',
             [4, 4, [], [], true],
             [$frontierCleanup['requested_tables'] ?? null, $frontierCleanup['drop_statements'] ?? null, $frontierCleanup['drop_failures'] ?? null, $frontierCleanup['remaining_tables'] ?? null, $frontierCleanup['verified_absent'] ?? null],
             ($frontierCleanup['requested_tables'] ?? null) === 4
@@ -13544,7 +13456,7 @@ function wp_fts_wc_finalize(): array
                 && ($frontierCleanup['verified_absent'] ?? null) === true
         ),
         wp_fts_wc_gate(
-            'old_posting_reset_populated_fixture',
+            'existing_posting_reset_populated_fixture',
             [157344, 57345, 28673, 28672, 7, 2, 1],
             [$frontierResetFixture['postings'] ?? null, $frontierResetFixture['terms'] ?? null, $frontierResetFixture['lexical_terms'] ?? null, $frontierResetFixture['surface_terms'] ?? null, $frontierResetFixture['documents'] ?? null, $frontierResetFixture['work_rows'] ?? null, $frontierResetFixture['non_epoch_work_rows'] ?? null],
             ($frontierResetFixture['postings'] ?? null) === 157344
@@ -13559,22 +13471,22 @@ function wp_fts_wc_finalize(): array
                 && wp_fts_wc_is_search_epoch_incarnation($frontierResetFixture['search_epoch_incarnation'] ?? null)
         ),
         wp_fts_wc_gate(
-            'old_posting_reset_summary',
+            'existing_posting_reset_summary',
             'atomic swap and epoch + 1',
             $frontierResetSummary,
             ($frontierResetSummary['reset_strategy'] ?? null) === 'mysql_atomic_table_swap'
                 && ($frontierResetSummary['search_epoch'] ?? null) === ($frontierResetFixture['search_epoch'] ?? -1) + 1
         ),
-        wp_fts_wc_gate('old_posting_reset_storage_statements', 'nine exact source-asserted storage statements with hashes; no DELETE/COUNT', count($frontierResetStatements), $frontierResetStatementsValid && ($frontierReset['statement_count'] ?? null) === 9 && ($frontierReset['statement_methods'] ?? null) === $expectedResetMethods && ($frontierReset['exact_sql_shape'] ?? null) === true && ($frontierReset['contains_delete_or_count'] ?? null) === false && ($frontierReset['max_statement_bytes'] ?? PHP_INT_MAX) <= 4096),
-        wp_fts_wc_gate('old_posting_reset_guard_calls', 3, $frontierReset['guard_calls'] ?? null, ($frontierReset['guard_calls'] ?? null) === 3),
-        wp_fts_wc_gate('old_posting_reset_latency', '<= 5000 ms', $frontierReset['elapsed_ms'] ?? null, is_numeric($frontierReset['elapsed_ms'] ?? null) && (float) $frontierReset['elapsed_ms'] >= 0.0 && (float) $frontierReset['elapsed_ms'] <= 5000.0),
-        wp_fts_wc_gate('old_posting_reset_php_allocation', '<= 16777216', $frontierReset['php_allocation_delta_bytes'] ?? null, is_int($frontierReset['php_allocation_delta_bytes'] ?? null) && $frontierReset['php_allocation_delta_bytes'] <= 16777216),
-        wp_fts_wc_gate('old_posting_reset_php_peak', '<= 134217728', $frontierReset['php_peak_bytes'] ?? null, is_int($frontierReset['php_peak_bytes'] ?? null) && $frontierReset['php_peak_bytes'] <= 134217728),
-        wp_fts_wc_gate('old_posting_reset_linux_vmhwm', '<= 134217728', $frontierReset['linux_vmhwm_bytes'] ?? null, is_int($frontierReset['linux_vmhwm_bytes'] ?? null) && $frontierReset['linux_vmhwm_bytes'] > 0 && $frontierReset['linux_vmhwm_bytes'] <= 134217728),
-        wp_fts_wc_gate('old_posting_reset_schema_verification', 'exact valid current schema', $frontierResetSchema, ($frontierReset['schema_version'] ?? null) === WP_FTS_Plugin::SCHEMA_VERSION && $frontierResetSchemaValid),
-        wp_fts_wc_gate('old_posting_reset_physical_schema', 'exact columns/indexes and InnoDB on four canonical tables', $frontierResetPhysical['exact_current_contract'] ?? null, $frontierResetPhysicalValid),
+        wp_fts_wc_gate('existing_posting_reset_storage_statements', 'nine exact source-asserted storage statements with hashes; no DELETE/COUNT', count($frontierResetStatements), $frontierResetStatementsValid && ($frontierReset['statement_count'] ?? null) === 9 && ($frontierReset['statement_methods'] ?? null) === $expectedResetMethods && ($frontierReset['exact_sql_shape'] ?? null) === true && ($frontierReset['contains_delete_or_count'] ?? null) === false && ($frontierReset['max_statement_bytes'] ?? PHP_INT_MAX) <= 4096),
+        wp_fts_wc_gate('existing_posting_reset_guard_calls', 3, $frontierReset['guard_calls'] ?? null, ($frontierReset['guard_calls'] ?? null) === 3),
+        wp_fts_wc_gate('existing_posting_reset_latency', '<= 5000 ms', $frontierReset['elapsed_ms'] ?? null, is_numeric($frontierReset['elapsed_ms'] ?? null) && (float) $frontierReset['elapsed_ms'] >= 0.0 && (float) $frontierReset['elapsed_ms'] <= 5000.0),
+        wp_fts_wc_gate('existing_posting_reset_php_allocation', '<= 16777216', $frontierReset['php_allocation_delta_bytes'] ?? null, is_int($frontierReset['php_allocation_delta_bytes'] ?? null) && $frontierReset['php_allocation_delta_bytes'] <= 16777216),
+        wp_fts_wc_gate('existing_posting_reset_php_peak', '<= 134217728', $frontierReset['php_peak_bytes'] ?? null, is_int($frontierReset['php_peak_bytes'] ?? null) && $frontierReset['php_peak_bytes'] <= 134217728),
+        wp_fts_wc_gate('existing_posting_reset_linux_vmhwm', '<= 134217728', $frontierReset['linux_vmhwm_bytes'] ?? null, is_int($frontierReset['linux_vmhwm_bytes'] ?? null) && $frontierReset['linux_vmhwm_bytes'] > 0 && $frontierReset['linux_vmhwm_bytes'] <= 134217728),
+        wp_fts_wc_gate('existing_posting_reset_schema_verification', 'exact valid current schema', $frontierResetSchema, $frontierResetSchemaValid),
+        wp_fts_wc_gate('existing_posting_reset_physical_schema', 'exact columns/indexes and InnoDB on four canonical tables', $frontierResetPhysical['exact_current_contract'] ?? null, $frontierResetPhysicalValid),
         wp_fts_wc_gate(
-            'old_posting_reset_published_state',
+            'existing_posting_reset_published_state',
             'empty terms/postings/documents, singleton advanced epoch, no staging/retired tables',
             $frontierResetPostState,
             ($frontierResetPostState['postings'] ?? null) === 0
@@ -13594,7 +13506,7 @@ function wp_fts_wc_finalize(): array
                     (string) ($frontierResetWorkRow['payload'] ?? '')
                 )
         ),
-        wp_fts_wc_gate('old_posting_frontier_php_peak', '<= 134217728', (int) ($oldPostingFrontier['php_peak_bytes'] ?? PHP_INT_MAX), (int) ($oldPostingFrontier['php_peak_bytes'] ?? PHP_INT_MAX) <= 134217728)
+        wp_fts_wc_gate('existing_posting_frontier_php_peak', '<= 134217728', (int) ($existingPostingFrontier['php_peak_bytes'] ?? PHP_INT_MAX), (int) ($existingPostingFrontier['php_peak_bytes'] ?? PHP_INT_MAX) <= 134217728)
     );
     $evidence['concurrency'] = $concurrency;
     $evidence['idle_http'] = $idle;
@@ -13604,7 +13516,7 @@ function wp_fts_wc_finalize(): array
     $evidence['killed_transaction'] = $transactionCrash;
     $evidence['wp_cli_cursor'] = $wpcliCursor;
     $evidence['writer_aggregate'] = $writerAggregate;
-    $evidence['old_posting_frontier'] = $oldPostingFrontier;
+    $evidence['existing_posting_frontier'] = $existingPostingFrontier;
     $evidence['max_valid_setup'] = $maxValidSetup;
     $evidence['max_valid_frontend'] = $maxValidSearch;
     $evidence['authoritative_search_memory'] = $authoritativeSearchMemory;
@@ -14042,13 +13954,13 @@ function wp_fts_wc_resource_artifact_gates(array $resources, array $validationEv
     $preCorpusMemory = is_array($databaseMemory['pre_corpus'] ?? null) ? $databaseMemory['pre_corpus'] : [];
     $finalMemory = is_array($databaseMemory['final_checkpoint'] ?? null) ? $databaseMemory['final_checkpoint'] : [];
     $memoryCheckpoints = is_array($databaseMemory['checkpoints'] ?? null) ? array_values($databaseMemory['checkpoints']) : [];
-    $expectedMemoryCheckpointLabels = ['pre-corpus', 'post-frontier', 'post-reindex'];
+    $expectedMemoryCheckpointLabels = ['pre-corpus', 'post-existing-posting-frontier', 'post-reindex'];
     foreach (['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout'] as $caseId) {
         for ($sample = 0; $sample < WP_FTS_WC_COLD_SAMPLE_COUNT; $sample++) {
             $expectedMemoryCheckpointLabels[] = "pre-cold-restart-{$caseId}-{$sample}";
         }
     }
-    $expectedMemoryCheckpointLabels[] = 'pre-scope-restart';
+    $expectedMemoryCheckpointLabels[] = 'pre-supporting-core-index-restart';
     $expectedMemoryCheckpointLabels[] = 'final-workload';
     $actualMemoryCheckpointLabels = array_map(
         static fn(mixed $checkpoint): mixed => is_array($checkpoint) ? ($checkpoint['checkpoint'] ?? null) : null,
@@ -14250,13 +14162,13 @@ function wp_fts_wc_resource_artifact_gates(array $resources, array $validationEv
 function wp_fts_wc_database_memory_evidence_is_exact(array $memory, array $databaseEvidence): bool
 {
     $checkpoints = is_array($memory['checkpoints'] ?? null) ? array_values($memory['checkpoints']) : [];
-    $expectedLabels = ['pre-corpus', 'post-frontier', 'post-reindex'];
+    $expectedLabels = ['pre-corpus', 'post-existing-posting-frontier', 'post-reindex'];
     foreach (['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout'] as $caseId) {
         for ($sample = 0; $sample < WP_FTS_WC_COLD_SAMPLE_COUNT; $sample++) {
             $expectedLabels[] = "pre-cold-restart-{$caseId}-{$sample}";
         }
     }
-    $expectedLabels[] = 'pre-scope-restart';
+    $expectedLabels[] = 'pre-supporting-core-index-restart';
     $expectedLabels[] = 'final-workload';
     if (
         ($memory['schema'] ?? null) !== 'relational-fts-database-cgroup-memory-v2'
@@ -16528,7 +16440,7 @@ function wp_fts_wc_assert_relational_schema(): array
     wp_fts_wc_assert(wp_fts_wc_index_has_columns($postingIndexes, ['term_id', 'post_id'], true), 'fts_postings needs a unique term-first primary/index path.');
     wp_fts_wc_assert(wp_fts_wc_index_has_columns($postingIndexes, ['post_id', 'term_id']), 'fts_postings needs a post-first candidate-probe path.');
 
-    $storage = wp_fts_wc_storage_fixture(false);
+    $storage = wp_fts_wc_storage_fixture();
     wp_fts_wc_assert(method_exists($storage, 'verify_schema'), 'Relational storage must expose physical schema verification.');
     $verification = $storage->verify_schema();
     wp_fts_wc_assert(is_array($verification) && !empty($verification['valid']), 'Production physical schema verification rejected the exact acceptance schema.');
@@ -18660,7 +18572,7 @@ function wp_fts_wc_pack_cardinality_statement_proof(array $definition, array $or
     // option would correctly revoke search readiness and enqueue reconciliation,
     // while this proof only compares two isolated query analyzers.
     $measure = static function (array $searchDefinition, array $analyzerOptions, array $packs): array {
-        $storage = wp_fts_wc_storage_fixture(false);
+        $storage = wp_fts_wc_storage_fixture();
         wp_fts_wc_assert(interface_exists('WP_FTS_Set_Oriented_Search_Storage') && $storage instanceof WP_FTS_Set_Oriented_Search_Storage, 'Pack-cardinality proof requires set-oriented storage.');
         $searcher = new WP_FTS_Searcher($storage, new WP_FTS_Analyzer($analyzerOptions));
         $recorded = wp_fts_wc_record_queries(static fn() => $searcher->search($searchDefinition['query'], $searchDefinition['options']));
@@ -20108,7 +20020,6 @@ add_action('init', static function (): void {
         'external_object_cache' => function_exists('wp_using_ext_object_cache')
             ? (bool) wp_using_ext_object_cache()
             : is_file(WP_CONTENT_DIR . '/object-cache.php'),
-        'schema_version' => (int) get_option(WP_FTS_Plugin::SCHEMA_VERSION_OPTION, 0),
         'ready' => false,
         'result_count' => 0,
         'result_ids' => [],
@@ -20952,7 +20863,7 @@ function wp_fts_wc_worker_statement_role(string $sql): string
         'wp_fts:targeted-scope-page' => 'targeted_scope_page',
         'wp_fts:dependency_measurement' => 'dependency_measurement',
         'wp_fts:dependency_values' => 'dependency_values',
-        'wp_fts:replacement-frontier' => 'replacement_frontier',
+        'wp_fts:existing-posting-frontier' => 'existing_posting_frontier',
         'wp_fts:dictionary-increment' => 'dictionary_increment',
         'wp_fts:dictionary-decrement' => 'dictionary_decrement',
         'wp_fts:bounded-index-delete' => 'bounded_index_delete',
@@ -20986,7 +20897,7 @@ function wp_fts_wc_worker_statement_role(string $sql): string
     }
     if (
         str_starts_with($normalized, 'SELECT ')
-        && str_contains($lower, 'source_existing_hash')
+        && str_contains($lower, 'existing_content_hash')
         && str_contains($lower, 'source_snapshot_complete')
     ) {
         return 'claim_source_snapshot';
@@ -21156,7 +21067,7 @@ function wp_fts_wc_worker_roles_are_ordered(array $roles): bool
         'conditional_source_fallback' => 4,
         'dependency_measurement' => 5,
         'dependency_values' => 6,
-        'replacement_frontier' => 7,
+        'existing_posting_frontier' => 7,
         'post_batch_failure' => 7,
         'lease_heartbeat' => 7,
         'health_state_read' => 8,
@@ -21507,8 +21418,6 @@ function wp_fts_wc_validation_inventory_matches(array $evidence): bool
         'mutation_fence_real_database_corpus_publication',
         'runtime_profile_full_parity',
         'actual_wpcli_query_count',
-        'cold_ready_current_schema_option',
-        'cold_ready_current_schema_requests',
         'cold_ready_request_autoloaded_options',
         'cold_ready_request_no_option_or_sitemeta_sql',
         'cold_ready_request_no_network_token_select',
@@ -22068,10 +21977,10 @@ function wp_fts_wc_assert(bool $condition, string $message): void
 }
 
 /** Reach the private production storage factory only from this fixture. */
-function wp_fts_wc_storage_fixture(bool $ensureSchema = false): WP_FTS_Relational_Storage
+function wp_fts_wc_storage_fixture(): WP_FTS_Relational_Storage
 {
     $method = new ReflectionMethod(WP_FTS_Plugin::class, 'storage');
     $method->setAccessible(true);
 
-    return $method->invoke(null, $ensureSchema);
+    return $method->invoke(null);
 }

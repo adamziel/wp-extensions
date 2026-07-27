@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-test_case_with_pdo_sqlite_fixture('current-v9 dropped scope keyset schedules maintenance, repairs, and resumes the scope', function (): void {
+test_case_with_pdo_sqlite_fixture('missing targeted keyset schedules maintenance, repairs, and resumes the scope', function (): void {
     $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
     wp_fts_relational_regression_create_schema($wpdb);
     wp_fts_relational_regression_add_source_post($wpdb, 42, '<p>repaired exact target</p>', '');
@@ -16,14 +16,13 @@ test_case_with_pdo_sqlite_fixture('current-v9 dropped scope keyset schedules mai
     preg_match('/INDEXED BY `([^`]+)`/', $hint, $match);
     $targetedIndex = (string) ($match[1] ?? '');
     assert_true($targetedIndex !== '', 'the SQLite repair fixture should resolve its exact targeted keyset name');
-    assert_true($wpdb->query("DROP INDEX `{$targetedIndex}`") !== false, 'the fixture should drop the current-v9 targeted keyset');
+    assert_true($wpdb->query("DROP INDEX `{$targetedIndex}`") !== false, 'the fixture should drop the current targeted keyset');
 
     wp_fts_test_reset_wordpress_fakes();
     WP_FTS_Plugin::reset_request_caches();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION] = ['filtered', 'targeted'];
     $queue = new WP_FTS_Index_Queue($wpdb);
     $queue->enqueue_scope(
-        'current-v9-dropped-targeted-keyset',
+        'dropped-targeted-keyset',
         ['reason' => 'scope-keyset-repair-regression'],
         null,
         WP_FTS_Index_Queue::SCOPE_COVERAGE_TARGETED,
@@ -51,7 +50,7 @@ test_case_with_pdo_sqlite_fixture('current-v9 dropped scope keyset schedules mai
         $GLOBALS['wp_fts_test_schedule_calls'],
         static fn(array $call): bool => ($call['hook'] ?? '') === WP_FTS_Plugin::SCHEMA_REPAIR_CRON_HOOK
     ));
-    assert_same(1, count($maintenanceSchedules), 'the failed current-v9 scope should schedule exactly one schema-maintenance event');
+    assert_same(1, count($maintenanceSchedules), 'the failed current scope should schedule exactly one schema-maintenance event');
     assert_same(
         'retry',
         (string) $wpdb->dbh->query("SELECT state FROM wp_fts_work WHERE kind = 'scope'")->fetchColumn(),
@@ -67,13 +66,8 @@ test_case_with_pdo_sqlite_fixture('current-v9 dropped scope keyset schedules mai
     wp_fts_quality_with_wpdb($wpdb, static function (): void {
         WP_FTS_Plugin::run_scheduled_schema_repair();
     });
-    $verification = $storage->verify_schema_and_scope_keyset_indexes()['scope_keyset_indexes'];
-    assert_same(true, $verification['valid'] ?? null, 'scheduled maintenance should recreate the missing owned keyset at current v9');
-    assert_same(
-        WP_FTS_Plugin::SCHEMA_VERSION,
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null,
-        'an additive support-index repair should retain the current logical schema version'
-    );
+    $verification = $storage->verify_schema_and_supporting_core_indexes()['supporting_core_indexes'];
+    assert_same(true, $verification['valid'] ?? null, 'scheduled maintenance should recreate the missing targeted keyset');
     assert_same(
         'ready',
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['initial_index_status'] ?? null,
@@ -118,7 +112,7 @@ WHERE kind = 'scope'"
     );
 });
 
-test_case_with_pdo_sqlite_fixture('current-v9 malformed scope keyset fails before selective SQL and schedules maintenance', function (): void {
+test_case_with_pdo_sqlite_fixture('malformed targeted keyset fails before selective SQL and schedules maintenance', function (): void {
     $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
     wp_fts_relational_regression_create_schema($wpdb);
     wp_fts_relational_regression_add_source_post($wpdb, 52, '<p>malformed keyset target</p>', '');
@@ -137,9 +131,8 @@ test_case_with_pdo_sqlite_fixture('current-v9 malformed scope keyset fails befor
 
     wp_fts_test_reset_wordpress_fakes();
     WP_FTS_Plugin::reset_request_caches();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCOPE_INDEX_OWNERSHIP_OPTION] = ['filtered', 'targeted'];
     (new WP_FTS_Index_Queue($wpdb))->enqueue_scope(
-        'current-v9-malformed-targeted-keyset',
+        'malformed-targeted-keyset',
         ['reason' => 'scope-keyset-malformed-regression'],
         null,
         WP_FTS_Index_Queue::SCOPE_COVERAGE_TARGETED,
@@ -176,7 +169,7 @@ test_case_with_pdo_sqlite_fixture('current-v9 malformed scope keyset fails befor
     );
 });
 
-test_case_with_pdo_sqlite_fixture('current-v9 malformed filtered keyset fails in one narrow SQLite metadata read', function (): void {
+test_case_with_pdo_sqlite_fixture('malformed filtered keyset fails in one narrow SQLite metadata read', function (): void {
     $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
     wp_fts_relational_regression_create_schema($wpdb);
     $storage = new WP_FTS_Relational_Storage($wpdb);

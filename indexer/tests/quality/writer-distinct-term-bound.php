@@ -83,12 +83,12 @@ test_case('relational writer exact posting boundary uses one memory-safe INSERT'
         $wpdb->prepared,
         static fn(array $prepared): bool => str_contains($prepared['sql'], 'wp_fts:dictionary-decrement')
     ));
-    assert_same(0, count($dfWrites), 'a fresh batch must not issue an empty old-posting decrement');
+    assert_same(0, count($dfWrites), 'a fresh batch must not issue an empty existing-posting decrement');
     assert_same(0, count(array_filter(
         $wpdb->queries,
         static fn(mixed $query): bool => is_string($query)
             && str_contains($query, 'wp_fts:bounded-index-delete')
-    )), 'a fresh batch must not issue an empty old-index retirement');
+    )), 'a fresh batch must not issue an empty existing-index retirement');
     $dictionaryWrites = array_values(array_filter(
         $wpdb->queries,
         static fn(mixed $query): bool => is_string($query)
@@ -157,7 +157,6 @@ test_case('mixed scope and maximum-identity post work alternates inside the work
     $fake->recordReadQueries = true;
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
 
     $tokens = [];
     for ($index = 0; $index < WP_FTS_Analysis_Limits::MAX_DOCUMENT_DISTINCT_TERMS; $index++) {
@@ -277,9 +276,9 @@ test_case('mixed scope and maximum-identity post work alternates inside the work
     assert_true(!isset($fake->queue[$scopeKey]), 'the acknowledged corpus scope should leave no hidden authority row');
 });
 
-test_case('relational writer preflights 100 maximum-old documents as one bounded complete prefix', function (): void {
+test_case('relational writer preflights 100 maximum-existing documents as one bounded complete prefix', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
-    $wpdb->replacementFrontierPostingCounts = array_fill_keys(range(1, 100), WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS);
+    $wpdb->existingPostingFrontierCounts = array_fill_keys(range(1, 100), WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS);
     $storage = new WP_FTS_Relational_Storage($wpdb);
     $deletions = array_fill_keys(range(1, 100), 0);
 
@@ -287,31 +286,31 @@ test_case('relational writer preflights 100 maximum-old documents as one bounded
 
     assert_same(range(1, 6), $plan->admitted_post_ids, 'six complete 8,192-row deletions should fit below the 50,000 mutation ceiling');
     assert_same(range(7, 100), $plan->deferred_post_ids, 'the partial seventh document and the whole ascending suffix must defer');
-    assert_same(50001, $plan->scanned_old_postings, 'frontier discovery should stop after exactly the limit plus one indexed rows');
-    assert_same(49152, $plan->posting_mutations, 'the admitted transaction should count only six complete old posting sets');
-    assert_same(array_fill_keys(range(1, 6), WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS), $plan->old_posting_counts, 'the plan should carry only complete per-document counts into storage');
+    assert_same(50001, $plan->scanned_existing_postings, 'frontier discovery should stop after exactly the limit plus one indexed rows');
+    assert_same(49152, $plan->posting_mutations, 'the admitted transaction should count only six complete existing posting sets');
+    assert_same(array_fill_keys(range(1, 6), WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS), $plan->existing_posting_counts, 'the plan should carry only complete per-document counts into storage');
     $frontierReads = array_values(array_filter(
         $wpdb->prepared,
-        static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:replacement-frontier */')
+        static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:existing-posting-frontier */')
     ));
-    assert_same(1, count($frontierReads), 'one claimed batch should issue exactly one old-posting frontier query');
+    assert_same(1, count($frontierReads), 'one claimed batch should issue exactly one existing-posting frontier query');
     assert_contains('FORCE INDEX (post_term)', $frontierReads[0]['sql'], 'MySQL frontier discovery must use the post-first covering index');
     assert_contains('LIMIT 50001', $frontierReads[0]['sql'], 'the indexed inner scan must have the hard limit-plus-one row ceiling');
     assert_contains('COUNT(*) AS posting_count', $frontierReads[0]['sql'], 'the outer query must return per-post aggregates rather than posting rows');
     assert_same([], $wpdb->queries, 'frontier planning must defer the suffix before opening a transaction');
 
     $result = $storage->replace_prepared_documents([], $plan->admitted_post_ids, $plan);
-    assert_same(49152, $result['old_postings'] ?? null, 'storage should consume the measured old count without rescanning');
+    assert_same(49152, $result['retired_postings'] ?? null, 'storage should consume the measured retirement count without rescanning');
     assert_same(49152, $result['posting_mutations'] ?? null, 'the transaction should expose its exact bounded posting mutation count');
     assert_same(1, count(array_filter(
         $wpdb->prepared,
-        static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:replacement-frontier */')
-    )), 'consuming a measured prefix must not repeat the old-posting scan');
+        static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:existing-posting-frontier */')
+    )), 'consuming a measured prefix must not repeat the existing-posting scan');
     $deleteWrites = array_values(array_filter(
         $wpdb->prepared,
         static fn(array $prepared): bool => str_starts_with(
             $prepared['sql'],
-            'DELETE old_posting, retired_term, retired_document'
+            'DELETE existing_posting, retired_term, retired_document'
         )
     ));
     assert_same(1, count($deleteWrites), 'one measured prefix should use one combined three-target DELETE');
@@ -323,30 +322,30 @@ test_case('relational writer preflights 100 maximum-old documents as one bounded
     );
     assert_contains('LIMIT 50100', $deleteWrites[0]['sql'], 'the materialized delete driver must retain its proven posting-plus-document ceiling');
     assert_contains('candidate_posting FORCE INDEX (post_term)', $deleteWrites[0]['sql'], 'the materialized delete driver must scan only the post-first frontier');
-    foreach (['old_posting', 'retired_term', 'retired_document'] as $targetAlias) {
+    foreach (['existing_posting', 'retired_term', 'retired_document'] as $targetAlias) {
         assert_contains("{$targetAlias} FORCE INDEX (PRIMARY)", $deleteWrites[0]['sql'], "the {$targetAlias} delete target must use primary-key lookups");
     }
 
     $replacementPlan = (new WP_FTS_Relational_Storage($wpdb))->plan_prepared_replacement(
         array_fill_keys(range(1, 100), WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS)
     );
-    assert_same(range(1, 3), $replacementPlan->admitted_post_ids, 'old deletions plus 8,192 new rows should admit three whole documents');
-    assert_same(49152, $replacementPlan->posting_mutations, 'combined old and new rows must share the same 50,000 ceiling');
+    assert_same(range(1, 3), $replacementPlan->admitted_post_ids, 'existing deletions plus 8,192 new rows should admit three whole documents');
+    assert_same(49152, $replacementPlan->posting_mutations, 'combined existing and new rows must share the same 50,000 ceiling');
 });
 
 test_case('direct relational writer callers auto-measure safe batches and get a pre-transaction typed split', function (): void {
     $safeWpdb = new WP_FTS_Test_WPDB();
-    $safeWpdb->replacementFrontierPostingCounts = [11 => 8192, 12 => 8192];
+    $safeWpdb->existingPostingFrontierCounts = [11 => 8192, 12 => 8192];
     $safeStorage = new WP_FTS_Relational_Storage($safeWpdb);
     $safe = $safeStorage->replace_prepared_documents([], [11, 12]);
-    assert_same(16384, $safe['old_postings'] ?? null, 'a direct caller should auto-measure and apply an entirely safe old-posting batch');
+    assert_same(16384, $safe['retired_postings'] ?? null, 'a direct caller should auto-measure and apply an entirely safe existing-posting batch');
     assert_same(1, count(array_filter(
         $safeWpdb->prepared,
-        static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:replacement-frontier */')
+        static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:existing-posting-frontier */')
     )), 'direct safe replacement should issue exactly one bounded frontier read');
 
     $splitWpdb = new WP_FTS_Test_WPDB();
-    $splitWpdb->replacementFrontierPostingCounts = array_fill_keys(range(1, 100), 8192);
+    $splitWpdb->existingPostingFrontierCounts = array_fill_keys(range(1, 100), 8192);
     $splitStorage = new WP_FTS_Relational_Storage($splitWpdb);
     $split = null;
     try {
@@ -361,13 +360,13 @@ test_case('direct relational writer callers auto-measure safe batches and get a 
     assert_true(!in_array('START TRANSACTION', $splitWpdb->queries, true), 'the direct split must happen before BEGIN');
     assert_same(1, count(array_filter(
         $splitWpdb->prepared,
-        static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:replacement-frontier */')
+        static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:existing-posting-frontier */')
     )), 'the oversized direct call should still use only one limit-plus-one frontier read');
 });
 
 test_case('relational replacement plans are opaque exact-prefix capabilities', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
-    $wpdb->replacementFrontierPostingCounts = [21 => 4096, 22 => 4096];
+    $wpdb->existingPostingFrontierCounts = [21 => 4096, 22 => 4096];
     $storage = new WP_FTS_Relational_Storage($wpdb);
     $plan = $storage->plan_prepared_replacement([21 => 0]);
     $forged = new WP_FTS_Prepared_Replacement_Plan(
@@ -386,7 +385,7 @@ test_case('relational replacement plans are opaque exact-prefix capabilities', f
     } catch (InvalidArgumentException $error) {
         $forgedError = $error;
     }
-    assert_true($forgedError instanceof InvalidArgumentException, 'a caller-constructed plan must not understate measured old postings');
+    assert_true($forgedError instanceof InvalidArgumentException, 'a caller-constructed plan must not understate measured existing postings');
     assert_true(!in_array('START TRANSACTION', $wpdb->queries, true), 'a forged plan must reject before BEGIN');
 
     $wpdb->queries = [];
@@ -400,7 +399,7 @@ test_case('relational replacement plans are opaque exact-prefix capabilities', f
     assert_true(!in_array('START TRANSACTION', $wpdb->queries, true), 'a mismatched genuine plan must reject before BEGIN');
 
     $reuseWpdb = new WP_FTS_Test_WPDB();
-    $reuseWpdb->replacementFrontierPostingCounts = [31 => 4096];
+    $reuseWpdb->existingPostingFrontierCounts = [31 => 4096];
     $reuseStorage = new WP_FTS_Relational_Storage($reuseWpdb);
     $abandoned = $reuseStorage->plan_prepared_replacement([31 => 0]);
     $issuedPlansProperty = (new ReflectionClass($reuseStorage))->getProperty('issuedReplacementPlans');
@@ -408,10 +407,10 @@ test_case('relational replacement plans are opaque exact-prefix capabilities', f
     assert_same(1, count($issuedPlans), 'the storage should retain one opaque capability while its measured plan is live');
     $abandonedFields = [
         $abandoned->new_posting_counts,
-        $abandoned->old_posting_counts,
+        $abandoned->existing_posting_counts,
         $abandoned->admitted_post_ids,
         $abandoned->deferred_post_ids,
-        $abandoned->scanned_old_postings,
+        $abandoned->scanned_existing_postings,
         $abandoned->posting_mutations,
     ];
     unset($abandoned);
@@ -455,27 +454,26 @@ test_case('prepared-document partition preserves the exact strict payload used b
     );
     assert_same(1, count(array_filter(
         $wpdb->prepared,
-        static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:replacement-frontier */')
+        static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:existing-posting-frontier */')
     )), 'validation before planning must retain the sole bounded frontier read');
 });
 
-test_case('production worker commits and acknowledges only the measured old-posting prefix', function (): void {
+test_case('production worker commits and acknowledges only the measured existing-posting prefix', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
     $fake = new WP_FTS_Test_WPDB();
     $fake->options = 'wp_options';
     $postIds = range(31001, 31100);
-    $fake->replacementFrontierPostingCounts = array_fill_keys($postIds, WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS);
+    $fake->existingPostingFrontierCounts = array_fill_keys($postIds, WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS);
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     wp_fts_test_seed_queue($fake, $postIds);
 
     try {
         $summary = WP_FTS_Plugin::process_manual_index_batch([
             'batch_size' => 100,
-            'source' => 'old-posting-frontier-contract',
+            'source' => 'existing-posting-frontier-contract',
         ]);
 
         assert_same(6, $summary['queue_processed'] ?? null, 'only six complete 8,192-posting deletions should commit and acknowledge');
@@ -486,8 +484,8 @@ test_case('production worker commits and acknowledges only the measured old-post
         assert_same(array_slice($postIds, 6), array_map('intval', array_keys($fake->queue)), 'the worker must preserve the exact ascending suffix');
         assert_same(1, count(array_filter(
             $fake->prepared,
-            static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:replacement-frontier */')
-        )), 'the worker should measure one exact post-analysis old-posting frontier');
+            static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:existing-posting-frontier */')
+        )), 'the worker should measure one exact post-analysis existing-posting frontier');
         assert_same(1, count(array_filter(
             $fake->queries,
             static fn(string|array $query): bool => is_string($query) && $query === 'START TRANSACTION'
@@ -497,7 +495,7 @@ test_case('production worker commits and acknowledges only the measured old-post
             ...array_values(array_filter($fake->queries, 'is_string')),
             ...array_map(static fn(array $prepared): string => (string) ($prepared['sql'] ?? ''), $fake->prepared),
         ]));
-        foreach (['wp_fts:claim-batch', 'wp_fts:replacement-frontier', 'wp_fts:dictionary-decrement', 'wp_fts:bounded-index-delete', 'wp_fts:search-epoch-advance', 'wp_fts:atomic-worker-ack'] as $roleTag) {
+        foreach (['wp_fts:claim-batch', 'wp_fts:existing-posting-frontier', 'wp_fts:dictionary-decrement', 'wp_fts:bounded-index-delete', 'wp_fts:search-epoch-advance', 'wp_fts:atomic-worker-ack'] as $roleTag) {
             assert_same(1, count(array_filter(
                 $syntheticStatements,
                 static fn(string $query): bool => str_contains($query, $roleTag)
@@ -550,7 +548,7 @@ test_case('production worker partitions storage-invalid documents before the val
         $firstStatementSequence = $statementSequence;
         $firstFrontierReads = array_values(array_filter(
             $fake->prepared,
-            static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:replacement-frontier */')
+            static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:existing-posting-frontier */')
         ));
 
         $statementSequence = [];
@@ -561,7 +559,7 @@ test_case('production worker partitions storage-invalid documents before the val
         $secondStatementSequence = $statementSequence;
         $secondFrontierReads = array_values(array_filter(
             $fake->prepared,
-            static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:replacement-frontier */')
+            static fn(array $prepared): bool => str_starts_with($prepared['sql'], '/* wp_fts:existing-posting-frontier */')
         ));
     } finally {
         unset($GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::POST_INDEX_OPTIONS_FILTER]);
@@ -570,7 +568,7 @@ test_case('production worker partitions storage-invalid documents before the val
 
     $frontierOffset = array_search(
         true,
-        array_map(static fn(string $sql): bool => str_starts_with($sql, '/* wp_fts:replacement-frontier */'), $firstStatementSequence),
+        array_map(static fn(string $sql): bool => str_starts_with($sql, '/* wp_fts:existing-posting-frontier */'), $firstStatementSequence),
         true
     );
     $publicationStatements = $frontierOffset === false ? [] : array_slice($firstStatementSequence, $frontierOffset + 1);
@@ -583,8 +581,8 @@ test_case('production worker partitions storage-invalid documents before the val
     assert_same(0, $successor['permanently_rejected'] ?? null, 'the successor must not repeat settled poison generations');
     assert_same([], wp_fts_test_queue_ids($fake), 'the two bounded phases should converge without leaving a poison retry');
     assert_same([$validPostId], array_map('intval', array_keys($fake->docs)), 'only the valid suffix document should reach relational storage');
-    assert_same(1, count($firstFrontierReads), 'the complete poison phase must produce exactly one replacement-frontier SELECT');
-    assert_same(2, count($secondFrontierReads), 'the valid successor must add exactly one replacement-frontier SELECT');
+    assert_same(1, count($firstFrontierReads), 'the complete poison phase must produce exactly one existing-posting-frontier SELECT');
+    assert_same(2, count($secondFrontierReads), 'the valid successor must add exactly one existing-posting-frontier SELECT');
     assert_same(1, count(array_filter(
         $publicationStatements,
         static fn(string $sql): bool => $sql === 'START TRANSACTION'
@@ -621,14 +619,14 @@ test_case('relational writer splits disjoint vocabulary at the 8192-identity tra
     assert_same([], $wpdb->queries, 'aggregate term overflow must be detected before transaction or dictionary SQL');
 });
 
-test_case_with_pdo_sqlite_fixture('relational writer replaces a 6000-term old union without returning it to PHP', function (): void {
+test_case_with_pdo_sqlite_fixture('relational writer replaces a 6000-term existing union without returning it to PHP', function (): void {
     $wpdb = new WP_FTS_Relational_Regression_SQLite_WPDB();
     wp_fts_relational_regression_create_schema($wpdb);
     $storage = new WP_FTS_Relational_Storage($wpdb);
     for ($postId = 1; $postId <= 2; $postId++) {
         $terms = [];
         for ($index = 0; $index < 3000; $index++) {
-            $terms[WP_FTS_TermNamespace::namespace_term('en', "old{$postId}term{$index}")] = 1;
+            $terms[WP_FTS_TermNamespace::namespace_term('en', "existing{$postId}term{$index}")] = 1;
         }
         $storage->replace_prepared_documents([
             wp_fts_writer_document($postId, 'en', $terms),
@@ -642,14 +640,13 @@ test_case_with_pdo_sqlite_fixture('relational writer replaces a 6000-term old un
         wp_fts_writer_document(2, 'en', [$shared => 1], [], sha1('replacement-2')),
     ]);
 
-    assert_same(2, $result['replaced'], 'the bounded delta writer should replace both disjoint old documents');
-    assert_true(count($wpdb->queries) <= 12, 'the disjoint old-union replacement should remain at twelve or fewer total statements');
-    assert_true(!str_contains(implode("\n", $wpdb->queries), "SELECT 'old' AS row_kind"), 'the batch writer must not transfer old term ids into PHP');
-    assert_same(1, (int) $wpdb->dbh->query('SELECT COUNT(*) FROM wp_fts_terms')->fetchColumn(), 'the bounded hot transaction should retire every zero-frequency term from the old posting union');
+    assert_same(2, $result['replaced'], 'the bounded delta writer should replace both disjoint existing documents');
+    assert_true(count($wpdb->queries) <= 12, 'the disjoint existing-union replacement should remain at twelve or fewer total statements');
+    assert_same(1, (int) $wpdb->dbh->query('SELECT COUNT(*) FROM wp_fts_terms')->fetchColumn(), 'the bounded hot transaction should retire every zero-frequency term from the existing posting union');
     assert_same(1, (int) $wpdb->dbh->query('SELECT COUNT(*) FROM wp_fts_terms WHERE doc_freq > 0')->fetchColumn(), 'only the replacement dictionary row should remain live');
     assert_same(2, (int) $wpdb->dbh->query('SELECT MAX(doc_freq) FROM wp_fts_terms')->fetchColumn(), 'the replacement term should retain exact distinct-document frequency');
     assert_same(2, (int) $wpdb->dbh->query('SELECT COUNT(*) FROM wp_fts_postings')->fetchColumn(), 'the replacement should retain one compact posting per document');
     $retirementSql = implode("\n", $wpdb->queries);
-    assert_contains('DELETE FROM wp_fts_terms', $retirementSql, 'SQLite should retire the bounded old dictionary union before deleting its postings');
+    assert_contains('DELETE FROM wp_fts_terms', $retirementSql, 'SQLite should retire the bounded existing dictionary union before deleting its postings');
     assert_contains('SELECT retired_posting.term_id', $retirementSql, 'SQLite dictionary retirement should derive ids from only the measured posting frontier');
 });

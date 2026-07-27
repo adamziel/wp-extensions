@@ -81,12 +81,7 @@ function wp_fts_support_snapshot_seed_state(WP_FTS_Test_WPDB $fake): void
         wp_fts_test_backfill_post(901, 'post', 'publish', 'Support Snapshot Indexed'),
         wp_fts_test_backfill_post(902, 'post', 'publish', 'Support Snapshot Queued'),
     ];
-    $fake->docs[901] = [
-        'lang' => 'en',
-        'doc_len' => 4,
-        'content_hash' => 'support-snapshot-hash',
-        'is_deleted' => 0,
-    ];
+    $fake->docs[901] = wp_fts_test_document_row(901, 'en', 'support-snapshot-hash');
     $GLOBALS['wp_fts_test_posts'][902] = (object) [
         'ID' => 902,
         'post_title' => "Queued Support SELECT * FROM wp_users\n#0 stack trace",
@@ -96,7 +91,6 @@ function wp_fts_support_snapshot_seed_state(WP_FTS_Test_WPDB $fake): void
         'post_type' => 'post',
         'post_date_gmt' => '2026-06-22 00:00:00',
     ];
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
         WP_FTS_Plugin::default_settings(),
         [
@@ -165,9 +159,6 @@ function wp_fts_support_snapshot_seed_state(WP_FTS_Test_WPDB $fake): void
             'stop_reason' => 'batch_cap',
             'lock_at_start' => ['state' => 'active', 'active' => true, 'mode' => 'manual', 'token' => 'do-not-expose-start-token'],
             'lock_at_end' => ['state' => 'active', 'active' => true, 'mode' => 'manual', 'token' => 'do-not-expose-end-token'],
-            'schema_status' => 'current',
-            'schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
-            'expected_schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
             'storage_backend' => 'relational',
         ],
     ];

@@ -1298,7 +1298,7 @@ WHERE (
                     source.post_status AS source_post_status,
                     source.post_date_gmt AS source_post_date_gmt,
                     source.post_password AS source_post_password,
-                    document.content_hash AS source_existing_hash
+                    document.content_hash AS existing_content_hash
 FROM {$this->table} w
 LEFT JOIN {$this->postsTable} source ON source.ID = w.post_id AND w.kind = 'post'
 LEFT JOIN {$this->documentsTable} document ON document.post_id = w.post_id AND w.kind = 'post'
@@ -1394,7 +1394,7 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
             'source_post_status',
             'source_post_date_gmt',
             'source_post_password',
-            'source_existing_hash',
+            'existing_content_hash',
         ];
         $actual_aliases = array_keys(get_object_vars($row));
         if ($actual_aliases !== $expected_aliases) {
@@ -1489,8 +1489,10 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
         $source_post_status = $this->claim_row_nullable_text($row, 'source_post_status');
         $source_post_date_gmt = $this->claim_row_nullable_text($row, 'source_post_date_gmt');
         $source_post_password = $this->claim_row_nullable_text($row, 'source_post_password');
-        $source_existing_hash = $this->claim_row_nullable_text($row, 'source_existing_hash');
-        if ($source_existing_hash !== null && strlen($source_existing_hash) > 40) {
+        // The derived document may survive after its canonical post disappears;
+        // its hash is still valid input for deleting that orphaned projection.
+        $existing_content_hash = $this->claim_row_nullable_text($row, 'existing_content_hash');
+        if ($existing_content_hash !== null && strlen($existing_content_hash) > 40) {
             throw $this->malformed_claim_row('the existing content hash exceeds its database column');
         }
 
@@ -1527,7 +1529,6 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
             || $source_post_status !== null
             || $source_post_date_gmt !== null
             || $source_post_password !== null
-            || $source_existing_hash !== null
             || !in_array($source_post_title, [null, ''], true)
             || !in_array($source_post_content, [null, ''], true)
             || !in_array($source_post_excerpt, [null, ''], true)
@@ -1548,7 +1549,7 @@ ORDER BY w.kind DESC, w.post_id ASC, w.job_key ASC",
                 'post_password' => $source_post_password,
                 'fts_post_source_bytes' => $source_bytes,
                 'fts_canonical_post_bytes' => $canonical_bytes,
-                'fts_existing_hash' => $source_existing_hash,
+                'fts_existing_hash' => $existing_content_hash,
             ];
         }
 

@@ -184,14 +184,13 @@ test_case('quality relational input containment byte-bounds metadata hydration a
 
     for ($postId = 1; $postId <= 4; $postId++) {
         $fake->postings[$key][$postId] = 4096;
-        $fake->docs[$postId] = [
-            'post_id' => $postId,
-            'primary_lang' => 'en',
-            'doc_len' => 1,
-            'content_hash' => 'metadata-transport-' . $postId,
-            'snippet_text' => 'metadatatransport',
-            'indexed_at' => time(),
-        ];
+        $fake->docs[$postId] = wp_fts_test_document_row(
+            $postId,
+            'en',
+            'metadata-transport-' . $postId,
+            'metadatatransport',
+            time()
+        );
         $GLOBALS['wp_fts_test_posts'][$postId] = (object) [
             'ID' => $postId,
             'post_date_gmt' => '2026-07-18 00:00:00',
@@ -252,7 +251,6 @@ test_case('quality relational input containment never accepts missing profile pr
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
         'status' => 'ready',
         'initial_index_status' => 'ready',
@@ -297,7 +295,6 @@ test_case('quality relational input containment replaces tables with unexpected 
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $fake->schemaIndexes['wp_fts_postings']['duplicate_post_first'] = ['post_id', 'term_id', 'impact'];
 
     try {
@@ -311,7 +308,7 @@ test_case('quality relational input containment replaces tables with unexpected 
         assert_true(count(array_filter(
             $fake->queries,
             static fn(mixed $query): bool => is_string($query) && str_starts_with($query, 'DROP TABLE `wp_fts_postings`')
-        )) === 1, 'repair should replace the incompatible postings table exactly once');
+        )) === 1, 'repair should replace the invalid current postings table exactly once');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -326,7 +323,6 @@ test_case('quality schema repair recreates a missing work table and reconciles t
     wp_fts_test_reset_wordpress_fakes();
     wp_fts_test_mark_search_takeover_ready();
     $fake->options = 'wp_options';
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     unset($fake->schemaColumns['wp_fts_work'], $fake->schemaIndexes['wp_fts_work']);
     $fake->queries = [];
     $fake->prepared = [];
@@ -339,7 +335,6 @@ test_case('quality schema repair recreates a missing work table and reconciles t
             $fake->queue,
             static fn(array $row): bool => ($row['kind'] ?? null) === 'scope'
         ));
-        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'generic repair should publish the current version only after recreating the absent work table');
         assert_same(true, (new WP_FTS_Relational_Storage($fake))->verify_schema()['valid'] ?? null, 'generic repair should restore the complete physical work-table contract');
         assert_same('pending', $health['initial_index_status'] ?? null, 'losing the durable work relation must invalidate the accepted search generation');
         assert_same(1, count($scopeRows), 'work-table recreation must enqueue one bounded corpus reconciliation');
@@ -363,7 +358,6 @@ test_case('quality schema repair replaces a conflicting recoverable index and re
     wp_fts_test_reset_wordpress_fakes();
     wp_fts_test_mark_search_takeover_ready();
     $fake->options = 'wp_options';
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $fake->schemaIndexes['wp_fts_work']['recoverable'] = ['kind', 'state', 'available_at'];
     $fake->queries = [];
     $fake->prepared = [];
@@ -382,11 +376,11 @@ test_case('quality schema repair replaces a conflicting recoverable index and re
             'generic repair should replace the conflicting named index with the exact recoverable definition'
         );
         assert_same('pending', $health['initial_index_status'] ?? null, 'a conflicting queue index must invalidate readiness instead of being accepted as current schema');
-        assert_same(1, count($scopeRows), 'replacement of an incompatible work table must enqueue one bounded corpus reconciliation');
+        assert_same(1, count($scopeRows), 'replacement of an invalid current work table must enqueue one bounded corpus reconciliation');
         assert_same(1, count(array_filter(
             $fake->queries,
             static fn(mixed $sql): bool => is_string($sql) && str_starts_with($sql, 'DROP TABLE `wp_fts_work`')
-        )), 'the incompatible named index should enter generic work-table replacement exactly once');
+        )), 'the invalid current named index should enter generic work-table replacement exactly once');
         assert_same(0, count(array_filter(
             $fake->queries,
             static fn(mixed $sql): bool => is_string($sql) && str_starts_with($sql, 'CREATE INDEX recoverable ON ')
@@ -405,7 +399,6 @@ test_case('quality schema repair replaces work-table engine and index damage tog
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     wp_fts_test_mark_search_takeover_ready();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     unset($fake->schemaIndexes['wp_fts_work']['recoverable']);
     $fake->schemaEngines['wp_fts_work'] = 'MyISAM';
     $fake->queries = [];
@@ -426,7 +419,7 @@ test_case('quality schema repair replaces work-table engine and index damage tog
         assert_same(1, count(array_filter(
             $fake->queries,
             static fn(mixed $sql): bool => is_string($sql) && str_starts_with($sql, 'DROP TABLE `wp_fts_work`')
-        )), 'additional work-table damage should rebuild the incompatible relation exactly once');
+        )), 'additional work-table damage should rebuild the invalid current relation exactly once');
         assert_same(false, WP_FTS_Plugin::search_takeover_status()['ready'] ?? null, 'search must remain fail-closed until the repaired generation is reconciled');
     } finally {
         $wpdb = $oldWpdb;
@@ -440,7 +433,6 @@ test_case('quality relational input containment requires transactional engines f
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $fake->schemaEngines['wp_fts_terms'] = 'MyISAM';
 
     try {
@@ -462,7 +454,7 @@ test_case('quality relational input containment requires transactional engines f
         assert_true(count(array_filter(
             $fake->queries,
             static fn(mixed $query): bool => is_string($query) && str_starts_with($query, 'DROP TABLE `wp_fts_terms`')
-        )) === 1, 'repair should replace the incompatible engine exactly once');
+        )) === 1, 'repair should replace the invalid current engine exactly once');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -475,7 +467,6 @@ test_case('plugin schema repair replaces damaged work state with one bounded cor
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $queue = new WP_FTS_Index_Queue($fake);
     $queue->enqueue_many([88], 1700000000, ['reason' => 'pre_repair_fixture']);
     $fake->schemaEngines['wp_fts_work'] = 'MyISAM';
@@ -523,7 +514,6 @@ test_case('quality relational input containment rejects truncated or disabled re
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $fake->schemaIndexSubParts['wp_fts_terms']['term_identity'][2] = 16;
     $fake->schemaInvisibleIndexes['wp_fts_postings']['post_term'] = true;
 

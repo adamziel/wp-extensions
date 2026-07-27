@@ -317,6 +317,37 @@ test_case_with_pdo_sqlite_fixture('relational search statements fail closed when
     }
 });
 
+test_case_with_pdo_sqlite_fixture('relational search statements fail closed when uninstall starts between bounded reads', function (): void {
+    [$wpdb, $storage] = wp_fts_relational_regression_search_fixture();
+    wp_fts_relational_regression_add_post($wpdb, 3501, '2026-03-10 00:00:00');
+    wp_fts_relational_regression_add_term($wpdb, 'uninstallrace', [3501 => 100.0]);
+    $wpdb->queries = [];
+    $wpdb->readQueryObserver = static function (string $sql) use ($wpdb): void {
+        if (!str_contains($sql, '/* wp_fts:rank */')) {
+            return;
+        }
+        $wpdb->readQueryObserver = null;
+        $wpdb->execute(
+            'INSERT INTO wp_options (option_name,option_value) VALUES (?,?)',
+            [WP_FTS_Plugin::UNINSTALL_FENCE_OPTION, WP_FTS_Plugin::UNINSTALL_FENCE_VALUE]
+        );
+    };
+
+    $error = null;
+    try {
+        $storage->search_page(
+            wp_fts_relational_regression_groups('uninstallrace'),
+            wp_fts_relational_regression_search_options(1)
+        );
+    } catch (WP_FTS_Search_Unavailable $caught) {
+        $error = $caught;
+    }
+
+    assert_true($error instanceof WP_FTS_Search_Unavailable, 'an uninstall fence published before ranking must return the typed unavailable result');
+    assert_same(2, count($wpdb->queries), 'the uninstall race must stop at the ranking statement that observes the fence');
+    assert_same(2, substr_count($wpdb->queries[1] ?? '', 'uninstall_fence.option_name'), 'ranking must retain uninstall checks in its work-prevention gate and zero-hit control row');
+});
+
 test_case_with_pdo_sqlite_fixture('relational search uses one authoritative sentinel per statement including valid zero hits', function (): void {
     [$wpdb, $storage] = wp_fts_relational_regression_search_fixture();
     wp_fts_relational_regression_add_post($wpdb, 36, '2026-03-10 00:00:00', 'post', 'draft');
@@ -329,10 +360,14 @@ test_case_with_pdo_sqlite_fixture('relational search uses one authoritative sent
     );
     assert_same([], $page['results'] ?? null, 'a valid publication with no visible hits should return an empty page rather than unavailable');
     assert_same(2, count($wpdb->queries), 'a valid zero-hit search should remain one plan plus one rank statement');
-    assert_same(1, substr_count($wpdb->queries[0] ?? '', 'schema_option.option_name'), 'planning should evaluate one authoritative publication sentinel');
+    assert_same(1, substr_count($wpdb->queries[0] ?? '', 'uninstall_fence.option_name'), 'planning should evaluate one uninstall fence sentinel');
+    assert_same(1, substr_count($wpdb->queries[0] ?? '', 'desired_option.option_name'), 'planning should evaluate the desired-readiness half of one authoritative publication sentinel');
+    assert_same(1, substr_count($wpdb->queries[0] ?? '', 'ready_option.option_name'), 'planning should evaluate the published-capability half of one authoritative publication sentinel');
     // Ranking needs an inner gate so revoked readiness prevents the expensive
     // posting scan, plus an outer sentinel that remains observable at zero hits.
-    assert_same(2, substr_count($wpdb->queries[1] ?? '', 'schema_option.option_name'), 'ranking should retain its work-prevention gate and its zero-hit control row');
+    assert_same(2, substr_count($wpdb->queries[1] ?? '', 'uninstall_fence.option_name'), 'ranking should retain uninstall checks in its work-prevention gate and zero-hit control row');
+    assert_same(2, substr_count($wpdb->queries[1] ?? '', 'desired_option.option_name'), 'ranking should retain desired-readiness checks in its work-prevention gate and zero-hit control row');
+    assert_same(2, substr_count($wpdb->queries[1] ?? '', 'ready_option.option_name'), 'ranking should retain published-capability checks in its work-prevention gate and zero-hit control row');
     assert_true(str_contains($wpdb->queries[1] ?? '', 'snapshot.snapshot_ready'), 'zero-hit ranking must retain a control row so readiness remains observable');
 
     [$hydrationWpdb, $hydrationStorage] = wp_fts_relational_regression_search_fixture();
@@ -344,9 +379,15 @@ test_case_with_pdo_sqlite_fixture('relational search uses one authoritative sent
         array_replace(wp_fts_relational_regression_search_options(1), ['include_metadata' => true])
     );
     assert_same(3, count($hydrationWpdb->queries), 'a hydrated hit should remain one plan, one rank, and one hydrate statement');
-    assert_same(1, substr_count($hydrationWpdb->queries[0] ?? '', 'schema_option.option_name'), 'hydrated planning should evaluate one publication sentinel');
-    assert_same(2, substr_count($hydrationWpdb->queries[1] ?? '', 'schema_option.option_name'), 'hydrated ranking should retain both its pre-scan gate and result sentinel');
-    assert_same(1, substr_count($hydrationWpdb->queries[2] ?? '', 'schema_option.option_name'), 'page-sized hydration should evaluate one publication sentinel');
+    assert_same(1, substr_count($hydrationWpdb->queries[0] ?? '', 'uninstall_fence.option_name'), 'hydrated planning should evaluate one uninstall fence sentinel');
+    assert_same(1, substr_count($hydrationWpdb->queries[0] ?? '', 'desired_option.option_name'), 'hydrated planning should evaluate one desired-readiness sentinel');
+    assert_same(1, substr_count($hydrationWpdb->queries[0] ?? '', 'ready_option.option_name'), 'hydrated planning should evaluate one published-capability sentinel');
+    assert_same(2, substr_count($hydrationWpdb->queries[1] ?? '', 'uninstall_fence.option_name'), 'hydrated ranking should retain uninstall checks in both its pre-scan gate and result sentinel');
+    assert_same(2, substr_count($hydrationWpdb->queries[1] ?? '', 'desired_option.option_name'), 'hydrated ranking should retain desired-readiness checks in both its pre-scan gate and result sentinel');
+    assert_same(2, substr_count($hydrationWpdb->queries[1] ?? '', 'ready_option.option_name'), 'hydrated ranking should retain published-capability checks in both its pre-scan gate and result sentinel');
+    assert_same(1, substr_count($hydrationWpdb->queries[2] ?? '', 'uninstall_fence.option_name'), 'page-sized hydration should evaluate one uninstall fence sentinel');
+    assert_same(1, substr_count($hydrationWpdb->queries[2] ?? '', 'desired_option.option_name'), 'page-sized hydration should evaluate one desired-readiness sentinel');
+    assert_same(1, substr_count($hydrationWpdb->queries[2] ?? '', 'ready_option.option_name'), 'page-sized hydration should evaluate one published-capability sentinel');
 });
 
 test_case_with_pdo_sqlite_fixture('relational planning rejects malformed database transport', function (): void {
@@ -785,7 +826,7 @@ test_case_with_pdo_sqlite_fixture('relational ranges over one normalized surface
     $wpdb->queries = [];
     $payload = $storage->search_page($groups, $options);
     $ids = array_column($payload['results'], 'doc_id');
-    assert_same(1256, $ids[0] ?? null, 'the 257th completion must participate through the one indexed surface range beyond the old 256-term expansion cap');
+    assert_same(1256, $ids[0] ?? null, 'the 257th completion must participate through the one complete indexed surface range');
 
     $rankSql = implode("\n", array_filter(
         $wpdb->queries,
@@ -1592,7 +1633,6 @@ test_case_with_pdo_sqlite_fixture('relational SQLite schema verification stays f
     wp_fts_relational_regression_create_schema($wpdb);
     $storage = new WP_FTS_Relational_Storage($wpdb);
 
-    // Reset publishes the exact current SQLite names. The older regression
     // The fixture intentionally uses several engine-specific names that a bounded
     // inspector must not expand into an open-ended candidate list.
     $storage->reset_index();
@@ -1651,7 +1691,6 @@ test_case_with_pdo_sqlite_fixture('relational real SQLite worker drains only the
     );
 
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
         'auto_detect_language' => false,
         'enable_stemming' => false,
@@ -1754,7 +1793,7 @@ test_case_with_pdo_sqlite_fixture('relational SQLite schema repair is idempotent
         'postings' => 0,
         'documents' => 0,
         'work' => 1,
-    ], $payload['mismatched_document'] ?? null, 'one incompatible search table must replace the complete three-table generation');
+    ], $payload['mismatched_document'] ?? null, 'one invalid current search table must replace the complete three-table generation');
     assert_same(
         ['wp_fts_documents.content_hash', 'wp_fts_documents.snippet_text'],
         $payload['invalid_document_definitions_before']['invalid_columns'] ?? null,
@@ -1783,7 +1822,7 @@ test_case_with_pdo_sqlite_fixture('relational SQLite schema repair is idempotent
         'postings' => 1,
         'documents' => 1,
         'work' => 0,
-    ], $payload['mismatched_work'] ?? null, 'an incompatible work table must be replaced independently of the search generation');
+    ], $payload['mismatched_work'] ?? null, 'an invalid current work table must be replaced independently of the search generation');
     assert_same([
         'valid' => true,
         'drops' => 3,
@@ -2195,7 +2234,6 @@ test_case_with_pdo_sqlite_fixture('relational worker defers the 50000-posting ag
     }
 
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
         'auto_detect_language' => false,
         'enable_stemming' => false,
@@ -2273,7 +2311,6 @@ test_case_with_pdo_sqlite_fixture('relational worker preserves a source-deferred
     wp_fts_relational_regression_add_source_post($wpdb, 21100, str_repeat(' ', 1200000), '');
 
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
         'auto_detect_language' => false,
         'enable_stemming' => false,
@@ -2340,7 +2377,7 @@ test_case_with_pdo_sqlite_fixture('relational worker preserves a source-deferred
 
 test_case('relational writer signals the 50000-posting aggregate overflow before issuing SQL', function (): void {
     assert_same(8192, WP_FTS_Relational_Storage::MAX_DOCUMENT_POSTINGS, 'one prepared document should admit at most 4096 lexical plus 4096 normalized-surface postings');
-    assert_same(50000, WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS, 'one replacement transaction should retain the bounded old-plus-new 50000-posting mutation frontier');
+    assert_same(50000, WP_FTS_Relational_Storage::MAX_BATCH_POSTINGS, 'one replacement transaction should retain the bounded existing-plus-new 50000-posting mutation frontier');
 
     $wpdb = new WP_FTS_Test_WPDB();
     $storage = new WP_FTS_Relational_Storage($wpdb);
@@ -2775,9 +2812,8 @@ function wp_fts_relational_regression_create_schema(WP_FTS_Relational_Regression
     foreach ($statements as $statement) {
         $wpdb->query($statement);
     }
-    (new WP_FTS_Relational_Storage($wpdb))->ensure_scope_keyset_indexes();
+    (new WP_FTS_Relational_Storage($wpdb))->ensure_supporting_core_indexes();
     foreach ([
-        WP_FTS_Plugin::SCHEMA_VERSION_OPTION => (string) WP_FTS_Plugin::SCHEMA_VERSION,
         WP_FTS_Plugin::READINESS_INCARNATION_OPTION => wp_fts_relational_regression_ready_incarnation(),
         WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION => serialize([
             'incarnation' => wp_fts_relational_regression_ready_incarnation(),

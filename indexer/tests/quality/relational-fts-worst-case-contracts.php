@@ -219,8 +219,6 @@ test_case('relational worst-case preliminary inventory rejects self-rehashed evi
         'mutation_fence_real_database_corpus_publication',
         'runtime_profile_full_parity',
         'actual_wpcli_query_count',
-        'cold_ready_current_schema_option',
-        'cold_ready_current_schema_requests',
         'cold_ready_request_autoloaded_options',
         'cold_ready_request_no_option_or_sitemeta_sql',
         'cold_ready_request_no_network_token_select',
@@ -1440,7 +1438,7 @@ test_case('production search requires relational storage', function (): void {
     }
     assert_true($productionSources !== [], 'production adapter sources should be inspectable');
     assert_contains(
-        'new WP_FTS_Searcher(self::storage(false), self::runtime_analyzer())',
+        'new WP_FTS_Searcher(self::storage(), self::runtime_analyzer())',
         $productionSources[$root . '/src/Plugin.php'] ?? '',
         'the shared WordPress search page must pass the relational storage directly'
     );
@@ -1634,16 +1632,16 @@ test_case('relational worst-case runner has fixed real corpus and resource profi
         'event_value /sys/fs/cgroup/memory.events oom_kill',
         'event_value /sys/fs/cgroup/memory/memory.oom_control oom_kill',
         'capture_database_memory_checkpoint "pre-cold-restart-${case_id}-${sample}"',
-        'capture_database_memory_checkpoint post-frontier',
+        'capture_database_memory_checkpoint post-existing-posting-frontier',
         'capture_database_memory_checkpoint post-reindex',
-        'capture_database_memory_checkpoint pre-scope-restart',
-        '$databaseMemoryCheckpointLabels = ["pre-corpus", "post-frontier", "post-reindex"];',
+        'capture_database_memory_checkpoint pre-supporting-core-index-restart',
+        '$databaseMemoryCheckpointLabels = ["pre-corpus", "post-existing-posting-frontier", "post-reindex"];',
         'exact ordered 45-checkpoint inventory',
         'timed_compose validation-database-restart 300 restart db',
-        'timed_compose scope-database-restart 300 restart db',
+        'timed_compose supporting-core-index-database-restart 300 restart db',
         'configure_performance_schema_consumers validation-performance-schema-enable',
         'configure_performance_schema_consumers "cold-performance-schema-enable-${case_id}-${sample}"',
-        'configure_performance_schema_consumers scope-performance-schema-enable',
+        'configure_performance_schema_consumers supporting-core-index-performance-schema-enable',
         'capture_database_memory_checkpoint final-workload',
         'capture_wordpress_memory_checkpoint pre-corpus',
         'capture_wordpress_memory_checkpoint final-workload',
@@ -2461,13 +2459,13 @@ AND work_row.generation = claim_driver.generation";
         'matches_expected' => true,
     ];
     assert_true(wp_fts_wc_resource_cgroup_is_exact($v1CgroupFixture, 536870912), 'cgroup v1 raw memsw must derive zero effective swap from raw memsw minus memory');
-    $databaseLabels = ['pre-corpus', 'post-frontier', 'post-reindex'];
+    $databaseLabels = ['pre-corpus', 'post-existing-posting-frontier', 'post-reindex'];
     foreach (['common_or', 'max_valid_or_prefix', 'rare_anchor_and', 'prefix_fanout'] as $caseId) {
         for ($sample = 0; $sample < WP_FTS_WC_COLD_SAMPLE_COUNT; $sample++) {
             $databaseLabels[] = "pre-cold-restart-{$caseId}-{$sample}";
         }
     }
-    $databaseLabels[] = 'pre-scope-restart';
+    $databaseLabels[] = 'pre-supporting-core-index-restart';
     $databaseLabels[] = 'final-workload';
     $databaseCheckpoints = [];
     foreach ($databaseLabels as $index => $label) {
@@ -2856,8 +2854,6 @@ test_case('relational worst-case runs exact isolated accepted and rejected bound
     $logicalPlans = wp_fts_wc_contract_function_source($isolated, 'wp_fts_ib_case_logical_plans');
     assert_contains("'key' => WP_FTS_TermNamespace::namespace_term('en', \$term)", $logicalPlans, 'isolated alternative boundaries should retain the current namespaced key');
     assert_contains("'rank' => \$index", $logicalPlans, 'isolated alternative boundaries should retain the current rank');
-    assert_true(!str_contains($logicalPlans, "'lang' => 'en'"), 'isolated direct-storage alternatives must not retain the removed language field');
-    assert_true(!str_contains($logicalPlans, "'term' => \$term"), 'isolated direct-storage alternatives must not retain the removed term field');
     foreach (['4,095-byte contiguous CJK', '4,096 distinct terms', '4,097 terms', '1,000-ID enqueue', '1,001 IDs', '180-second'] as $required) {
         assert_contains($required, $acceptance, "acceptance writeup should retain isolated hard boundary: {$required}");
     }
@@ -2871,10 +2867,6 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
         'WP_FTS_Plugin::run_scheduled_schema_repair();',
         $integration,
         'initial readiness should run through the current schema-repair callback'
-    );
-    assert_true(
-        !str_contains($integration, 'run_scheduled_schema_upgrade'),
-        'the real-database workload must not call the removed schema-upgrade alias'
     );
     foreach ([
         'relational-fts-evidence-v5',
@@ -3315,13 +3307,13 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
         $storage,
         'the bounded dictionary VALUES UPSERT must retain its exact evidence tag'
     );
-    assert_contains('/* wp_fts:dictionary-decrement */', $storage, 'the post-first old-frequency decrement must retain its exact evidence tag');
-    assert_contains('UPDATE (', $storage, 'the old-frequency decrement must put its materialized posting relation before the update target');
-    assert_contains('changed FORCE INDEX (post_term)', $storage, 'the old-frequency decrement must force its post-first covering driver');
-    assert_contains('STRAIGHT_JOIN {$this->termsTable} AS t FORCE INDEX (PRIMARY)', $storage, 'the old-frequency decrement must primary-key join the target after materialization');
+    assert_contains('/* wp_fts:dictionary-decrement */', $storage, 'the post-first existing-frequency decrement must retain its exact proof tag');
+    assert_contains('UPDATE (', $storage, 'the existing-frequency decrement must put its materialized posting relation before the update target');
+    assert_contains('changed FORCE INDEX (post_term)', $storage, 'the existing-frequency decrement must force its post-first covering driver');
+    assert_contains('STRAIGHT_JOIN {$this->termsTable} AS t FORCE INDEX (PRIMARY)', $storage, 'the existing-frequency decrement must primary-key join the target after materialization');
     assert_contains('MAX_TERM_RESOLUTION_IDENTITIES = 8192', $storage, 'the maximum document must resolve its dictionary in one proven-width indexed read');
-    assert_contains('$postsWithOldPostings = array_keys(array_filter(', $storage, 'fresh documents must derive an empty retirement set from measured old-posting counts');
-    assert_contains('if ($postsWithOldPostings !== [])', $storage, 'fresh documents must skip the dictionary decrement statement');
+    assert_contains('$postsWithExistingPostings = array_keys(array_filter(', $storage, 'fresh documents must derive an empty retirement set from measured existing-posting counts');
+    assert_contains('if ($postsWithExistingPostings !== [])', $storage, 'fresh documents must skip the dictionary decrement statement');
     assert_contains('if ($retiredPosts !== [])', $storage, 'fresh documents must skip the bounded deletion statement');
     assert_true(!str_contains($storage, 'dictionary_delta_relation'), 'relational storage must not restore the self-referential dictionary INSERT/SELECT');
     assert_contains('run_wpcli_php_phase wpcli-adapter', $runner, 'real database runner should measure the installed WP-CLI command through wpdb');
@@ -3336,15 +3328,15 @@ test_case('relational worst-case evidence gates query shape, memory, rows, laten
     record_check('WP-CLI strict-types execution contract', 2);
 });
 
-test_case('relational worst-case retains the real 57344-row old-posting frontier proof', function (): void {
+test_case('relational worst-case retains the real 57344-row existing-posting frontier proof', function (): void {
     $root = dirname(__DIR__, 2);
     $runner = (string) file_get_contents($root . '/tools/run-relational-fts-worst-case.sh');
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
-    $frontier = (string) file_get_contents(dirname(__DIR__) . '/integration/old-posting-frontier.php');
+    $frontier = (string) file_get_contents(dirname(__DIR__) . '/integration/existing-posting-frontier.php');
     $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
 
     foreach ([
-        '7 x 8,192 old-posting fixture',
+        '7 x 8,192 existing-posting fixture',
         'MAX_BATCH_POSTINGS + 1',
         'MAX_BATCH_TERMS',
         'plan_prepared_replacement',
@@ -3365,6 +3357,7 @@ test_case('relational worst-case retains the real 57344-row old-posting frontier
         "'decrement_sql_sha256'",
         "'decrement_server_rows_examined'",
         "'decrement_server_rows_affected'",
+        'wp_fts:existing-posting-frontier',
         'wp_fts:dictionary-decrement',
         'wp_fts_frontier_decrement_performance_events',
         "'delete_statement_count'",
@@ -3375,10 +3368,10 @@ test_case('relational worst-case retains the real 57344-row old-posting frontier
         'wp_fts:search-epoch-advance',
         'LIMIT 50100',
         'candidate_posting FORCE INDEX (post_term)',
-        "foreach (['old_posting', 'retired_term', 'retired_document']",
+        "foreach (['existing_posting', 'retired_term', 'retired_document']",
         'wp_fts_frontier_delete_performance_events',
         "'bad_document_frequencies'",
-        "'old_posting_access' => \$oldAccess",
+        "'existing_posting_access' => \$existingAccess",
         "'max_server_rows_examined'",
         "'max_created_tmp_disk_tables'",
         "'remaining_terms'",
@@ -3388,7 +3381,6 @@ test_case('relational worst-case retains the real 57344-row old-posting frontier
         "'reset_strategy' => 'mysql_atomic_table_swap'",
         "'exact_sql_shape' => \$resetSql === \$expectedResetSql",
         "'contains_delete_or_count' => \$resetHasForbiddenCorpusWork",
-        "'schema_version' => 1",
         "'exact_current_contract' => true",
         "'recoverable' => ['unique' => false, 'columns' => ['kind', 'state', 'claim_expires_at', 'available_at', 'post_id', 'job_key']]",
         "'only_canonical_tables' => \$postResetTables === \$expectedPostResetTables",
@@ -3396,69 +3388,69 @@ test_case('relational worst-case retains the real 57344-row old-posting frontier
         'wp_fts_frontier_linux_vmhwm_bytes()',
         "'php_peak_bytes' => \$overallPhpPeakBytes",
     ] as $required) {
-        assert_contains($required, $frontier, "old-posting proof should retain hard evidence input: {$required}");
+        assert_contains($required, $frontier, "existing-posting proof should retain hard proof input: {$required}");
     }
     foreach ([
-        'OLD_POSTING_FRONTIER_SHA256=',
-        '${OLD_POSTING_FRONTIER_SCRIPT}:/proof/old-posting-frontier.php:ro',
-        'WP_FTS_FRONTIER_HARNESS_SHA256=${OLD_POSTING_FRONTIER_SHA256}',
+        'EXISTING_POSTING_FRONTIER_SHA256=',
+        '${EXISTING_POSTING_FRONTIER_SCRIPT}:/proof/existing-posting-frontier.php:ro',
+        'WP_FTS_FRONTIER_HARNESS_SHA256=${EXISTING_POSTING_FRONTIER_SHA256}',
         'wordpress timeout -s KILL 300 php -d memory_limit=128M',
-        'run_old_posting_frontier',
+        'run_existing_posting_frontier',
     ] as $required) {
         assert_contains($required, $runner, "runner should retain the source-bound frontier invocation: {$required}");
     }
     foreach ([
-        'old_posting_frontier_artifact',
-        'old_posting_frontier_disjoint_terms',
-        'old_posting_frontier_pass_shapes',
-        'old_posting_frontier_scan_rows',
-        'old_posting_frontier_aggregate_rows',
-        'old_posting_frontier_mutations',
-        'old_posting_frontier_query_count',
-        'old_posting_frontier_transaction_order',
-        'old_posting_survivor_fixture',
-        'old_posting_survivor_decrement',
-        'old_posting_survivor_state',
-        'old_posting_frontier_decrement_query_count',
-        'old_posting_frontier_decrement_statement_bytes',
-        'old_posting_frontier_decrement_elapsed_ms',
-        'old_posting_frontier_decrement_server_rows_examined',
-        'old_posting_frontier_decrement_server_rows_affected',
-        'old_posting_frontier_decrement_disk_temp_tables',
-        'old_posting_frontier_decrement_sort_merge_passes',
-        'old_posting_frontier_decrement_server_ms',
-        'old_posting_frontier_delete_query_count',
-        'old_posting_frontier_delete_statement_bytes',
-        'old_posting_frontier_delete_elapsed_ms',
-        'old_posting_frontier_delete_server_rows_examined',
-        'old_posting_frontier_delete_server_rows_affected',
-        'old_posting_frontier_delete_disk_temp_tables',
-        'old_posting_frontier_delete_sort_merge_passes',
-        'old_posting_frontier_delete_server_ms',
-        'old_posting_frontier_transaction_statements',
-        'old_posting_frontier_pass_ms',
-        'old_posting_frontier_server_rows_examined',
-        'old_posting_frontier_disk_temp_tables',
-        'old_posting_frontier_remaining_terms',
-        'old_posting_frontier_preserved_decoy_postings',
-        'old_posting_frontier_bad_doc_freqs',
-        'old_posting_frontier_covering_index',
-        'old_posting_frontier_inner_plan',
-        'old_posting_frontier_cleanup',
-        'old_posting_reset_populated_fixture',
-        'old_posting_reset_storage_statements',
-        'old_posting_reset_physical_schema',
-        'old_posting_reset_published_state',
-        'old_posting_frontier_php_peak',
+        'existing_posting_frontier_artifact',
+        'existing_posting_frontier_disjoint_terms',
+        'existing_posting_frontier_pass_shapes',
+        'existing_posting_frontier_scan_rows',
+        'existing_posting_frontier_aggregate_rows',
+        'existing_posting_frontier_mutations',
+        'existing_posting_frontier_query_count',
+        'existing_posting_frontier_transaction_order',
+        'existing_posting_survivor_fixture',
+        'existing_posting_survivor_decrement',
+        'existing_posting_survivor_state',
+        'existing_posting_frontier_decrement_query_count',
+        'existing_posting_frontier_decrement_statement_bytes',
+        'existing_posting_frontier_decrement_elapsed_ms',
+        'existing_posting_frontier_decrement_server_rows_examined',
+        'existing_posting_frontier_decrement_server_rows_affected',
+        'existing_posting_frontier_decrement_disk_temp_tables',
+        'existing_posting_frontier_decrement_sort_merge_passes',
+        'existing_posting_frontier_decrement_server_ms',
+        'existing_posting_frontier_delete_query_count',
+        'existing_posting_frontier_delete_statement_bytes',
+        'existing_posting_frontier_delete_elapsed_ms',
+        'existing_posting_frontier_delete_server_rows_examined',
+        'existing_posting_frontier_delete_server_rows_affected',
+        'existing_posting_frontier_delete_disk_temp_tables',
+        'existing_posting_frontier_delete_sort_merge_passes',
+        'existing_posting_frontier_delete_server_ms',
+        'existing_posting_frontier_transaction_statements',
+        'existing_posting_frontier_pass_ms',
+        'existing_posting_frontier_server_rows_examined',
+        'existing_posting_frontier_disk_temp_tables',
+        'existing_posting_frontier_remaining_terms',
+        'existing_posting_frontier_preserved_decoy_postings',
+        'existing_posting_frontier_bad_doc_freqs',
+        'existing_posting_frontier_covering_index',
+        'existing_posting_frontier_inner_plan',
+        'existing_posting_frontier_cleanup',
+        'existing_posting_reset_populated_fixture',
+        'existing_posting_reset_storage_statements',
+        'existing_posting_reset_physical_schema',
+        'existing_posting_reset_published_state',
+        'existing_posting_frontier_php_peak',
     ] as $required) {
         assert_contains($required, $integration, "final evidence should retain frontier gate: {$required}");
     }
-    foreach (['**57,344** old rows', '**50,001** rows inside', '**49,152** terms', '`doc_freq=2`', '`STRAIGHT_JOIN`', '**50,100**', 'combined posting/dictionary/document deletion', 'exactly **2** passes', '`post_term`', '**157,344** populated postings', 'storage-only proof', 'exactly **9**', 'database statements', 'no `DELETE` or `COUNT`', '**10 plugin-owned', 'one epoch read plus **9 writes**'] as $required) {
-        assert_contains($required, $acceptance, "acceptance should retain the old-posting hard gate: {$required}");
+    foreach (['**57,344** existing rows', '**50,001** rows inside', '**49,152** terms', '`doc_freq=2`', '`STRAIGHT_JOIN`', '**50,100**', 'combined posting/dictionary/document deletion', 'exactly **2** passes', '`post_term`', '**157,344** populated postings', 'storage-only proof', 'exactly **9**', 'database statements', 'no `DELETE` or `COUNT`', '**10 plugin-owned', 'one epoch read plus **9 writes**'] as $required) {
+        assert_contains($required, $acceptance, "acceptance should retain the existing-posting hard gate: {$required}");
     }
-    assert_contains('exactly five', $acceptance, 'acceptance should retain the combined five-statement old-posting transaction boundary');
+    assert_contains('exactly five', $acceptance, 'acceptance should retain the combined five-statement existing-posting transaction boundary');
     assert_contains('`recoverable(kind,state,claim_expires_at,available_at,post_id,job_key)`', $acceptance, 'acceptance should retain the exact post-reset recoverable-work index');
-    assert_contains("wp_fts_wc_gate('old_posting_frontier_transaction_statements', 5", $integration, 'final evidence should require the combined five-statement old-posting transaction boundary');
+    assert_contains("wp_fts_wc_gate('existing_posting_frontier_transaction_statements', 5", $integration, 'final proof should require the combined five-statement existing-posting transaction boundary');
 });
 
 test_case('nontransactional work-table evidence distinguishes product recovery from fixture cleanup', function (): void {
@@ -3773,7 +3765,7 @@ test_case('SQLite writer transport remains linear and distinct from the real MyS
             && is_int($transactionPosition)
             && $transportPosition < $frontierPosition
             && $frontierPosition < $transactionPosition,
-        'SQLite transport rejection/splitting must precede the old-posting frontier and transaction'
+        'SQLite transport rejection/splitting must precede the existing-posting frontier and transaction'
     );
     foreach ([
         '$identityVisits++;',
@@ -3985,10 +3977,8 @@ test_case('relational worst-case conditioning and phase evidence cannot pass on 
     $documentsSchemaStart = strpos($mysqlStorage, '"CREATE TABLE {$this->documentsTable} (');
     $documentsSchemaEnd = strpos($mysqlStorage, '"CREATE TABLE {$this->workTable} (', $documentsSchemaStart === false ? 0 : $documentsSchemaStart);
     assert_true(is_int($documentsSchemaStart) && is_int($documentsSchemaEnd), 'production documents schema should remain inspectable');
-    $documentsSchema = substr($mysqlStorage, $documentsSchemaStart, $documentsSchemaEnd - $documentsSchemaStart);
-    assert_true(!str_contains($documentsSchema, 'doc_len'), 'production documents schema must not persist a scalar document length');
     assert_contains("'columns' => ['post_id', 'primary_lang', 'content_hash', 'snippet_text', 'indexed_at']", $mysqlStorage, 'schema verification must retain the exact production document columns');
-    assert_contains('foreach (array_diff($physical[\'columns\'], $contract[\'columns\']) as $column)', $mysqlStorage, 'schema verification must reject every unexpected production column, including a leftover document length');
+    assert_contains('foreach (array_diff($physical[\'columns\'], $contract[\'columns\']) as $column)', $mysqlStorage, 'schema verification must reject every unexpected production column');
     $acceptanceSchema = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_assert_relational_schema');
     assert_contains("'content_hash' => ['type' => 'varbinary(40)', 'nullable' => false, 'default' => null, 'extra' => '']", $acceptanceSchema, 'the real schema proof should require the current fixed-width content hash');
     assert_contains("'snippet_text' => ['type' => 'mediumtext', 'nullable' => false, 'default' => null, 'extra' => '']", $acceptanceSchema, 'the real schema proof should require the current non-null snippet transport');
@@ -4125,7 +4115,7 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     $acceptance = (string) file_get_contents($root . '/docs/relational-search-acceptance.md');
     $runner = (string) file_get_contents($root . '/tools/run-relational-fts-worst-case.sh');
-    $scopeLifecycle = (string) file_get_contents(__DIR__ . '/scope-keyset-index-lifecycle.php');
+    $supportingIndexLifecycle = (string) file_get_contents(__DIR__ . '/supporting-core-index-lifecycle.php');
 
     foreach ([
         'scopeSearchThreadId',
@@ -4166,22 +4156,20 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         '$denseTargetCount = 100000',
         'ENGINE=MyISAM',
         'KEY term_taxonomy_id (term_taxonomy_id)',
-        'function wp_fts_wc_populated_scope_index_repair(',
+        'function wp_fts_wc_populated_supporting_core_index_repair(',
         'COUNT(*) AS row_count',
-        'function wp_fts_wc_scope_ddl_writer()',
-        "'scope_index_repair_innodb_core_clones'",
-        "'scope_index_repair_fixture_cardinality'",
-        "'scope_index_repair_exact_ddl'",
-        "'scope_index_repair_ownership_before_ddl'",
-        "'scope_index_repair_schema_version_stable'",
-        "'scope_index_repair_performance_schema_attribution'",
-        "'scope_index_repair_concurrent_writes'",
-        "'scope_index_repair_write_overlap'",
-        "'scope_index_repair_write_duration_ms'",
-        "'scope_index_repair_storage_delta'",
-        "'scope_index_repair_readiness_preserved'",
-        "'scope_index_repair_work_preserved'",
-        "'relational-fts-populated-scope-index-repair-v1'",
+        'function wp_fts_wc_supporting_core_index_ddl_writer()',
+        "'supporting_core_index_repair_innodb_core_clones'",
+        "'supporting_core_index_repair_fixture_cardinality'",
+        "'supporting_core_index_repair_exact_ddl'",
+        "'supporting_core_index_repair_performance_schema_attribution'",
+        "'supporting_core_index_repair_concurrent_writes'",
+        "'supporting_core_index_repair_write_overlap'",
+        "'supporting_core_index_repair_write_duration_ms'",
+        "'supporting_core_index_repair_storage_delta'",
+        "'supporting_core_index_repair_readiness_preserved'",
+        "'supporting_core_index_repair_work_preserved'",
+        "'relational-fts-populated-supporting-core-index-repair-v1'",
         "'posts' => 100001, 'relationships' => 300001",
         'Could not seed the target relationship cursor sentinel.',
         'VmHWM',
@@ -4193,8 +4181,7 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         'MAX(filtered_candidates.should_process)',
         'GROUP BY filtered_candidates.post_id',
         'function wp_fts_wc_measure_scope_gap(',
-        "'scope_expansion_real_keyset_indexes'",
-        "'scope_expansion_index_ownership'",
+        "'scope_expansion_supporting_core_indexes'",
         "'scope_expansion_noncovering_decoy_index'",
         "'targeted_scope_expansion_one_statement_per_page'",
         "'filtered_scope_expansion_one_statement_per_page'",
@@ -4222,14 +4209,14 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         assert_contains($required, $integration, "scope proof should retain measured anti-join evidence: {$required}");
     }
     assert_same(2, substr_count($integration, "'taxonomy_scope_active_surface_range_gated'"), 'the gated surface-range proof must be emitted once and consumed once during finalization');
-    assert_contains('old-posting-frontier|scope-ddl-writer|scope-proof', $runner, 'the populated scope-index DDL phase should retain its 1,800-second external kill');
-    assert_same(1, substr_count($runner, 'run_php_phase scope-ddl-writer'), 'the populated scope-index proof should load one persistent lightweight writer process');
-    assert_contains('scope_ddl_writer_pid=$!', $runner, 'the populated scope-index proof should supervise its one persistent writer process');
+    assert_contains('existing-posting-frontier|supporting-core-index-ddl-writer|scope-proof', $runner, 'the populated supporting-core-index DDL phase should retain its 1,800-second external kill');
+    assert_same(1, substr_count($runner, 'run_php_phase supporting-core-index-ddl-writer'), 'the populated supporting-core-index proof should load one persistent lightweight writer process');
+    assert_contains('supporting_core_index_ddl_writer_pid=$!', $runner, 'the populated supporting-core-index proof should supervise its one persistent writer process');
     assert_contains("'pid' => \$pid", $integration, 'all six populated core-index writes should identify their one persistent writer process');
-    $scopeWriterDispatch = strpos($integration, "if (\$phase === 'scope-ddl-writer')");
+    $supportingCoreWriterDispatch = strpos($integration, "if (\$phase === 'supporting-core-index-ddl-writer')");
     $wordpressBootstrapDispatch = strpos($integration, 'wp_fts_wc_bootstrap_wordpress();');
-    assert_true(is_int($scopeWriterDispatch) && is_int($wordpressBootstrapDispatch) && $scopeWriterDispatch < $wordpressBootstrapDispatch, 'the lightweight DDL writer should run before the WordPress bootstrap branch');
-    assert_contains("'wordpress_bootstrapped' => false", $integration, 'all four populated scope-index writes should record the lightweight runtime boundary');
+    assert_true(is_int($supportingCoreWriterDispatch) && is_int($wordpressBootstrapDispatch) && $supportingCoreWriterDispatch < $wordpressBootstrapDispatch, 'the lightweight DDL writer should run before the WordPress bootstrap branch');
+    assert_contains("'wordpress_bootstrapped' => false", $integration, 'all six populated supporting-core-index writes should record the lightweight runtime boundary');
     assert_contains('6 exact successful canonical writes from 1 persistent lightweight process', $integration, 'the populated core-index gate should reject extra writer runtimes');
     assert_true(!str_contains($runner, 'WP_FTS_WC_DDL_OPERATION='), 'the DDL proof must not load one WordPress runtime per operation');
     assert_true(!str_contains($runner, 'WP_FTS_WC_DDL_ORDINAL=${ordinal}'), 'the DDL proof must not load one WordPress runtime per index and operation');
@@ -4238,9 +4225,11 @@ test_case('taxonomy scope fail-closed search retains server-measured worst-case 
         "\$fake->failQueryNeedleOccurrence = 3",
         'stops after first DDL when its writer lease is stolen',
         'lease loss after first CREATE must prevent later core-table DDL',
-        'a same-name index collision before ownership or DDL',
+        'a same-name/different-order index must fail closed with a bounded conflict',
+        'collision detection must happen before any supporting CREATE INDEX',
+        'uninstall must leave a conflicting namespaced definition untouched',
     ] as $required) {
-        assert_contains($required, $scopeLifecycle, "scope-index lifecycle proof should retain failure contract: {$required}");
+        assert_contains($required, $supportingIndexLifecycle, "supporting-index lifecycle proof should retain failure contract: {$required}");
     }
     foreach ([
         'broad `prefixprobe*` surface query',
@@ -4312,8 +4301,6 @@ test_case('cold ready requests prove the complete plugin SQL set from connection
         "'cold-ready-request' => wp_fts_wc_cold_ready_request()",
         'relational-fts-cold-ready-request-v2',
         "run_php_phase cold-ready-request",
-        "'cold_ready_current_schema_option'",
-        "'cold_ready_current_schema_requests'",
         "'cold_ready_request_autoloaded_options'",
         "'cold_ready_request_no_option_or_sitemeta_sql'",
         "'cold_ready_request_no_network_token_select'",
@@ -4334,7 +4321,7 @@ test_case('cold ready requests prove the complete plugin SQL set from connection
     }
     foreach ([
         'exact current schema',
-        'seven bounded request inputs',
+        'six bounded request inputs',
         '0 plugin-attributed statements',
         'plan+rank (**2**)',
         'plan+rank+hydrate',
@@ -5079,8 +5066,8 @@ test_case('relational worst-case shell and PHP entry points pass syntax checks',
     $isolated = test_run_subprocess([PHP_BINARY, '-l', dirname(__DIR__) . '/integration/relational-fts-isolated-boundaries.php'], $root);
     assert_same(0, $isolated['exit'], 'isolated accepted/rejected boundary proof should pass PHP syntax validation');
 
-    $frontier = test_run_subprocess([PHP_BINARY, '-l', dirname(__DIR__) . '/integration/old-posting-frontier.php'], $root);
-    assert_same(0, $frontier['exit'], 'old-posting frontier proof should pass PHP syntax validation');
+    $frontier = test_run_subprocess([PHP_BINARY, '-l', dirname(__DIR__) . '/integration/existing-posting-frontier.php'], $root);
+    assert_same(0, $frontier['exit'], 'existing-posting frontier proof should pass PHP syntax validation');
 });
 
 test_case('relational worst-case CI is a required real database lane with failure artifacts', function (): void {

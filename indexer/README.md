@@ -160,11 +160,10 @@ only the dictionary, postings, bounded result sidecars, and durable work needed
 to find one ranked page. If the index is lost, it can be rebuilt from WordPress
 content.
 
-There is deliberately one production search architecture. The component no
-longer contains a file-backed engine or a PHP posting-list ranker, and the
-plugin does not carry a migration ladder for unreleased schema prototypes. An
-incompatible derived table is replaced, not translated indefinitely; content
-is recovered by reindexing from WordPress.
+There is deliberately one production search architecture. The component uses
+the relational index and set-oriented ranking path. A damaged derived table is
+replaced with the exact current schema; content is recovered by reindexing from
+WordPress.
 
 ### Responsibilities
 
@@ -205,7 +204,7 @@ rather than a PHP loop over completions.
 3. The extractor builds weighted fields. The analyzer normalizes visible text,
    applies the selected language pipeline, and emits bounded lexical and surface
    frequencies plus a content hash and snippet source.
-4. The relational writer measures the complete old-plus-new posting frontier
+4. The relational writer measures the complete existing-plus-new posting frontier
    before opening its transaction. Oversized valid work is split; one document
    that violates a hard limit is rejected without making the rest of the batch
    opaque.
@@ -276,10 +275,6 @@ exhaustive count.
 - **SQLite is a preview path.** The same relational design supports a
   single-request Playground smoke, but production concurrency is validated on
   MySQL and MariaDB.
-- **Current-schema-only means reindexing after incompatible changes.** This
-  keeps unreleased compatibility code out of the runtime, but it trades an
-  in-place migration for a deliberate rebuild of derived data.
-
 This architecture is a good fit when keeping search local to the WordPress
 database, bounding PHP memory, and preserving WordPress visibility are more
 important than exact totals or advanced search features. A dedicated search
@@ -370,14 +365,15 @@ and failure diagnostics rather than force-unlocking. This slice intentionally
 does not provide a force-unlock control, because deleting an active lock can
 allow overlapping index writes.
 
-The Health tab reports stored schema/readiness state without inspecting physical
-tables. Explicit support snapshots and `wp fts diagnose` add bounded read-only
-physical verification; the repair button runs the same idempotent repair and
-verification path as `wp fts repair`, and the new version is stored only after
-the physical contract passes. Repair touches schema and table definitions only
-and does not index content or create sample posts. Network activation provisions
-the current site and starts a cursor-driven cron chain that repairs exactly one
-existing site per event; new sites use the same provisioning path.
+The Health tab reports stored readiness and bounded work state without inspecting
+physical tables. Explicit support snapshots and `wp fts diagnose` add bounded
+read-only physical verification; the repair button runs the same idempotent
+repair and verification path as `wp fts repair`. Repair touches schema and table
+definitions only, keeps search readiness revoked after damage, and queues one
+complete reconciliation without indexing content inline or creating sample
+posts. Network activation provisions the current site and starts a cursor-driven
+cron chain that repairs exactly one existing site per event; new sites use the
+same provisioning path.
 
 ## Feature Summary
 

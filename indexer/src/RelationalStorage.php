@@ -53,22 +53,23 @@ final class WP_FTS_Prepared_Batch_Split_Required extends InvalidArgumentExceptio
  * One measured, complete prefix of a relational posting replacement.
  *
  * Counts are carried from the post-first preflight into the transaction so a
- * normal worker never repeats the old-posting scan after it defers the suffix.
+ * normal worker never repeats the existing-posting scan after it defers the
+ * suffix.
  */
 final class WP_FTS_Prepared_Replacement_Plan
 {
     /**
      * @param array<int,int> $new_posting_counts
-     * @param array<int,int> $old_posting_counts
+     * @param array<int,int> $existing_posting_counts
      * @param int[] $admitted_post_ids
      * @param int[] $deferred_post_ids
      */
     public function __construct(
         public readonly array $new_posting_counts,
-        public readonly array $old_posting_counts,
+        public readonly array $existing_posting_counts,
         public readonly array $admitted_post_ids,
         public readonly array $deferred_post_ids,
-        public readonly int $scanned_old_postings,
+        public readonly int $scanned_existing_postings,
         public readonly int $posting_mutations
     ) {
     }
@@ -97,7 +98,7 @@ final class WP_FTS_Relational_Storage implements WP_FTS_Set_Oriented_Search_Stor
     private const MAX_TERM_RESOLUTION_IDENTITIES = 8192;
     public const MAX_BATCH_DOCUMENTS = 100;
     // One document has at most 4,096 lexical and 4,096 normalized-surface
-    // postings. A replacement may briefly own both old and new rows, so its
+    // postings. A replacement may briefly own both existing and new rows, so its
     // measured transaction frontier is twice that document envelope.
     public const MAX_DOCUMENT_POSTINGS = 8192;
     public const MAX_BATCH_POSTINGS = 50000;
@@ -148,7 +149,7 @@ final class WP_FTS_Relational_Storage implements WP_FTS_Set_Oriented_Search_Stor
     private bool $transactionActive = false;
     private bool $transactionMutated = false;
     private bool $transactionEpochAdvanced = false;
-    /** @var WeakMap<WP_FTS_Prepared_Replacement_Plan,array{new:array<int,int>,old:array<int,int>,mutations:int}> */
+    /** @var WeakMap<WP_FTS_Prepared_Replacement_Plan,array{new:array<int,int>,existing:array<int,int>,mutations:int}> */
     private WeakMap $issuedReplacementPlans;
 
     /**
@@ -188,7 +189,7 @@ final class WP_FTS_Relational_Storage implements WP_FTS_Set_Oriented_Search_Stor
     /**
      * Create the complete relational physical schema.
      *
-     * Incompatible derived generations are removed before WordPress `dbDelta()`
+     * Invalid derived generations are removed before WordPress `dbDelta()`
      * creates missing tables and indexes. Outside WordPress, the same raw CREATE
      * statements run directly. Binary charsets keep dictionary identities
      * byte-stable on MySQL/MariaDB.
@@ -196,7 +197,7 @@ final class WP_FTS_Relational_Storage implements WP_FTS_Set_Oriented_Search_Stor
     public function create_tables(): void
     {
         $this->guard_mutation();
-        $this->drop_incompatible_derived_tables();
+        $this->drop_invalid_derived_tables();
         $binary = 'DEFAULT CHARSET=binary';
         $sql = [
             "CREATE TABLE {$this->termsTable} (
@@ -262,16 +263,8 @@ KEY dirty (post_id,kind)
         }
     }
 
-    /**
-     * Return the supporting core-table indexes this site still needs to create.
-     *
-     * Callers persist ownership before issuing DDL. An exact namespaced index
-     * that predates this plugin is reused but deliberately not claimed, while
-     * a same-name/different-definition collision fails closed.
-     *
-     * @return string[] Stable contract keys, never database identifiers.
-     */
-    public function scope_keyset_indexes_requiring_creation(): array
+    /** Install the core-table indexes required by scope pages and search visibility. */
+    public function ensure_supporting_core_indexes(): void
     {
         $contracts = $this->supporting_core_index_contracts();
         $requests = [];
@@ -282,54 +275,13 @@ KEY dirty (post_id,kind)
             ];
             $requests[$contract['table']]['indexes'][] = $contract;
         }
-
-        return $this->scope_keyset_indexes_requiring_creation_from_physical(
+        $missing = $this->supporting_core_indexes_requiring_creation_from_physical(
             $contracts,
             $this->inspect_schema_snapshot($requests)
         );
-    }
 
-    /**
-     * @param array<string,array{key:string,table:string,name:string,columns:string[],unique:bool}> $contracts
-     * @param array<string,array<string,mixed>> $physical
-     * @return string[]
-     */
-    private function scope_keyset_indexes_requiring_creation_from_physical(array $contracts, array $physical): array
-    {
-        $missing = [];
-        foreach ($contracts as $key => $contract) {
-            $tablePhysical = $physical[$contract['table']] ?? $this->empty_physical_schema();
-            $this->assert_supporting_core_table_physical($contract, $tablePhysical);
-            $named = $this->named_schema_index($tablePhysical['indexes'] ?? [], $contract['name']);
-            if ($named === null) {
-                $missing[] = $key;
-                continue;
-            }
-            if (!$this->schema_index_matches_exactly($named, $contract)) {
-                throw new RuntimeException(
-                    "The {$contract['table']} index {$contract['name']} conflicts with the FTS core-index contract."
-                );
-            }
-        }
-
-        return $missing;
-    }
-
-    /** Install the core-table indexes required by scope pages and search visibility. */
-    public function ensure_scope_keyset_indexes(): void
-    {
-        foreach ($this->supporting_core_index_contracts() as $contract) {
-            $physical = $this->inspect_supporting_core_table($contract);
-            $named = $this->named_schema_index($physical['indexes'] ?? [], $contract['name']);
-            if ($named !== null) {
-                if (!$this->schema_index_matches_exactly($named, $contract)) {
-                    throw new RuntimeException(
-                        "The {$contract['table']} index {$contract['name']} conflicts with the FTS core-index contract."
-                    );
-                }
-                continue;
-            }
-
+        foreach ($missing as $key) {
+            $contract = $contracts[$key];
             $table = $this->required_schema_identifier($contract['table']);
             $name = $this->required_schema_identifier($contract['name']);
             $columns = implode(',', array_map(
@@ -357,24 +309,39 @@ KEY dirty (post_id,kind)
     }
 
     /**
-     * Remove only exact indexes whose ownership was durably recorded pre-DDL.
+     * Remove only exact plugin-namespaced supporting indexes.
      *
-     * @param string[] $ownedKeys Stable keys read from the bounded ownership option.
+     * Metadata failure aborts before the first DROP because uninstall cannot
+     * safely distinguish an exact plugin definition from a collision.
      */
-    public function drop_owned_scope_keyset_indexes(array $ownedKeys): void
+    public function drop_supporting_core_indexes(): void
     {
-        $owned = array_fill_keys(array_filter($ownedKeys, 'is_string'), true);
-        foreach ($this->supporting_core_index_contracts() as $key => $contract) {
-            if (!isset($owned[$key])) {
+        $contracts = $this->supporting_core_index_contracts();
+        $requests = [];
+        foreach ($contracts as $contract) {
+            $requests[$contract['table']] ??= [
+                'indexes' => [],
+                'inspect_all_indexes' => false,
+            ];
+            $requests[$contract['table']]['indexes'][] = $contract;
+        }
+        $physical = $this->inspect_schema_snapshot($requests);
+
+        foreach ($contracts as $contract) {
+            $tablePhysical = $physical[$contract['table']] ?? $this->empty_physical_schema();
+            if (!empty($tablePhysical['inspection_error'])) {
+                throw new RuntimeException(
+                    "The {$contract['table']} metadata required for exact FTS core-index cleanup is unavailable."
+                );
+            }
+        }
+
+        foreach ($contracts as $key => $contract) {
+            $tablePhysical = $physical[$contract['table']] ?? $this->empty_physical_schema();
+            if (empty($tablePhysical['exists'])) {
                 continue;
             }
-            $physical = $this->is_sqlite_runtime()
-                ? $this->inspect_sqlite_schema($contract['table'], [$contract])
-                : $this->inspect_mysql_schema($contract['table']);
-            if (empty($physical['exists'])) {
-                continue;
-            }
-            $actual = $this->named_schema_index($physical['indexes'] ?? [], $contract['name']);
+            $actual = $this->named_schema_index($tablePhysical['indexes'] ?? [], $contract['name']);
             if ($actual === null || !$this->schema_index_matches_exactly($actual, $contract)) {
                 // A missing or changed definition is no longer safe to treat as
                 // this plugin's object. Never drop a merely similar core index.
@@ -446,11 +413,6 @@ KEY dirty (post_id,kind)
     }
 
     /**
-     * Keep one ownership lifecycle for every plugin-created core-table index.
-     *
-     * The public lifecycle method and option names predate the visibility
-     * index. Reusing them avoids a second ownership record that could drift.
-     *
      * @return array<string,array{key:string,table:string,name:string,columns:string[],unique:bool}>
      */
     private function supporting_core_index_contracts(): array
@@ -554,14 +516,14 @@ KEY dirty (post_id,kind)
     }
 
     /**
-     * Replace incompatible derived tables instead of asking dbDelta to mutate
+     * Replace invalid current derived tables instead of asking dbDelta to mutate
      * primary-key identity in place. Terms, postings, and documents are one
      * reproducible search generation: retaining any member after a peer is lost
      * or replaced can attach postings to reused term ids and leave deleted
      * document ids outside reconciliation. Work is independent so a damaged
      * queue can be rebuilt without discarding a coherent search index.
      */
-    private function drop_incompatible_derived_tables(): void
+    private function drop_invalid_derived_tables(): void
     {
         $contracts = $this->schema_contract();
         $physical = $this->inspect_schema_snapshot(
@@ -595,7 +557,7 @@ KEY dirty (post_id,kind)
             $this->drop_existing_schema_tables(
                 [$this->workTable],
                 $physical,
-                'replace incompatible FTS work table'
+                'replace invalid FTS work table'
             );
         }
     }
@@ -638,9 +600,8 @@ KEY dirty (post_id,kind)
     /**
      * Inspect the exact physical table, column, index, and engine contract.
      *
-     * The schema version option is only a logical marker; callers must use this
-     * result before treating the index as physically usable or persisting a
-     * completed repair.
+     * Callers must use this result before treating the index as physically
+     * usable or persisting a completed repair.
      *
      * @return array{valid:bool,available:bool,missing_tables:string[],missing_columns:string[],unexpected_columns:string[],invalid_columns:string[],missing_indexes:string[],unexpected_indexes:string[],invalid_engines:string[]}
      */
@@ -661,12 +622,12 @@ KEY dirty (post_id,kind)
      *
      * @return array<string,mixed>
      */
-    public function verify_schema_and_scope_keyset_indexes(): array
+    public function verify_schema_and_supporting_core_indexes(): array
     {
         $contracts = $this->schema_contract();
-        $scopeContracts = $this->supporting_core_index_contracts();
+        $supportingContracts = $this->supporting_core_index_contracts();
         $requests = $this->schema_contract_inspection_requests($contracts);
-        foreach ($scopeContracts as $contract) {
+        foreach ($supportingContracts as $contract) {
             $requests[$contract['table']] ??= [
                 'indexes' => [],
                 'inspect_all_indexes' => false,
@@ -677,27 +638,53 @@ KEY dirty (post_id,kind)
         $verification = $this->verify_schema_from_physical($contracts, $snapshot);
         $verification['fts_tables_valid'] = !empty($verification['valid']);
         try {
-            $missing = $this->scope_keyset_indexes_requiring_creation_from_physical(
-                $scopeContracts,
+            $missing = $this->supporting_core_indexes_requiring_creation_from_physical(
+                $supportingContracts,
                 $snapshot
             );
-            $scopeVerification = [
+            $supportingVerification = [
                 'valid' => $missing === [],
                 'missing' => $missing,
                 'error' => '',
             ];
         } catch (Throwable $error) {
-            $scopeVerification = [
+            $supportingVerification = [
                 'valid' => false,
                 'missing' => [],
                 'error' => substr($error->getMessage(), 0, 240),
             ];
         }
-        $verification['scope_keyset_indexes'] = $scopeVerification;
+        $verification['supporting_core_indexes'] = $supportingVerification;
         $verification['valid'] = $verification['fts_tables_valid']
-            && !empty($scopeVerification['valid']);
+            && !empty($supportingVerification['valid']);
 
         return $verification;
+    }
+
+    /**
+     * @param array<string,array{key:string,table:string,name:string,columns:string[],unique:bool}> $contracts
+     * @param array<string,array<string,mixed>> $physical
+     * @return string[]
+     */
+    private function supporting_core_indexes_requiring_creation_from_physical(array $contracts, array $physical): array
+    {
+        $missing = [];
+        foreach ($contracts as $key => $contract) {
+            $tablePhysical = $physical[$contract['table']] ?? $this->empty_physical_schema();
+            $this->assert_supporting_core_table_physical($contract, $tablePhysical);
+            $named = $this->named_schema_index($tablePhysical['indexes'] ?? [], $contract['name']);
+            if ($named === null) {
+                $missing[] = $key;
+                continue;
+            }
+            if (!$this->schema_index_matches_exactly($named, $contract)) {
+                throw new RuntimeException(
+                    "The {$contract['table']} index {$contract['name']} conflicts with the FTS core-index contract."
+                );
+            }
+        }
+
+        return $missing;
     }
 
     /**
@@ -1615,7 +1602,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
      * Partition every per-document poison value before replacement planning.
      *
      * This is a pure-PHP pass: one invalid document cannot trigger another
-     * old-posting frontier query for each remaining document in the batch.
+     * existing-posting frontier query for each remaining document in the batch.
      * Aggregate posting/term limits still belong to the batch writer below.
      *
      * @param array<int,array<string,mixed>> $docs
@@ -1690,7 +1677,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
      *
      * @param array<int,array<string,mixed>> $docs
      * @param int[] $delete_ids
-     * @return array{replaced:int,deleted:int,terms:int,postings:int,old_postings:int,posting_mutations:int}
+     * @return array{replaced:int,deleted:int,terms:int,postings:int,retired_postings:int,posting_mutations:int}
      */
     public function replace_prepared_documents(
         array $docs,
@@ -1812,7 +1799,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
                 'deleted' => 0,
                 'terms' => 0,
                 'postings' => 0,
-                'old_postings' => 0,
+                'retired_postings' => 0,
                 'posting_mutations' => 0,
             ];
         }
@@ -1841,7 +1828,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             $issuedPlan === null
             || $replacement_plan->new_posting_counts !== $newPostingCounts
             || $replacement_plan->admitted_post_ids !== array_keys($newPostingCounts)
-            || $replacement_plan->old_posting_counts !== $issuedPlan['old']
+            || $replacement_plan->existing_posting_counts !== $issuedPlan['existing']
             || $replacement_plan->new_posting_counts !== $issuedPlan['new']
             || $replacement_plan->posting_mutations !== $issuedPlan['mutations']
         ) {
@@ -1861,24 +1848,24 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             $this->guard_mutation();
         }
         try {
-            // Keep new-identity UPSERT and old-frequency decrement separate.
+            // Keep new-identity UPSERT and existing-frequency decrement separate.
             // In particular, never INSERT ... SELECT from the dictionary back
             // into itself: MariaDB can probe and lock fragmented identity
             // leaves far beyond the measured posting frontier on that shape.
             $this->insert_term_identities($identities, $newDocumentCounts);
-            $postsWithOldPostings = array_keys(array_filter(
-                $replacement_plan->old_posting_counts,
+            $postsWithExistingPostings = array_keys(array_filter(
+                $replacement_plan->existing_posting_counts,
                 static fn(int $count): bool => $count > 0
             ));
-            if ($postsWithOldPostings !== []) {
-                $this->decrement_doc_freq_for_posts($postsWithOldPostings);
+            if ($postsWithExistingPostings !== []) {
+                $this->decrement_doc_freq_for_posts($postsWithExistingPostings);
             }
             $retiredPosts = array_values(array_unique([
-                ...$postsWithOldPostings,
+                ...$postsWithExistingPostings,
                 ...array_keys($deleteIds),
             ]));
             if ($retiredPosts !== []) {
-                // One bounded, post-first DELETE removes the measured old
+                // One bounded, post-first DELETE removes the measured existing
                 // postings, their now-empty dictionary rows, and deletion-only
                 // projections. A fresh prepared document has no retirement work.
                 $this->delete_replaced_index_rows($retiredPosts, array_keys($deleteIds));
@@ -1933,7 +1920,7 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
             'deleted' => count($deleteIds),
             'terms' => count($identities),
             'postings' => $expectedPostingRows,
-            'old_postings' => array_sum($replacement_plan->old_posting_counts),
+            'retired_postings' => array_sum($replacement_plan->existing_posting_counts),
             'posting_mutations' => $replacement_plan->posting_mutations,
         ];
     }
@@ -2134,57 +2121,57 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         $placeholders = implode(',', array_fill(0, count($postIds), '%d'));
         $indexHint = $this->is_sqlite_runtime() ? '' : ' FORCE INDEX (post_term)';
         $rows = $this->get_results($this->wpdb->prepare(
-            "/* wp_fts:replacement-frontier */
+            "/* wp_fts:existing-posting-frontier */
 	SELECT capped.post_id, COUNT(*) AS posting_count
 	FROM (
-	    SELECT old_posting.post_id
-    FROM {$this->postingsTable} old_posting{$indexHint}
-    WHERE old_posting.post_id IN ({$placeholders})
-    ORDER BY old_posting.post_id ASC, old_posting.term_id ASC
+	    SELECT existing_posting.post_id
+    FROM {$this->postingsTable} existing_posting{$indexHint}
+    WHERE existing_posting.post_id IN ({$placeholders})
+    ORDER BY existing_posting.post_id ASC, existing_posting.term_id ASC
     LIMIT {$scanLimit}
 	) AS capped
 	GROUP BY capped.post_id
 	ORDER BY capped.post_id ASC",
             ...$postIds
-        ), 'measure bounded old FTS posting frontier');
+        ), 'measure bounded existing FTS posting frontier');
 
-        $oldPostingCounts = [];
-        $scannedOldPostings = 0;
+        $existingPostingCounts = [];
+        $scannedExistingPostings = 0;
         foreach ($rows as $row) {
             $postId = max(0, (int) ($row->post_id ?? 0));
             $postingCount = max(0, (int) ($row->posting_count ?? 0));
             if (
                 !isset($normalized[$postId])
-                || isset($oldPostingCounts[$postId])
+                || isset($existingPostingCounts[$postId])
                 || $postingCount <= 0
                 || $postingCount > $scanLimit
-                || $scannedOldPostings > $scanLimit - $postingCount
+                || $scannedExistingPostings > $scanLimit - $postingCount
             ) {
-                throw new RuntimeException('The bounded old FTS posting frontier returned an invalid aggregate.');
+                throw new RuntimeException('The bounded existing FTS posting frontier returned an invalid aggregate.');
             }
-            $oldPostingCounts[$postId] = $postingCount;
-            $scannedOldPostings += $postingCount;
+            $existingPostingCounts[$postId] = $postingCount;
+            $scannedExistingPostings += $postingCount;
         }
 
-        $frontierPostId = $scannedOldPostings === $scanLimit
-            ? max(array_keys($oldPostingCounts))
+        $frontierPostId = $scannedExistingPostings === $scanLimit
+            ? max(array_keys($existingPostingCounts))
             : null;
         $admittedPostIds = [];
         $admittedNewCounts = [];
-        $admittedOldCounts = [];
+        $admittedExistingCounts = [];
         $postingMutations = 0;
         foreach ($normalized as $postId => $newPostingCount) {
             if ($frontierPostId !== null && $postId >= $frontierPostId) {
                 break;
             }
-            $oldPostingCount = $oldPostingCounts[$postId] ?? 0;
-            if ($postingMutations + $oldPostingCount + $newPostingCount > self::MAX_BATCH_POSTINGS) {
+            $existingPostingCount = $existingPostingCounts[$postId] ?? 0;
+            if ($postingMutations + $existingPostingCount + $newPostingCount > self::MAX_BATCH_POSTINGS) {
                 break;
             }
             $admittedPostIds[] = $postId;
             $admittedNewCounts[$postId] = $newPostingCount;
-            $admittedOldCounts[$postId] = $oldPostingCount;
-            $postingMutations += $oldPostingCount + $newPostingCount;
+            $admittedExistingCounts[$postId] = $existingPostingCount;
+            $postingMutations += $existingPostingCount + $newPostingCount;
         }
         if ($admittedPostIds === []) {
             $firstPostId = (int) array_key_first($normalized);
@@ -2199,15 +2186,15 @@ ORDER BY table_name, row_kind, ordinal_position, index_name, index_position"
         ));
         $plan = new WP_FTS_Prepared_Replacement_Plan(
             $admittedNewCounts,
-            $admittedOldCounts,
+            $admittedExistingCounts,
             $admittedPostIds,
             $deferredPostIds,
-            $scannedOldPostings,
+            $scannedExistingPostings,
             $postingMutations
         );
         $this->issuedReplacementPlans[$plan] = [
             'new' => $admittedNewCounts,
-            'old' => $admittedOldCounts,
+            'existing' => $admittedExistingCounts,
             'mutations' => $postingMutations,
         ];
 
@@ -4372,7 +4359,7 @@ VALUES ";
     }
 
     /**
-     * Delete one measured old-posting frontier and its now-unused rows.
+     * Delete one measured existing-posting frontier and its now-unused rows.
      *
      * A direct three-target join lets MariaDB drive the DELETE through the
      * dictionary's `empty_terms` index, scanning and locking unrelated empty
@@ -4413,7 +4400,7 @@ VALUES ";
             array_push($args, $postId, isset($deleteIds[$postId]) ? 1 : 0);
         }
         $driverLimit = self::MAX_BATCH_POSTINGS + self::MAX_BATCH_DOCUMENTS;
-        $sql = "DELETE old_posting, retired_term, retired_document
+        $sql = "DELETE existing_posting, retired_term, retired_document
 /* wp_fts:bounded-index-delete */
 FROM (
     SELECT bounded_rows.post_id, bounded_rows.delete_document, bounded_rows.term_id
@@ -4425,8 +4412,8 @@ FROM (
     ) bounded_rows
     LIMIT {$driverLimit}
 ) delete_driver
-LEFT JOIN {$this->postingsTable} old_posting FORCE INDEX (PRIMARY)
-  ON old_posting.term_id = delete_driver.term_id AND old_posting.post_id = delete_driver.post_id
+LEFT JOIN {$this->postingsTable} existing_posting FORCE INDEX (PRIMARY)
+  ON existing_posting.term_id = delete_driver.term_id AND existing_posting.post_id = delete_driver.post_id
 LEFT JOIN {$this->termsTable} retired_term FORCE INDEX (PRIMARY)
   ON retired_term.term_id = delete_driver.term_id AND retired_term.doc_freq = 0
 LEFT JOIN {$this->documentsTable} retired_document FORCE INDEX (PRIMARY)
@@ -4458,7 +4445,7 @@ WHERE doc_freq = 0
     }
 
     /**
-     * Subtract the bounded old-posting counts from dictionary DFs.
+     * Subtract the bounded existing-posting counts from dictionary DFs.
      *
      * MySQL/MariaDB starts from the post-first covering index, groups only the
      * affected posting rows, then primary-key joins those term ids. There is no
@@ -5034,8 +5021,8 @@ FROM ({$gateSql}) surface_gate
             'profile_hash' => $profile,
         ]);
         $clauses = [
-            "EXISTS (SELECT 1 FROM {$this->optionsTable} schema_option
-                WHERE schema_option.option_name = %s AND schema_option.option_value = %s)",
+            "NOT EXISTS (SELECT 1 FROM {$this->optionsTable} uninstall_fence
+                WHERE uninstall_fence.option_name = %s)",
             "EXISTS (SELECT 1 FROM {$this->optionsTable} desired_option
                 WHERE desired_option.option_name = %s AND desired_option.option_value = %s)",
             "EXISTS (SELECT 1 FROM {$this->optionsTable} ready_option
@@ -5048,8 +5035,7 @@ FROM ({$gateSql}) surface_gate
                 LIMIT 1)";
         }
         $args = [
-            WP_FTS_Plugin::SCHEMA_VERSION_OPTION,
-            (string) WP_FTS_Plugin::SCHEMA_VERSION,
+            WP_FTS_Plugin::UNINSTALL_FENCE_OPTION,
             WP_FTS_Plugin::READINESS_INCARNATION_OPTION,
             $incarnation,
             WP_FTS_Plugin::SEARCH_READY_INCARNATION_OPTION,

@@ -299,13 +299,14 @@ test_case('quality disposable release smoke requires write opt-in before assembl
 test_case('quality disposable release smoke builds bounded WP-CLI command sequence', function (): void {
     $tmp = wp_fts_disposable_smoke_contract_temp_dir();
     $commands = [];
+    $batchCalls = 0;
     try {
         $wpRoot = wp_fts_disposable_smoke_contract_wp_root($tmp, true);
         $zip = $tmp . '/wp-fts-indexer.zip';
         wp_fts_disposable_smoke_contract_write_file($zip, "zip fixture\n");
 
         $runner = new WP_FTS_DisposableReleaseSmokeRunner(
-            function (array $command) use (&$commands): array {
+            function (array $command) use (&$commands, &$batchCalls): array {
                 $commands[] = $command;
                 $joined = implode(' ', $command);
                 if (str_contains($joined, 'core is-installed')) {
@@ -321,13 +322,21 @@ test_case('quality disposable release smoke builds bounded WP-CLI command sequen
                     return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['schema_status' => 'ok', 'pending_queue_count' => 0]), 'stderr' => ''];
                 }
                 if (str_contains($joined, 'fts repair')) {
-                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['schema_status' => 'ok', 'schema_version' => WP_FTS_Plugin::SCHEMA_VERSION]), 'stderr' => ''];
+                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['schema_status' => 'ok']), 'stderr' => ''];
                 }
                 if (str_contains($joined, 'post create')) {
                     return ['exit' => 0, 'stdout' => "123\n", 'stderr' => ''];
                 }
                 if (str_contains($joined, 'fts process-batch')) {
-                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['indexed' => 1, 'queue_processed' => 1]), 'stderr' => ''];
+                    $batchCalls++;
+                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json([
+                        'indexed' => 1,
+                        'queue_processed' => 1,
+                        'has_more' => $batchCalls < 3,
+                    ]), 'stderr' => ''];
+                }
+                if (str_contains($joined, 'cron event run wp_fts_repair_schema')) {
+                    return ['exit' => 0, 'stdout' => 'Executed readiness maintenance.', 'stderr' => ''];
                 }
                 if (str_contains($joined, 'fts search')) {
                     return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json([
@@ -379,11 +388,17 @@ test_case('quality disposable release smoke builds bounded WP-CLI command sequen
             wp_fts_disposable_smoke_contract_true(in_array('--format=json', $command, true), "wp fts {$subcommand} should request JSON evidence");
         }
 
-        $batch = wp_fts_disposable_smoke_contract_find_command($commands, 'fts', 'process-batch');
-        wp_fts_disposable_smoke_contract_true(is_array($batch), 'smoke should run one bounded indexing batch');
-        wp_fts_disposable_smoke_contract_true(in_array('--batch_size=1', $batch, true), 'process-batch should be batch bounded');
-        wp_fts_disposable_smoke_contract_true(in_array('--time_budget=5', $batch, true), 'process-batch should be time bounded');
-        wp_fts_disposable_smoke_contract_true(in_array('--format=json', $batch, true), 'process-batch should emit JSON evidence');
+        $batches = array_values(array_filter(
+            $commands,
+            static fn(array $command): bool => in_array('fts', $command, true)
+                && in_array('process-batch', $command, true)
+        ));
+        wp_fts_disposable_smoke_contract_same(3, count($batches), 'smoke should drain reconciliation through bounded indexing passes');
+        foreach ($batches as $batch) {
+            wp_fts_disposable_smoke_contract_true(in_array('--batch_size=1', $batch, true), 'every process-batch call should be batch bounded');
+            wp_fts_disposable_smoke_contract_true(in_array('--time_budget=5', $batch, true), 'every process-batch call should be time bounded');
+            wp_fts_disposable_smoke_contract_true(in_array('--format=json', $batch, true), 'every process-batch call should emit JSON output');
+        }
     } finally {
         wp_fts_disposable_smoke_contract_remove_tree($tmp);
     }
@@ -427,7 +442,7 @@ test_case('quality disposable release smoke sanitizes successful JSON evidence',
                     ]), 'stderr' => ''];
                 }
                 if (str_contains($joined, 'fts repair')) {
-                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['schema_status' => 'ok', 'schema_version' => WP_FTS_Plugin::SCHEMA_VERSION]), 'stderr' => ''];
+                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['schema_status' => 'ok']), 'stderr' => ''];
                 }
                 if (str_contains($joined, 'post create')) {
                     return ['exit' => 0, 'stdout' => "123\n", 'stderr' => ''];
@@ -437,6 +452,9 @@ test_case('quality disposable release smoke sanitizes successful JSON evidence',
                         'indexed' => 1,
                         'debug' => $rawPasswordAssignment . ' ' . $rawLocalPath,
                     ]), 'stderr' => ''];
+                }
+                if (str_contains($joined, 'cron event run wp_fts_repair_schema')) {
+                    return ['exit' => 0, 'stdout' => 'Executed readiness maintenance.', 'stderr' => ''];
                 }
                 if (str_contains($joined, 'fts search')) {
                     return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json([

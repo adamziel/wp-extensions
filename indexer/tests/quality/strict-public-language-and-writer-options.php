@@ -31,9 +31,13 @@ function splwo_cli_private(WP_FTS_WPCLI_Command $command, string $method, mixed 
     return $reflection->invoke($command, ...$args);
 }
 
-test_case('production storage factory and inactive transaction controls stay closed', function (): void {
-    $factory = new ReflectionMethod(WP_FTS_Plugin::class, 'storage');
-    assert_true($factory->isPrivate(), 'the production storage object must not escape through a public plugin accessor');
+test_case('production storage factories and inactive transaction controls stay closed', function (): void {
+    $storageFactory = new ReflectionMethod(WP_FTS_Plugin::class, 'storage');
+    assert_true($storageFactory->isPrivate(), 'the production storage object must not escape through a public plugin accessor');
+    assert_same(0, $storageFactory->getNumberOfParameters(), 'the production storage factory must expose no schema-check mode');
+    $queueFactory = new ReflectionMethod(WP_FTS_Plugin::class, 'index_queue');
+    assert_true($queueFactory->isPrivate(), 'the production queue object must not escape through a public plugin accessor');
+    assert_same(0, $queueFactory->getNumberOfParameters(), 'the production queue factory must expose no schema-check mode');
 
     $wpdb = new WP_FTS_Test_WPDB();
     $storage = new WP_FTS_Relational_Storage($wpdb);
@@ -237,7 +241,7 @@ test_case('strict WordPress REST and CLI language boundaries share one parser', 
     assert_same('en-US', splwo_cli_private($command, 'language_arg', 'en_US'), 'WP-CLI should return the canonical strict language');
 });
 
-test_case('strict runtime analyzer maps reject old spellings and malformed stored state', function (): void {
+test_case('strict runtime analyzer maps require canonical keys and valid stored state', function (): void {
     foreach ([
         ['lemma_packs_by_lang' => ['en' => null]],
         ['lemma_packs_by_lang' => ['en' => ' manifest.json']],
@@ -269,7 +273,7 @@ test_case('strict runtime analyzer maps reject old spellings and malformed store
     assert_true($paddedPathError instanceof InvalidArgumentException, 'bundled-path comparison should not trim configured paths');
 
     wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = 'old-state';
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = 'malformed-state';
     $beforeUpdates = $GLOBALS['wp_fts_test_updated_options'];
     $storedStateError = splwo_caught(static fn(): array => WP_FTS_Plugin::set_runtime_lemma_pack_option(
         'bn',
