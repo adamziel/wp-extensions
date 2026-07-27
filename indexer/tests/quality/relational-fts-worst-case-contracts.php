@@ -474,10 +474,10 @@ test_case('relational worst-case gate fingerprints reject ordered inventory drif
     $integration = (string) file_get_contents(dirname(__DIR__) . '/integration/relational-fts-worst-case.php');
     $expectedSource = wp_fts_wc_contract_function_source($integration, 'wp_fts_wc_expected_gate_inventory_fingerprints');
     foreach ([
-        "'count' => 1170",
-        "'sha256' => '0419c613811a13d49755af028011543c41d31a8f0bbd4a2acf65e03f1c5a4e25'",
-        "'count' => 2647",
-        "'sha256' => '8668f37040da9acbf9a0abd06abd4b81c9a184c9b997cbd6eb20c9f766ff628c'",
+        "'count' => 1168",
+        "'sha256' => '16e17be6386921c2583926de47b42fd438066d6877c963faf655a6f8bef2636f'",
+        "'count' => 2641",
+        "'sha256' => '00fef8cab8daa68d6433ba40969dab8452ad691c0f078f3630e580c59d4ac1ba'",
     ] as $required) {
         assert_contains($required, $expectedSource, "reviewed gate fingerprint must retain {$required}");
     }

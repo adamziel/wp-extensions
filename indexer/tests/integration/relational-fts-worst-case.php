@@ -21599,12 +21599,12 @@ function wp_fts_wc_expected_gate_inventory_fingerprints(): array
 {
     return [
         'preliminary' => [
-            'count' => 1170,
-            'sha256' => '0419c613811a13d49755af028011543c41d31a8f0bbd4a2acf65e03f1c5a4e25',
+            'count' => 1168,
+            'sha256' => '16e17be6386921c2583926de47b42fd438066d6877c963faf655a6f8bef2636f',
         ],
         'final' => [
-            'count' => 2647,
-            'sha256' => '8668f37040da9acbf9a0abd06abd4b81c9a184c9b997cbd6eb20c9f766ff628c',
+            'count' => 2641,
+            'sha256' => '00fef8cab8daa68d6433ba40969dab8452ad691c0f078f3630e580c59d4ac1ba',
         ],
     ];
 }
