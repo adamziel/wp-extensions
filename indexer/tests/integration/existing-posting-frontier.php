@@ -1085,7 +1085,7 @@ function wp_fts_frontier_delete_performance_events(mysqli $db, int $connectionId
 FROM performance_schema.events_statements_history_long events
 INNER JOIN performance_schema.threads threads ON threads.thread_id = events.thread_id
 WHERE threads.processlist_id = {$connectionId}
-  AND events.sql_text LIKE 'DELETE old\_posting, retired\_term, retired\_document%' ESCAPE '\\\\'
+  AND events.sql_text LIKE 'DELETE existing\_posting, retired\_term, retired\_document%' ESCAPE '\\\\'
   AND events.sql_text LIKE '%/* wp\_fts:bounded-index-delete */%' ESCAPE '\\\\'
 ORDER BY event_id ASC";
     $result = $db->query($sql);

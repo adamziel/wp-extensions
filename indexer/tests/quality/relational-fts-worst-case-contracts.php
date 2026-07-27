@@ -3369,6 +3369,7 @@ test_case('relational worst-case retains the real 57344-row existing-posting fro
         'LIMIT 50100',
         'candidate_posting FORCE INDEX (post_term)',
         "foreach (['existing_posting', 'retired_term', 'retired_document']",
+        "DELETE existing\\_posting, retired\\_term, retired\\_document%",
         'wp_fts_frontier_delete_performance_events',
         "'bad_document_frequencies'",
         "'existing_posting_access' => \$existingAccess",
